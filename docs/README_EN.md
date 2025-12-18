@@ -53,7 +53,7 @@ Comparison with other search solutions:
 ## Features
 
 - ✅ Call Grok search capabilities via OpenAI compatible format
-- ✅ Flexible TOML configuration file management
+- ✅ Environment variable configuration, secure and convenient
 - ✅ Formatted search result output (title + link + summary)
 - ✅ Extensible architecture, supports adding other search providers
 - ✅ Comprehensive logging system for debugging and monitoring
@@ -109,45 +109,43 @@ wget -qO- https://astral.sh/uv/install.sh | sh
 
 </details>
 
-### 1. Installation
+### 1. Installation & Configuration
 
-Use `claude mcp add` for one-click installation and configuration:
+Use `claude mcp add-json` for one-click installation and configuration:
 
 ```bash
-claude mcp add grok-search -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/GrokSearch.git grok-search
+claude mcp add-json grok-search --scope user '{
+  "type": "stdio",
+  "command": "uvx",
+  "args": [
+    "--from",
+    "git+https://github.com/your-org/GrokSearch.git",
+    "grok-search"
+  ],
+  "env": {
+    "GROK_API_URL": "https://api.example.com/v1",
+    "GROK_API_KEY": "your-api-key-here"
+  }
+}'
 ```
 
-### 2. Configuration
+#### Configuration Guide
 
-#### Configuration File Description
+Configuration is done through **environment variables**, set directly in the `env` field during installation:
 
-Configuration file location:
-- **Auto-created location**: `~/.config/grok-search/config.toml`
-
-A configuration file template will be automatically created on first run. **You must configure the URL and KEY**, otherwise you cannot access the service.
-
-Edit the `config.toml` file:
-
-```toml
-[debug]
-enabled = false  # Set to false for production, true for development debugging
-
-[grok]
-api_url = "https://your-grok-api-endpoint.com/v1"  # Replace with actual Grok API address (currently supports OpenAI format)
-api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"    # Replace with your actual API Key
-
-[logging]
-level = "INFO"  # Log level: DEBUG, INFO, WARNING, ERROR
-dir = "logs"    # Log file storage directory
-```
-Welcome to use our service https://cc.guda.studio/
+| Environment Variable | Required | Default | Description |
+|---------------------|----------|---------|-------------|
+| `GROK_API_URL` | ✅ | - | Grok API endpoint (OpenAI-compatible format) |
+| `GROK_API_KEY` | ✅ | - | Your API Key |
+| `GROK_DEBUG` | ❌ | `false` | Enable debug mode (`true`/`false`) |
+| `GROK_LOG_LEVEL` | ❌ | `INFO` | Log level (DEBUG/INFO/WARNING/ERROR) |
+| `GROK_LOG_DIR` | ❌ | `logs` | Log file storage directory |
 
 ⚠️ **Security Notes**:
-- Do not commit `config.toml` containing real API Keys to Git
-- This file is already excluded in `.gitignore`
-- User directory configuration (`~/.config/grok-search/`) will not be tracked by Git
+- API Keys are stored in Claude Code configuration file (`~/.config/claude/mcp.json`), please protect this file
+- Do not share configurations containing real API Keys or commit them to version control
 
-### 3. Verify Installation
+### 2. Verify Installation
 
 ```bash
 claude mcp list
@@ -155,7 +153,7 @@ claude mcp list
 
 You should see the `grok-search` server registered.
 
-### 4. Project Details
+### 3. Project Details
 
 #### Tool Response Format
 
@@ -186,12 +184,11 @@ JSON structure returned by the `web_search` tool:
 
 ```
 grok-search/
-├── config.toml.example         # Configuration file template
 ├── pyproject.toml              # Project metadata and dependencies
 ├── README.md                   # Project documentation
 └── src/grok_search/
     ├── __init__.py             # Package entry
-    ├── config.py               # Configuration management (TOML loading)
+    ├── config.py               # Configuration management (environment variable loading)
     ├── logger.py               # Logging system
     ├── server.py               # MCP server main program
     ├── utils.py                # Result formatting utilities
@@ -206,7 +203,7 @@ grok-search/
 | Module | Responsibility |
 |--------|---------------|
 | `server.py` | FastMCP service entry, registers `web_search` tool |
-| `config.py` | Singleton pattern for TOML configuration management |
+| `config.py` | Singleton pattern for environment variable configuration management |
 | `providers/base.py` | Defines `SearchProvider` abstract interface and `SearchResult` data model |
 | `providers/grok.py` | Implements Grok API calls and response parsing |
 | `utils.py` | Formats search results into AI-friendly text |
@@ -223,9 +220,9 @@ Having problems or suggestions? Please [submit an Issue](https://github.com/your
 <summary><b>Q: How do I get Grok API access?</b></summary>
 
 A: This project uses third-party platforms to relay Grok API. You need to:
-1. Register with a third-party service that supports Grok (such as some AI Gateways)
+1. Register with a third-party service that supports Grok
 2. Obtain API Endpoint and API Key
-3. Configure the relevant information in `config.toml`
+3. Configure environment variables using `claude mcp add-json` command (see Installation & Configuration section)
 </details>
 
 <details>

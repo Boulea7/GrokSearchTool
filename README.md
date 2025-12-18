@@ -61,7 +61,7 @@ Claude/Claude Code → MCP 调用 → Search MCP 服务 → 转接 Grok API → 
 ## 功能特性
 
 - ✅ 通过 OpenAI 兼容格式调用 Grok 搜索能力
-- ✅ 灵活的 TOML 配置文件管理
+- ✅ 环境变量配置，安全便捷
 - ✅ 格式化搜索结果输出（标题 + 链接 + 摘要）
 - ✅ 可扩展架构，支持添加其他搜索 Provider
 - ✅ 完善的日志系统，便于调试和监控
@@ -118,49 +118,42 @@ wget -qO- https://astral.sh/uv/install.sh | sh
 - 注册支持 Grok 的第三方平台账户
 - 获取 API Endpoint 和 API Key
 
-<!-- 如果您正在为订阅和配置而忧愁，我们非常欢迎您[积极联系我们](https://cc.guda.studio)。 -->
 
 </details>
 
-### 1. 安装
+### 1. 安装与配置
 
-使用 `claude mcp add` 一键安装并配置：
+使用 `claude mcp add-json` 一键安装并配置：
 
 ```bash
-claude mcp add grok-search -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/GrokSearch.git grok-search
+claude mcp add-json grok-search --scope user '{
+  "type": "stdio",
+  "command": "uvx",
+  "args": [
+    "--from",
+    "git+https://github.com/your-org/GrokSearch.git",
+    "grok-search"
+  ],
+  "env": {
+    "GROK_API_URL": "https://api.example.com/v1",
+    "GROK_API_KEY": "your-api-key-here"
+  }
+}'
 ```
 
-### 2. 配置
+#### 配置说明
 
-#### 配置文件说明
+配置通过**环境变量**进行，安装时直接在 `env` 字段中设置：
 
-配置文件位置：
-- **自动创建位置**：`~/.config/grok-search/config.toml`
+| 环境变量 | 必填 | 默认值 | 说明 |
+|---------|------|--------|------|
+| `GROK_API_URL` | ✅ | - | Grok API 地址（支持 OpenAI 格式） |
+| `GROK_API_KEY` | ✅ | - | 您的 API Key |
+| `GROK_DEBUG` | ❌ | `false` | 调试模式开关（`true`/`false`） |
+| `GROK_LOG_LEVEL` | ❌ | `INFO` | 日志级别（DEBUG/INFO/WARNING/ERROR） |
+| `GROK_LOG_DIR` | ❌ | `logs` | 日志文件存储目录 |
 
-首次运行时会自动创建配置文件模板，**务必配置好URL，以及KEY**，否则无法访问服务。
-
-编辑 `config.toml` 文件：
-
-```toml
-[debug]
-enabled = false  # 生产环境设为 false，开发调试时设为 true
-
-[grok]
-api_url = "https://your-grok-api-endpoint.com/v1"  # 替换为实际的 Grok API 地址（目前支持Openai格式）
-api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"    # 替换为您的实际 API Key
-
-[logging]
-level = "INFO"  # 日志级别：DEBUG, INFO, WARNING, ERROR
-dir = "logs"    # 日志文件存储目录
-```
-欢迎使用我们的服务 https://cc.guda.studio/ 
-
-⚠️ **安全提示**：
-- 请勿将包含真实 API Key 的 `config.toml` 提交到 Git
-- 项目已在 `.gitignore` 中排除此文件
-- 用户目录配置（`~/.config/grok-search/`）不会被 Git 追踪
-
-### 3. 验证安装：
+### 2. 验证安装
 
 ```bash
 claude mcp list
@@ -168,7 +161,7 @@ claude mcp list
 
 应能看到 `grok-search` 服务器已注册。
 
-### 4. 项目相关说明
+### 3. 项目相关说明
 
 #### MCP 工具说明
 
@@ -235,12 +228,11 @@ fetched_at: [抓取时间]
 
 ```
 grok-search/
-├── config.toml.example         # 配置文件模板
 ├── pyproject.toml              # 项目元数据与依赖
 ├── README.md                   # 项目文档
 └── src/grok_search/
     ├── __init__.py             # 包入口
-    ├── config.py               # 配置管理（TOML 加载）
+    ├── config.py               # 配置管理（环境变量加载）
     ├── logger.py               # 日志系统
     ├── server.py               # MCP 服务器主程序
     ├── utils.py                # 结果格式化工具
@@ -255,16 +247,12 @@ grok-search/
 | 模块 | 职责 |
 |------|------|
 | `server.py` | FastMCP 服务入口，注册 `web_search` 和 `web_fetch` 工具 |
-| `config.py` | 单例模式管理 TOML 配置 |
+| `config.py` | 单例模式管理环境变量配置 |
 | `providers/base.py` | 定义 `SearchProvider` 抽象接口和 `SearchResult` 数据模型 |
 | `providers/grok.py` | 实现 Grok API 调用（搜索和内容抓取） |
 | `utils.py` | 格式化工具和 Prompt 模板管理 |
 
 ## Others
-
-### 提交 Issue
-
-遇到问题或有建议？请[提交 Issue](https://github.com/yourusername/grok-search/issues)。
 
 ## 常见问题
 
@@ -272,16 +260,11 @@ grok-search/
 <summary><b>Q: 如何获取 Grok API 访问权限？</b></summary>
 
 A: 本项目使用第三方平台转接 Grok API。您需要：
-1. 注册支持 Grok 的第三方服务（如某些 AI Gateway）
+1. 注册支持 Grok 的第三方服务
 2. 获取 API Endpoint 和 API Key
-3. 在 `config.toml` 中配置相关信息
+3. 使用 `claude mcp add-json` 命令配置环境变量（参见安装配置章节）
 </details>
 
-<details>
-<summary><b>Q: 可以同时使用多个搜索 Provider 吗？</b></summary>
-
-A: 当前版本仅支持单一 Provider。多 Provider 支持已在路线图中，将在未来版本实现。
-</details>
 
 <details>
 <summary><b>Q: 搜索结果数量如何控制？</b></summary>
@@ -302,11 +285,6 @@ A: `web_search` 工具支持 `platform` 参数，可以指定搜索聚焦的平�
 - 留空则搜索全网
 </details>
 
-<details>
-<summary><b>Q: 支持其他 AI 模型吗？</b></summary>
-
-A: 支持！任何兼容 MCP 协议的客户端都可以使用，包括但不限于 Claude Desktop、Claude Code、其他 MCP 客户端。
-</details>
 
 ## 许可证
 
@@ -318,5 +296,4 @@ A: 支持！任何兼容 MCP 协议的客户端都可以使用，包括但不限
 
 **如果这个项目对您有帮助，请给个 ⭐ Star！**
 [![Star History Chart](https://api.star-history.com/svg?repos=GuDaStudio/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#GuDaStudio/GrokSearch&type=date&legend=top-left)
-
 </div>

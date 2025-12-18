@@ -28,8 +28,7 @@ mcp = FastMCP("grok-search")
         - `url`: the link to the result
         - `title`: a short title
         - `summary`: a brief description or snippet of the page content.
-    """,
-    meta={"author": "GuDa"}
+    """
 )
 async def web_search(query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx: Context = None) -> str:
     try:
@@ -79,8 +78,7 @@ async def web_search(query: str, platform: str = "", min_results: int = 3, max_r
     - Handles special characters, encoding (UTF-8), and nested structures
     - May not capture dynamically loaded content requiring JavaScript execution
     - Respects the original language without translation
-    """,
-    meta={"author": "GuDa"}
+    """
 )
 async def web_fetch(url: str, ctx: Context = None) -> str:
     try:

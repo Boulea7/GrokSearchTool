@@ -1,101 +1,55 @@
-import tomllib
-import shutil
+import os
 from pathlib import Path
-from typing import Any
 
 class Config:
     _instance = None
-    _config_data: dict[str, Any] = {}
-    _config_path: Path = None
-    
+    _SETUP_COMMAND = (
+        'claude mcp add-json grok-search --scope user '
+        '\'{"type":"stdio","command":"uvx","args":["--from",'
+        '"git+https://github.com/your-org/GrokSearch.git","grok-search"],'
+        '"env":{"GROK_API_URL":"your-api-url","GROK_API_KEY":"your-api-key"}}\''
+    )
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._load_config()
         return cls._instance
-    
-    def _get_config_path(self) -> Path:
-        user_config_dir = Path.home() / ".config" / "grok-search"
-        user_config_file = user_config_dir / "config.toml"
-        
-        if user_config_file.exists():
-            return user_config_file
-        
-        dev_config_file = Path(__file__).parent.parent.parent / "config.toml"
-        if dev_config_file.exists():
-            return dev_config_file
-        
-        return user_config_file
-    
-    def _create_default_config(self, config_path: Path):
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        example_file = Path(__file__).parent.parent.parent / "config.toml.example"
-        if example_file.exists():
-            shutil.copy(example_file, config_path)
-        else:
-            default_content = """[debug]
-enabled = false
 
-[grok]
-api_url = "https://cc.guda.studio/grok/v1"
-api_key = "YOUR_API_KEY_HERE"
-
-[logging]
-level = "INFO"
-dir = "logs"
-"""
-            config_path.write_text(default_content, encoding="utf-8")
-    
-    def _load_config(self):
-        self._config_path = self._get_config_path()
-        
-        if not self._config_path.exists():
-            self._create_default_config(self._config_path)
-        
-        with open(self._config_path, "rb") as f:
-            self._config_data = tomllib.load(f)
-    
     @property
     def debug_enabled(self) -> bool:
-        return self._config_data.get("debug", {}).get("enabled", False)
-    
+        return os.getenv("GROK_DEBUG", "false").lower() in ("true", "1", "yes")
+
     @property
     def grok_api_url(self) -> str:
-        url = self._config_data.get("grok", {}).get("api_url")
-        if not url or url == "YOUR_API_URL":
+        url = os.getenv("GROK_API_URL")
+        if not url:
             raise ValueError(
                 f"Grok API URL 未配置！\n"
-                f"请编辑配置文件: {self._config_path}\n"
-                f"设置 [grok] 部分的 api_url 为您的实际 API 地址"
+                f"请使用以下命令配置 MCP 服务器：\n{self._SETUP_COMMAND}"
             )
         return url
-    
+
     @property
     def grok_api_key(self) -> str:
-        key = self._config_data.get("grok", {}).get("api_key")
-        if not key or key == "YOUR_API_KEY_HERE":
+        key = os.getenv("GROK_API_KEY")
+        if not key:
             raise ValueError(
                 f"Grok API Key 未配置！\n"
-                f"请编辑配置文件: {self._config_path}\n"
-                f"设置 [grok] 部分的 api_key 为您的实际 API Key"
+                f"请使用以下命令配置 MCP 服务器：\n{self._SETUP_COMMAND}"
             )
         return key
-    
+
     @property
     def log_level(self) -> str:
-        return self._config_data.get("logging", {}).get("level", "INFO")
-    
+        return os.getenv("GROK_LOG_LEVEL", "INFO").upper()
+
     @property
     def log_dir(self) -> Path:
-        log_dir_str = self._config_data.get("logging", {}).get("dir", "logs")
+        log_dir_str = os.getenv("GROK_LOG_DIR", "logs")
         if Path(log_dir_str).is_absolute():
             return Path(log_dir_str)
         user_log_dir = Path.home() / ".config" / "grok-search" / log_dir_str
+        user_log_dir.mkdir(parents=True, exist_ok=True)
         return user_log_dir
-    
-    @property
-    def config_path(self) -> Path:
-        return self._config_path
 
 config = Config()
