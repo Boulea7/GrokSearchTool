@@ -6,7 +6,7 @@ class Config:
     _SETUP_COMMAND = (
         'claude mcp add-json grok-search --scope user '
         '\'{"type":"stdio","command":"uvx","args":["--from",'
-        '"git+https://github.com/your-org/GrokSearch.git","grok-search"],'
+        '"git+https://github.com/GuDaStudio/GrokSearch","grok-search"],'
         '"env":{"GROK_API_URL":"your-api-url","GROK_API_KEY":"your-api-key"}}\''
     )
 

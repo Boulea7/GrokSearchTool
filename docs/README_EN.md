@@ -94,7 +94,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/your-org/GrokSearch.git",
+    "git+https://github.com/GuDaStudio/GrokSearch",
     "grok-search"
   ],
   "env": {
