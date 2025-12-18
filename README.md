@@ -90,6 +90,7 @@ wget -qO- https://astral.sh/uv/install.sh | sh
 ### 1. 安装与配置
 
 使用 `claude mcp add-json` 一键安装并配置：
+**注意：**  需要替换 **GROK_API_URL** 以及 **GROK_API_KEY**这两个字段为你自己的站点以及密钥，目前只支持openai格式，所以如果需要使用grok，也需要使用转为openai格式的grok镜像站
 
 ```bash
 claude mcp add-json grok-search --scope user '{
