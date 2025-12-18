@@ -52,4 +52,32 @@ class Config:
         user_log_dir.mkdir(parents=True, exist_ok=True)
         return user_log_dir
 
+    @staticmethod
+    def _mask_api_key(key: str) -> str:
+        """脱敏显示 API Key，只显示前后各 4 个字符"""
+        if not key or len(key) <= 8:
+            return "***"
+        return f"{key[:4]}{'*' * (len(key) - 8)}{key[-4:]}"
+
+    def get_config_info(self) -> dict:
+        """获取配置信息（API Key 已脱敏）"""
+        try:
+            api_url = self.grok_api_url
+            api_key_raw = self.grok_api_key
+            api_key_masked = self._mask_api_key(api_key_raw)
+            config_status = "✅ 配置完整"
+        except ValueError as e:
+            api_url = "未配置"
+            api_key_masked = "未配置"
+            config_status = f"❌ 配置错误: {str(e)}"
+
+        return {
+            "api_url": api_url,
+            "api_key": api_key_masked,
+            "debug_enabled": self.debug_enabled,
+            "log_level": self.log_level,
+            "log_dir": str(self.log_dir),
+            "config_status": config_status
+        }
+
 config = Config()

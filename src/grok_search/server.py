@@ -96,6 +96,107 @@ async def web_fetch(url: str, ctx: Context = None) -> str:
     return results
 
 
+@mcp.tool(
+    name="get_config_info",
+    description="""
+    Returns the current Grok Search MCP server configuration information and tests the connection.
+
+    This tool is useful for:
+    - Verifying that environment variables are correctly configured
+    - Testing API connectivity by sending a request to /models endpoint
+    - Debugging configuration issues
+    - Checking the current API endpoint and settings
+
+    Returns
+    -------
+    str
+        A JSON-encoded string containing configuration details:
+        - `api_url`: The configured Grok API endpoint
+        - `api_key`: The API key (masked for security, showing only first and last 4 characters)
+        - `debug_enabled`: Whether debug mode is enabled
+        - `log_level`: Current logging level
+        - `log_dir`: Directory where logs are stored
+        - `config_status`: Overall configuration status (✅ complete or ❌ error)
+        - `connection_test`: Result of testing API connectivity to /models endpoint
+
+    Notes
+    -----
+    - API keys are automatically masked for security
+    - This tool does not require any parameters
+    - Useful for troubleshooting before making actual search requests
+    - Automatically tests API connectivity during execution
+    """
+)
+async def get_config_info() -> str:
+    import json
+    import httpx
+
+    config_info = config.get_config_info()
+
+    # 添加连接测试
+    test_result = {
+        "status": "未测试",
+        "message": "",
+        "response_time_ms": 0
+    }
+
+    try:
+        api_url = config.grok_api_url
+        api_key = config.grok_api_key
+
+        # 构建 /models 端点 URL
+        models_url = f"{api_url.rstrip('/')}/models"
+
+        # 发送测试请求
+        import time
+        start_time = time.time()
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                models_url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+            )
+
+            response_time = (time.time() - start_time) * 1000  # 转换为毫秒
+
+            if response.status_code == 200:
+                test_result["status"] = "✅ 连接成功"
+                test_result["message"] = f"成功获取模型列表 (HTTP {response.status_code})"
+                test_result["response_time_ms"] = round(response_time, 2)
+
+                # 尝试解析返回的模型列表
+                try:
+                    models_data = response.json()
+                    if "data" in models_data and isinstance(models_data["data"], list):
+                        model_count = len(models_data["data"])
+                        test_result["message"] += f"，共 {model_count} 个模型"
+                except:
+                    pass
+            else:
+                test_result["status"] = "⚠️ 连接异常"
+                test_result["message"] = f"HTTP {response.status_code}: {response.text[:100]}"
+                test_result["response_time_ms"] = round(response_time, 2)
+
+    except httpx.TimeoutException:
+        test_result["status"] = "❌ 连接超时"
+        test_result["message"] = "请求超时（10秒），请检查网络连接或 API URL"
+    except httpx.RequestError as e:
+        test_result["status"] = "❌ 连接失败"
+        test_result["message"] = f"网络错误: {str(e)}"
+    except ValueError as e:
+        test_result["status"] = "❌ 配置错误"
+        test_result["message"] = str(e)
+    except Exception as e:
+        test_result["status"] = "❌ 测试失败"
+        test_result["message"] = f"未知错误: {str(e)}"
+
+    config_info["connection_test"] = test_result
+
+    return json.dumps(config_info, ensure_ascii=False, indent=2)
+
 
 def main():
     mcp.run(transport="stdio")

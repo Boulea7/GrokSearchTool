@@ -20,31 +20,13 @@
 Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的 MCP（Model Context Protocol）服务器，通过转接第三方平台（如 Grok）的强大搜索能力，为 Claude、Claude Code 等 AI 模型提供实时网络搜索功能。
 
 ### 核心价值
-
 - **突破知识截止限制**：让 Claude 访问最新的网络信息，不再受训练数据时间限制
 - **增强事实核查**：实时搜索验证信息的准确性和时效性
 - **结构化输出**：返回包含标题、链接、摘要的标准化 JSON，便于 AI 模型理解与引用
 - **即插即用**：通过 MCP 协议无缝集成到 Claude Desktop、Claude Code 等客户端
 
-### 工作原理
 
-```
-Claude/Claude Code → MCP 调用 → Search MCP 服务 → 转接 Grok API → 网络搜索/内容抓取 → 结构化结果返回
-```
-
-**`web_search` 搜索流程**：
-1. Claude 通过 MCP 协议调用 `web_search` 工具
-2. Search MCP 将请求转发到 Grok 第三方平台（OpenAI 兼容接口）
-3. Grok 执行实时网络搜索并返回结果
-4. Search MCP 格式化为结构化 JSON：`{title, url, content}`
-5. Claude 基于搜索结果生成更准确、更新的回答
-
-**`web_fetch` 抓取流程**：
-1. Claude 通过 MCP 协议调用 `web_fetch` 工具
-2. Search MCP 将 URL 发送到 Grok API
-3. Grok 获取网页内容并解析 HTML 结构
-4. 返回包含元数据、目录、正文的结构化 Markdown 文档
-5. Claude 基于完整网页内容进行分析和回答
+**工作流程**：`Claude → MCP → Grok API → 搜索/抓取 → 结构化返回`
 
 ## 为什么选择 Grok？
 
@@ -60,22 +42,14 @@ Claude/Claude Code → MCP 调用 → Search MCP 服务 → 转接 Grok API → 
 
 ## 功能特性
 
-- ✅ 通过 OpenAI 兼容格式调用 Grok 搜索能力
-- ✅ 环境变量配置，安全便捷
-- ✅ 格式化搜索结果输出（标题 + 链接 + 摘要）
+- ✅ OpenAI 兼容接口，环境变量配置
+- ✅ 实时网络搜索 + 网页内容抓取
+- ✅ 支持指定搜索平台（Twitter、Reddit、GitHub 等）
+- ✅ 配置测试工具（连接测试 + API Key 脱敏）
 - ✅ 可扩展架构，支持添加其他搜索 Provider
-- ✅ 完善的日志系统，便于调试和监控
-- ✅ 调试模式开关，方便开发测试
-- ✅ 支持指定聚焦的搜索平台（如 Twitter、Reddit、GitHub 等）
-- ✅ 可配置搜索结果数量范围
-- ✅ 网页内容抓取：自动获取 URL 内容并转换为结构化 Markdown
 
 ## 快速开始
 
-<details>
-<summary><h3>0. 前置要求（点击展开）</h3></summary>
-
-#### 安装必要工具
 
 **Python 环境**：
 - Python 3.10 或更高版本
@@ -87,12 +61,13 @@ Claude/Claude Code → MCP 调用 → Search MCP 服务 → 转接 Grok API → 
 
 <details>
 <summary><b>Windows 安装</b></summary>
-
 在 PowerShell 中运行以下命令：
 
 ```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
+
+**💡 重要提示** ：我们 **强烈推荐** Windows 用户在 WSL（Windows Subsystem for Linux）中运行本项目！
 
 </details>
 
@@ -111,15 +86,6 @@ wget -qO- https://astral.sh/uv/install.sh | sh
 
 </details>
 
-> **💡 重要提示**：我们**强烈推荐** Windows 用户在 WSL（Windows Subsystem for Linux）中运行本项目！
-
-#### 获取 Grok API 访问权限
-
-- 注册支持 Grok 的第三方平台账户
-- 获取 API Endpoint 和 API Key
-
-
-</details>
 
 ### 1. 安装与配置
 
@@ -161,11 +127,128 @@ claude mcp list
 
 应能看到 `grok-search` 服务器已注册。
 
-### 3. 项目相关说明
+### 3. 测试配置
+
+配置完成后，**强烈建议**在 Claude 对话中运行配置测试，以确保一切正常：
+
+在 Claude 对话中输入：
+```
+请测试 Grok Search 的配置
+```
+
+或直接说：
+```
+显示 grok-search 配置信息
+```
+
+工具会自动执行以下检查：
+- ✅ 验证环境变量是否正确加载
+- ✅ 测试 API 连接（向 `/models` 端点发送请求）
+- ✅ 显示响应时间和可用模型数量
+- ✅ 识别并报告任何配置错误
+
+**成功示例输出**：
+```json
+{
+  "api_url": "https://cc.guda.studio/grok/v1",
+  "api_key": "sk-a*****************xyz",
+  "config_status": "✅ 配置完整",
+  "connection_test": {
+    "status": "✅ 连接成功",
+    "message": "成功获取模型列表 (HTTP 200)，共 5 个模型",
+    "response_time_ms": 234.56
+  }
+}
+```
+
+如果看到 `❌ 连接失败` 或 `⚠️ 连接异常`，请检查：
+- API URL 是否正确
+- API Key 是否有效
+- 网络连接是否正常
+
+### 4. 高级配置（可选）
+为了更好的使用Grok Search 可以通过配置Claude Code或者类似的系统提示词来对整体Vibe Coding Cli进行优化，以Claude Code 为例可以编辑 ~/.claude/CLAUDE.md中坠下下面内容：
+<details>
+<summary><b>💡 Grok Search Enhance 系统提示词</b>（点击展开）</summary>
+
+  # Grok Search Enhance 系统提示词
+
+  ## 0. Module Activation
+  **触发条件**：当需要执行以下操作时，自动激活本模块并**强制替换**内置工具：
+  - 网络搜索 / 信息检索 / 事实核查
+  - 获取网页内容 / URL 解析 / 文档抓取
+  - 查询最新信息 / 突破知识截止限制
+
+  ## 1. Tool Routing Policy
+
+  ### 强制替换规则
+  | 需求场景 | ❌ 禁用 (Built-in) | ✅ 强制使用 (GrokSearch) |
+  | :--- | :--- | :--- |
+  | 网络搜索 | `WebSearch` | `mcp__grok-search__web_search` |
+  | 网页抓取 | `WebFetch` | `mcp__grok-search__web_fetch` |
+  | 配置诊断 | N/A | `mcp__grok-search__get_config_info` |
+
+  ### 工具能力矩阵
+
+  | Tool | Function | Key Parameters | Output Format | Use Case |
+  | :--- | :--- | :--- | :--- | :--- |
+  | **web_search** | 实时网络搜索 | `query` (必填)<br>`platform` (可选: Twitter/GitHub/Reddit)<br>`min_results` / `max_results` | JSON Array<br>`{title, url, content}` | • 事实核查<br>• 最新资讯<br>• 技术文档检索 |
+  | **web_fetch** | 网页内容抓取 | `url` (必填) | Structured Markdown<br>(含元数据头部) | • 完整文档获取<br>• 深度内容分析<br>• 链接内容验证 |
+  | **get_config_info** | 配置状态检测 | 无参数 | JSON<br>`{api_url, status, connection_test}` | • 连接问题诊断<br>• 首次使用验证 |
+
+  ## 2. Search Workflow
+
+  ### Phase 1: 查询构建 (Query Construction)
+  1.  **意图识别**：分析用户需求，确定搜索类型：
+      - **广度搜索**：多源信息聚合 → 使用 `web_search`
+      - **深度获取**：单一 URL 完整内容 → 使用 `web_fetch`
+  2.  **参数优化**：
+      - 若需聚焦特定平台，设置 `platform` 参数
+      - 根据需求复杂度调整 `min_results` / `max_results`
+
+  ### Phase 2: 搜索执行 (Search Execution)
+  1.  **首选策略**：优先使用 `web_search` 获取结构化摘要
+  2.  **深度补充**：若摘要不足以回答问题，对关键 URL 调用 `web_fetch` 获取完整内容
+  3.  **迭代检索**：若首轮结果不满足需求，**调整查询词**后重新搜索（禁止直接放弃）
+
+  ### Phase 3: 结果整合 (Result Synthesis)
+  1.  **信息验证**：交叉比对多源结果，识别矛盾信息
+  2.  **时效标注**：对时间敏感信息，**必须**标注信息来源与时间
+  3.  **引用规范**：输出中**强制包含**来源 URL，格式：`[标题](URL)`
+
+  ## 3. Error Handling
+
+  | 错误类型 | 诊断方法 | 恢复策略 |
+  | :--- | :--- | :--- |
+  | 连接失败 | 调用 `get_config_info` 检查配置 | 提示用户检查 API URL / Key |
+  | 无搜索结果 | 检查 query 是否过于具体 | 放宽搜索词，移除限定条件 |
+  | 网页抓取超时 | 检查 URL 可访问性 | 尝试搜索替代来源 |
+  | 内容被截断 | 检查目标页面结构 | 分段抓取或提示用户直接访问 |
+
+  ## 4. Anti-Patterns
+
+  | ❌ 禁止行为 | ✅ 正确做法 |
+  | :--- | :--- |
+  | 使用内置 `WebSearch` / `WebFetch` | **强制**使用 GrokSearch 对应工具 |
+  | 搜索后不标注来源 | 输出**必须**包含 `[来源](URL)` 引用 |
+  | 单次搜索失败即放弃 | 调整参数后至少重试 1 次 |
+  | 假设网页内容而不抓取 | 对关键信息**必须**调用 `web_fetch` 验证 |
+  | 忽略搜索结果的时效性 | 时间敏感信息**必须**标注日期 |
+
+  ---
+  模块说明：
+  - 强制替换：明确禁用内置工具，强制路由到 GrokSearch
+  - 三工具覆盖：web_search + web_fetch + get_config_info
+  - 错误处理：包含配置诊断的恢复策略
+  - 引用规范：强制标注来源，符合信息可追溯性要求
+
+</details>
+
+### 5. 项目相关说明
 
 #### MCP 工具说明
 
-本项目提供两个 MCP 工具：
+本项目提供三个 MCP 工具：
 
 ##### `web_search` - 网络搜索
 
@@ -176,115 +259,63 @@ claude mcp list
 | `min_results` | int | ❌ | `3` | 最少返回结果数 |
 | `max_results` | int | ❌ | `10` | 最多返回结果数 |
 
-返回 JSON 结构：
-
-```json
-{
-  "results": [
-    {
-      "title": "FastMCP - Python framework for MCP servers",
-      "url": "https://github.com/jlowin/fastmcp",
-      "content": "FastMCP is a Python framework..."
-    }
-  ],
-  "provider": "grok",
-  "query": "FastMCP latest version"
-}
-```
+**返回**：包含 `title`、`url`、`content` 的 JSON 数组
 
 ##### `web_fetch` - 网页内容抓取
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `url` | string | ✅ | 目标网页 URL（HTTP/HTTPS） |
+| `url` | string | ✅ | 目标网页 URL |
 
-功能特点：
-- 获取完整网页 HTML 内容并解析
-- 自动转换为结构化 Markdown 格式
-- 保留原网页的标题层级、列表、表格、代码块等元素
-- 输出包含元数据头部（来源 URL、标题、抓取时间）
-- 移除脚本、样式等非内容元素
+**功能**：获取完整网页内容并转换为结构化 Markdown，保留标题层级、列表、表格、代码块等元素
 
-返回 Markdown 结构示例：
+##### `get_config_info` - 配置信息查询
 
-```markdown
----
-source: [原始URL]
-title: [网页标题]
-fetched_at: [抓取时间]
----
+**无需参数**。显示配置状态、测试 API 连接、返回响应时间和可用模型数量（API Key 自动脱敏）
 
-## 目录
-- [章节1](#章节1)
-- [章节2](#章节2)
+<details>
+<summary><b>返回示例</b>（点击展开）</summary>
 
-## 章节1
-网页正文内容...
+```json
+{
+  "api_url": "https://cc.guda.studio/grok/v1",
+  "api_key": "sk-a*****************xyz",
+  "config_status": "✅ 配置完整",
+  "connection_test": {
+    "status": "✅ 连接成功",
+    "message": "成功获取模型列表 (HTTP 200)，共 5 个模型",
+    "response_time_ms": 234.56
+  }
+}
 ```
 
+</details>
+
 ---
 
-## 项目架构
+<details>
+<summary><h2>项目架构</h2>（点击展开）</summary>
 
 ```
-grok-search/
-├── pyproject.toml              # 项目元数据与依赖
-├── README.md                   # 项目文档
-└── src/grok_search/
-    ├── __init__.py             # 包入口
-    ├── config.py               # 配置管理（环境变量加载）
-    ├── logger.py               # 日志系统
-    ├── server.py               # MCP 服务器主程序
-    ├── utils.py                # 结果格式化工具
-    └── providers/              # 搜索 Provider 抽象层
-        ├── __init__.py
-        ├── base.py             # SearchProvider 基类
-        └── grok.py             # Grok API 实现
+src/grok_search/
+├── config.py          # 配置管理（环境变量）
+├── server.py          # MCP 服务入口（注册工具）
+├── logger.py          # 日志系统
+├── utils.py           # 格式化工具
+└── providers/
+    ├── base.py        # SearchProvider 基类
+    └── grok.py        # Grok API 实现
 ```
 
-### 核心模块说明
-
-| 模块 | 职责 |
-|------|------|
-| `server.py` | FastMCP 服务入口，注册 `web_search` 和 `web_fetch` 工具 |
-| `config.py` | 单例模式管理环境变量配置 |
-| `providers/base.py` | 定义 `SearchProvider` 抽象接口和 `SearchResult` 数据模型 |
-| `providers/grok.py` | 实现 Grok API 调用（搜索和内容抓取） |
-| `utils.py` | 格式化工具和 Prompt 模板管理 |
-
-## Others
+</details>
 
 ## 常见问题
 
-<details>
-<summary><b>Q: 如何获取 Grok API 访问权限？</b></summary>
+**Q: 如何获取 Grok API 访问权限？**
+A: 注册第三方平台 → 获取 API Endpoint 和 Key → 使用 `claude mcp add-json` 配置
 
-A: 本项目使用第三方平台转接 Grok API。您需要：
-1. 注册支持 Grok 的第三方服务
-2. 获取 API Endpoint 和 API Key
-3. 使用 `claude mcp add-json` 命令配置环境变量（参见安装配置章节）
-</details>
-
-
-<details>
-<summary><b>Q: 搜索结果数量如何控制？</b></summary>
-
-A: `web_search` 工具接受以下参数控制搜索结果：
-- `min_results`：最少返回结果数（默认 3）
-- `max_results`：最多返回结果数（默认 10）
-
-Claude 会根据需要自动调整这些参数。
-</details>
-
-<details>
-<summary><b>Q: 如何指定搜索特定平台？</b></summary>
-
-A: `web_search` 工具支持 `platform` 参数，可以指定搜索聚焦的平台。例如：
-- `platform="Twitter"` - 聚焦 Twitter 搜索结果
-- `platform="GitHub, Reddit"` - 聚焦 GitHub 和 Reddit 的结果
-- 留空则搜索全网
-</details>
-
+**Q: 配置后如何验证？**
+A: 在 Claude 对话中说"显示 grok-search 配置信息"，查看连接测试结果
 
 ## 许可证
 
