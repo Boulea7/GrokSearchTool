@@ -94,7 +94,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Nick-Hogo/GrokSearch",
+    "git+https://github.com/GuDaStudio/GrokSearch",
     "grok-search"
   ],
   "env": {
@@ -417,6 +417,6 @@ This project is open source under the [MIT License](LICENSE).
 <div align="center">
 
 **If this project helps you, please give it a ⭐ Star!**
-[![Star History Chart](https://api.star-history.com/svg?repos=Nick-Hogo/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#Nick-Hogo/GrokSearch&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=GuDaStudio/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#GuDaStudio/GrokSearch&type=date&legend=top-left)
 
 </div>
