@@ -28,8 +28,8 @@ Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构
 
 **工作流程**：`Claude → MCP → Grok API → 搜索/抓取 → 结构化返回`
 
-## 为什么选择 Grok？
-
+<details>
+<summary><b>💡 更多选择Grok  search 的理由</b></summary>
 与其他搜索方案对比：
 
 | 特性 | Grok Search MCP | Google Custom Search API | Bing Search API | SerpAPI |
@@ -47,9 +47,12 @@ Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构
 - ✅ 支持指定搜索平台（Twitter、Reddit、GitHub 等）
 - ✅ 配置测试工具（连接测试 + API Key 脱敏）
 - ✅ 可扩展架构，支持添加其他搜索 Provider
+</details>
 
-## 快速开始
+## 安装教程
+### Step 0.前期准备（若已经安装uv则跳过该步骤）
 
+<details>
 
 **Python 环境**：
 - Python 3.10 或更高版本
@@ -59,8 +62,7 @@ Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构
 
 请确保您已成功安装 [uv 工具](https://docs.astral.sh/uv/getting-started/installation/)：
 
-<details>
-<summary><b>Windows 安装</b></summary>
+#### Windows 安装 uv
 在 PowerShell 中运行以下命令：
 
 ```powershell
@@ -69,10 +71,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 
 **💡 重要提示** ：我们 **强烈推荐** Windows 用户在 WSL（Windows Subsystem for Linux）中运行本项目！
 
-</details>
-
-<details>
-<summary><b>Linux/macOS 安装</b></summary>
+#### Linux/macOS 安装 uv
 
 使用 curl 或 wget 下载并安装：
 
@@ -87,7 +86,7 @@ wget -qO- https://astral.sh/uv/install.sh | sh
 </details>
 
 
-### 1. 安装与配置
+### Step 1. 安装 Grok Search MCP 
 
 使用 `claude mcp add-json` 一键安装并配置：
 **注意：**  需要替换 **GROK_API_URL** 以及 **GROK_API_KEY**这两个字段为你自己的站点以及密钥，目前只支持openai格式，所以如果需要使用grok，也需要使用转为openai格式的grok镜像站
@@ -98,7 +97,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/GuDaStudio/GrokSearch",
+    "git+https://github.com/Nick-Hogo/GrokSearch",
     "grok-search"
   ],
   "env": {
@@ -108,27 +107,14 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
-#### 配置说明
 
-配置通过**环境变量**进行，安装时直接在 `env` 字段中设置：
-
-| 环境变量 | 必填 | 默认值 | 说明 |
-|---------|------|--------|------|
-| `GROK_API_URL` | ✅ | - | Grok API 地址（支持 OpenAI 格式） |
-| `GROK_API_KEY` | ✅ | - | 您的 API Key |
-| `GROK_DEBUG` | ❌ | `false` | 调试模式开关（`true`/`false`） |
-| `GROK_LOG_LEVEL` | ❌ | `INFO` | 日志级别（DEBUG/INFO/WARNING/ERROR） |
-| `GROK_LOG_DIR` | ❌ | `logs` | 日志文件存储目录 |
-
-### 2. 验证安装
+### Step 2. 验证安装 & 检查MCP配置
 
 ```bash
 claude mcp list
 ```
 
 应能看到 `grok-search` 服务器已注册。
-
-### 3. 测试配置
 
 配置完成后，**强烈建议**在 Claude 对话中运行配置测试，以确保一切正常：
 
@@ -148,31 +134,50 @@ claude mcp list
 - ✅ 显示响应时间和可用模型数量
 - ✅ 识别并报告任何配置错误
 
-**成功示例输出**：
-```json
-{
-  "api_url": "https://YOUR-API-URL/grok/v1",
-  "api_key": "sk-a*****************xyz",
-  "config_status": "✅ 配置完整",
-  "connection_test": {
-    "status": "✅ 连接成功",
-    "message": "成功获取模型列表 (HTTP 200)，共 5 个模型",
-    "response_time_ms": 234.56
-  }
-}
-```
 
 如果看到 `❌ 连接失败` 或 `⚠️ 连接异常`，请检查：
 - API URL 是否正确
 - API Key 是否有效
 - 网络连接是否正常
 
-### 4. 高级配置（可选）
-为了更好的使用Grok Search 可以通过配置Claude Code或者类似的系统提示词来对整体Vibe Coding Cli进行优化，以Claude Code 为例可以编辑 ~/.claude/CLAUDE.md中坠下下面内容：
-<details>
-<summary><b>💡 Grok Search Enhance 系统提示词</b>（点击展开）</summary>
+### Step 3. 配置系统提示词
+为了更好的使用Grok Search 可以通过配置Claude Code或者类似的系统提示词来对整体Vibe Coding Cli进行优化，以Claude Code 为例可以编辑 ~/.claude/CLAUDE.md中追加下面内容，提供了两版使用详细版更能激活工具的能力：
+```markdown
+# Grok Search 提示词 精简版
+## 激活与路由
+**触发**：网络搜索/网页抓取/最新信息查询时自动激活
+**强制替换**：`WebSearch` → `mcp__grok-search__web_search` | `WebFetch` → `mcp__grok-search__web_fetch`
 
-  # Grok Search Enhance 系统提示词
+## 工具矩阵
+
+| Tool | Parameters | Output | Use Case |
+|------|------------|--------|----------|
+| `web_search` | `query`(必填), `platform`/`min_results`/`max_results`(可选) | `[{title,url,content}]` | 多源聚合/事实核查/最新资讯 |
+| `web_fetch` | `url`(必填) | Structured Markdown | 完整内容获取/深度分析 |
+| `get_config_info` | 无 | `{api_url,status,test}` | 连接诊断 |
+
+## 执行策略
+**查询构建**：广度用 `web_search`，深度用 `web_fetch`，特定平台设 `platform` 参数
+**搜索执行**：优先摘要 → 关键 URL 补充完整内容 → 结果不足调整查询重试（禁止放弃）
+**结果整合**：交叉验证 + **强制标注来源** `[标题](URL)` + 时间敏感信息注明日期
+
+## 错误恢复
+
+连接失败 → `get_config_info` 检查 | 无结果 → 放宽查询条件 | 超时 → 搜索替代源
+
+
+## 核心约束
+
+✅ 强制 GrokSearch 工具 + 输出必含来源引用 + 失败必重试 + 关键信息必验证
+❌ 禁用内置工具 + 禁止无来源输出 + 禁止单次放弃 + 禁止未验证假设
+```
+
+<details>
+<summary><b>💡 Grok Search Enhance 系统提示词（详细版）</b>（点击展开）</summary>
+
+````markdown
+
+  # Grok Search Enhance 系统提示词（详细版）
 
   ## 0. Module Activation
   **触发条件**：当需要执行以下操作时，自动激活本模块并**强制替换**内置工具：
@@ -242,10 +247,11 @@ claude mcp list
   - 三工具覆盖：web_search + web_fetch + get_config_info
   - 错误处理：包含配置诊断的恢复策略
   - 引用规范：强制标注来源，符合信息可追溯性要求
+````
 
 </details>
 
-### 5. 项目相关说明
+### 详细项目介绍
 
 #### MCP 工具说明
 
@@ -262,6 +268,29 @@ claude mcp list
 
 **返回**：包含 `title`、`url`、`content` 的 JSON 数组
 
+
+<details>
+<summary><b>返回示例</b>（点击展开）</summary>
+
+```json
+[
+  {
+    "title": "Claude Code - Anthropic官方CLI工具",
+    "url": "https://claude.com/claude-code",
+    "description": "Anthropic推出的官方命令行工具，支持MCP协议集成，提供代码生成和项目管理功能"
+  },
+  {
+    "title": "Model Context Protocol (MCP) 技术规范",
+    "url": "https://modelcontextprotocol.io/docs",
+    "description": "MCP协议官方文档，定义了AI模型与外部工具的标准化通信接口"
+  },
+  {
+    ...
+  }
+]
+```
+</details>
+
 ##### `web_fetch` - 网页内容抓取
 
 | 参数 | 类型 | 必填 | 说明 |
@@ -269,6 +298,33 @@ claude mcp list
 | `url` | string | ✅ | 目标网页 URL |
 
 **功能**：获取完整网页内容并转换为结构化 Markdown，保留标题层级、列表、表格、代码块等元素
+
+<details>
+<summary><b>返回示例</b>（点击展开）</summary>
+
+```markdown
+---
+source: https://modelcontextprotocol.io/docs/concepts/architecture
+title: MCP 架构设计文档
+fetched_at: 2024-01-15T10:30:00Z
+---
+
+# MCP 架构设计文档
+
+## 目录
+- [核心概念](#核心概念)
+- [协议层次](#协议层次)
+- [通信模式](#通信模式)
+
+## 核心概念
+
+Model Context Protocol (MCP) 是一个标准化的通信协议，用于连接 AI 模型与外部工具和数据源。
+...
+
+更多信息请访问 [官方文档](https://modelcontextprotocol.io)
+```
+</details>
+
 
 ##### `get_config_info` - 配置信息查询
 
@@ -327,5 +383,5 @@ A: 在 Claude 对话中说"显示 grok-search 配置信息"，查看连接测试
 <div align="center">
 
 **如果这个项目对您有帮助，请给个 ⭐ Star！**
-[![Star History Chart](https://api.star-history.com/svg?repos=GuDaStudio/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#GuDaStudio/GrokSearch&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=Nick-Hogo/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#Nick-hogo/GrokSearch&type=date&legend=top-left)
 </div>

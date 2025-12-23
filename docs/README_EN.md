@@ -94,7 +94,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/GuDaStudio/GrokSearch",
+    "git+https://github.com/Nick-Hogo/GrokSearch",
     "grok-search"
   ],
   "env": {
@@ -151,12 +151,15 @@ The tool will automatically perform the following checks:
 **Successful Output Example**:
 ```json
 {
-  "api_url": "https://YOUR-API-URL/grok/v1",
-  "api_key": "sk-a*****************xyz",
-  "config_status": "✅ 配置完整",
+  "GROK_API_URL": "https://YOUR-API-URL/grok/v1",
+  "GROK_API_KEY": "sk-a*****************xyz",
+  "GROK_DEBUG": false,
+  "GROK_LOG_LEVEL": "INFO",
+  "GROK_LOG_DIR": "/home/user/.config/grok-search/logs",
+  "config_status": "✅ Configuration Complete",
   "connection_test": {
-    "status": "✅ 连接成功",
-    "message": "成功获取模型列表 (HTTP 200)，共 5 个模型",
+    "status": "✅ Connection Successful",
+    "message": "Successfully retrieved model list (HTTP 200), 5 models available",
     "response_time_ms": 234.56
   }
 }
@@ -262,6 +265,30 @@ This project provides three MCP tools:
 
 **Returns**: JSON array containing `title`, `url`, `content`
 
+<details>
+<summary><b>Return Example</b> (Click to expand)</summary>
+
+```json
+[
+  {
+    "title": "Claude Code - Anthropic Official CLI Tool",
+    "url": "https://claude.com/claude-code",
+    "description": "Official command-line tool from Anthropic with MCP protocol integration, providing code generation and project management"
+  },
+  {
+    "title": "Model Context Protocol (MCP) Technical Specification",
+    "url": "https://modelcontextprotocol.io/docs",
+    "description": "Official MCP documentation defining standardized communication interfaces between AI models and external tools"
+  },
+  {
+    "title": "GitHub - FastMCP: Build MCP Servers Quickly",
+    "url": "https://github.com/jlowin/fastmcp",
+    "description": "Python-based MCP server framework that simplifies tool registration and async processing"
+  }
+]
+```
+</details>
+
 ##### `web_fetch` - Web Content Fetching
 
 | Parameter | Type | Required | Description |
@@ -269,6 +296,62 @@ This project provides three MCP tools:
 | `url` | string | ✅ | Target webpage URL |
 
 **Features**: Retrieves complete webpage content and converts to structured Markdown, preserving headings, lists, tables, code blocks, etc.
+
+<details>
+<summary><b>Return Example</b> (Click to expand)</summary>
+
+```markdown
+---
+source: https://modelcontextprotocol.io/docs/concepts/architecture
+title: MCP Architecture Documentation
+fetched_at: 2024-01-15T10:30:00Z
+---
+
+# MCP Architecture Documentation
+
+## Table of Contents
+- [Core Concepts](#core-concepts)
+- [Protocol Layers](#protocol-layers)
+- [Communication Patterns](#communication-patterns)
+
+## Core Concepts
+
+Model Context Protocol (MCP) is a standardized communication protocol for connecting AI models with external tools and data sources.
+
+### Design Goals
+- **Standardization**: Provide unified interface specifications
+- **Extensibility**: Support custom tool registration
+- **Efficiency**: Optimize data transmission and processing
+
+## Protocol Layers
+
+MCP adopts a three-layer architecture design:
+
+| Layer | Function | Implementation |
+|-------|----------|----------------|
+| Transport | Data transmission | stdio, HTTP, WebSocket |
+| Protocol | Message format | JSON-RPC 2.0 |
+| Application | Tool definition | Tool Schema + Handlers |
+
+## Communication Patterns
+
+MCP supports the following communication patterns:
+
+1. **Request-Response**: Synchronous tool invocation
+2. **Streaming**: Process large datasets
+3. **Event Notification**: Asynchronous status updates
+
+```python
+# Example: Register MCP tool
+@mcp.tool(name="search")
+async def search_tool(query: str) -> str:
+    results = await perform_search(query)
+    return json.dumps(results)
+```
+
+For more information, visit [Official Documentation](https://modelcontextprotocol.io)
+```
+</details>
 
 ##### `get_config_info` - Configuration Info Query
 
@@ -283,12 +366,15 @@ This project provides three MCP tools:
 
 ```json
 {
-  "api_url": "https://YOUR-API-URl/grok/v1",
-  "api_key": "sk-a*****************xyz",
-  "config_status": "✅ 配置完整",
+  "GROK_API_URL": "https://YOUR-API-URL/grok/v1",
+  "GROK_API_KEY": "sk-a*****************xyz",
+  "GROK_DEBUG": false,
+  "GROK_LOG_LEVEL": "INFO",
+  "GROK_LOG_DIR": "/home/user/.config/grok-search/logs",
+  "config_status": "✅ Configuration Complete",
   "connection_test": {
-    "status": "✅ 连接成功",
-    "message": "成功获取模型列表 (HTTP 200)，共 5 个模型",
+    "status": "✅ Connection Successful",
+    "message": "Successfully retrieved model list (HTTP 200), 5 models available",
     "response_time_ms": 234.56
   }
 }
@@ -331,6 +417,6 @@ This project is open source under the [MIT License](LICENSE).
 <div align="center">
 
 **If this project helps you, please give it a ⭐ Star!**
-[![Star History Chart](https://api.star-history.com/svg?repos=GuDaStudio/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#GuDaStudio/GrokSearch&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=Nick-Hogo/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#Nick-Hogo/GrokSearch&type=date&legend=top-left)
 
 </div>
