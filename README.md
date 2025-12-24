@@ -142,6 +142,7 @@ claude mcp list
 
 ### Step 3. 配置系统提示词
 为了更好的使用Grok Search 可以通过配置Claude Code或者类似的系统提示词来对整体Vibe Coding Cli进行优化，以Claude Code 为例可以编辑 ~/.claude/CLAUDE.md中追加下面内容，提供了两版使用详细版更能激活工具的能力：
+#### 精简版提示词
 ```markdown
 # Grok Search 提示词 精简版
 ## 激活与路由
@@ -172,6 +173,7 @@ claude mcp list
 ❌ 禁用内置工具 + 禁止无来源输出 + 禁止单次放弃 + 禁止未验证假设
 ```
 
+#### 详细版提示词
 <details>
 <summary><b>💡 Grok Search Enhance 系统提示词（详细版）</b>（点击展开）</summary>
 
