@@ -45,7 +45,6 @@ class GrokSearchProvider(BaseSearchProvider):
 
         timeout = httpx.Timeout(connect=6.0, read=50.0, write=10.0, pool=None)
         
-        
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             async with client.stream(
                 "POST",
@@ -73,7 +72,8 @@ class GrokSearchProvider(BaseSearchProvider):
                 {"role": "user", "content": url + "\n获取该网页内容并返回其结构化Markdown格式" },
             ],
         }
-        timeout = httpx.Timeout(connect=6.0, read=50.0, write=10.0, pool=None)
+        # 超时时间增加到 120s
+        timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
 
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             async with client.stream(
@@ -88,23 +88,35 @@ class GrokSearchProvider(BaseSearchProvider):
 
     async def _parse_streaming_response(self, response, ctx=None) -> str:
         content = ""
-        chunk_count = 0
+        full_body_buffer = [] 
         
         async for line in response.aiter_lines():
             line = line.strip()
-            if not line or line == "data: [DONE]":
+            if not line:
                 continue
+            
+            full_body_buffer.append(line)
+
             if line.startswith("data: "):
+                if line == "data: [DONE]":
+                    continue
                 try:
                     data = json.loads(line[6:])
                     delta = data.get("choices", [{}])[0].get("delta", {})
                     if "content" in delta:
                         content += delta["content"]
-                        chunk_count += 1
-                        if chunk_count % 100 == 0:
-                            preview = content[-100:] if len(content) > 100 else content
                 except json.JSONDecodeError:
                     continue
         
+        # 非流式 JSON 兜底处理
+        if not content and full_body_buffer:
+            try:
+                full_text = "".join(full_body_buffer)
+                data = json.loads(full_text)
+                if "choices" in data and len(data["choices"]) > 0:
+                    message = data["choices"][0].get("message", {})
+                    content = message.get("content", "")
+            except json.JSONDecodeError:
+                pass
 
         return content
