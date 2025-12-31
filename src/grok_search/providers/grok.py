@@ -102,10 +102,12 @@ class GrokSearchProvider(BaseSearchProvider):
                     continue
                 try:
                     data = json.loads(line[6:])
-                    delta = data.get("choices", [{}])[0].get("delta", {})
-                    if "content" in delta:
-                        content += delta["content"]
-                except json.JSONDecodeError:
+                    choices = data.get("choices", [])
+                    if choices and len(choices) > 0:
+                        delta = choices[0].get("delta", {})
+                        if "content" in delta:
+                            content += delta["content"]
+                except (json.JSONDecodeError, IndexError):
                     continue
         
         # 非流式 JSON 兜底处理
