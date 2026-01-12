@@ -12,6 +12,7 @@ dependencies = [
     "fastmcp>=2.0.0",
     "httpx>=0.28.0",
     "mcp[cli]>=1.21.2",
+    "tenacity>=8.0.0",
 ]
 
 [project.optional-dependencies]

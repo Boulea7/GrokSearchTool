@@ -48,6 +48,18 @@ class Config:
         return os.getenv("GROK_DEBUG", "false").lower() in ("true", "1", "yes")
 
     @property
+    def retry_max_attempts(self) -> int:
+        return int(os.getenv("GROK_RETRY_MAX_ATTEMPTS", "3"))
+
+    @property
+    def retry_multiplier(self) -> float:
+        return float(os.getenv("GROK_RETRY_MULTIPLIER", "1"))
+
+    @property
+    def retry_max_wait(self) -> int:
+        return int(os.getenv("GROK_RETRY_MAX_WAIT", "10"))
+
+    @property
     def grok_api_url(self) -> str:
         url = os.getenv("GROK_API_URL")
         if not url:
