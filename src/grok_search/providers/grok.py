@@ -15,7 +15,7 @@ RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 def _is_retryable_exception(exc) -> bool:
     """检查异常是否可重试"""
-    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.ConnectError)):
+    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.ConnectError, httpx.RemoteProtocolError)):
         return True
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in RETRYABLE_STATUS_CODES
@@ -27,6 +27,7 @@ class _WaitWithRetryAfter(wait_base):
 
     def __init__(self, multiplier: float, max_wait: int):
         self._base_wait = wait_random_exponential(multiplier=multiplier, max=max_wait)
+        self._protocol_error_base = 3.0
 
     def __call__(self, retry_state):
         if retry_state.outcome and retry_state.outcome.failed:
@@ -35,6 +36,8 @@ class _WaitWithRetryAfter(wait_base):
                 retry_after = self._parse_retry_after(exc.response)
                 if retry_after is not None:
                     return retry_after
+            if isinstance(exc, httpx.RemoteProtocolError):
+                return self._base_wait(retry_state) + self._protocol_error_base
         return self._base_wait(retry_state)
 
     def _parse_retry_after(self, response: httpx.Response) -> Optional[float]:
