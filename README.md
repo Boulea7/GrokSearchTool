@@ -48,6 +48,7 @@ Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构
 - ✅ 配置测试工具（连接测试 + API Key 脱敏）
 - ✅ 动态模型切换（支持切换不同 Grok 模型并持久化保存）
 - ✅ **工具路由控制（一键禁用官方 WebSearch/WebFetch，强制使用 GrokSearch）**
+- ✅ **自动时间注入（搜索时自动获取本地时间，确保时间相关查询的准确性）**
 - ✅ 可扩展架构，支持添加其他搜索 Provider
 </details>
 

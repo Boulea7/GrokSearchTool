@@ -48,6 +48,7 @@ Comparison with other search solutions:
 - ✅ Configuration testing tool (connection test + API Key masking)
 - ✅ Dynamic model switching (switch between Grok models with persistent settings)
 - ✅ **Tool routing control (one-click disable built-in WebSearch/WebFetch, force use GrokSearch)**
+- ✅ **Automatic time injection (automatically gets local time during search for accurate time-sensitive queries)**
 - ✅ Extensible architecture for additional search providers
 
 ## Quick Start
@@ -256,7 +257,7 @@ Module Description:
 
 #### MCP Tools
 
-This project provides four MCP tools:
+This project provides five MCP tools:
 
 ##### `web_search` - Web Search
 
