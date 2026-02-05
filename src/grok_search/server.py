@@ -380,7 +380,7 @@ def main():
             kernel32 = ctypes.windll.kernel32
             handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if not handle:
-                return False
+                return True
             exit_code = ctypes.c_ulong()
             result = kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
             kernel32.CloseHandle(handle)
