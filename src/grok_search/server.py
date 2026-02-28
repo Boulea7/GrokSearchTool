@@ -27,6 +27,7 @@ mcp = FastMCP("grok-search")
 
 @mcp.tool(
     name="web_search",
+    output_schema=None,
     description="""
     Performs a third-party web search based on the given query and returns the results
     as a JSON string.
@@ -69,6 +70,7 @@ async def web_search(query: str, platform: str = "", min_results: int = 3, max_r
 
 @mcp.tool(
     name="web_fetch",
+    output_schema=None,
     description="""
     Fetches and extracts the complete content from a specified URL and returns it
     as a structured Markdown document.
@@ -118,6 +120,7 @@ async def web_fetch(url: str, ctx: Context = None) -> str:
 
 @mcp.tool(
     name="get_config_info",
+    output_schema=None,
     description="""
     Returns the current Grok Search MCP server configuration information and tests the connection.
 
@@ -234,6 +237,7 @@ async def get_config_info() -> str:
 
 @mcp.tool(
     name="switch_model",
+    output_schema=None,
     description="""
     Switches the default Grok model used for search and fetch operations, and persists the setting.
 
@@ -298,6 +302,7 @@ async def switch_model(model: str) -> str:
 
 @mcp.tool(
     name="toggle_builtin_tools",
+    output_schema=None,
     description="""
     Toggle Claude Code's built-in WebSearch and WebFetch tools on/off.
 
