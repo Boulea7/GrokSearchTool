@@ -117,7 +117,7 @@ class _WaitWithRetryAfter(wait_base):
 
 
 class GrokSearchProvider(BaseSearchProvider):
-    def __init__(self, api_url: str, api_key: str, model: str = "grok-4-fast"):
+    def __init__(self, api_url: str, api_key: str, model: str = "grok-4.1-fast"):
         super().__init__(api_url, api_key)
         self.model = model
 

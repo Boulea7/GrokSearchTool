@@ -10,7 +10,7 @@ class Config:
         '"git+https://github.com/GuDaStudio/GrokSearch","grok-search"],'
         '"env":{"GROK_API_URL":"your-api-url","GROK_API_KEY":"your-api-key"}}\''
     )
-    _DEFAULT_MODEL = "grok-4-fast"
+    _DEFAULT_MODEL = "grok-4.1-fast"
 
     def __new__(cls):
         if cls._instance is None:
