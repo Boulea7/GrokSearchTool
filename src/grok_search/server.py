@@ -1,14 +1,15 @@
+import asyncio
 import sys
 from pathlib import Path
+from typing import Annotated, Optional
+
+from fastmcp import FastMCP, Context
+from pydantic import Field
 
 # 支持直接运行：添加 src 目录到 Python 路径
 src_dir = Path(__file__).parent.parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
-
-from fastmcp import FastMCP, Context
-from typing import Annotated, Optional
-from pydantic import Field
 
 # 尝试使用绝对导入（支持 mcp run）
 try:
@@ -23,8 +24,6 @@ except ImportError:
     from .config import config
     from .sources import SourcesCache, merge_sources, new_session_id, split_answer_and_sources
     from .planning import engine as planning_engine, _split_csv
-
-import asyncio
 
 mcp = FastMCP("grok-search")
 
@@ -69,6 +68,132 @@ async def _get_available_models_cached(api_url: str, api_key: str) -> list[str]:
     async with _AVAILABLE_MODELS_LOCK:
         _AVAILABLE_MODELS_CACHE[key] = models
     return models
+
+
+def _planning_session_error(session_id: str) -> str:
+    import json
+
+    return json.dumps(
+        {
+            "error": "session_not_found",
+            "message": f"Session '{session_id}' not found. Call plan_intent first.",
+            "expected_phase_order": [
+                "intent_analysis",
+                "complexity_assessment",
+                "query_decomposition",
+                "search_strategy",
+                "tool_selection",
+                "execution_order",
+            ],
+            "restart_from_intent_analysis": True,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _extract_request_id(headers) -> str:
+    if not headers:
+        return ""
+
+    return (
+        headers.get("x-oneapi-request-id", "")
+        or headers.get("x-request-id", "")
+        or headers.get("request-id", "")
+    ).strip()
+
+
+def _extract_error_summary(response) -> str:
+    if response is None:
+        return ""
+
+    try:
+        data = response.json()
+    except Exception:
+        data = None
+
+    if isinstance(data, dict):
+        error = data.get("error", {})
+        if isinstance(error, dict):
+            message = (error.get("message") or "").strip()
+            if message:
+                return message
+
+    body_text = (getattr(response, "text", "") or "").strip()
+    if not body_text:
+        return ""
+
+    normalized = body_text.lower()
+    if "<html" in normalized and "bad gateway" in normalized:
+        return "html_5xx_page"
+    if "<html" in normalized and _looks_like_login_page(body_text):
+        return "login_page"
+
+    snippet = body_text[:180].replace("\n", " ").strip()
+    return snippet
+
+
+def _format_grok_error(exc: Exception) -> str:
+    import httpx
+
+    if isinstance(exc, httpx.TimeoutException):
+        return "搜索失败: 上游请求超时，请稍后重试"
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        location = exc.response.headers.get("location", "").strip()
+        request_id = _extract_request_id(exc.response.headers)
+        summary = _extract_error_summary(exc.response)
+        if status_code in {301, 302, 303, 307, 308} and location:
+            message = f"搜索失败: 上游返回 HTTP {status_code} 重定向到 {location}，请检查代理认证状态"
+        else:
+            message = f"搜索失败: 上游返回 HTTP {status_code}"
+        if summary:
+            message += f"，摘要={summary}"
+        if request_id:
+            message += f"，request_id={request_id}"
+        return message
+
+    message = str(exc).strip()
+    if message:
+        return f"搜索失败: {message}"
+    return "搜索失败: 上游请求异常"
+
+
+def _looks_like_login_page(body_text: str) -> bool:
+    normalized = (body_text or "").strip().lower()
+    if "<html" not in normalized:
+        return False
+    return any(token in normalized for token in ("login", "sign in", "signin", "auth"))
+
+
+def _format_fetch_error(provider: str, exc: Exception) -> str:
+    import httpx
+
+    if isinstance(exc, httpx.TimeoutException):
+        return f"{provider} 请求超时"
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        location = exc.response.headers.get("location", "").strip()
+        request_id = _extract_request_id(exc.response.headers)
+        summary = _extract_error_summary(exc.response)
+        if status_code in {301, 302, 303, 307, 308} and location:
+            message = f"{provider} 返回 HTTP {status_code} 重定向到 {location}，请检查认证状态"
+        elif status_code in {401, 403}:
+            message = f"{provider} 返回 HTTP {status_code}，请检查认证状态"
+        else:
+            message = f"{provider} 返回 HTTP {status_code}"
+        if summary:
+            message += f"，摘要={summary}"
+        if request_id:
+            message += f"，request_id={request_id}"
+        return message
+
+    message = str(exc).strip()
+    if message:
+        return f"{provider} 请求失败: {message}"
+    return f"{provider} 请求失败"
 
 
 def _extra_results_to_sources(
@@ -164,11 +289,14 @@ async def web_search(
             tavily_count = extra_sources
 
     # 并行执行搜索任务
-    async def _safe_grok() -> str:
+    async def _safe_grok() -> tuple[str, str | None]:
         try:
-            return await grok_provider.search(query, platform)
-        except Exception:
-            return ""
+            result = await grok_provider.search(query, platform)
+        except Exception as exc:
+            return "", _format_grok_error(exc)
+        if not result or not result.strip():
+            return "", "搜索失败: 上游返回空响应，请检查模型或代理配置"
+        return result, None
 
     async def _safe_tavily() -> list[dict] | None:
         try:
@@ -192,7 +320,7 @@ async def web_search(
 
     gathered = await asyncio.gather(*coros)
 
-    grok_result: str = gathered[0] or ""
+    grok_result, grok_error = gathered[0]
     tavily_results: list[dict] | None = None
     firecrawl_results: list[dict] | None = None
     idx = 1
@@ -205,9 +333,10 @@ async def web_search(
     answer, grok_sources = split_answer_and_sources(grok_result)
     extra = _extra_results_to_sources(tavily_results, firecrawl_results)
     all_sources = merge_sources(grok_sources, extra)
+    content = answer if answer.strip() else (grok_error or "")
 
     await _SOURCES_CACHE.set(session_id, all_sources)
-    return {"session_id": session_id, "content": answer, "sources_count": len(all_sources)}
+    return {"session_id": session_id, "content": content, "sources_count": len(all_sources)}
 
 
 @mcp.tool(
@@ -233,12 +362,12 @@ async def get_sources(
     return {"session_id": session_id, "sources": sources, "sources_count": len(sources)}
 
 
-async def _call_tavily_extract(url: str) -> str | None:
+async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
     import httpx
     api_url = config.tavily_api_url
     api_key = config.tavily_api_key
     if not api_key:
-        return None
+        return None, None
     endpoint = f"{api_url.rstrip('/')}/extract"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     body = {"urls": [url], "format": "markdown"}
@@ -246,13 +375,17 @@ async def _call_tavily_extract(url: str) -> str | None:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
+            if _looks_like_login_page(response.text):
+                return None, "Tavily 返回登录页或认证页面，请检查代理认证状态"
             data = response.json()
             if data.get("results") and len(data["results"]) > 0:
                 content = data["results"][0].get("raw_content", "")
-                return content if content and content.strip() else None
-            return None
-    except Exception:
-        return None
+                if content and content.strip():
+                    return content, None
+                return None, "Tavily 提取成功但内容为空"
+            return None, "Tavily 提取成功但 results 为空"
+    except Exception as exc:
+        return None, _format_fetch_error("Tavily", exc)
 
 
 async def _call_tavily_search(query: str, max_results: int = 6) -> list[dict] | None:
@@ -305,15 +438,16 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
         return None
 
 
-async def _call_firecrawl_scrape(url: str, ctx=None) -> str | None:
+async def _call_firecrawl_scrape(url: str, ctx=None) -> tuple[str | None, str | None]:
     import httpx
     api_url = config.firecrawl_api_url
     api_key = config.firecrawl_api_key
     if not api_key:
-        return None
+        return None, None
     endpoint = f"{api_url.rstrip('/')}/scrape"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     max_retries = config.retry_max_attempts
+    last_error: str | None = None
     for attempt in range(max_retries):
         body = {
             "url": url,
@@ -325,15 +459,19 @@ async def _call_firecrawl_scrape(url: str, ctx=None) -> str | None:
             async with httpx.AsyncClient(timeout=90.0) as client:
                 response = await client.post(endpoint, headers=headers, json=body)
                 response.raise_for_status()
+                if _looks_like_login_page(response.text):
+                    return None, "Firecrawl 返回登录页或认证页面，请检查代理认证状态"
                 data = response.json()
                 markdown = data.get("data", {}).get("markdown", "")
                 if markdown and markdown.strip():
-                    return markdown
+                    return markdown, None
+                last_error = "Firecrawl 返回空 markdown"
                 await log_info(ctx, f"Firecrawl: markdown为空, 重试 {attempt + 1}/{max_retries}", config.debug_enabled)
         except Exception as e:
+            last_error = _format_fetch_error("Firecrawl", e)
             await log_info(ctx, f"Firecrawl error: {e}", config.debug_enabled)
-            return None
-    return None
+            return None, last_error
+    return None, last_error
 
 
 @mcp.tool(
@@ -360,20 +498,28 @@ async def web_fetch(
 ) -> str:
     await log_info(ctx, f"Begin Fetch: {url}", config.debug_enabled)
 
-    result = await _call_tavily_extract(url)
+    result, tavily_error = await _call_tavily_extract(url)
     if result:
         await log_info(ctx, "Fetch Finished (Tavily)!", config.debug_enabled)
         return result
+    if tavily_error:
+        await log_info(ctx, f"Tavily extract failed: {tavily_error}", config.debug_enabled)
 
     await log_info(ctx, "Tavily unavailable or failed, trying Firecrawl...", config.debug_enabled)
-    result = await _call_firecrawl_scrape(url, ctx)
+    result, firecrawl_error = await _call_firecrawl_scrape(url, ctx)
     if result:
         await log_info(ctx, "Fetch Finished (Firecrawl)!", config.debug_enabled)
         return result
+    if firecrawl_error:
+        await log_info(ctx, f"Firecrawl scrape failed: {firecrawl_error}", config.debug_enabled)
 
     await log_info(ctx, "Fetch Failed!", config.debug_enabled)
     if not config.tavily_api_key and not config.firecrawl_api_key:
         return "配置错误: TAVILY_API_KEY 和 FIRECRAWL_API_KEY 均未配置"
+
+    errors = [error for error in (tavily_error, firecrawl_error) if error]
+    if errors:
+        return f"提取失败: {'；'.join(errors)}"
     return "提取失败: 所有提取服务均未能获取内容"
 
 
@@ -510,7 +656,7 @@ async def get_config_info() -> str:
 
                         if model_names:
                             test_result["available_models"] = model_names
-                except:
+                except Exception:
                     pass
             else:
                 test_result["status"] = "⚠️ 连接异常"
@@ -713,7 +859,7 @@ async def plan_complexity(
 ) -> str:
     import json
     if not planning_engine.get_session(session_id):
-        return json.dumps({"error": f"Session '{session_id}' not found. Call plan_intent first."})
+        return _planning_session_error(session_id)
     return json.dumps(planning_engine.process_phase(
         phase="complexity_assessment", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence,
@@ -741,7 +887,7 @@ async def plan_sub_query(
 ) -> str:
     import json
     if not planning_engine.get_session(session_id):
-        return json.dumps({"error": f"Session '{session_id}' not found. Call plan_intent first."})
+        return _planning_session_error(session_id)
     item = {"id": id, "goal": goal, "expected_output": expected_output, "boundary": boundary}
     if depends_on:
         item["depends_on"] = _split_csv(depends_on)
@@ -771,7 +917,7 @@ async def plan_search_term(
 ) -> str:
     import json
     if not planning_engine.get_session(session_id):
-        return json.dumps({"error": f"Session '{session_id}' not found. Call plan_intent first."})
+        return _planning_session_error(session_id)
     data = {"search_terms": [{"term": term, "purpose": purpose, "round": round}]}
     if approach:
         data["approach"] = approach
@@ -800,7 +946,7 @@ async def plan_tool_mapping(
 ) -> str:
     import json
     if not planning_engine.get_session(session_id):
-        return json.dumps({"error": f"Session '{session_id}' not found. Call plan_intent first."})
+        return _planning_session_error(session_id)
     item = {"sub_query_id": sub_query_id, "tool": tool, "reason": reason}
     if params_json:
         try:
@@ -829,7 +975,7 @@ async def plan_execution(
 ) -> str:
     import json
     if not planning_engine.get_session(session_id):
-        return json.dumps({"error": f"Session '{session_id}' not found. Call plan_intent first."})
+        return _planning_session_error(session_id)
     parallel = [_split_csv(g) for g in parallel_groups.split(";") if g.strip()] if parallel_groups else []
     seq = _split_csv(sequential)
     return json.dumps(planning_engine.process_phase(
@@ -837,6 +983,17 @@ async def plan_execution(
         is_revision=is_revision, confidence=confidence,
         phase_data={"parallel": parallel, "sequential": seq, "estimated_rounds": estimated_rounds},
     ), ensure_ascii=False, indent=2)
+
+
+def _configure_windows_event_loop_policy() -> None:
+    if sys.platform != "win32":
+        return
+
+    policy_cls = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
+    if policy_cls is None:
+        return
+
+    asyncio.set_event_loop_policy(policy_cls())
 
 
 def main():
@@ -851,6 +1008,8 @@ def main():
         signal.signal(signal.SIGINT, handle_shutdown)
         if sys.platform != 'win32':
             signal.signal(signal.SIGTERM, handle_shutdown)
+
+    _configure_windows_event_loop_policy()
 
     # Windows 父进程监控
     if sys.platform == 'win32':
