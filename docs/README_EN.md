@@ -76,6 +76,26 @@ claude mcp remove grok-search
 
 Replace the environment variables in the following command with your own values. The Grok endpoint must be OpenAI-compatible; Tavily is optional — `web_fetch` and `web_map` will be unavailable without it.
 
+### Fork Maintainer Note: empirically stable combinations
+
+The following results were verified locally on `2026-03-24` and are included here as fork-only operational notes for easier sharing:
+
+- Recommended primary combo: `https://ai.huan666.de/v1` + `grok-4.1-fast`
+- Backup proxy: `https://api.925214.xyz/v1`
+
+Observed results:
+
+- `ai.huan666.de + grok-4.1-fast`: `10/10` successful runs, clean output, about `7.3s` average latency
+- `ai.huan666.de + grok-4.20-beta`: high success rate, but noticeably slower
+- `api.925214.xyz`: both `grok-4.1-fast` and `grok-4.20-beta` repeatedly returned empty placeholder completion frames (`choices=null`) during the same test window
+
+If you want the highest chance of a clean first-time setup, explicitly set:
+
+```bash
+GROK_API_URL="https://ai.huan666.de/v1"
+GROK_MODEL="grok-4.1-fast"
+```
+
 #### GuDa Users (Recommended)
 
 GuDa users only need to set `GUDA_API_KEY` to access all services — API URLs are automatically derived:
@@ -125,7 +145,7 @@ You can also configure additional environment variables in the `env` field:
 | `GUDA_BASE_URL` | No | `https://code.guda.studio` | GuDa service base URL |
 | `GROK_API_URL` | No | `{GUDA_BASE_URL}/grok/v1` | Grok API endpoint (OpenAI-compatible), overrides GuDa-derived value |
 | `GROK_API_KEY` | No | `{GUDA_API_KEY}` | Grok API key, overrides GuDa-derived value |
-| `GROK_MODEL` | No | `grok-4.20-beta` | Default model (takes precedence over `~/.config/grok-search/config.json` when set) |
+| `GROK_MODEL` | No | `grok-4.1-fast` | Default model (takes precedence over `~/.config/grok-search/config.json` when set) |
 | `TAVILY_API_KEY` | No | `{GUDA_API_KEY}` | Tavily API key (for web_fetch / web_map) |
 | `TAVILY_API_URL` | No | `{GUDA_BASE_URL}/tavily` | Tavily API endpoint |
 | `TAVILY_ENABLED` | No | `true` | Enable Tavily |
@@ -139,6 +159,8 @@ You can also configure additional environment variables in the `env` field:
 | `GROK_RETRY_MAX_WAIT` | No | `10` | Max retry wait in seconds |
 
 > **Note**: When `GUDA_API_KEY` is set, all `GROK_API_URL`/`GROK_API_KEY`/`TAVILY_*`/`FIRECRAWL_*` variables become optional as they are auto-derived from `GUDA_BASE_URL`. Explicitly set variables take higher priority.
+
+> The current fork defaults to `grok-4.1-fast` because it performed best in local proxy compatibility tests.
 
 
 ### Verify Installation

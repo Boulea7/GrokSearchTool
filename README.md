@@ -92,6 +92,26 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
+### Fork 维护补充：实测稳定组合
+
+以下内容是当前 fork 维护者在 `2026-03-24` 的实测结论，仅作为分享版经验值：
+
+- 主推荐：`https://ai.huan666.de/v1` + `grok-4.1-fast`
+- 备用站：`https://api.925214.xyz/v1`
+
+实测摘要：
+
+- `ai.huan666.de + grok-4.1-fast`：`10/10` 成功，输出干净，平均延迟约 `7.3s`
+- `ai.huan666.de + grok-4.20-beta`：成功率高，但明显更慢
+- `api.925214.xyz`：在同一测试窗口内，`grok-4.1-fast` 与 `grok-4.20-beta` 都持续返回空占位 completion 帧（`choices=null`）
+
+如果你想优先获得更稳定的首次体验，建议显式设置：
+
+```bash
+GROK_API_URL="https://ai.huan666.de/v1"
+GROK_MODEL="grok-4.1-fast"
+```
+
 <details> <summary>如果遇到 SSL / 证书验证错误</summary>
 
 在部分企业网络或代理环境中，可能会出现类似错误：
@@ -125,7 +145,7 @@ claude mcp add-json grok-search --scope user '{
 |------|------|--------|------|
 | `GROK_API_URL` | ✅ | - | Grok API 地址（OpenAI 兼容格式） |
 | `GROK_API_KEY` | ✅ | - | Grok API 密钥 |
-| `GROK_MODEL` | ❌ | `grok-4-fast` | 默认模型（设置后优先于 `~/.config/grok-search/config.json`） |
+| `GROK_MODEL` | ❌ | `grok-4.1-fast` | 默认模型（设置后优先于 `~/.config/grok-search/config.json`） |
 | `TAVILY_API_KEY` | ❌ | - | Tavily API 密钥（用于 web_fetch / web_map） |
 | `TAVILY_API_URL` | ❌ | `https://api.tavily.com` | Tavily API 地址 |
 | `TAVILY_ENABLED` | ❌ | `true` | 是否启用 Tavily |
@@ -137,6 +157,8 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_RETRY_MAX_ATTEMPTS` | ❌ | `3` | 最大重试次数 |
 | `GROK_RETRY_MULTIPLIER` | ❌ | `1` | 重试退避乘数 |
 | `GROK_RETRY_MAX_WAIT` | ❌ | `10` | 重试最大等待秒数 |
+
+> 当前 fork 分享版默认推荐 `grok-4.1-fast`。如需更高阶模型，请优先确认对应中转站的兼容质量。
 
 
 ### 验证安装
@@ -258,6 +280,23 @@ A: 需要 OpenAI 兼容格式的 API 地址（支持 `/chat/completions` 和 `/m
 Q: 如何验证配置？
 </summary>
 A: 在 Claude 对话中说"显示 grok-search 配置信息"，将自动测试 API 连接并显示结果。
+</details>
+
+<details>
+<summary>
+Q: `web_search` 返回空内容或直接报错怎么办？
+</summary>
+A: 当前 fork 版本已经尽量把错误显性化，你可以按以下方式理解：
+
+- `HTTP 503`：上游服务当前不可用，或该模型没有可用通道
+- “空的占位 completion 帧（choices=null）”：中转站接受了请求，但没有返回可用正文
+- 登录页/认证页相关报错：代理认证失效、被重定向，或上游鉴权异常
+
+建议排查顺序：
+
+1. 先用 `get_config_info` 确认 `/models` 正常
+2. 再显式切换到 `grok-4.1-fast`
+3. 如果仍然不稳定，优先更换中转站，而不是只改默认模型
 </details>
 
 ## 许可证
