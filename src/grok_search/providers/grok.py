@@ -6,6 +6,7 @@ from typing import List, Optional
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
 from tenacity.wait import wait_base
 from .base import BaseSearchProvider, SearchResult
+from ..sources import merge_sources
 from ..utils import search_prompt, fetch_prompt, url_describe_prompt, rank_sources_prompt
 from ..logger import log_info
 from ..config import config
@@ -172,25 +173,133 @@ class GrokSearchProvider(BaseSearchProvider):
         }
         return await self._execute_completion_with_retry(headers, payload, ctx)
 
+    def _flatten_text_content(self, value) -> str:
+        if isinstance(value, str):
+            return value
+
+        if isinstance(value, dict):
+            for key in ("text", "content", "value", "output_text"):
+                nested = self._flatten_text_content(value.get(key))
+                if nested:
+                    return nested
+            return ""
+
+        if isinstance(value, list):
+            parts: list[str] = []
+            for item in value:
+                nested = self._flatten_text_content(item)
+                if nested:
+                    parts.append(nested)
+            return "".join(parts)
+
+        return ""
+
+    def _normalize_source_items(self, data) -> list[dict]:
+        items = data if isinstance(data, list) else [data]
+        normalized: list[dict] = []
+
+        for item in items:
+            if isinstance(item, str) and item.startswith(("http://", "https://")):
+                normalized.append({"url": item})
+                continue
+
+            if not isinstance(item, dict):
+                continue
+
+            url = item.get("url") or item.get("href") or item.get("link")
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                continue
+
+            source = {"url": url}
+            title = item.get("title") or item.get("name") or item.get("label")
+            if isinstance(title, str) and title.strip():
+                source["title"] = title.strip()
+
+            description = (
+                item.get("description")
+                or item.get("snippet")
+                or item.get("content")
+                or item.get("text")
+            )
+            if isinstance(description, str) and description.strip():
+                source["description"] = description.strip()
+
+            normalized.append(source)
+
+        return normalized
+
+    def _extract_structured_sources(self, data: dict) -> list[dict]:
+        candidate_keys = (
+            "citations",
+            "references",
+            "sources",
+            "source_cards",
+            "source_card",
+            "annotations",
+            "search_results",
+            "searchResults",
+            "urls",
+        )
+        collected: list[dict] = []
+
+        def collect_from_mapping(mapping):
+            nonlocal collected
+            if not isinstance(mapping, dict):
+                return
+            for key in candidate_keys:
+                if key in mapping:
+                    collected = merge_sources(collected, self._normalize_source_items(mapping[key]))
+
+        if not isinstance(data, dict):
+            return []
+
+        collect_from_mapping(data)
+        for choice in data.get("choices", []) or []:
+            if not isinstance(choice, dict):
+                continue
+            collect_from_mapping(choice)
+            for key in ("message", "delta"):
+                nested = choice.get(key)
+                collect_from_mapping(nested)
+
+        return collected
+
+    def _append_sources_block(self, content: str, sources: list[dict]) -> str:
+        if not sources:
+            return content
+
+        lines: list[str] = []
+        body = (content or "").strip()
+        if body:
+            lines.append(body)
+            lines.append("")
+
+        lines.append("## Sources")
+        for index, source in enumerate(sources, start=1):
+            title = source.get("title") or source["url"]
+            lines.append(f"{index}. [{title}]({source['url']})")
+
+        return "\n".join(lines).strip()
+
     def _extract_content_from_choice(self, choice: dict) -> str:
         if not isinstance(choice, dict):
             return ""
 
         message = choice.get("message", {})
         if isinstance(message, dict):
-            content = message.get("content", "")
-            if isinstance(content, str) and content:
+            content = self._flatten_text_content(message.get("content"))
+            if content:
                 return content
 
         delta = choice.get("delta", {})
         if isinstance(delta, dict):
-            content = delta.get("content", "")
-            if isinstance(content, str) and content:
+            content = self._flatten_text_content(delta.get("content"))
+            if content:
                 return content
 
         for key in ("text", "content"):
-            value = choice.get(key, "")
-            if isinstance(value, str) and value:
+            value = self._flatten_text_content(choice.get(key, ""))
+            if value:
                 return value
 
         return ""
@@ -284,6 +393,7 @@ class GrokSearchProvider(BaseSearchProvider):
             choices = data.get("choices", [])
             if isinstance(choices, list) and choices:
                 content = self._extract_content_from_choice(choices[0])
+            content = self._append_sources_block(content, self._extract_structured_sources(data))
 
         if not content and any(line.lstrip().startswith("data:") for line in body_text.splitlines()):
             class _LineResponse:

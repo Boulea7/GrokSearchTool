@@ -80,7 +80,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/GuDaStudio/GrokSearch@grok-with-tavily",
+    "git+https://github.com/Boulea7/GrokSearchTool@main",
     "grok-search"
   ],
   "env": {
@@ -127,7 +127,7 @@ claude mcp add-json grok-search --scope user '{
   "args": [
     "--native-tls",
     "--from",
-    "git+https://github.com/GuDaStudio/GrokSearch@grok-with-tavily",
+    "git+https://github.com/Boulea7/GrokSearchTool@main",
     "grok-search"
   ],
   "env": {
@@ -157,8 +157,25 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_RETRY_MAX_ATTEMPTS` | ❌ | `3` | 最大重试次数 |
 | `GROK_RETRY_MULTIPLIER` | ❌ | `1` | 重试退避乘数 |
 | `GROK_RETRY_MAX_WAIT` | ❌ | `10` | 重试最大等待秒数 |
+| `PYTHONIOENCODING` | ❌ | `utf-8` | 建议显式设为 UTF-8，减少 Windows / 中转站日志乱码 |
+| `PYTHONUNBUFFERED` | ❌ | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
+| `PYTHONUTF8` | ❌ | `1` | 强制 Python UTF-8 模式 |
 
 > 当前 fork 分享版默认推荐 `grok-4.1-fast`。如需更高阶模型，请优先确认对应中转站的兼容质量。
+
+### 本地优先启动建议
+
+如果你本机会频繁改 MCP 代码，建议优先使用本地安装，再将远端 fork 作为兜底：
+
+```bash
+uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
+```
+
+经验建议：
+
+- `GROK_API_URL` 尽量写成 OpenAI 兼容根路径并显式带上 `/v1`
+- `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
+- 若 `content` 为空，先检查中转站是否真的返回了正文；若 `sources_count=0`，再检查上游是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
 
 
 ### 验证安装

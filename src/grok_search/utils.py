@@ -10,7 +10,7 @@ def extract_unique_urls(text: str) -> list[str]:
     seen: set[str] = set()
     urls: list[str] = []
     for m in _URL_PATTERN.finditer(text):
-        url = m.group().rstrip('.,;:!?')
+        url = m.group().rstrip('.,;:!?*_')
         if url not in seen:
             seen.add(url)
             urls.append(url)

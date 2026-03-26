@@ -16,13 +16,27 @@ try:
     from grok_search.providers.grok import GrokSearchProvider
     from grok_search.logger import log_info
     from grok_search.config import config
-    from grok_search.sources import SourcesCache, merge_sources, new_session_id, split_answer_and_sources
+    from grok_search.sources import (
+        SourcesCache,
+        extract_sources_from_text,
+        merge_sources,
+        new_session_id,
+        sanitize_answer_text,
+        split_answer_and_sources,
+    )
     from grok_search.planning import engine as planning_engine, _split_csv
 except ImportError:
     from .providers.grok import GrokSearchProvider
     from .logger import log_info
     from .config import config
-    from .sources import SourcesCache, merge_sources, new_session_id, split_answer_and_sources
+    from .sources import (
+        SourcesCache,
+        extract_sources_from_text,
+        merge_sources,
+        new_session_id,
+        sanitize_answer_text,
+        split_answer_and_sources,
+    )
     from .planning import engine as planning_engine, _split_csv
 
 mcp = FastMCP("grok-search")
@@ -331,9 +345,18 @@ async def web_search(
         firecrawl_results = gathered[idx]
 
     answer, grok_sources = split_answer_and_sources(grok_result)
+    if not grok_sources:
+        grok_sources = extract_sources_from_text(grok_result)
     extra = _extra_results_to_sources(tavily_results, firecrawl_results)
     all_sources = merge_sources(grok_sources, extra)
-    content = answer if answer.strip() else (grok_error or "")
+    content = answer.strip()
+    if not content:
+        if grok_error:
+            content = grok_error
+        elif all_sources:
+            content = "搜索成功，但上游只返回了信源列表，未返回正文。可调用 get_sources 查看信源。"
+        else:
+            content = sanitize_answer_text(grok_result).strip() or "搜索失败: 上游未返回可用正文"
 
     await _SOURCES_CACHE.set(session_id, all_sources)
     return {"session_id": session_id, "content": content, "sources_count": len(all_sources)}
