@@ -244,7 +244,7 @@ def _split_heading_sources(text: str) -> tuple[str, list[dict]] | None:
     for m in reversed(matches):
         start = m.start()
         sources_text = text[start:]
-        sources = _extract_sources_from_text(sources_text)
+        sources = extract_sources_from_text(sources_text)
         if not sources:
             continue
         answer = text[:start].rstrip()
@@ -280,7 +280,7 @@ def _split_tail_link_block(text: str) -> tuple[str, list[dict]] | None:
         return None
 
     block_text = "\n".join(lines[tail_start : tail_end + 1])
-    sources = _extract_sources_from_text(block_text)
+    sources = extract_sources_from_text(block_text)
     if not sources:
         return None
 
@@ -302,7 +302,7 @@ def _split_details_block_sources(text: str) -> tuple[str, list[dict]] | None:
         return None
 
     block_text = text[open_idx : close_idx + len("</details>")]
-    sources = _extract_sources_from_text(block_text)
+    sources = extract_sources_from_text(block_text)
     if len(sources) < 2:
         return None
 
@@ -336,7 +336,7 @@ def _parse_sources_payload(payload: str) -> list[dict]:
             data = None
 
     if data is None:
-        return _extract_sources_from_text(payload)
+        return extract_sources_from_text(payload)
 
     if isinstance(data, dict):
         for key in ("sources", "citations", "references", "urls"):
@@ -397,7 +397,7 @@ def _normalize_sources(data: Any) -> list[dict]:
     return normalized
 
 
-def _extract_sources_from_text(text: str) -> list[dict]:
+def extract_sources_from_text(text: str) -> list[dict]:
     sources: list[dict] = []
     seen: set[str] = set()
 
