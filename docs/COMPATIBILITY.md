@@ -1,24 +1,46 @@
 # Compatibility Notes
 
-## Client Scope
+## Support Levels
 
-GrokSearch is designed around stdio MCP and works best with clients that can expose tool descriptions faithfully.
+Compatibility claims are grouped into three levels:
 
-### First-class
+- `Officially tested`: validated end-to-end in a clean environment
+- `Community-tested`: supported by host documentation and maintainer usage, but not yet documented as a full official validation matrix
+- `Planned`: a future target, not a current install promise
+
+## Host Summary
+
+### Officially tested
 
 - Claude Code
-  - full MCP tool surface
+  - full core MCP tool surface
   - `toggle_builtin_tools` is specifically designed for Claude Code project settings
 
-### Supported with core search workflow
+### Community-tested
 
 - Codex-style MCP clients
-  - `web_search`, `get_sources`, `web_fetch`, `web_map`, and `plan_*` work when the client supports stdio MCP and regular tool descriptions
+  - `plan_*`, `web_search`, `get_sources`, `web_fetch`, and `web_map` work when the client supports stdio MCP and regular tool descriptions
   - Claude-specific tool toggling is not relevant
 
 - Cherry Studio
-  - core search and fetch flows are supported
+  - core planning, search, and fetch flows are supported
   - behavior still depends on upstream model endpoint compatibility
+
+### Planned
+
+- Dify
+- n8n
+- Coze
+
+These hosts remain planned targets until remote transport and host-specific verification are documented responsibly.
+
+## Transport Scope
+
+- Public documentation currently prioritizes local `stdio`
+- Remote `HTTP` / `Streamable HTTP` remains a later compatibility track
+- Long-running `deep research` workflows should not be treated as the default MCP install story
+- The recommended core interaction path remains `plan_* -> web_search`
+- Any interactive `deep research` experience should remain CLI-first; MCP and skill integrations should stay non-interactive
 
 ## Provider Requirements
 
@@ -30,6 +52,7 @@ GrokSearch is designed around stdio MCP and works best with clients that can exp
 
 | Feature | Required configuration |
 | --- | --- |
+| `plan_*` | none beyond a working MCP host |
 | `web_search` | `GROK_API_URL`, `GROK_API_KEY` |
 | `get_sources` | a previous successful `web_search` call |
 | `web_fetch` | `TAVILY_API_KEY` or `FIRECRAWL_API_KEY` |

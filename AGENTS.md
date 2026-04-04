@@ -59,28 +59,28 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `sources`
 - `sources_count`
 
-## 项目规划
+## 文档政策
 
-### 当前状态
+- 公开维护的路线图仅放在 [docs/ROADMAP.md](./docs/ROADMAP.md)
+- 详细开发文档、研究笔记、内部决策、发布准备清单统一放在 `.local/docs/`
+- `.local/` 必须保持在 `.gitignore` 中，不得提交到 GitHub
+- `AGENTS.md` 只保留稳定操作上下文，不承担内部迭代计划与临时研究记录
 
-- 已将仓库定位收口为独立维护的主仓，不再依赖上游仓库叙事
-- 已补强 `plan_*` 阶段顺序、缺失会话错误提示与运行时参数校验
-- 已补强 `web_search` 输出清洗、空响应兜底与结构化信源提取
-- 已将 Grok provider 调整为非流式 completion 优先，并保留 SSE 文本兼容
-- 已补充 Windows `SelectorEventLoopPolicy` 兼容逻辑
-- 已增强 `web_search` 对上游 `503`、空占位 completion 帧与不可解析响应的错误显性化，并尽量保留 `request_id`
-- 已增强 `web_search` 对 OpenAI 兼容 `message.content` 数组块、结构化 citations/annotations、正文内联链接的解析与兜底，减少 `content` 为空及 `sources_count=0` 的情况
-- 已修复 `extra_sources` 在 Tavily / Firecrawl 同时配置时的分配逻辑
-- 已增强 `web_fetch` 对 Tavily / Firecrawl 的失败归因，并新增对明显截断内容的检测
-- 已补充多语言 README、治理文档、GitHub 模板，以及 companion skill `skills/research-with-grok-search/`
-- 当前包版本已更新到 `1.0.0`
+## 当前定位
 
-### 待办
+- 核心产品是轻量 `MCP + companion skill`
+- 默认能力以高频、短时、低摩擦的信息注入为主，目标是在大多数场景下尽快返回有用结果与可核验来源
+- `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info` 是默认主能力
+- `plan_*` 是默认的轻量规划入口，推荐作为复杂搜索与多数常规搜索的前置步骤
+- `web_search` 是默认搜索执行入口，既可直接调用，也可承接 `plan_*` 之后的搜索执行
+- `plan_*` 的额外开销当前较低，适合作为高频、轻量的默认规划入口
+- 更长时间、更强编排的复杂任务与深度探索能力统一收口为 `deep research` 框架，并与核心默认体验解耦
+- 当前推荐分层是：`plan_* -> web_search` 负责轻量层，`deep research` 负责高级深度探索层
+- 所有需要用户编辑、确认或阶段性干预的交互只放在 CLI；MCP 与 companion skill 只承载非交互式触发、状态查询和结果获取
 
-- 继续增强 `get_config_info`，逐步演进为更完整的兼容性诊断入口
-- 继续补强 `get_sources` 的来源可信度与可追溯元数据
-- 评估是否引入更深层的抓取工作流，例如 `map -> fetch` 或 `web_crawl`
-- 继续观察不同 Grok 中转站对 `/v1/chat/completions` 的兼容质量，必要时再讨论更受限的协议 fallback
-- 评估是否在 `get_config_info` 中直接提示 `GROK_API_URL` 缺少 `/v1` 的常见误配
-- 继续观察是否有上游会把 citations 放在更深层的自定义字段中，必要时再扩展结构化信源提取白名单
-- 逐步建立更明确的 release / changelog / compatibility 维护节奏
+## 稳定注意事项
+
+- `GROK_API_URL` 应尽量使用 OpenAI-compatible 根路径并显式带上 `/v1`
+- `get_config_info` 当前可用于配置与连通性初检，但还不是完整的端到端兼容性诊断
+- `web_fetch` 目前优先使用 Tavily extract，失败时回退到 Firecrawl scrape
+- `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性

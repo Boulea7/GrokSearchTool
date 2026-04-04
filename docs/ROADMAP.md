@@ -1,19 +1,41 @@
 # Roadmap
 
-## P0
+## Positioning
 
-- Build a stronger compatibility doctor on top of `get_config_info`
-- Improve source provenance and reliability beyond in-memory cache metadata
-- Add broader client compatibility tests for Claude Code, Codex-style clients, and Cherry Studio
-- Establish an explicit release flow with tags, changelog discipline, and installation smoke tests
+GrokSearch is being developed as a lightweight MCP plus companion skill for fast, high-frequency information injection during LLM tool use.
 
-## P1
+The core product focus is:
 
-- Productize fetch and map workflows into deeper research flows
-- Add structured observability and a debuggable support bundle
-- Improve configuration onboarding and troubleshooting guidance
+- return useful, current, source-backed results quickly
+- help models gather broad and relevant context without wasting their own token budget
+- stay practical across multiple MCP-capable hosts instead of over-optimizing for a single CLI workflow
 
-## P2
+Long-running `deep research` remains a separate advanced capability direction and should not complicate the default MCP experience.
 
-- Rework the planning surface into clearer expert/basic layers
-- Expand research workflow ergonomics without widening the default tool surface too aggressively
+## Now
+
+- Strengthen the core `web_search`, `get_sources`, `web_fetch`, `web_map`, and `get_config_info` experience while keeping the default workflow fast and lightweight
+- Improve source provenance, confidence cues, and result ordering so useful evidence is surfaced before low-value noise
+- Expand compatibility and installation validation for important MCP hosts, with clear distinctions between officially tested, community-tested, and planned integrations
+- Build a stronger diagnostics and release discipline around configuration checks, compatibility smoke tests, tags, changelog hygiene, and installation verification
+
+## Next
+
+- Refine the companion skill so it keeps `plan_* -> web_search` as the recommended core path while still allowing direct lightweight tool use when the model has a clear reason to skip planning
+- Improve structured observability and troubleshooting guidance without widening the default tool surface too aggressively
+- Add richer source metadata and more selective result packaging so calling models receive high-value context first and low-value output is suppressed
+- Clarify transport and host integration guidance for local `stdio` usage first, then remote MCP patterns where they are stable enough to document responsibly
+
+## Later
+
+- Evolve `deep research` as a separate advanced product layer, with the default priority on CLI-oriented workflows and careful evaluation of optional advanced MCP modes
+- Evaluate deeper research orchestration such as extended `map -> fetch` flows, resumable jobs, progress reporting, exported research artifacts, and support bundles
+- Revisit expert versus basic interaction layers only if they can be added without making the default MCP and skill experience heavier or slower
+
+## Compatibility Intent
+
+Public compatibility communication should continue to prioritize clarity over breadth:
+
+- document what is officially tested
+- distinguish planned integrations from already-verified ones
+- keep machine-specific workarounds, temporary experiments, and local-only setup notes out of the public roadmap
