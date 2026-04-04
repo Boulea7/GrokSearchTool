@@ -1,6 +1,6 @@
 import pytest
 
-from grok_search.providers.grok import GrokSearchProvider
+from grok_search.providers.grok import GrokSearchProvider, _WaitWithRetryAfter
 
 
 class DummyResponse:
@@ -113,6 +113,48 @@ async def test_parse_completion_response_appends_structured_citations():
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_appends_annotation_sources():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":"hello world","annotations":[{"title":"Docs","url":"https://docs.example.com/"}]}}]}',
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": "hello world",
+                        "annotations": [
+                            {"title": "Docs", "url": "https://docs.example.com/"},
+                        ],
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "https://docs.example.com/" in result
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_response_appends_url_list_sources():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":"hello world"}}],"urls":["https://example.com/guide"]}',
+        json_data={
+            "choices": [{"message": {"content": "hello world"}}],
+            "urls": ["https://example.com/guide"],
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "https://example.com/guide" in result
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_falls_back_to_sse_text():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(
@@ -145,6 +187,18 @@ async def test_parse_completion_response_raises_on_empty_placeholder_sse():
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_raises_on_empty_placeholder_json():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"id":"","object":"","model":"","choices":null,"usage":null}',
+        json_data={"id": "", "object": "", "model": "", "choices": None, "usage": None},
+    )
+
+    with pytest.raises(ValueError, match="空的占位 completion 帧"):
+        await provider._parse_completion_response(response)
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_raises_on_login_html():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(
@@ -154,3 +208,10 @@ async def test_parse_completion_response_raises_on_login_html():
 
     with pytest.raises(ValueError, match="登录页面"):
         await provider._parse_completion_response(response)
+
+
+def test_wait_with_retry_after_parses_seconds_header():
+    strategy = _WaitWithRetryAfter(multiplier=1, max_wait=10)
+    request = DummyResponse(headers={"Retry-After": "3"})
+
+    assert strategy._parse_retry_after(request) == 3.0

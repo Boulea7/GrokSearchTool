@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research with GrokSearch"
+  short_description: "Use GrokSearch MCP for current web research"
+  default_prompt: "Use $research-with-grok-search to gather current web evidence, verify sources, and route GrokSearch MCP tools correctly."

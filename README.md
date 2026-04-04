@@ -3,9 +3,9 @@
 
 <!-- # Grok Search MCP -->
 
-[English](./docs/README_EN.md) | 简体中文
+[English](./README.en.md) | [繁體中文](./README.zh-TW.md) | 简体中文 | [日本語](./README.ja.md) | [Русский](./README.ru.md)
 
-**Grok-with-Tavily MCP，为 Claude Code 提供更完善的网络访问能力**
+**GrokSearch MCP，为 Claude Code 提供更完善的网络访问能力**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![FastMCP](https://img.shields.io/badge/FastMCP-2.0.0+-green.svg)](https://github.com/jlowin/fastmcp)
 
@@ -29,7 +29,7 @@ Claude ──MCP──► Grok Search Server
 - **双引擎**：Grok 搜索 + Tavily 抓取/映射，互补协作
 - **Firecrawl 托底**：Tavily 提取失败时自动降级到 Firecrawl Scrape，支持空内容自动重试
 - **OpenAI 兼容接口**，支持任意 Grok 镜像站
-- **自动时间注入**（检测时间相关查询，注入本地时间上下文）
+- **自动时间注入**（默认注入本地时间上下文）
 - 一键禁用 Claude Code 官方 WebSearch/WebFetch，强制路由到本工具
 - 智能重试（支持 Retry-After 头解析 + 指数退避）
 - 父进程监控（Windows 下自动检测父进程退出，防止僵尸进程）
@@ -72,7 +72,7 @@ claude mcp remove grok-search
 ```
 
 
-将以下命令中的环境变量替换为你自己的值后执行。Grok 接口需为 OpenAI 兼容格式；Tavily 为可选配置，未配置时工具 `web_fetch` 和 `web_map` 不可用。
+将以下命令中的环境变量替换为你自己的值后执行。Grok 接口需为 OpenAI 兼容格式；Tavily 为可选配置，未配置时 `web_map` 不可用；若仅配置 Firecrawl，`web_fetch` 仍可用。
 
 ```bash
 claude mcp add-json grok-search --scope user '{
@@ -92,9 +92,9 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
-### Fork 维护补充：实测稳定组合
+### 当前维护说明：实测稳定组合
 
-以下内容是当前 fork 维护者在 `2026-03-24` 的实测结论，仅作为分享版经验值：
+以下内容是当前维护者在 `2026-03-24` 的实测结论，仅作为经验值：
 
 - 主推荐：`https://grok2api.example.com/v1` + `grok-4.1-fast`
 - 备用站：`https://relay-backup.example.com/v1`
@@ -143,29 +143,30 @@ claude mcp add-json grok-search --scope user '{
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| `GROK_API_URL` | ✅ | - | Grok API 地址（OpenAI 兼容格式） |
-| `GROK_API_KEY` | ✅ | - | Grok API 密钥 |
-| `GROK_MODEL` | ❌ | `grok-4.1-fast` | 默认模型（设置后优先于 `~/.config/grok-search/config.json`） |
-| `TAVILY_API_KEY` | ❌ | - | Tavily API 密钥（用于 web_fetch / web_map） |
-| `TAVILY_API_URL` | ❌ | `https://api.tavily.com` | Tavily API 地址 |
-| `TAVILY_ENABLED` | ❌ | `true` | 是否启用 Tavily |
-| `FIRECRAWL_API_KEY` | ❌ | - | Firecrawl API 密钥（Tavily 失败时托底） |
-| `FIRECRAWL_API_URL` | ❌ | `https://api.firecrawl.dev/v2` | Firecrawl API 地址 |
-| `GROK_DEBUG` | ❌ | `false` | 调试模式 |
-| `GROK_LOG_LEVEL` | ❌ | `INFO` | 日志级别 |
-| `GROK_LOG_DIR` | ❌ | `logs` | 日志目录 |
-| `GROK_RETRY_MAX_ATTEMPTS` | ❌ | `3` | 最大重试次数 |
-| `GROK_RETRY_MULTIPLIER` | ❌ | `1` | 重试退避乘数 |
-| `GROK_RETRY_MAX_WAIT` | ❌ | `10` | 重试最大等待秒数 |
-| `PYTHONIOENCODING` | ❌ | `utf-8` | 建议显式设为 UTF-8，减少 Windows / 中转站日志乱码 |
-| `PYTHONUNBUFFERED` | ❌ | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
-| `PYTHONUTF8` | ❌ | `1` | 强制 Python UTF-8 模式 |
+| `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式） |
+| `GROK_API_KEY` | 是 | - | Grok API 密钥 |
+| `GROK_MODEL` | 否 | `grok-4.1-fast` | 默认模型（设置后优先于 `~/.config/grok-search/config.json`） |
+| `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 web_fetch / web_map） |
+| `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
+| `TAVILY_ENABLED` | 否 | `true` | 是否启用 Tavily |
+| `FIRECRAWL_API_KEY` | 否 | - | Firecrawl API 密钥（Tavily 失败时托底） |
+| `FIRECRAWL_API_URL` | 否 | `https://api.firecrawl.dev/v2` | Firecrawl API 地址 |
+| `GROK_DEBUG` | 否 | `false` | 调试模式 |
+| `GROK_LOG_LEVEL` | 否 | `INFO` | 日志级别 |
+| `GROK_LOG_DIR` | 否 | `logs` | 日志目录 |
+| `GROK_OUTPUT_CLEANUP` | 否 | `true` | 是否启用 `web_search` 输出清洗 |
+| `GROK_RETRY_MAX_ATTEMPTS` | 否 | `3` | 最大重试次数 |
+| `GROK_RETRY_MULTIPLIER` | 否 | `1` | 重试退避乘数 |
+| `GROK_RETRY_MAX_WAIT` | 否 | `10` | 重试最大等待秒数 |
+| `PYTHONIOENCODING` | 否 | `utf-8` | 建议显式设为 UTF-8，减少 Windows / 中转站日志乱码 |
+| `PYTHONUNBUFFERED` | 否 | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
+| `PYTHONUTF8` | 否 | `1` | 强制 Python UTF-8 模式 |
 
-> 当前 fork 分享版默认推荐 `grok-4.1-fast`。如需更高阶模型，请优先确认对应中转站的兼容质量。
+> 当前默认推荐 `grok-4.1-fast`。如需更高阶模型，请优先确认对应中转站的兼容质量。
 
 ### 本地优先启动建议
 
-如果你本机会频繁改 MCP 代码，建议优先使用本地安装，再将远端 fork 作为兜底：
+如果你本机会频繁改 MCP 代码，建议优先使用本地安装，再将远端仓库作为兜底：
 
 ```bash
 uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
@@ -175,7 +176,7 @@ uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
 
 - `GROK_API_URL` 尽量写成 OpenAI 兼容根路径并显式带上 `/v1`
 - `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
-- 若 `content` 为空，先检查中转站是否真的返回了正文；若 `sources_count=0`，再检查上游是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
+- 若 `content` 为空，先检查中转站是否真的返回了正文；若 `sources_count=0`，再检查是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
 
 
 ### 验证安装
@@ -184,7 +185,7 @@ uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
 claude mcp list
 ```
 
-🍟 显示连接成功后，我们**十分推荐**在 Claude 对话中输入 
+显示连接成功后，我们**十分推荐**在 Claude 对话中输入
 ```
 调用 grok-search toggle_builtin_tools，关闭Claude Code's built-in WebSearch and WebFetch tools
 ```
@@ -195,7 +196,7 @@ claude mcp list
 ## 三、MCP 工具介绍
 
 <details>
-<summary>本项目提供八个 MCP 工具（展开查看）</summary>
+<summary>本项目提供 MCP 工具（展开查看）</summary>
 
 ### `web_search` — AI 网络搜索
 
@@ -205,12 +206,12 @@ claude mcp list
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `query` | string | ✅ | - | 搜索查询语句 |
-| `platform` | string | ❌ | `""` | 聚焦平台（如 `"Twitter"`, `"GitHub, Reddit"`） |
-| `model` | string | ❌ | `null` | 按次指定 Grok 模型 ID |
-| `extra_sources` | int | ❌ | `0` | 额外补充信源数量（Tavily/Firecrawl，可为 0 关闭） |
+| `query` | string | 是 | - | 搜索查询语句 |
+| `platform` | string | 否 | `""` | 聚焦平台（如 `"Twitter"`, `"GitHub, Reddit"`） |
+| `model` | string | 否 | `null` | 按次指定 Grok 模型 ID |
+| `extra_sources` | int | 否 | `0` | 额外补充信源数量（Tavily/Firecrawl，可为 0 关闭） |
 
-自动检测查询中的时间相关关键词（如"最新""今天""recent"等），注入本地时间上下文以提升时效性搜索的准确度。
+自动注入本地时间上下文，以提升时效性搜索的准确度。
 
 返回值（结构化字典）：
 - `session_id`: 本次查询的会话 ID
@@ -223,7 +224,7 @@ claude mcp list
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `session_id` | string | ✅ | `web_search` 返回的 `session_id` |
+| `session_id` | string | 是 | `web_search` 返回的 `session_id` |
 
 返回值（结构化字典）：
 - `session_id`
@@ -236,7 +237,7 @@ claude mcp list
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `url` | string | ✅ | 目标网页 URL |
+| `url` | string | 是 | 目标网页 URL |
 
 ### `web_map` — 站点结构映射
 
@@ -244,12 +245,12 @@ claude mcp list
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `url` | string | ✅ | - | 起始 URL |
-| `instructions` | string | ❌ | `""` | 自然语言过滤指令 |
-| `max_depth` | int | ❌ | `1` | 最大遍历深度（1-5） |
-| `max_breadth` | int | ❌ | `20` | 每页最大跟踪链接数（1-500） |
-| `limit` | int | ❌ | `50` | 总链接处理数上限（1-500） |
-| `timeout` | int | ❌ | `150` | 超时秒数（10-150） |
+| `url` | string | 是 | - | 起始 URL |
+| `instructions` | string | 否 | `""` | 自然语言过滤指令 |
+| `max_depth` | int | 否 | `1` | 最大遍历深度（1-5） |
+| `max_breadth` | int | 否 | `20` | 每页最大跟踪链接数（1-500） |
+| `limit` | int | 否 | `50` | 总链接处理数上限（1-500） |
+| `timeout` | int | 否 | `150` | 超时秒数（10-150） |
 
 ### `get_config_info` — 配置诊断
 
@@ -259,7 +260,7 @@ claude mcp list
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `model` | string | ✅ | 模型 ID（如 `"grok-4-fast"`, `"grok-2-latest"`） |
+| `model` | string | 是 | 模型 ID（如 `"grok-4-fast"`, `"grok-2-latest"`） |
 
 切换后配置持久化到 `~/.config/grok-search/config.json`，跨会话保持。
 
@@ -267,11 +268,11 @@ claude mcp list
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `action` | string | ❌ | `"status"` | `"on"` 禁用官方工具 / `"off"` 启用官方工具 / `"status"` 查看状态 |
+| `action` | string | 否 | `"status"` | `"on"` 禁用官方工具 / `"off"` 启用官方工具 / `"status"` 查看状态 |
 
 修改项目级 `.claude/settings.json` 的 `permissions.deny`，一键禁用 Claude Code 官方的 WebSearch 和 WebFetch。
 
-### `search_planning` — 搜索规划
+### `plan_intent` / `plan_complexity` / `plan_sub_query` / `plan_search_term` / `plan_tool_mapping` / `plan_execution`
 
 结构化搜索规划脚手架（分阶段、多轮），用于在执行复杂搜索前先生成可执行的搜索计划。
 </details>
@@ -303,7 +304,7 @@ A: 在 Claude 对话中说"显示 grok-search 配置信息"，将自动测试 AP
 <summary>
 Q: `web_search` 返回空内容或直接报错怎么办？
 </summary>
-A: 当前 fork 版本已经尽量把错误显性化，你可以按以下方式理解：
+A: 当前版本已经尽量把错误显性化，你可以按以下方式理解：
 
 - `HTTP 503`：上游服务当前不可用，或该模型没有可用通道
 - “空的占位 completion 帧（choices=null）”：中转站接受了请求，但没有返回可用正文
@@ -316,6 +317,16 @@ A: 当前 fork 版本已经尽量把错误显性化，你可以按以下方式�
 3. 如果仍然不稳定，优先更换中转站，而不是只改默认模型
 </details>
 
+## 五、补充文档
+
+- [贡献指南](./CONTRIBUTING.md)
+- [安全策略](./SECURITY.md)
+- [行为准则](./CODE_OF_CONDUCT.md)
+- [兼容性说明](./docs/COMPATIBILITY.md)
+- [路线图](./docs/ROADMAP.md)
+- [更新记录](./CHANGELOG.md)
+- [Companion Skill](./skills/research-with-grok-search/SKILL.md)
+
 ## 许可证
 
 [MIT License](LICENSE)
@@ -326,5 +337,5 @@ A: 当前 fork 版本已经尽量把错误显性化，你可以按以下方式�
 
 **如果这个项目对您有帮助，请给个 Star！**
 
-[![Star History Chart](https://api.star-history.com/svg?repos=GuDaStudio/GrokSearch&type=date&legend=top-left)](https://www.star-history.com/#GuDaStudio/GrokSearch&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=Boulea7/GrokSearchTool&type=date&legend=top-left)](https://www.star-history.com/#Boulea7/GrokSearchTool&type=date&legend=top-left)
 </div>

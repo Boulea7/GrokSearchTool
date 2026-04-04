@@ -1,10 +1,11 @@
 import asyncio
+import re
 import sys
 from pathlib import Path
 from typing import Annotated, Optional
 
 from fastmcp import FastMCP, Context
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 # 支持直接运行：添加 src 目录到 Python 路径
 src_dir = Path(__file__).parent.parent
@@ -24,7 +25,17 @@ try:
         sanitize_answer_text,
         split_answer_and_sources,
     )
-    from grok_search.planning import engine as planning_engine, _split_csv
+    from grok_search.planning import (
+        ComplexityOutput,
+        ExecutionOrderOutput,
+        IntentOutput,
+        SearchTerm,
+        StrategyOutput,
+        SubQuery,
+        ToolPlanItem,
+        engine as planning_engine,
+        _split_csv,
+    )
 except ImportError:
     from .providers.grok import GrokSearchProvider
     from .logger import log_info
@@ -37,7 +48,17 @@ except ImportError:
         sanitize_answer_text,
         split_answer_and_sources,
     )
-    from .planning import engine as planning_engine, _split_csv
+    from .planning import (
+        ComplexityOutput,
+        ExecutionOrderOutput,
+        IntentOutput,
+        SearchTerm,
+        StrategyOutput,
+        SubQuery,
+        ToolPlanItem,
+        engine as planning_engine,
+        _split_csv,
+    )
 
 mcp = FastMCP("grok-search")
 
@@ -104,6 +125,26 @@ def _planning_session_error(session_id: str) -> str:
         ensure_ascii=False,
         indent=2,
     )
+
+
+def _planning_validation_error(code: str, message: str, details: list | None = None) -> str:
+    import json
+
+    payload = {"error": code, "message": message}
+    if details:
+        payload["details"] = details
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _format_validation_details(exc: ValidationError) -> list[dict]:
+    return [
+        {
+            "field": ".".join(str(part) for part in err["loc"]),
+            "message": err["msg"],
+            "type": err["type"],
+        }
+        for err in exc.errors()
+    ]
 
 
 def _extract_request_id(headers) -> str:
@@ -179,6 +220,32 @@ def _looks_like_login_page(body_text: str) -> bool:
     if "<html" not in normalized:
         return False
     return any(token in normalized for token in ("login", "sign in", "signin", "auth"))
+
+
+def _is_probably_truncated_content(content: str, min_length: int = 120) -> bool:
+    stripped = (content or "").strip()
+    if len(stripped) < min_length:
+        return False
+
+    lowered = stripped.lower()
+    markers = (
+        "[...]",
+        "[truncated]",
+        "(truncated)",
+        "<truncated>",
+        "output truncated",
+        "content truncated",
+    )
+    if any(marker in lowered for marker in markers):
+        return True
+
+    if stripped.count("```") % 2 == 1:
+        return True
+
+    if re.search(r"\[[^\]]*\]\([^)]*$", stripped):
+        return True
+
+    return False
 
 
 def _format_fetch_error(provider: str, exc: Exception) -> str:
@@ -295,7 +362,8 @@ async def web_search(
     tavily_count = 0
     if extra_sources > 0:
         if has_firecrawl and has_tavily:
-            firecrawl_count = round(extra_sources * 1)
+            firecrawl_count = max(1, round(extra_sources * 0.7))
+            firecrawl_count = min(firecrawl_count, extra_sources - 1) if extra_sources > 1 else extra_sources
             tavily_count = extra_sources - firecrawl_count
         elif has_firecrawl:
             firecrawl_count = extra_sources
@@ -404,6 +472,8 @@ async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
             if data.get("results") and len(data["results"]) > 0:
                 content = data["results"][0].get("raw_content", "")
                 if content and content.strip():
+                    if _is_probably_truncated_content(content):
+                        return None, "Tavily 提取结果疑似被截断"
                     return content, None
                 return None, "Tavily 提取成功但内容为空"
             return None, "Tavily 提取成功但 results 为空"
@@ -487,6 +557,10 @@ async def _call_firecrawl_scrape(url: str, ctx=None) -> tuple[str | None, str | 
                 data = response.json()
                 markdown = data.get("data", {}).get("markdown", "")
                 if markdown and markdown.strip():
+                    if _is_probably_truncated_content(markdown):
+                        last_error = "Firecrawl 返回的 markdown 疑似被截断"
+                        await log_info(ctx, f"Firecrawl: markdown疑似截断, 重试 {attempt + 1}/{max_retries}", config.debug_enabled)
+                        continue
                     return markdown, None
                 last_error = "Firecrawl 返回空 markdown"
                 await log_info(ctx, f"Firecrawl: markdown为空, 重试 {attempt + 1}/{max_retries}", config.debug_enabled)
@@ -660,7 +734,7 @@ async def get_config_info() -> str:
             response_time = (time.time() - start_time) * 1000  # 转换为毫秒
 
             if response.status_code == 200:
-                test_result["status"] = "✅ 连接成功"
+                test_result["status"] = "连接成功"
                 test_result["message"] = f"成功获取模型列表 (HTTP {response.status_code})"
                 test_result["response_time_ms"] = round(response_time, 2)
 
@@ -682,21 +756,21 @@ async def get_config_info() -> str:
                 except Exception:
                     pass
             else:
-                test_result["status"] = "⚠️ 连接异常"
+                test_result["status"] = "连接异常"
                 test_result["message"] = f"HTTP {response.status_code}: {response.text[:100]}"
                 test_result["response_time_ms"] = round(response_time, 2)
 
     except httpx.TimeoutException:
-        test_result["status"] = "❌ 连接超时"
+        test_result["status"] = "连接超时"
         test_result["message"] = "请求超时（10秒），请检查网络连接或 API URL"
     except httpx.RequestError as e:
-        test_result["status"] = "❌ 连接失败"
+        test_result["status"] = "连接失败"
         test_result["message"] = f"网络错误: {str(e)}"
     except ValueError as e:
-        test_result["status"] = "❌ 配置错误"
+        test_result["status"] = "配置错误"
         test_result["message"] = str(e)
     except Exception as e:
-        test_result["status"] = "❌ 测试失败"
+        test_result["status"] = "测试失败"
         test_result["message"] = f"未知错误: {str(e)}"
 
     config_info["connection_test"] = test_result
@@ -733,7 +807,7 @@ async def switch_model(
         current_model = config.grok_model
 
         result = {
-            "status": "✅ 成功",
+            "status": "成功",
             "previous_model": previous_model,
             "current_model": current_model,
             "message": f"模型已从 {previous_model} 切换到 {current_model}",
@@ -744,13 +818,13 @@ async def switch_model(
 
     except ValueError as e:
         result = {
-            "status": "❌ 失败",
+            "status": "失败",
             "message": f"切换模型失败: {str(e)}"
         }
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as e:
         result = {
-            "status": "❌ 失败",
+            "status": "失败",
             "message": f"未知错误: {str(e)}"
         }
         return json.dumps(result, ensure_ascii=False, indent=2)
@@ -859,6 +933,10 @@ async def plan_intent(
         data["ambiguities"] = _split_csv(ambiguities)
     if unverified_terms:
         data["unverified_terms"] = _split_csv(unverified_terms)
+    try:
+        IntentOutput(**data)
+    except ValidationError as exc:
+        return _planning_validation_error("validation_error", "Invalid intent input.", _format_validation_details(exc))
     return json.dumps(planning_engine.process_phase(
         phase="intent_analysis", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=data,
@@ -883,6 +961,15 @@ async def plan_complexity(
     import json
     if not planning_engine.get_session(session_id):
         return _planning_session_error(session_id)
+    try:
+        ComplexityOutput(
+            level=level,
+            estimated_sub_queries=estimated_sub_queries,
+            estimated_tool_calls=estimated_tool_calls,
+            justification=justification,
+        )
+    except ValidationError as exc:
+        return _planning_validation_error("validation_error", "Invalid complexity input.", _format_validation_details(exc))
     return json.dumps(planning_engine.process_phase(
         phase="complexity_assessment", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence,
@@ -916,6 +1003,10 @@ async def plan_sub_query(
         item["depends_on"] = _split_csv(depends_on)
     if tool_hint:
         item["tool_hint"] = tool_hint
+    try:
+        SubQuery(**item)
+    except ValidationError as exc:
+        return _planning_validation_error("validation_error", "Invalid sub-query input.", _format_validation_details(exc))
     return json.dumps(planning_engine.process_phase(
         phase="query_decomposition", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=item,
@@ -939,13 +1030,27 @@ async def plan_search_term(
     is_revision: Annotated[bool, "True to replace all search terms"] = False,
 ) -> str:
     import json
-    if not planning_engine.get_session(session_id):
+    session = planning_engine.get_session(session_id)
+    if not session:
         return _planning_session_error(session_id)
+    if (is_revision or "search_strategy" not in session.phases) and not approach:
+        return _planning_validation_error(
+            "first_search_term_requires_approach",
+            "The first search term must include approach=broad_first|narrow_first|targeted.",
+        )
     data = {"search_terms": [{"term": term, "purpose": purpose, "round": round}]}
     if approach:
         data["approach"] = approach
     if fallback_plan:
         data["fallback_plan"] = fallback_plan
+    try:
+        StrategyOutput(
+            approach=approach or "targeted",
+            search_terms=[SearchTerm(term=term, purpose=purpose, round=round)],
+            fallback_plan=fallback_plan or None,
+        )
+    except ValidationError as exc:
+        return _planning_validation_error("validation_error", "Invalid search strategy input.", _format_validation_details(exc))
     return json.dumps(planning_engine.process_phase(
         phase="search_strategy", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=data,
@@ -976,6 +1081,12 @@ async def plan_tool_mapping(
             item["params"] = json.loads(params_json)
         except json.JSONDecodeError:
             pass
+    try:
+        ToolPlanItem(**item)
+    except ValidationError as exc:
+        if any(detail["type"] == "literal_error" for detail in _format_validation_details(exc)):
+            return _planning_validation_error("invalid_tool", "tool must be one of web_search, web_fetch, web_map.")
+        return _planning_validation_error("validation_error", "Invalid tool mapping input.", _format_validation_details(exc))
     return json.dumps(planning_engine.process_phase(
         phase="tool_selection", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=item,
@@ -1001,6 +1112,10 @@ async def plan_execution(
         return _planning_session_error(session_id)
     parallel = [_split_csv(g) for g in parallel_groups.split(";") if g.strip()] if parallel_groups else []
     seq = _split_csv(sequential)
+    try:
+        ExecutionOrderOutput(parallel=parallel, sequential=seq, estimated_rounds=estimated_rounds)
+    except ValidationError as exc:
+        return _planning_validation_error("validation_error", "Invalid execution plan input.", _format_validation_details(exc))
     return json.dumps(planning_engine.process_phase(
         phase="execution_order", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence,
