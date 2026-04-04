@@ -1,4 +1,4 @@
-from grok_search.sources import sanitize_answer_text, split_answer_and_sources
+from grok_search.sources import sanitize_answer_text, split_answer_and_sources, standardize_sources
 from grok_search.utils import extract_unique_urls
 
 
@@ -82,3 +82,112 @@ def test_extract_unique_urls_strips_trailing_markdown_emphasis():
     urls = extract_unique_urls(raw)
 
     assert urls == ["https://fastapi.tiangolo.com/"]
+
+
+def test_standardize_sources_applies_defaults_and_ranks():
+    sources = standardize_sources(
+        [
+            {"title": "OpenAI", "url": "https://openai.com/"},
+            {
+                "title": "Docs",
+                "url": "https://docs.example.com/guide",
+                "provider": "firecrawl",
+                "description": "Guide content",
+            },
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "OpenAI",
+            "url": "https://openai.com/",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "openai.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        },
+        {
+            "title": "Docs",
+            "url": "https://docs.example.com/guide",
+            "provider": "firecrawl",
+            "source_type": "web_page",
+            "description": "Guide content",
+            "snippet": "Guide content",
+            "domain": "docs.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 2,
+        },
+    ]
+
+
+def test_standardize_sources_preserves_existing_metadata_and_retrieved_at():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "provider": "tavily",
+                "description": "Legacy description",
+                "retrieved_at": "2026-01-01T00:00:00Z",
+                "custom_field": "keep-me",
+            }
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Legacy Source",
+            "url": "https://legacy.example.com/page",
+            "provider": "tavily",
+            "description": "Legacy description",
+            "retrieved_at": "2026-01-01T00:00:00Z",
+            "custom_field": "keep-me",
+            "source_type": "web_page",
+            "snippet": "Legacy description",
+            "domain": "legacy.example.com",
+            "score": None,
+            "published_at": None,
+            "rank": 1,
+        }
+    ]
+
+
+def test_standardize_sources_maps_legacy_alias_fields():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "source": "legacy-provider",
+                "published_date": "2025-12-31",
+            }
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Legacy Source",
+            "url": "https://legacy.example.com/page",
+            "source": "legacy-provider",
+            "published_date": "2025-12-31",
+            "provider": "legacy-provider",
+            "description": "",
+            "source_type": "web_page",
+            "snippet": "",
+            "domain": "legacy.example.com",
+            "score": None,
+            "published_at": "2025-12-31",
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
