@@ -115,7 +115,7 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
     timestamp = retrieved_at or dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     standardized: list[dict] = []
 
-    for rank, item in enumerate(sources or [], start=1):
+    for item in sources or []:
         raw_item = dict(item or {})
         url = _normalize_url(raw_item.get("url"))
         if not url:
@@ -136,7 +136,7 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
         raw_item["score"] = _normalize_score(raw_item.get("score"))
         raw_item["published_at"] = _normalize_optional_text(raw_item.get("published_at") or raw_item.get("published_date"))
         raw_item["retrieved_at"] = _normalize_optional_text(raw_item.get("retrieved_at")) or timestamp
-        raw_item["rank"] = rank
+        raw_item["rank"] = len(standardized) + 1
         standardized.append(raw_item)
 
     return standardized
