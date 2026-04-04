@@ -55,8 +55,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 | `plan_*` | none beyond a working MCP host |
 | `web_search` | `GROK_API_URL`, `GROK_API_KEY` |
 | `get_sources` | a previous successful `web_search` call |
-| `web_fetch` | `TAVILY_API_KEY` or `FIRECRAWL_API_KEY` |
-| `web_map` | `TAVILY_API_KEY` |
+| `web_fetch` | `FIRECRAWL_API_KEY`, or `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
+| `web_map` | `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `toggle_builtin_tools` | Claude Code project layout |
 
 ## Known Practical Limits

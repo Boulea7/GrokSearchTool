@@ -98,6 +98,31 @@ async def test_out_of_order_phase_returns_error():
 
 
 @pytest.mark.asyncio
+async def test_revision_cannot_create_later_phase_out_of_order():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Resolve an ambiguous query.",
+            query_type="exploratory",
+            time_sensitivity="recent",
+        )
+    )
+
+    result = json.loads(
+        await server.plan_execution(
+            session_id=intent["session_id"],
+            thought="Try to bypass ordering with a revision.",
+            parallel_groups="sq1",
+            sequential="sq1",
+            estimated_rounds=1,
+            is_revision=True,
+        )
+    )
+
+    assert "requires 'tool_selection'" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_level_1_blocks_later_phases():
     intent = json.loads(
         await server.plan_intent(
