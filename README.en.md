@@ -74,7 +74,7 @@ If your environment requires system certificates, add `--native-tls` to `uvx`.
 | `GROK_MODEL` | No | Default model |
 | `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
-| `TAVILY_ENABLED` | No | Enable or disable Tavily-backed search/fetch/map paths |
+| `TAVILY_ENABLED` | No | Enable or disable Tavily-backed fetch/map paths |
 | `FIRECRAWL_API_KEY` | No | Firecrawl fallback key |
 | `FIRECRAWL_API_URL` | No | Firecrawl endpoint |
 | `GROK_DEBUG` | No | Enable debug logging |
