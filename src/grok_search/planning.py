@@ -172,7 +172,9 @@ class PlanningEngine:
         if target not in PHASE_NAMES:
             return {"error": f"Unknown phase: {target}. Valid: {', '.join(PHASE_NAMES)}"}
 
-        if not is_revision:
+        creating_new_phase = target not in session.phases
+
+        if creating_new_phase:
             predecessor = _PHASE_PREDECESSORS.get(target)
             if predecessor and predecessor not in session.phases:
                 return {

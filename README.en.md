@@ -74,6 +74,7 @@ If your environment requires system certificates, add `--native-tls` to `uvx`.
 | `GROK_MODEL` | No | Default model |
 | `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
+| `TAVILY_ENABLED` | No | Enable or disable Tavily-backed search/fetch/map paths |
 | `FIRECRAWL_API_KEY` | No | Firecrawl fallback key |
 | `FIRECRAWL_API_URL` | No | Firecrawl endpoint |
 | `GROK_DEBUG` | No | Enable debug logging |
@@ -88,7 +89,7 @@ Notes:
 - the recommended core path is `plan_* -> web_search`
 - interactive `deep research` workflows are planned CLI-first rather than as conversational MCP/skill interactions
 - `web_fetch` still works with Firecrawl only.
-- `web_map` requires Tavily.
+- `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` always injects local time context into the search prompt.
 - `get_config_info` currently validates `/models` only; it is not a full search-compatibility doctor.
 
