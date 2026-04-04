@@ -1,0 +1,86 @@
+[简体中文](README.md) | [繁體中文](README.zh-TW.md) | [English](README.en.md) | [日本語](README.ja.md) | Русский
+
+# GrokSearch
+
+GrokSearch — это независимо поддерживаемый MCP-сервер для ассистентов и клиентов, которым нужен стабильный веб-ресёрч.
+
+Он объединяет поиск через `Grok` и извлечение контента через `Tavily` / `Firecrawl`, предоставляя единый набор MCP-инструментов для простых запросов и многошаговых исследований.
+
+## Обзор
+
+- `web_search`: веб-поиск с кэшированием источников
+- `get_sources`: получение кэшированных источников из `web_search`
+- `web_fetch`: сначала Tavily, затем Firecrawl как fallback
+- `web_map`: карта структуры сайта
+- `plan_*`: поэтапное планирование сложных исследований
+- `get_config_info`: проверка конфигурации и тест `/models`
+- `switch_model`: смена модели Grok по умолчанию
+- `toggle_builtin_tools`: переключение встроенных WebSearch / WebFetch в Claude Code
+
+Сейчас опубликовано `13` MCP-инструментов.
+
+## Установка
+
+### Требования
+
+- Python `3.10+`
+- `uv`
+- клиент с поддержкой stdio MCP
+
+### Добавление как MCP
+
+```bash
+claude mcp add-json grok-search --scope user '{
+  "type": "stdio",
+  "command": "uvx",
+  "args": [
+    "--from",
+    "git+https://github.com/Boulea7/GrokSearchTool@main",
+    "grok-search"
+  ],
+  "env": {
+    "GROK_API_URL": "https://your-api-endpoint.com/v1",
+    "GROK_API_KEY": "your-grok-api-key",
+    "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
+  }
+}'
+```
+
+Примечания:
+
+- `web_fetch` работает и только с Firecrawl.
+- `web_map` требует Tavily.
+- `web_search` всегда добавляет локальный временной контекст.
+- `get_config_info` сейчас проверяет только `/models`.
+
+## Companion Skill
+
+Репозиторий также включает companion skill: [`skills/research-with-grok-search`](skills/research-with-grok-search/SKILL.md)
+
+```bash
+mkdir -p ~/.codex/skills
+ln -s /absolute/path/to/GrokSearch/skills/research-with-grok-search ~/.codex/skills/research-with-grok-search
+```
+
+## Разработка
+
+```bash
+PYTHONPATH=src uv run python -m grok_search.server
+uv run --with pytest --with pytest-asyncio pytest -q
+uv run --with ruff ruff check .
+python3 -m py_compile src/grok_search/*.py src/grok_search/providers/*.py tests/*.py
+```
+
+## Документация
+
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Compatibility](docs/COMPATIBILITY.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Changelog](CHANGELOG.md)
+
+## License
+
+[MIT](LICENSE)
