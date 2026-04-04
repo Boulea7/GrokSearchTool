@@ -84,6 +84,35 @@ def test_extract_unique_urls_strips_trailing_markdown_emphasis():
     assert urls == ["https://fastapi.tiangolo.com/"]
 
 
+def test_standardize_sources_skips_invalid_or_missing_urls():
+    sources = standardize_sources(
+        [
+            {"title": "No URL"},
+            {"title": "Empty URL", "url": ""},
+            {"title": "None URL", "url": None},
+            {"title": "Non-string URL", "url": 123},
+            {"title": "Valid", "url": "https://valid.example.com/"},
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Valid",
+            "url": "https://valid.example.com/",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "valid.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
 def test_standardize_sources_applies_defaults_and_ranks():
     sources = standardize_sources(
         [
@@ -159,6 +188,22 @@ def test_standardize_sources_preserves_existing_metadata_and_retrieved_at():
             "rank": 1,
         }
     ]
+
+
+def test_standardize_sources_normalizes_score_edge_cases():
+    sources = standardize_sources(
+        [
+            {"title": "Int Score", "url": "https://example.com/int", "score": 1},
+            {"title": "Float Score", "url": "https://example.com/float", "score": 0.5},
+            {"title": "True Score", "url": "https://example.com/true", "score": True},
+            {"title": "False Score", "url": "https://example.com/false", "score": False},
+            {"title": "String Score", "url": "https://example.com/string", "score": "not-a-number"},
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert [item["score"] for item in sources] == [1.0, 0.5, None, None, None]
+    assert [item["rank"] for item in sources] == [1, 2, 3, 4, 5]
 
 
 def test_standardize_sources_maps_legacy_alias_fields():
