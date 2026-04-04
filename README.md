@@ -5,7 +5,7 @@
 
 [English](./README.en.md) | [繁體中文](./README.zh-TW.md) | 简体中文 | [日本語](./README.ja.md) | [Русский](./README.ru.md)
 
-**GrokSearch MCP，为 Claude Code 提供更完善的网络访问能力**
+**GrokSearch MCP，为 Claude Code 提供轻量、可核验来源的网络上下文能力**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![FastMCP](https://img.shields.io/badge/FastMCP-2.0.0+-green.svg)](https://github.com/jlowin/fastmcp)
 
@@ -15,7 +15,7 @@
 
 ## 一、概述
 
-Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的 MCP 服务器，采用**双引擎架构**：**Grok** 负责 AI 驱动的智能搜索，**Tavily** 负责高保真网页抓取与站点映射，各取所长为 Claude Code / Cherry Studio 等LLM Client提供完整的实时网络访问能力。
+Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的轻量 MCP 服务器，采用**双引擎架构**：**Grok** 负责 AI 驱动的智能搜索，**Tavily** 负责高保真网页抓取与站点映射，各取所长为 Claude Code / Cherry Studio 等 LLM Client 提供可核验来源的实时网络上下文能力。当前推荐主路径是 `plan_* -> web_search`；更重的深度探索能力将继续收口到 `deep research`，并优先在 CLI 落地。
 
 ```
 Claude ──MCP──► Grok Search Server
@@ -30,9 +30,11 @@ Claude ──MCP──► Grok Search Server
 - **Firecrawl 托底**：Tavily 提取失败时自动降级到 Firecrawl Scrape，支持空内容自动重试
 - **OpenAI 兼容接口**，支持任意 Grok 镜像站
 - **自动时间注入**（默认注入本地时间上下文）
+- **推荐核心路径**：先 `plan_*` 再 `web_search`，以更稳定地约束复杂搜索
 - 一键禁用 Claude Code 官方 WebSearch/WebFetch，强制路由到本工具
 - 智能重试（支持 Retry-After 头解析 + 指数退避）
 - 父进程监控（Windows 下自动检测父进程退出，防止僵尸进程）
+- **未来高级能力方向**：更重的深度探索能力将以 `deep research` 框架推进，交互式体验优先在 CLI 落地
 
 ### 效果展示
 我们以在`cherry studio`中配置本MCP为例，展示了`claude-opus-4.6`模型如何通过本项目实现外部知识搜集，降低幻觉率。
@@ -92,26 +94,6 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
-### 当前维护说明：实测稳定组合
-
-以下内容是当前维护者在 `2026-03-24` 的实测结论，仅作为经验值：
-
-- 主推荐：`https://grok2api.example.com/v1` + `grok-4.1-fast`
-- 备用站：`https://relay-backup.example.com/v1`
-
-实测摘要：
-
-- `grok2api.example.com + grok-4.1-fast`：`10/10` 成功，输出干净，平均延迟约 `7.3s`
-- `grok2api.example.com + grok-4.20-beta`：成功率高，但明显更慢
-- `relay-backup.example.com`：在同一测试窗口内，`grok-4.1-fast` 与 `grok-4.20-beta` 都持续返回空占位 completion 帧（`choices=null`）
-
-如果你想优先获得更稳定的首次体验，建议显式设置：
-
-```bash
-GROK_API_URL="https://grok2api.example.com/v1"
-GROK_MODEL="grok-4.1-fast"
-```
-
 <details> <summary>如果遇到 SSL / 证书验证错误</summary>
 
 在部分企业网络或代理环境中，可能会出现类似错误：
@@ -162,7 +144,7 @@ claude mcp add-json grok-search --scope user '{
 | `PYTHONUNBUFFERED` | 否 | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
 | `PYTHONUTF8` | 否 | `1` | 强制 Python UTF-8 模式 |
 
-> 当前默认推荐 `grok-4.1-fast`。如需更高阶模型，请优先确认对应中转站的兼容质量。
+> 当前代码默认值是 `grok-4.1-fast`。如需切换到其他模型，请优先确认对应中转站的兼容质量。
 
 ### 本地优先启动建议
 
@@ -313,7 +295,7 @@ A: 当前版本已经尽量把错误显性化，你可以按以下方式理解�
 建议排查顺序：
 
 1. 先用 `get_config_info` 确认 `/models` 正常
-2. 再显式切换到 `grok-4.1-fast`
+2. 再切回当前配置或代码默认模型，确认是否为模型兼容性问题
 3. 如果仍然不稳定，优先更换中转站，而不是只改默认模型
 </details>
 
