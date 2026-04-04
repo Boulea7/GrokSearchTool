@@ -7,3 +7,10 @@ logs/
 uv.lock
 .env
 .env.*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*
+*secret*
+*api_key*

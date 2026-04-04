@@ -140,3 +140,100 @@ async def test_level_1_blocks_later_phases():
     )
 
     assert result["error"] == "Level 1 planning completes after query_decomposition."
+
+
+@pytest.mark.asyncio
+async def test_first_search_term_requires_approach():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare Grok and Tavily.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need search strategy.",
+        level=2,
+        estimated_sub_queries=2,
+        estimated_tool_calls=4,
+        justification="Needs decomposition and strategy.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Search first axis.",
+        id="sq1",
+        goal="Compare feature coverage.",
+        expected_output="A concise feature comparison.",
+        boundary="Exclude performance discussion.",
+        tool_hint="web_search",
+    )
+
+    result = json.loads(
+        await server.plan_search_term(
+            session_id=session_id,
+            thought="Missing approach on first term.",
+            term="grok tavily comparison",
+            purpose="sq1",
+            round=1,
+        )
+    )
+
+    assert result["error"] == "first_search_term_requires_approach"
+
+
+@pytest.mark.asyncio
+async def test_plan_tool_mapping_rejects_invalid_tool():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy and mapping.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Requires explicit tool selection.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A single comparison paragraph.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed search strategy.",
+        term="grok tavily provider",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Use an invalid tool.",
+            sub_query_id="sq1",
+            tool="web_scrape",
+            reason="Should fail.",
+        )
+    )
+
+    assert result["error"] == "invalid_tool"

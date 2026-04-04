@@ -7,7 +7,7 @@ class Config:
     _SETUP_COMMAND = (
         'claude mcp add-json grok-search --scope user '
         '\'{"type":"stdio","command":"uvx","args":["--from",'
-        '"git+https://github.com/GuDaStudio/GrokSearch","grok-search"],'
+        '"git+https://github.com/Boulea7/GrokSearchTool@main","grok-search"],'
         '"env":{"GROK_API_URL":"your-api-url","GROK_API_KEY":"your-api-key"}}\''
     )
     _DEFAULT_MODEL = "grok-4.1-fast"
@@ -180,11 +180,11 @@ class Config:
             api_url = self.grok_api_url
             api_key_raw = self.grok_api_key
             api_key_masked = self._mask_api_key(api_key_raw)
-            config_status = "✅ 配置完整"
+            config_status = "配置完整"
         except ValueError as e:
             api_url = "未配置"
             api_key_masked = "未配置"
-            config_status = f"❌ 配置错误: {str(e)}"
+            config_status = f"配置错误: {str(e)}"
 
         return {
             "GROK_API_URL": api_url,

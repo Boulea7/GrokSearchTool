@@ -73,6 +73,45 @@ async def test_web_search_extracts_inline_links_as_sources(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_splits_extra_sources_across_providers(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results):
+        calls["tavily"] = max_results
+        return [{"title": "Tavily", "url": "https://tavily.example.com", "content": "t"}]
+
+    async def fake_firecrawl(query, limit):
+        calls["firecrawl"] = limit
+        return [{"title": "Firecrawl", "url": "https://firecrawl.example.com", "description": "f"}]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_search", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_search("test query", extra_sources=5)
+
+    assert calls["tavily"] > 0
+    assert calls["firecrawl"] > 0
+    assert calls["tavily"] + calls["firecrawl"] == 5
+    assert result["sources_count"] == 2
+
+
+def test_probably_truncated_content_detects_obvious_markers():
+    assert server._is_probably_truncated_content("Partial answer [...]", min_length=10) is True
+    assert server._is_probably_truncated_content("```\ncode block never closes", min_length=10) is True
+    assert server._is_probably_truncated_content("A complete sentence.\n\nAnother paragraph.", min_length=10) is False
+
+
+@pytest.mark.asyncio
 async def test_web_search_surfaces_sources_only_response_without_empty_content(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
@@ -148,3 +187,21 @@ async def test_web_fetch_preserves_config_error_when_no_extractors(monkeypatch):
     result = await server.web_fetch("https://example.com")
 
     assert result == "配置错误: TAVILY_API_KEY 和 FIRECRAWL_API_KEY 均未配置"
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_falls_back_when_tavily_reports_truncated_content(monkeypatch):
+    async def fake_tavily(url):
+        return None, "Tavily 提取结果疑似被截断"
+
+    async def fake_firecrawl(url, ctx):
+        return "# Restored full content", None
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_fetch("https://example.com")
+
+    assert result == "# Restored full content"
