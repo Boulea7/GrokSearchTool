@@ -361,7 +361,7 @@ async def web_search(
     grok_provider = GrokSearchProvider(api_url, api_key, effective_model)
 
     # 计算额外信源配额
-    has_tavily = bool(config.tavily_api_key)
+    has_tavily = config.tavily_enabled and bool(config.tavily_api_key)
     has_firecrawl = bool(config.firecrawl_api_key)
     firecrawl_count = 0
     tavily_count = 0
@@ -466,7 +466,7 @@ async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
     import httpx
     api_url = config.tavily_api_url
     api_key = config.tavily_api_key
-    if not api_key:
+    if not config.tavily_enabled or not api_key:
         return None, None
     endpoint = f"{api_url.rstrip('/')}/extract"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -493,7 +493,7 @@ async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
 async def _call_tavily_search(query: str, max_results: int = 6) -> list[dict] | None:
     import httpx
     api_key = config.tavily_api_key
-    if not api_key:
+    if not config.tavily_enabled or not api_key:
         return None
     endpoint = f"{config.tavily_api_url.rstrip('/')}/search"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -604,12 +604,16 @@ async def web_fetch(
 ) -> str:
     await log_info(ctx, f"Begin Fetch: {url}", config.debug_enabled)
 
-    result, tavily_error = await _call_tavily_extract(url)
-    if result:
-        await log_info(ctx, "Fetch Finished (Tavily)!", config.debug_enabled)
-        return result
-    if tavily_error:
-        await log_info(ctx, f"Tavily extract failed: {tavily_error}", config.debug_enabled)
+    tavily_error: str | None = None
+    if config.tavily_enabled:
+        result, tavily_error = await _call_tavily_extract(url)
+        if result:
+            await log_info(ctx, "Fetch Finished (Tavily)!", config.debug_enabled)
+            return result
+        if tavily_error:
+            await log_info(ctx, f"Tavily extract failed: {tavily_error}", config.debug_enabled)
+    else:
+        await log_info(ctx, "Tavily disabled, skipping extract.", config.debug_enabled)
 
     await log_info(ctx, "Tavily unavailable or failed, trying Firecrawl...", config.debug_enabled)
     result, firecrawl_error = await _call_firecrawl_scrape(url, ctx)
@@ -635,6 +639,8 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
     import json
     api_url = config.tavily_api_url
     api_key = config.tavily_api_key
+    if not config.tavily_enabled:
+        return "配置错误: TAVILY_ENABLED=false，Tavily map 已禁用"
     if not api_key:
         return "配置错误: TAVILY_API_KEY 未配置，请设置环境变量 TAVILY_API_KEY"
     endpoint = f"{api_url.rstrip('/')}/map"
@@ -1089,7 +1095,11 @@ async def plan_tool_mapping(
         try:
             item["params"] = json.loads(params_json)
         except json.JSONDecodeError:
-            pass
+            return _planning_validation_error(
+                "validation_error",
+                "Invalid tool mapping input.",
+                [{"loc": ["params_json"], "msg": "params_json must be valid JSON.", "type": "json_invalid"}],
+            )
     try:
         ToolPlanItem(**item)
     except ValidationError as exc:
