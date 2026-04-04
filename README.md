@@ -98,11 +98,14 @@ claude mcp add-json grok-search --scope user '{
 
 在部分企业网络或代理环境中，可能会出现类似错误：
 
+```text
 certificate verify failed
 self signed certificate in certificate chain
+```
 
 可以在 uvx 参数中添加 --native-tls，使其使用系统证书库：
 
+```bash
 claude mcp add-json grok-search --scope user '{
   "type": "stdio",
   "command": "uvx",
@@ -119,7 +122,8 @@ claude mcp add-json grok-search --scope user '{
     "TAVILY_API_URL": "https://api.tavily.com"
   }
 }'
-</details> ```
+```
+</details>
 
 除此之外，你还可以在`env`字段中配置更多环境变量
 

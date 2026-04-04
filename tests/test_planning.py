@@ -237,3 +237,147 @@ async def test_plan_tool_mapping_rejects_invalid_tool():
     )
 
     assert result["error"] == "invalid_tool"
+
+
+@pytest.mark.asyncio
+async def test_plan_search_term_rejects_more_than_eight_words():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Requires search strategy.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A single comparison paragraph.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    result = json.loads(
+        await server.plan_search_term(
+            session_id=session_id,
+            thought="Too many words.",
+            term="one two three four five six seven eight nine",
+            purpose="sq1",
+            round=1,
+            approach="targeted",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_plan_search_term_rejects_multiple_sub_query_purposes():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Requires search strategy.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A single comparison paragraph.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    result = json.loads(
+        await server.plan_search_term(
+            session_id=session_id,
+            thought="Multiple purposes are invalid.",
+            term="grok provider comparison",
+            purpose="sq1+sq2",
+            round=1,
+            approach="targeted",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_plan_tool_mapping_rejects_invalid_params_json():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy and mapping.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Requires explicit tool selection.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A single comparison paragraph.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed search strategy.",
+        term="grok tavily provider",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Invalid params_json should fail.",
+            sub_query_id="sq1",
+            tool="web_search",
+            reason="Need valid params.",
+            params_json="{bad json}",
+        )
+    )
+
+    assert result["error"] == "validation_error"

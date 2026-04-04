@@ -137,6 +137,39 @@ async def test_web_search_splits_extra_sources_across_providers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_respects_tavily_enabled_false(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results):
+        calls["tavily"] += 1
+        return [{"title": "Tavily", "url": "https://tavily.example.com", "content": "t"}]
+
+    async def fake_firecrawl(query, limit):
+        calls["firecrawl"] = limit
+        return [{"title": "Firecrawl", "url": "https://firecrawl.example.com", "description": "f"}]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_search", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "false")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_search("test query", extra_sources=3)
+
+    assert calls["tavily"] == 0
+    assert calls["firecrawl"] == 3
+    assert result["sources_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_get_sources_standardizes_merged_provider_metadata(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
@@ -323,6 +356,31 @@ async def test_web_fetch_surfaces_provider_errors(monkeypatch):
 
     assert "Tavily 返回 HTTP 307" in result
     assert "Firecrawl 返回 HTTP 401" in result
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_skips_tavily_when_disabled(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    async def fake_tavily(url):
+        calls["tavily"] += 1
+        return None, "should not be called"
+
+    async def fake_firecrawl(url, ctx):
+        calls["firecrawl"] += 1
+        return "# Firecrawl content", None
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "false")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_fetch("https://example.com")
+
+    assert calls["tavily"] == 0
+    assert calls["firecrawl"] == 1
+    assert result == "# Firecrawl content"
 
 
 @pytest.mark.asyncio

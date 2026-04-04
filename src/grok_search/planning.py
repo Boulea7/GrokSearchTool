@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Literal
 import uuid
 
@@ -44,6 +44,21 @@ class SearchTerm(BaseModel):
     term: str = Field(description="Search query string. MUST be ≤8 words. Drop redundant synonyms (e.g., use 'RAG' not 'RAG retrieval augmented generation').")
     purpose: str = Field(description="Single sub-query ID this term serves (e.g., 'sq2'). ONE term per sub-query — do NOT combine like 'sq1+sq2'.")
     round: int = Field(ge=1, description="Execution round: 1=broad discovery, 2+=targeted follow-up refined by round 1 findings")
+
+    @field_validator("term")
+    @classmethod
+    def validate_term_word_limit(cls, value: str) -> str:
+        if len(value.split()) > 8:
+            raise ValueError("term must be 8 words or fewer")
+        return value
+
+    @field_validator("purpose")
+    @classmethod
+    def validate_single_purpose(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped or any(separator in stripped for separator in (",", "+")) or len(stripped.split()) != 1:
+            raise ValueError("purpose must reference exactly one sub-query ID")
+        return stripped
 
 
 class StrategyOutput(BaseModel):
