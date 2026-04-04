@@ -24,6 +24,7 @@ try:
         new_session_id,
         sanitize_answer_text,
         split_answer_and_sources,
+        standardize_sources,
     )
     from grok_search.planning import (
         ComplexityOutput,
@@ -47,6 +48,7 @@ except ImportError:
         new_session_id,
         sanitize_answer_text,
         split_answer_and_sources,
+        standardize_sources,
     )
     from .planning import (
         ComplexityOutput,
@@ -312,6 +314,9 @@ def _extra_results_to_sources(
             content = (r.get("content") or "").strip()
             if content:
                 item["description"] = content
+            score = r.get("score")
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                item["score"] = score
             sources.append(item)
 
     return sources
@@ -426,8 +431,9 @@ async def web_search(
         else:
             content = sanitize_answer_text(grok_result).strip() or "搜索失败: 上游未返回可用正文"
 
-    await _SOURCES_CACHE.set(session_id, all_sources)
-    return {"session_id": session_id, "content": content, "sources_count": len(all_sources)}
+    standardized_sources = standardize_sources(all_sources)
+    await _SOURCES_CACHE.set(session_id, standardized_sources)
+    return {"session_id": session_id, "content": content, "sources_count": len(standardized_sources)}
 
 
 @mcp.tool(
@@ -450,7 +456,10 @@ async def get_sources(
             "sources_count": 0,
             "error": "session_id_not_found_or_expired",
         }
-    return {"session_id": session_id, "sources": sources, "sources_count": len(sources)}
+    standardized_sources = standardize_sources(sources)
+    if standardized_sources != sources:
+        await _SOURCES_CACHE.set(session_id, standardized_sources)
+    return {"session_id": session_id, "sources": standardized_sources, "sources_count": len(standardized_sources)}
 
 
 async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:

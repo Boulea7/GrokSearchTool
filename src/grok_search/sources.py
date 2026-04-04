@@ -1,9 +1,11 @@
 import ast
+import datetime as dt
 import json
 import re
 import uuid
 from collections import OrderedDict
 from typing import Any
+from urllib.parse import urlparse
 
 import asyncio
 
@@ -107,6 +109,37 @@ def merge_sources(*source_lists: list[dict]) -> list[dict]:
             seen.add(url)
             merged.append(item)
     return merged
+
+
+def standardize_sources(sources: list[dict], retrieved_at: str | None = None) -> list[dict]:
+    timestamp = retrieved_at or dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    standardized: list[dict] = []
+
+    for rank, item in enumerate(sources or [], start=1):
+        raw_item = dict(item or {})
+        url = _normalize_url(raw_item.get("url"))
+        if not url:
+            continue
+
+        snippet = _normalize_snippet(raw_item)
+        description = _normalize_text(raw_item.get("description"))
+        if not description:
+            description = snippet
+
+        raw_item["title"] = _normalize_text(raw_item.get("title"))
+        raw_item["url"] = url
+        raw_item["provider"] = _normalize_provider(raw_item.get("provider") or raw_item.get("source"))
+        raw_item["description"] = description
+        raw_item["source_type"] = "web_page"
+        raw_item["snippet"] = snippet
+        raw_item["domain"] = _extract_domain(url)
+        raw_item["score"] = _normalize_score(raw_item.get("score"))
+        raw_item["published_at"] = _normalize_optional_text(raw_item.get("published_at") or raw_item.get("published_date"))
+        raw_item["retrieved_at"] = _normalize_optional_text(raw_item.get("retrieved_at")) or timestamp
+        raw_item["rank"] = rank
+        standardized.append(raw_item)
+
+    return standardized
 
 
 def split_answer_and_sources(text: str) -> tuple[str, list[dict]]:
@@ -419,3 +452,46 @@ def extract_sources_from_text(text: str) -> list[dict]:
         sources.append({"url": url})
 
     return sources
+
+
+def _normalize_url(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _normalize_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _normalize_optional_text(value: Any) -> str | None:
+    text = _normalize_text(value)
+    return text or None
+
+
+def _normalize_provider(value: Any) -> str:
+    provider = _normalize_text(value)
+    return provider or "grok"
+
+
+def _normalize_snippet(item: dict[str, Any]) -> str:
+    for key in ("snippet", "description", "content", "text"):
+        text = _normalize_text(item.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _normalize_score(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _extract_domain(url: str) -> str:
+    parsed = urlparse(url)
+    return (parsed.netloc or "").lower()

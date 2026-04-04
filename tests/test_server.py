@@ -73,6 +73,37 @@ async def test_web_search_extracts_inline_links_as_sources(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_sources_returns_standardized_metadata_for_inline_links(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "OpenAI docs: [OpenAI](https://openai.com/)"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+    source = cached["sources"][0]
+
+    assert source == {
+        "title": "OpenAI",
+        "url": "https://openai.com/",
+        "provider": "grok",
+        "source_type": "web_page",
+        "description": "",
+        "snippet": "",
+        "domain": "openai.com",
+        "score": None,
+        "published_at": None,
+        "retrieved_at": source["retrieved_at"],
+        "rank": 1,
+    }
+    assert source["retrieved_at"].endswith("Z")
+
+
+@pytest.mark.asyncio
 async def test_web_search_splits_extra_sources_across_providers(monkeypatch):
     calls = {"tavily": 0, "firecrawl": 0}
 
@@ -103,6 +134,130 @@ async def test_web_search_splits_extra_sources_across_providers(monkeypatch):
     assert calls["firecrawl"] > 0
     assert calls["tavily"] + calls["firecrawl"] == 5
     assert result["sources_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_sources_standardizes_merged_provider_metadata(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results):
+        return [
+            {
+                "title": "OpenAI Blog",
+                "url": "https://openai.com/blog",
+                "content": "Latest updates",
+                "score": 0.91,
+            }
+        ]
+
+    async def fake_firecrawl(query, limit):
+        return [
+            {
+                "title": "Example Docs",
+                "url": "https://docs.example.com/guide",
+                "description": "Guide content",
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_search", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_search("test query", extra_sources=2)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 2
+    assert cached["sources"] == [
+        {
+            "title": "Example Docs",
+            "url": "https://docs.example.com/guide",
+            "provider": "firecrawl",
+            "source_type": "web_page",
+            "description": "Guide content",
+            "snippet": "Guide content",
+            "domain": "docs.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        },
+        {
+            "title": "OpenAI Blog",
+            "url": "https://openai.com/blog",
+            "provider": "tavily",
+            "source_type": "web_page",
+            "description": "Latest updates",
+            "snippet": "Latest updates",
+            "domain": "openai.com",
+            "score": 0.91,
+            "published_at": None,
+            "retrieved_at": cached["sources"][1]["retrieved_at"],
+            "rank": 2,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_standardizes_legacy_cached_sources_on_read():
+    session_id = "legacy-session"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "description": "Legacy description",
+                "provider": "firecrawl",
+            }
+        ],
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == [
+        {
+            "title": "Legacy Source",
+            "url": "https://legacy.example.com/page",
+            "description": "Legacy description",
+            "provider": "firecrawl",
+            "source_type": "web_page",
+            "snippet": "Legacy description",
+            "domain": "legacy.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_reuses_standardized_timestamp_for_legacy_cache():
+    session_id = "legacy-session-stable"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "description": "Legacy description",
+            }
+        ],
+    )
+
+    first = await server.get_sources(session_id)
+    migrated = await server._SOURCES_CACHE.get(session_id)
+    second = await server.get_sources(session_id)
+
+    assert migrated[0]["retrieved_at"] == first["sources"][0]["retrieved_at"]
+    assert first["sources"][0]["retrieved_at"] == second["sources"][0]["retrieved_at"]
 
 
 def test_probably_truncated_content_detects_obvious_markers():
