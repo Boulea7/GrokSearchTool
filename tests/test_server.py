@@ -883,11 +883,11 @@ async def test_web_fetch_falls_back_when_tavily_reports_truncated_content(monkey
 @pytest.mark.asyncio
 async def test_call_tavily_extract_rejects_login_page(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
     responses = {
         ("POST", "https://api.tavily.com/extract"): httpx.Response(
             200,
             text="<html><body>Please login to continue</body></html>",
-            json={"results": [{"raw_content": "ignored"}]},
         ),
     }
     monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
@@ -901,6 +901,7 @@ async def test_call_tavily_extract_rejects_login_page(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_tavily_extract_reports_empty_results(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
     responses = {
         ("POST", "https://api.tavily.com/extract"): httpx.Response(
             200,
@@ -918,6 +919,7 @@ async def test_call_tavily_extract_reports_empty_results(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_tavily_extract_reports_truncated_content(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
     responses = {
         ("POST", "https://api.tavily.com/extract"): httpx.Response(
             200,
@@ -954,6 +956,7 @@ async def test_call_tavily_map_returns_config_error_when_key_missing(monkeypatch
 @pytest.mark.asyncio
 async def test_call_tavily_map_surfaces_timeout(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
     exceptions = {
         ("POST", "https://api.tavily.com/map"): httpx.TimeoutException("timeout"),
     }
@@ -967,6 +970,7 @@ async def test_call_tavily_map_surfaces_timeout(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_tavily_map_surfaces_http_error(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
     responses = {
         ("POST", "https://api.tavily.com/map"): httpx.Response(
             502,
@@ -983,6 +987,7 @@ async def test_call_tavily_map_surfaces_http_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_tavily_map_returns_serialized_result(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
     responses = {
         ("POST", "https://api.tavily.com/map"): httpx.Response(
             200,
