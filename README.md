@@ -17,6 +17,8 @@
 
 Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的轻量 MCP 服务器，采用**双引擎架构**：**Grok** 负责 AI 驱动的智能搜索，**Tavily** 负责高保真网页抓取与站点映射，各取所长为 Claude Code / Cherry Studio / Codex CLI 等 LLM Client 提供可核验来源的实时网络上下文能力。当前推荐主路径是 `plan_* -> web_search`；对于明确单跳、低歧义、规划收益很低的查询，也允许直接调用 `web_search`。更重的深度探索能力将继续收口到 `deep research`，并优先在 CLI 落地。
 
+当前公开的 `stdio` 安装示例以维护中的发布仓库 `Boulea7/GrokSearchTool` 为准；本地开发工作区、历史远端命名或旧协作痕迹不代表项目仍按 `fork/upstream` PR 模式推进。
+
 ```
 Claude ──MCP──► Grok Search Server
                   ├─ web_search  ───► Grok API（AI 搜索）
@@ -62,6 +64,7 @@ Claude ──MCP──► Grok Search Server
 
 - 公开安装文档当前只承诺本地 `stdio` 路径
 - `toggle_builtin_tools` 仅适用于 Claude Code 项目级设置
+- 下面的安装片段默认使用当前维护中的公开安装源 `Boulea7/GrokSearchTool`
 
 <details>
 <summary><b>安装 uv</b></summary>

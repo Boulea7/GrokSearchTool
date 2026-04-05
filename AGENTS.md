@@ -29,6 +29,8 @@ uv run --with pytest --with pytest-asyncio pytest -q
 
 请参考 [README.md](./README.md) 与 [README.en.md](./README.en.md) 中的 `claude mcp add-json` 示例。
 
+当前公开的 `stdio` 安装示例默认以维护中的发布仓库 `Boulea7/GrokSearchTool` 为准；本地开发工作区与历史远端命名不应被理解为仍按 `fork/upstream` PR 模式协作。
+
 ## 参数说明
 
 ### 核心环境变量

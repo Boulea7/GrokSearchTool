@@ -37,6 +37,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 ## Transport Scope
 
 - Public documentation currently prioritizes local `stdio`
+- Public `stdio` install snippets currently use the maintained release repo `Boulea7/GrokSearchTool`
 - Remote `HTTP` / `Streamable HTTP` remains a later compatibility track
 - Long-running `deep research` workflows should not be treated as the default MCP install story
 - The recommended core interaction path remains `plan_* -> web_search`

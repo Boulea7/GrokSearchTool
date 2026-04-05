@@ -166,6 +166,40 @@ async def test_get_config_info_marks_provider_probe_failures_as_degraded(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_marks_empty_firecrawl_markdown_as_warning(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": ""}},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert checks["firecrawl_scrape"]["status"] == "warning"
+    assert "markdown 为空" in checks["firecrawl_scrape"]["message"]
+    assert payload["doctor"]["status"] == "partial"
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "partial_ready"
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_finds_claude_project_root_from_subdirectory(monkeypatch, tmp_path):
     repo_root = tmp_path / "repo"
     nested = repo_root / "nested" / "child"

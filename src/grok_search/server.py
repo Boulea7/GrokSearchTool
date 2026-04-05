@@ -1345,7 +1345,12 @@ async def get_config_info() -> str:
         firecrawl_data = firecrawl_scrape.pop("data", None)
         if firecrawl_scrape["status"] == "ok":
             has_markdown = bool((((firecrawl_data or {}).get("data", {}) or {}).get("markdown", "") or "").strip())
-            firecrawl_scrape["message"] = "Firecrawl scrape 探测成功。" if has_markdown else "Firecrawl scrape 已响应，但 markdown 为空。"
+            if has_markdown:
+                firecrawl_scrape["message"] = "Firecrawl scrape 探测成功。"
+            else:
+                firecrawl_scrape["status"] = "warning"
+                firecrawl_scrape["message"] = "Firecrawl scrape 已响应，但 markdown 为空。"
+                _append_recommendation(recommendations, "检查 Firecrawl scrape 返回内容是否为空，避免 web_fetch 被误判为 fully ready。")
         else:
             _append_recommendation(recommendations, "检查 FIRECRAWL_API_KEY / FIRECRAWL_API_URL，确认 Firecrawl scrape 端点可达。")
     else:
