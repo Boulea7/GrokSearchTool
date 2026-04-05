@@ -46,7 +46,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 
 - `GROK_API_URL` must be OpenAI-compatible and should include `/v1`
 - `web_search` depends on a working `/chat/completions` implementation
-- `get_config_info` currently checks `/models`, which is useful but not a full end-to-end compatibility guarantee
+- `get_config_info` now provides a lightweight doctor view over `/models`, optional provider probes, and feature readiness, but it is still not a full end-to-end compatibility guarantee
 
 ## Feature Dependencies
 

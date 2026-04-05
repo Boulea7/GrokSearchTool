@@ -896,6 +896,222 @@ async def web_map(
     return result
 
 
+def _build_doctor_check(
+    check_id: str,
+    status: str,
+    message: str,
+    *,
+    endpoint: str = "",
+    response_time_ms: float | int | None = None,
+    skipped_reason: str = "",
+    **extra,
+) -> dict:
+    check = {
+        "check_id": check_id,
+        "status": status,
+        "message": message,
+    }
+    if endpoint:
+        check["endpoint"] = endpoint
+    if response_time_ms is not None:
+        check["response_time_ms"] = round(float(response_time_ms), 2)
+    if skipped_reason:
+        check["skipped_reason"] = skipped_reason
+    for key, value in extra.items():
+        if value is not None:
+            check[key] = value
+    return check
+
+
+def _append_recommendation(recommendations: list[str], message: str) -> None:
+    if message and message not in recommendations:
+        recommendations.append(message)
+
+
+def _summarize_doctor_status(doctor_status: str) -> str:
+    if doctor_status == "ok":
+        return "核心配置与可选依赖探测均正常。"
+    if doctor_status == "error":
+        return "核心 Grok 配置或连通性存在阻塞问题。"
+    return "核心 Grok 可用，但部分可选能力未配置、未生效或探测失败。"
+
+
+async def _probe_json_endpoint(
+    check_id: str,
+    method: str,
+    url: str,
+    headers: dict,
+    *,
+    json_body: dict | None = None,
+    timeout: float = 10.0,
+) -> dict:
+    import time
+
+    import httpx
+
+    start_time = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            if method == "GET":
+                response = await client.get(url, headers=headers)
+            else:
+                response = await client.post(url, headers=headers, json=json_body)
+
+        response_time_ms = (time.perf_counter() - start_time) * 1000
+        response_text = (response.text or "")[:120]
+        try:
+            data = response.json()
+        except Exception:
+            data = None
+
+        if response.status_code >= 400:
+            return _build_doctor_check(
+                check_id,
+                "error",
+                f"HTTP {response.status_code}: {response_text}",
+                endpoint=url,
+                response_time_ms=response_time_ms,
+                error_kind="http_error",
+                status_code=response.status_code,
+            )
+
+        return _build_doctor_check(
+            check_id,
+            "ok",
+            "请求成功",
+            endpoint=url,
+            response_time_ms=response_time_ms,
+            data=data,
+            status_code=response.status_code,
+        )
+    except httpx.TimeoutException as exc:
+        return _build_doctor_check(
+            check_id,
+            "error",
+            f"请求超时: {str(exc) or 'timeout'}",
+            endpoint=url,
+            error_kind="timeout",
+        )
+    except httpx.RequestError as exc:
+        return _build_doctor_check(
+            check_id,
+            "error",
+            f"网络错误: {str(exc)}",
+            endpoint=url,
+            error_kind="request_error",
+        )
+    except Exception as exc:
+        return _build_doctor_check(
+            check_id,
+            "error",
+            f"未知错误: {str(exc)}",
+            endpoint=url,
+            error_kind="unexpected_error",
+        )
+
+
+def _build_connection_test_from_models_check(models_check: dict) -> dict:
+    status_map = {
+        "timeout": "连接超时",
+        "request_error": "连接失败",
+        "http_error": "连接异常",
+        "config_error": "配置错误",
+    }
+    if models_check["status"] == "ok":
+        result = {
+            "status": "连接成功",
+            "message": models_check["message"],
+            "response_time_ms": models_check.get("response_time_ms", 0),
+        }
+        if models_check.get("available_models"):
+            result["available_models"] = models_check["available_models"]
+        return result
+
+    return {
+        "status": status_map.get(models_check.get("error_kind"), "测试失败"),
+        "message": models_check["message"],
+        "response_time_ms": models_check.get("response_time_ms", 0),
+    }
+
+
+def _build_feature_readiness(checks: list[dict]) -> dict:
+    checks_by_id = {check["check_id"]: check for check in checks}
+    grok_config = checks_by_id["grok_config"]
+    grok_models = checks_by_id["grok_models"]
+    tavily_search = checks_by_id["tavily_search"]
+    firecrawl_search = checks_by_id["firecrawl_search"]
+    claude_context = checks_by_id["claude_code_project"]
+
+    if grok_config["status"] != "ok":
+        web_search_status = "not_ready"
+        web_search_message = grok_config["message"]
+    elif grok_models["status"] == "ok":
+        web_search_status = "ready"
+        web_search_message = "Grok 配置完整，/models 探测成功。"
+    else:
+        web_search_status = "degraded"
+        web_search_message = grok_models["message"]
+
+    if tavily_search["status"] == "ok" and firecrawl_search["status"] == "ok":
+        web_fetch_status = "ready"
+        web_fetch_message = "Tavily 与 Firecrawl 均可用。"
+    elif tavily_search["status"] == "ok" or firecrawl_search["status"] == "ok":
+        web_fetch_status = "partial_ready"
+        web_fetch_message = "仅部分抓取后端已验证可用。"
+    elif tavily_search["status"] == "skipped" and firecrawl_search["status"] == "skipped":
+        web_fetch_status = "not_ready"
+        web_fetch_message = "Tavily / Firecrawl 均未配置。"
+    else:
+        web_fetch_status = "partial_ready"
+        web_fetch_message = "至少一个抓取后端已配置，但当前探测未通过。"
+
+    if tavily_search["status"] == "ok":
+        web_map_status = "ready"
+        web_map_message = "Tavily search 探测成功，map 前置配置完整。"
+    elif tavily_search["status"] == "error":
+        web_map_status = "degraded"
+        web_map_message = tavily_search["message"]
+    else:
+        web_map_status = "not_ready"
+        web_map_message = "Tavily 未配置或已禁用。"
+
+    toggle_status = "ready" if claude_context["status"] == "ok" else "not_ready"
+
+    return {
+        "web_search": {"status": web_search_status, "message": web_search_message},
+        "get_sources": {
+            "status": web_search_status if web_search_status != "degraded" else "degraded",
+            "message": "需要之前成功的 web_search session_id。",
+        },
+        "web_fetch": {"status": web_fetch_status, "message": web_fetch_message},
+        "web_map": {"status": web_map_status, "message": web_map_message},
+        "toggle_builtin_tools": {
+            "status": toggle_status,
+            "message": claude_context["message"],
+            "client_specific": True,
+        },
+    }
+
+
+def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommendations: list[str]) -> dict:
+    web_search_status = feature_readiness["web_search"]["status"]
+    if web_search_status == "not_ready":
+        doctor_status = "error"
+    elif any(check["status"] in {"error", "warning"} for check in checks) or any(
+        item["status"] in {"partial_ready", "degraded", "not_ready"} for item in feature_readiness.values()
+    ):
+        doctor_status = "partial"
+    else:
+        doctor_status = "ok"
+
+    return {
+        "status": doctor_status,
+        "summary": _summarize_doctor_status(doctor_status),
+        "checks": checks,
+        "recommendations": recommendations,
+    }
+
+
 @mcp.tool(
     name="get_config_info",
     output_schema=None,
@@ -904,92 +1120,145 @@ async def web_map(
 
     **Key Features:**
         - **Configuration Check:** Verifies environment variables and current settings.
+        - **Doctor Checks:** Runs structured readiness checks for Grok, Tavily, Firecrawl, and Claude-specific routing.
         - **Connection Test:** Sends request to /models endpoint to validate API access.
         - **Model Discovery:** Lists all available models from the API.
 
     **Edge Cases & Best Practices:**
-        - Use this tool first when debugging connection or configuration issues.
+        - Use this tool first when debugging connection, provider readiness, or installation issues.
         - API keys are automatically masked for security in the response.
+        - Optional provider probes only run when their configuration is present.
         - Connection test timeout is 10 seconds; network issues may cause delays.
     """,
-    meta={"version": "1.3.0", "author": "guda.studio"},
+    meta={"version": "1.4.0", "author": "guda.studio"},
 )
 async def get_config_info() -> str:
     import json
-    import httpx
 
     config_info = config.get_config_info()
-
-    # 添加连接测试
-    test_result = {
-        "status": "未测试",
-        "message": "",
-        "response_time_ms": 0
-    }
+    checks: list[dict] = []
+    recommendations: list[str] = []
 
     try:
         api_url = config.grok_api_url
         api_key = config.grok_api_key
+        checks.append(_build_doctor_check("grok_config", "ok", "Grok 核心配置已提供。"))
+    except ValueError as exc:
+        api_url = ""
+        api_key = ""
+        checks.append(_build_doctor_check("grok_config", "error", str(exc), error_kind="config_error"))
+        _append_recommendation(recommendations, "先配置 GROK_API_URL 与 GROK_API_KEY，再重新运行 get_config_info。")
 
-        # 构建 /models 端点 URL
-        models_url = f"{api_url.rstrip('/')}/models"
+    if api_url:
+        if api_url.rstrip("/").endswith("/v1"):
+            checks.append(_build_doctor_check("grok_api_url_format", "ok", "GROK_API_URL 已显式包含 /v1。"))
+        else:
+            checks.append(_build_doctor_check("grok_api_url_format", "warning", "GROK_API_URL 未显式包含 /v1。"))
+            _append_recommendation(recommendations, "将 GROK_API_URL 改为显式包含 /v1 的 OpenAI-compatible 根路径。")
 
-        # 发送测试请求
-        import time
-        start_time = time.time()
+    if api_url and api_key:
+        grok_models = await _probe_json_endpoint(
+            "grok_models",
+            "GET",
+            f"{api_url.rstrip('/')}/models",
+            {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=10.0,
+        )
+        models_data = grok_models.pop("data", None)
+        if grok_models["status"] == "ok":
+            model_names = []
+            for model in (models_data or {}).get("data", []) or []:
+                if isinstance(model, dict) and isinstance(model.get("id"), str):
+                    model_names.append(model["id"])
+            grok_models["message"] = f"成功获取模型列表，共 {len(model_names)} 个模型。"
+            if model_names:
+                grok_models["available_models"] = model_names
+        else:
+            _append_recommendation(recommendations, "检查 Grok 中转站是否支持 /models，并确认 API Key 与 URL 可达。")
+    else:
+        grok_models = _build_doctor_check(
+            "grok_models",
+            "error",
+            "Grok 核心配置缺失，无法执行 /models 探测。",
+            error_kind="config_error",
+        )
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                models_url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                }
-            )
+    checks.append(grok_models)
+    if config.tavily_enabled and config.tavily_api_key:
+        tavily_check = await _probe_json_endpoint(
+            "tavily_search",
+            "POST",
+            f"{config.tavily_api_url.rstrip('/')}/search",
+            {
+                "Authorization": f"Bearer {config.tavily_api_key}",
+                "Content-Type": "application/json",
+            },
+            json_body={"query": "grok-search doctor", "max_results": 1, "search_depth": "basic"},
+            timeout=10.0,
+        )
+        tavily_data = tavily_check.pop("data", None)
+        if tavily_check["status"] == "ok":
+            result_count = len((tavily_data or {}).get("results", []) or [])
+            tavily_check["message"] = f"Tavily search 探测成功，返回 {result_count} 条结果。"
+        else:
+            _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily search 端点可达。")
+    else:
+        tavily_reason = "TAVILY_ENABLED=false" if not config.tavily_enabled else "TAVILY_API_KEY 未配置"
+        tavily_check = _build_doctor_check(
+            "tavily_search",
+            "skipped",
+            "未执行 Tavily search 探测。",
+            skipped_reason=tavily_reason,
+        )
+        _append_recommendation(recommendations, "若需要 web_map 或 Tavily-first web_fetch，请配置并启用 Tavily。")
+    checks.append(tavily_check)
 
-            response_time = (time.time() - start_time) * 1000  # 转换为毫秒
+    if config.firecrawl_api_key:
+        firecrawl_check = await _probe_json_endpoint(
+            "firecrawl_search",
+            "POST",
+            f"{config.firecrawl_api_url.rstrip('/')}/search",
+            {
+                "Authorization": f"Bearer {config.firecrawl_api_key}",
+                "Content-Type": "application/json",
+            },
+            json_body={"query": "grok-search doctor", "limit": 1},
+            timeout=10.0,
+        )
+        firecrawl_data = firecrawl_check.pop("data", None)
+        if firecrawl_check["status"] == "ok":
+            result_count = len(((firecrawl_data or {}).get("data", {}) or {}).get("web", []) or [])
+            firecrawl_check["message"] = f"Firecrawl search 探测成功，返回 {result_count} 条结果。"
+        else:
+            _append_recommendation(recommendations, "检查 FIRECRAWL_API_KEY / FIRECRAWL_API_URL，确认 Firecrawl search 端点可达。")
+    else:
+        firecrawl_check = _build_doctor_check(
+            "firecrawl_search",
+            "skipped",
+            "未执行 Firecrawl search 探测。",
+            skipped_reason="FIRECRAWL_API_KEY 未配置",
+        )
+        _append_recommendation(recommendations, "若需要 Firecrawl fallback，请配置 FIRECRAWL_API_KEY。")
+    checks.append(firecrawl_check)
 
-            if response.status_code == 200:
-                test_result["status"] = "连接成功"
-                test_result["message"] = f"成功获取模型列表 (HTTP {response.status_code})"
-                test_result["response_time_ms"] = round(response_time, 2)
+    claude_context_status = "ok" if (Path.cwd() / ".git").exists() else "skipped"
+    checks.append(
+        _build_doctor_check(
+            "claude_code_project",
+            claude_context_status,
+            "当前目录具备项目级 Claude Code 设置上下文。" if claude_context_status == "ok" else "未检测到项目级 Git 上下文。",
+            skipped_reason="" if claude_context_status == "ok" else "missing_git_context",
+        )
+    )
 
-                # 尝试解析返回的模型列表
-                try:
-                    models_data = response.json()
-                    if "data" in models_data and isinstance(models_data["data"], list):
-                        model_count = len(models_data["data"])
-                        test_result["message"] += f"，共 {model_count} 个模型"
-
-                        # 提取所有模型的 ID/名称
-                        model_names = []
-                        for model in models_data["data"]:
-                            if isinstance(model, dict) and "id" in model:
-                                model_names.append(model["id"])
-
-                        if model_names:
-                            test_result["available_models"] = model_names
-                except Exception:
-                    pass
-            else:
-                test_result["status"] = "连接异常"
-                test_result["message"] = f"HTTP {response.status_code}: {response.text[:100]}"
-                test_result["response_time_ms"] = round(response_time, 2)
-
-    except httpx.TimeoutException:
-        test_result["status"] = "连接超时"
-        test_result["message"] = "请求超时（10秒），请检查网络连接或 API URL"
-    except httpx.RequestError as e:
-        test_result["status"] = "连接失败"
-        test_result["message"] = f"网络错误: {str(e)}"
-    except ValueError as e:
-        test_result["status"] = "配置错误"
-        test_result["message"] = str(e)
-    except Exception as e:
-        test_result["status"] = "测试失败"
-        test_result["message"] = f"未知错误: {str(e)}"
-
-    config_info["connection_test"] = test_result
+    feature_readiness = _build_feature_readiness(checks)
+    doctor = _build_doctor_payload(checks, feature_readiness, recommendations)
+    config_info["connection_test"] = _build_connection_test_from_models_check(grok_models)
+    config_info["doctor"] = doctor
+    config_info["feature_readiness"] = feature_readiness
 
     return json.dumps(config_info, ensure_ascii=False, indent=2)
 

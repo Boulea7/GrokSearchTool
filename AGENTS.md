@@ -88,5 +88,6 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `get_config_info` 当前可用于配置与连通性初检，但还不是完整的端到端兼容性诊断
 - `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`
 - `get_sources` 当前会统一返回标准化 metadata，并按 `score`、来源身份清晰度与稳定去重后的顺序生成 `rank`
+- `get_config_info` 当前已支持轻量 doctor 输出：保留 `connection_test`，并新增 `doctor` 与 `feature_readiness`
 - `web_fetch` 目前优先使用 Tavily extract，失败时回退到 Firecrawl scrape
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性
