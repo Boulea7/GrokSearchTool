@@ -37,6 +37,102 @@ async def test_web_search_surfaces_http_redirect(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_returns_structured_status_fields_for_legacy_call(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+
+    assert result["status"] == "ok"
+    assert result["error"] is None
+    assert result["warnings"] == []
+    assert result["effective_params"] == {
+        "platform": "",
+        "topic": "general",
+        "time_range": None,
+        "include_domains": [],
+        "exclude_domains": [],
+        "model": "",
+        "extra_sources": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_web_search_echoes_effective_params_for_new_controls(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search(
+        "test query",
+        topic="news",
+        time_range="week",
+        include_domains=["openai.com"],
+        exclude_domains=["example.com"],
+    )
+
+    assert result["status"] == "ok"
+    assert result["effective_params"]["topic"] == "news"
+    assert result["effective_params"]["time_range"] == "week"
+    assert result["effective_params"]["include_domains"] == ["openai.com"]
+    assert result["effective_params"]["exclude_domains"] == ["example.com"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_rejects_overlapping_include_and_exclude_domains():
+    result = await server.web_search(
+        "test query",
+        include_domains=["openai.com"],
+        exclude_domains=["openai.com"],
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert "同时出现在 include_domains 与 exclude_domains" in result["content"]
+    assert result["sources_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_web_search_marks_partial_when_controls_cannot_be_applied(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    result = await server.web_search(
+        "test query",
+        topic="news",
+        time_range="week",
+        include_domains=["openai.com"],
+        extra_sources=0,
+    )
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert "domain_controls_not_applied_without_tavily" in result["warnings"]
+    assert "time_range_not_applied_without_tavily" in result["warnings"]
+    assert result["effective_params"]["topic"] == "news"
+    assert result["effective_params"]["include_domains"] == ["openai.com"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_surfaces_empty_upstream_response(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
@@ -50,6 +146,8 @@ async def test_web_search_surfaces_empty_upstream_response(monkeypatch):
     result = await server.web_search("test query")
 
     assert result["content"] == "搜索失败: 上游返回空响应，请检查模型或代理配置"
+    assert result["status"] == "error"
+    assert result["error"] == "upstream_empty_response"
     assert result["sources_count"] == 0
 
 
@@ -114,7 +212,7 @@ async def test_web_search_splits_extra_sources_across_providers(monkeypatch):
         async def search(self, query, platform):
             return "Search answer"
 
-    async def fake_tavily(query, max_results):
+    async def fake_tavily(query, max_results, **kwargs):
         calls["tavily"] = max_results
         return [{"title": "Tavily", "url": "https://tavily.example.com", "content": "t"}]
 
@@ -178,7 +276,7 @@ async def test_get_sources_standardizes_merged_provider_metadata(monkeypatch):
         async def search(self, query, platform):
             return "Search answer"
 
-    async def fake_tavily(query, max_results):
+    async def fake_tavily(query, max_results, **kwargs):
         return [
             {
                 "title": "OpenAI Blog",

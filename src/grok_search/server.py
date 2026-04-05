@@ -322,6 +322,85 @@ def _extra_results_to_sources(
     return sources
 
 
+_VALID_SEARCH_TOPICS = {"general", "news"}
+_VALID_TIME_RANGES = {"day", "week", "month", "year"}
+
+
+def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
+    normalized: list[str] = []
+    for item in domains or []:
+        if not isinstance(item, str):
+            continue
+        domain = item.strip().lower()
+        if not domain:
+            continue
+        if domain not in normalized:
+            normalized.append(domain)
+    return normalized
+
+
+def _build_search_response(
+    session_id: str,
+    content: str,
+    sources_count: int,
+    *,
+    status: str,
+    effective_params: dict,
+    warnings: Optional[list[str]] = None,
+    error: Optional[str] = None,
+) -> dict:
+    return {
+        "session_id": session_id,
+        "content": content,
+        "sources_count": sources_count,
+        "status": status,
+        "effective_params": effective_params,
+        "warnings": warnings or [],
+        "error": error,
+    }
+
+
+def _validate_search_inputs(
+    query: str,
+    topic: str,
+    time_range: str,
+    include_domains: Optional[list[str]],
+    exclude_domains: Optional[list[str]],
+) -> tuple[dict, str | None]:
+    normalized_query = query.strip()
+    normalized_topic = (topic or "general").strip() or "general"
+    normalized_time_range = (time_range or "").strip() or None
+    normalized_include_domains = _normalize_domain_list(include_domains)
+    normalized_exclude_domains = _normalize_domain_list(exclude_domains)
+
+    effective_params = {
+        "query": normalized_query,
+        "topic": normalized_topic,
+        "time_range": normalized_time_range,
+        "include_domains": normalized_include_domains,
+        "exclude_domains": normalized_exclude_domains,
+    }
+
+    if not normalized_query:
+        return effective_params, "搜索失败: query 不能为空"
+
+    if normalized_topic not in _VALID_SEARCH_TOPICS:
+        return effective_params, "搜索失败: topic 仅支持 general 或 news"
+
+    if normalized_time_range and normalized_time_range not in _VALID_TIME_RANGES:
+        return effective_params, "搜索失败: time_range 仅支持 day、week、month、year"
+
+    overlap = sorted(set(normalized_include_domains) & set(normalized_exclude_domains))
+    if overlap:
+        overlap_text = ", ".join(overlap)
+        return effective_params, (
+            "搜索失败: 以下域名同时出现在 include_domains 与 exclude_domains 中: "
+            f"{overlap_text}"
+        )
+
+    return effective_params, None
+
+
 @mcp.tool(
     name="web_search",
     output_schema=None,
@@ -341,24 +420,71 @@ async def web_search(
     platform: Annotated[str, "Target platform to focus on (e.g., 'Twitter', 'GitHub', 'Reddit'). Leave empty for general web search."] = "",
     model: Annotated[str, "Optional model ID for this request only. This value is used ONLY when user explicitly provided."] = "",
     extra_sources: Annotated[int, "Number of additional reference results from Tavily/Firecrawl. Set 0 to disable. Default 0."] = 0,
+    topic: Annotated[str, "Optional search topic: general | news."] = "general",
+    time_range: Annotated[str, "Optional freshness filter: day | week | month | year."] = "",
+    include_domains: Annotated[Optional[list[str]], "Optional domain allowlist for supplemental Tavily search."] = None,
+    exclude_domains: Annotated[Optional[list[str]], "Optional domain denylist for supplemental Tavily search."] = None,
 ) -> dict:
     session_id = new_session_id()
+    validated_params, validation_error = _validate_search_inputs(
+        query=query,
+        topic=topic,
+        time_range=time_range,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+    )
+    effective_params = {
+        "platform": platform,
+        "topic": validated_params["topic"],
+        "time_range": validated_params["time_range"],
+        "include_domains": validated_params["include_domains"],
+        "exclude_domains": validated_params["exclude_domains"],
+        "model": model,
+        "extra_sources": extra_sources,
+    }
+
+    if validation_error:
+        await _SOURCES_CACHE.set(session_id, [])
+        return _build_search_response(
+            session_id,
+            validation_error,
+            0,
+            status="error",
+            effective_params=effective_params,
+            error="validation_error",
+        )
+
     try:
         api_url = config.grok_api_url
         api_key = config.grok_api_key
     except ValueError as e:
         await _SOURCES_CACHE.set(session_id, [])
-        return {"session_id": session_id, "content": f"配置错误: {str(e)}", "sources_count": 0}
+        return _build_search_response(
+            session_id,
+            f"配置错误: {str(e)}",
+            0,
+            status="error",
+            effective_params=effective_params,
+            error="config_error",
+        )
 
     effective_model = config.grok_model
     if model:
         available = await _get_available_models_cached(api_url, api_key)
         if available and model not in available:
             await _SOURCES_CACHE.set(session_id, [])
-            return {"session_id": session_id, "content": f"无效模型: {model}", "sources_count": 0}
+            return _build_search_response(
+                session_id,
+                f"无效模型: {model}",
+                0,
+                status="error",
+                effective_params=effective_params,
+                error="invalid_model",
+            )
         effective_model = model
 
     grok_provider = GrokSearchProvider(api_url, api_key, effective_model)
+    warnings: list[str] = []
 
     # 计算额外信源配额
     has_tavily = config.tavily_enabled and bool(config.tavily_api_key)
@@ -376,26 +502,39 @@ async def web_search(
             tavily_count = extra_sources
 
     # 并行执行搜索任务
-    async def _safe_grok() -> tuple[str, str | None]:
+    if not has_tavily:
+        if effective_params["include_domains"] or effective_params["exclude_domains"]:
+            warnings.append("domain_controls_not_applied_without_tavily")
+        if effective_params["time_range"]:
+            warnings.append("time_range_not_applied_without_tavily")
+
+    async def _safe_grok() -> tuple[str, str | None, str | None]:
         try:
-            result = await grok_provider.search(query, platform)
+            result = await grok_provider.search(validated_params["query"], platform)
         except Exception as exc:
-            return "", _format_grok_error(exc)
+            return "", _format_grok_error(exc), "upstream_request_failed"
         if not result or not result.strip():
-            return "", "搜索失败: 上游返回空响应，请检查模型或代理配置"
-        return result, None
+            return "", "搜索失败: 上游返回空响应，请检查模型或代理配置", "upstream_empty_response"
+        return result, None, None
 
     async def _safe_tavily() -> list[dict] | None:
         try:
             if tavily_count:
-                return await _call_tavily_search(query, tavily_count)
+                return await _call_tavily_search(
+                    validated_params["query"],
+                    tavily_count,
+                    topic=effective_params["topic"],
+                    time_range=effective_params["time_range"],
+                    include_domains=effective_params["include_domains"],
+                    exclude_domains=effective_params["exclude_domains"],
+                )
         except Exception:
             return None
 
     async def _safe_firecrawl() -> list[dict] | None:
         try:
             if firecrawl_count:
-                return await _call_firecrawl_search(query, firecrawl_count)
+                return await _call_firecrawl_search(validated_params["query"], firecrawl_count)
         except Exception:
             return None
 
@@ -407,7 +546,7 @@ async def web_search(
 
     gathered = await asyncio.gather(*coros)
 
-    grok_result, grok_error = gathered[0]
+    grok_result, grok_error, grok_error_code = gathered[0]
     tavily_results: list[dict] | None = None
     firecrawl_results: list[dict] | None = None
     idx = 1
@@ -433,7 +572,23 @@ async def web_search(
 
     standardized_sources = standardize_sources(all_sources)
     await _SOURCES_CACHE.set(session_id, standardized_sources)
-    return {"session_id": session_id, "content": content, "sources_count": len(standardized_sources)}
+    status = "ok"
+    error = None
+    if grok_error:
+        status = "error"
+        error = grok_error_code or "upstream_request_failed"
+    elif warnings:
+        status = "partial"
+
+    return _build_search_response(
+        session_id,
+        content,
+        len(standardized_sources),
+        status=status,
+        effective_params=effective_params,
+        warnings=warnings,
+        error=error,
+    )
 
 
 @mcp.tool(
@@ -490,7 +645,15 @@ async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
         return None, _format_fetch_error("Tavily", exc)
 
 
-async def _call_tavily_search(query: str, max_results: int = 6) -> list[dict] | None:
+async def _call_tavily_search(
+    query: str,
+    max_results: int = 6,
+    *,
+    topic: str = "general",
+    time_range: str | None = None,
+    include_domains: Optional[list[str]] = None,
+    exclude_domains: Optional[list[str]] = None,
+) -> list[dict] | None:
     import httpx
     api_key = config.tavily_api_key
     if not config.tavily_enabled or not api_key:
@@ -503,7 +666,14 @@ async def _call_tavily_search(query: str, max_results: int = 6) -> list[dict] | 
         "search_depth": "advanced",
         "include_raw_content": False,
         "include_answer": False,
+        "topic": topic,
     }
+    if time_range:
+        body["time_range"] = time_range
+    if include_domains:
+        body["include_domains"] = include_domains
+    if exclude_domains:
+        body["exclude_domains"] = exclude_domains
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
             response = await client.post(endpoint, headers=headers, json=body)
