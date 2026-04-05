@@ -2,6 +2,11 @@
 
 ## Choose the right tool
 
+Default routing rule:
+
+- start with `plan_* -> web_search` unless the task is clearly single-hop
+- use direct `web_search` only when planning would add little value
+
 ### `web_search`
 
 Use for:
@@ -42,3 +47,4 @@ Use for:
 - “Read the page at URL Y” -> `web_fetch`
 - “Find the right docs page under this domain” -> `web_map`, then `web_fetch`
 - “Research a complex topic with multiple sub-questions” -> `plan_*`, then execute the planned searches
+- “Need a cited answer with light decomposition” -> `plan_*`, then `web_search`, then `get_sources`

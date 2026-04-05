@@ -40,6 +40,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - Remote `HTTP` / `Streamable HTTP` remains a later compatibility track
 - Long-running `deep research` workflows should not be treated as the default MCP install story
 - The recommended core interaction path remains `plan_* -> web_search`
+- Clear single-hop lookups may still call `web_search` directly when planning would add little value
 - Any interactive `deep research` experience should remain CLI-first; MCP and skill integrations should stay non-interactive
 
 ## Provider Requirements
@@ -58,6 +59,17 @@ These hosts remain planned targets until remote transport and host-specific veri
 | `web_fetch` | `FIRECRAWL_API_KEY`, or `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `web_map` | `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `toggle_builtin_tools` | Claude Code project layout |
+
+## Minimum `stdio` smoke check
+
+For any locally configured `stdio` host:
+
+1. call `get_config_info`
+2. run one `web_search`
+3. call `get_sources` when source verification matters
+4. validate `web_fetch` / `web_map` only when the corresponding provider is configured
+
+Keep remote `HTTP` / `Streamable HTTP` validation out of the default install story until that transport is explicitly verified and documented.
 
 ## Known Practical Limits
 

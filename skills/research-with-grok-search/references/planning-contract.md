@@ -2,6 +2,11 @@
 
 Use these rules when invoking the `plan_*` tools.
 
+Default rule:
+
+- for non-obviously-trivial research, start with `plan_*`
+- for clear single-hop lookups, direct `web_search` is acceptable
+
 ## Required order
 
 `plan_intent -> plan_complexity -> plan_sub_query -> plan_search_term -> plan_tool_mapping -> plan_execution`
@@ -24,6 +29,6 @@ Use these rules when invoking the `plan_*` tools.
 - valid `approach` values: `broad_first`, `narrow_first`, `targeted`
 - valid tool values: `web_search`, `web_fetch`, `web_map`
 
-## Use planning sparingly
+## When to skip planning
 
-Do not use the planning chain for trivial lookups when direct `web_search` is enough.
+Do not use the planning chain for trivial or already-bounded single-hop lookups when direct `web_search` is enough.

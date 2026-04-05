@@ -4,7 +4,7 @@ English | [简体中文](README.md) | [繁體中文](README.zh-TW.md) | [日本�
 
 GrokSearch is an independently maintained MCP server for assistants and clients that need fast, reliable, source-backed web context.
 
-It combines `Grok` search with `Tavily` and `Firecrawl` extraction, then exposes a stable MCP tool surface for lightweight lookups, source verification, focused page fetching, a recommended `plan_* -> web_search` workflow for complex searches, and a future `deep research` direction for heavier exploration tasks.
+It combines `Grok` search with `Tavily` and `Firecrawl` extraction, then exposes a stable MCP tool surface for lightweight lookups, source verification, focused page fetching, a recommended `plan_* -> web_search` workflow for complex searches, and a future `deep research` direction for heavier exploration tasks. For clear, low-ambiguity single-hop lookups where planning adds little value, direct `web_search` is still acceptable.
 
 ## Overview
 
@@ -41,6 +41,17 @@ The public MCP surface currently includes `13` tools:
 - `uv`
 - A client that supports stdio MCP, such as Claude Code, Codex CLI, or Cherry Studio
 
+### Support levels
+
+- `Officially tested`: Claude Code
+- `Community-tested`: Codex-style MCP clients, Cherry Studio
+- `Planned`: Dify, n8n, Coze
+
+Notes:
+
+- Public installation guidance currently covers local `stdio` only.
+- `toggle_builtin_tools` is specific to Claude Code project settings.
+
 ### Add as an MCP server
 
 Replace the environment variables below with your own values:
@@ -64,6 +75,43 @@ claude mcp add-json grok-search --scope user '{
 ```
 
 If your environment requires system certificates, add `--native-tls` to `uvx`.
+
+### Minimal `stdio` examples for other hosts
+
+#### Codex CLI / Codex-style clients
+
+Add the following snippet to `~/.codex/config.toml` or project-level `.codex/config.toml`:
+
+```toml
+[mcp_servers.grok-search]
+command = "uvx"
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+
+[mcp_servers.grok-search.env]
+GROK_API_URL = "https://api.example.com/v1"
+GROK_API_KEY = "your-grok-api-key"
+TAVILY_API_KEY = "tvly-your-tavily-key"
+FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
+```
+
+#### Cherry Studio
+
+Create a `STDIO` MCP server entry with the same core fields:
+
+```json
+{
+  "name": "grok-search",
+  "type": "stdio",
+  "command": "uvx",
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "env": {
+    "GROK_API_URL": "https://api.example.com/v1",
+    "GROK_API_KEY": "your-grok-api-key",
+    "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
+  }
+}
+```
 
 ### Core environment variables
 
@@ -93,6 +141,15 @@ Notes:
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` always injects local time context into the search prompt.
 - `get_config_info` now provides a lightweight doctor view with additive compatibility and readiness checks, but it is still not a full end-to-end search guarantee.
+
+### Minimal smoke check
+
+For any local `stdio` host, start with this lightweight verification flow:
+
+1. Call `get_config_info`
+2. Run one `web_search`
+3. Use `get_sources` if source verification matters
+4. Only then validate `web_fetch` / `web_map` when Tavily or Firecrawl is configured
 
 ### `get_config_info` doctor output
 
