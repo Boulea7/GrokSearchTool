@@ -1557,6 +1557,20 @@ def _validate_execution_plan(session, parallel: list[list[str]], sequential: lis
     return None
 
 
+def _validate_upstream_phase_revision(session, phase: str) -> str | None:
+    blocked_downstream = {
+        "intent_analysis": ("complexity_assessment", "query_decomposition", "search_strategy", "tool_selection", "execution_order"),
+        "complexity_assessment": ("query_decomposition", "search_strategy", "tool_selection", "execution_order"),
+    }
+    downstream_phases = blocked_downstream.get(phase, ())
+    if any(name in session.phases for name in downstream_phases):
+        return _planning_validation_message(
+            f"{phase} revision would invalidate downstream phases. Restart planning from {phase} or open a new session.",
+            "is_revision",
+        )
+    return None
+
+
 @mcp.tool(
     name="plan_intent",
     output_schema=None,
@@ -1582,6 +1596,13 @@ async def plan_intent(
     is_revision: Annotated[bool, "True to overwrite existing intent"] = False,
 ) -> str:
     import json
+    if is_revision and session_id and not planning_engine.get_session(session_id):
+        return _planning_session_error(session_id)
+    session = planning_engine.get_session(session_id) if session_id else None
+    if is_revision and session:
+        revision_error = _validate_upstream_phase_revision(session, "intent_analysis")
+        if revision_error:
+            return revision_error
     data = {"core_question": core_question, "query_type": query_type, "time_sensitivity": time_sensitivity}
     if domain:
         data["domain"] = domain
@@ -1617,8 +1638,13 @@ async def plan_complexity(
     is_revision: Annotated[bool, "True to overwrite"] = False,
 ) -> str:
     import json
-    if not planning_engine.get_session(session_id):
+    session = planning_engine.get_session(session_id)
+    if not session:
         return _planning_session_error(session_id)
+    if is_revision:
+        revision_error = _validate_upstream_phase_revision(session, "complexity_assessment")
+        if revision_error:
+            return revision_error
     try:
         ComplexityOutput(
             level=level,
