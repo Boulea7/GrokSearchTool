@@ -1104,12 +1104,18 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
     }
 
 
+def _feature_affects_overall_doctor_status(item: dict) -> bool:
+    return not item.get("client_specific", False)
+
+
 def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommendations: list[str]) -> dict:
     web_search_status = feature_readiness["web_search"]["status"]
     if web_search_status == "not_ready":
         doctor_status = "error"
     elif any(check["status"] in {"error", "warning"} for check in checks) or any(
-        item["status"] in {"partial_ready", "degraded", "not_ready"} for item in feature_readiness.values()
+        item["status"] in {"partial_ready", "degraded", "not_ready"}
+        for item in feature_readiness.values()
+        if _feature_affects_overall_doctor_status(item)
     ):
         doctor_status = "partial"
     else:
