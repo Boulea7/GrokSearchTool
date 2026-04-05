@@ -186,6 +186,39 @@ async def test_get_config_info_finds_claude_project_root_from_subdirectory(monke
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_ignores_client_specific_toggle_in_overall_doctor_status(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: None)
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["status"] == "not_ready"
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
+    assert payload["doctor"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_warns_when_api_url_has_no_v1(monkeypatch):
     monkeypatch.setenv("GROK_API_URL", "https://api.example.com")
     responses = {
