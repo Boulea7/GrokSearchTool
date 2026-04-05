@@ -499,8 +499,8 @@ async def web_search(
     tavily_count = 0
     if extra_sources > 0:
         if has_tavily and needs_tavily_controls:
-            tavily_count = extra_sources if not has_firecrawl else 1
-            firecrawl_count = max(extra_sources - tavily_count, 0)
+            tavily_count = extra_sources
+            firecrawl_count = 0
         elif has_firecrawl and has_tavily:
             firecrawl_count = max(1, round(extra_sources * 0.7))
             firecrawl_count = min(firecrawl_count, extra_sources - 1) if extra_sources > 1 else extra_sources
