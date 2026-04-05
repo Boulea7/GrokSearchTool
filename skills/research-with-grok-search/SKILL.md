@@ -17,10 +17,11 @@ Use `web_search` directly only when the task is clearly single-hop and planning 
 - single-hop factual questions
 - straightforward lookups
 - quick current checks
+- bounded comparisons that do not need decomposition
 
 When source verification matters, follow `web_search` with `get_sources`.
 
-### 2. Use planning only when it materially helps
+### 2. Keep planning as the default unless the skip case is clear
 
 Use the `plan_*` tools when the task is:
 
@@ -28,6 +29,9 @@ Use the `plan_*` tools when the task is:
 - multi-step
 - time-sensitive and high-risk
 - likely to need decomposition before searching
+
+For non-obviously-trivial research, start with `plan_*`.  
+Skip planning only when the task is already clear, bounded, and low-friction enough for direct `web_search`.
 
 Required order:
 

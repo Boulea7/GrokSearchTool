@@ -4,7 +4,7 @@
 
 GrokSearch は、素早く信頼できるソース付き Web コンテキストを必要とするアシスタントや汎用クライアント向けに独立運用されている MCP サーバーです。
 
-`Grok` の検索能力と `Tavily` / `Firecrawl` の抽出能力を組み合わせ、軽量な検索、ソース確認、対象ページ取得、そして複雑な検索に対する推奨コア経路 `plan_* -> web_search` を支える MCP ツール群を提供します。より重い探索タスクについては、今後 `deep research` 方向へ拡張します。
+`Grok` の検索能力と `Tavily` / `Firecrawl` の抽出能力を組み合わせ、軽量な検索、ソース確認、対象ページ取得、そして複雑な検索に対する推奨コア経路 `plan_* -> web_search` を支える MCP ツール群を提供します。計画の価値が低い明確な単発検索では、直接 `web_search` を呼ぶこともできます。より重い探索タスクについては、今後 `deep research` 方向へ拡張します。
 
 ## 概要
 
@@ -49,7 +49,7 @@ claude mcp add-json grok-search --scope user '{
 
 補足:
 
-- 推奨されるコア経路は `plan_* -> web_search` です。
+- 推奨されるコア経路は `plan_* -> web_search` です。明確な単発検索では直接 `web_search` も利用できます。
 - インタラクティブな `deep research` 体験は、MCP / skill ではなく CLI を優先して提供する予定です。
 - `web_fetch` は Firecrawl のみでも動作します。
 - `web_map` には Tavily が必要です。

@@ -15,7 +15,7 @@
 
 ## 一、概述
 
-Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的轻量 MCP 服务器，采用**双引擎架构**：**Grok** 负责 AI 驱动的智能搜索，**Tavily** 负责高保真网页抓取与站点映射，各取所长为 Claude Code / Cherry Studio 等 LLM Client 提供可核验来源的实时网络上下文能力。当前推荐主路径是 `plan_* -> web_search`；更重的深度探索能力将继续收口到 `deep research`，并优先在 CLI 落地。
+Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的轻量 MCP 服务器，采用**双引擎架构**：**Grok** 负责 AI 驱动的智能搜索，**Tavily** 负责高保真网页抓取与站点映射，各取所长为 Claude Code / Cherry Studio / Codex CLI 等 LLM Client 提供可核验来源的实时网络上下文能力。当前推荐主路径是 `plan_* -> web_search`；对于明确单跳、低歧义、规划收益很低的查询，也允许直接调用 `web_search`。更重的深度探索能力将继续收口到 `deep research`，并优先在 CLI 落地。
 
 ```
 Claude ──MCP──► Grok Search Server
@@ -30,7 +30,7 @@ Claude ──MCP──► Grok Search Server
 - **Firecrawl 托底**：Tavily 提取失败时自动降级到 Firecrawl Scrape，支持空内容自动重试
 - **OpenAI 兼容接口**，支持任意 Grok 镜像站
 - **自动时间注入**（默认注入本地时间上下文）
-- **推荐核心路径**：先 `plan_*` 再 `web_search`，以更稳定地约束复杂搜索
+- **推荐核心路径**：默认先 `plan_*` 再 `web_search`；对明确单跳查询仍允许直接 `web_search`
 - 一键禁用 Claude Code 官方 WebSearch/WebFetch，强制路由到本工具
 - 智能重试（支持 Retry-After 头解析 + 指数退避）
 - 父进程监控（Windows 下自动检测父进程退出，防止僵尸进程）
@@ -50,7 +50,18 @@ Claude ──MCP──► Grok Search Server
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)（推荐的 Python 包管理器）
-- Claude Code
+- 支持 `stdio` MCP 的客户端，如 Claude Code、Codex CLI、Cherry Studio
+
+### 支持级别
+
+- `Officially tested`：Claude Code
+- `Community-tested`：Codex 风格 MCP 客户端、Cherry Studio
+- `Planned`：Dify、n8n、Coze
+
+说明：
+
+- 公开安装文档当前只承诺本地 `stdio` 路径
+- `toggle_builtin_tools` 仅适用于 Claude Code 项目级设置
 
 <details>
 <summary><b>安装 uv</b></summary>
@@ -92,6 +103,43 @@ claude mcp add-json grok-search --scope user '{
     "TAVILY_API_URL": "https://api.tavily.com"
   }
 }'
+```
+
+### 其他 `stdio` 客户端最小配置
+
+#### Codex CLI / Codex 风格 MCP 客户端
+
+将以下片段加入 `~/.codex/config.toml` 或项目级 `.codex/config.toml`：
+
+```toml
+[mcp_servers.grok-search]
+command = "uvx"
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+
+[mcp_servers.grok-search.env]
+GROK_API_URL = "https://your-api-endpoint.com/v1"
+GROK_API_KEY = "your-grok-api-key"
+TAVILY_API_KEY = "tvly-your-tavily-key"
+FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
+```
+
+#### Cherry Studio
+
+在 Cherry Studio 的 MCP 配置中新增一个 `STDIO` server，核心字段保持如下：
+
+```json
+{
+  "name": "grok-search",
+  "type": "stdio",
+  "command": "uvx",
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "env": {
+    "GROK_API_URL": "https://your-api-endpoint.com/v1",
+    "GROK_API_KEY": "your-grok-api-key",
+    "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
+  }
+}
 ```
 
 <details> <summary>如果遇到 SSL / 证书验证错误</summary>
@@ -171,6 +219,15 @@ uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
 claude mcp list
 ```
 
+### 最小 smoke check
+
+无论你使用 Claude Code、Codex CLI 还是 Cherry Studio，建议至少做以下本地 `stdio` 验证：
+
+1. 先调用 `get_config_info`，确认 `doctor`、`feature_readiness` 和 `/models` 探测结果正常
+2. 再调用一次 `web_search`，验证主搜索链路可用
+3. 若需要引用核对，再调用 `get_sources`
+4. 只有在配置了 Tavily / Firecrawl 后，再额外验证 `web_fetch` / `web_map`
+
 显示连接成功后，我们**十分推荐**在 Claude 对话中输入
 ```
 调用 grok-search toggle_builtin_tools，关闭Claude Code's built-in WebSearch and WebFetch tools
@@ -189,6 +246,8 @@ claude mcp list
 通过 Grok API 执行 AI 驱动的网络搜索，默认仅返回 Grok 的回答正文，并返回 `session_id` 以便后续获取信源。
 
 `web_search` 输出不展开完整信源，仅返回 `sources_count` 与结构化状态字段；信源会按 `session_id` 缓存在服务端，可用 `get_sources` 拉取。
+
+默认推荐对非显而易见的单跳任务先走 `plan_* -> web_search`；如果查询本身已经足够明确、低歧义，且 planning 只会增加摩擦，则可直接调用 `web_search`。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|

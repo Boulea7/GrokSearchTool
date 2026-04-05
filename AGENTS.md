@@ -75,7 +75,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - 核心产品是轻量 `MCP + companion skill`
 - 默认能力以高频、短时、低摩擦的信息注入为主，目标是在大多数场景下尽快返回有用结果与可核验来源
 - `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info` 是默认主能力
-- `plan_*` 是默认的轻量规划入口，推荐作为复杂搜索与多数常规搜索的前置步骤
+- `plan_*` 是默认的轻量规划入口，推荐作为复杂搜索与多数常规搜索的前置步骤；对明确单跳、低歧义且规划收益很低的查询，允许直接进入 `web_search`
 - `web_search` 是默认搜索执行入口，既可直接调用，也可承接 `plan_*` 之后的搜索执行
 - `plan_*` 的额外开销当前较低，适合作为高频、轻量的默认规划入口
 - 更长时间、更强编排的复杂任务与深度探索能力统一收口为 `deep research` 框架，并与核心默认体验解耦
