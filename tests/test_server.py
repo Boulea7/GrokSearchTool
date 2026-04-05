@@ -10,6 +10,7 @@ from grok_search.sources import SourcesCache
 @pytest.fixture(autouse=True)
 def reset_server_state(monkeypatch):
     monkeypatch.setattr(server, "_SOURCES_CACHE", SourcesCache(max_size=32))
+    monkeypatch.setattr(server.config, "_cached_model", None, raising=False)
     monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
     monkeypatch.setenv("GROK_API_KEY", "test-key")
 
@@ -235,6 +236,47 @@ async def test_get_config_info_warns_when_api_url_has_no_v1(monkeypatch):
     assert checks["grok_api_url_format"]["status"] == "warning"
     assert payload["doctor"]["status"] == "partial"
     assert any("/v1" in item for item in payload["doctor"]["recommendations"])
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_marks_configured_model_mismatch_as_degraded(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "missing-model")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}, {"id": "grok-4-fast"}]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+
+    assert payload["connection_test"]["status"] == "连接成功"
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "missing-model" in payload["feature_readiness"]["web_search"]["message"]
+    assert any("missing-model" in item for item in payload["doctor"]["recommendations"])
+    assert any("grok-4.1-fast" in item for item in payload["doctor"]["recommendations"])
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkeypatch):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "persisted-model" in payload["feature_readiness"]["web_search"]["message"]
+    assert any("persisted-model" in item for item in payload["doctor"]["recommendations"])
 
 
 @pytest.mark.asyncio
