@@ -1110,6 +1110,12 @@ def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | No
     existing_ids = _get_planning_sub_query_ids(session)
     sub_query_id = item["id"]
 
+    if is_revision and any(phase in session.phases for phase in ("search_strategy", "tool_selection", "execution_order")):
+        return _planning_validation_message(
+            "Sub-query revision would invalidate downstream phases. Restart planning from query_decomposition or open a new session.",
+            "id",
+        )
+
     if not is_revision and sub_query_id in existing_ids:
         return _planning_validation_message(
             f"Duplicate sub-query id: {sub_query_id}",
@@ -1183,6 +1189,13 @@ def _validate_execution_plan(session, parallel: list[list[str]], sequential: lis
             )
         seen_ids.add(sub_query_id)
         placement_stage[sub_query_id] = sequential_offset + offset
+
+    missing_ids = sorted(existing_ids - seen_ids)
+    if missing_ids:
+        return _planning_validation_message(
+            f"Missing sub-query ids in execution plan: {', '.join(missing_ids)}",
+            "sequential",
+        )
 
     for item in _get_planning_sub_queries(session):
         sub_query_id = item.get("id")
