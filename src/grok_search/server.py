@@ -1084,6 +1084,124 @@ async def toggle_builtin_tools(
     }, ensure_ascii=False, indent=2)
 
 
+def _get_planning_sub_queries(session) -> list[dict]:
+    record = session.phases.get("query_decomposition")
+    if not record or not isinstance(record.data, list):
+        return []
+    return [item for item in record.data if isinstance(item, dict)]
+
+
+def _get_planning_sub_query_ids(session) -> set[str]:
+    return {
+        item["id"]
+        for item in _get_planning_sub_queries(session)
+        if isinstance(item.get("id"), str) and item["id"].strip()
+    }
+
+
+def _planning_validation_message(message: str, field: str | None = None) -> str:
+    details = None
+    if field:
+        details = [{"field": field, "message": message, "type": "value_error"}]
+    return _planning_validation_error("validation_error", message, details)
+
+
+def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | None:
+    existing_ids = _get_planning_sub_query_ids(session)
+    sub_query_id = item["id"]
+
+    if not is_revision and sub_query_id in existing_ids:
+        return _planning_validation_message(
+            f"Duplicate sub-query id: {sub_query_id}",
+            "id",
+        )
+
+    dependencies = item.get("depends_on") or []
+    unique_dependencies = set()
+    for dependency in dependencies:
+        if dependency == sub_query_id:
+            return _planning_validation_message(
+                f"Sub-query '{sub_query_id}' cannot depend on itself.",
+                "depends_on",
+            )
+        if dependency in unique_dependencies:
+            return _planning_validation_message(
+                f"Duplicate sub-query dependency: {dependency}",
+                "depends_on",
+            )
+        unique_dependencies.add(dependency)
+        if dependency not in existing_ids:
+            return _planning_validation_message(
+                f"Unknown sub-query dependency: {dependency}",
+                "depends_on",
+            )
+
+    return None
+
+
+def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -> str | None:
+    existing_ids = _get_planning_sub_query_ids(session)
+    if sub_query_id not in existing_ids:
+        return _planning_validation_message(
+            f"Unknown sub-query id: {sub_query_id}",
+            field_name,
+        )
+    return None
+
+
+def _validate_execution_plan(session, parallel: list[list[str]], sequential: list[str]) -> str | None:
+    existing_ids = _get_planning_sub_query_ids(session)
+    placement_stage: dict[str, int] = {}
+    seen_ids: set[str] = set()
+
+    for stage_index, group in enumerate(parallel):
+        for sub_query_id in group:
+            if sub_query_id not in existing_ids:
+                return _planning_validation_message(
+                    f"Unknown sub-query id: {sub_query_id}",
+                    "parallel",
+                )
+            if sub_query_id in seen_ids:
+                return _planning_validation_message(
+                    f"Duplicate execution id: {sub_query_id}",
+                    "parallel",
+                )
+            seen_ids.add(sub_query_id)
+            placement_stage[sub_query_id] = stage_index
+
+    sequential_offset = len(parallel)
+    for offset, sub_query_id in enumerate(sequential):
+        if sub_query_id not in existing_ids:
+            return _planning_validation_message(
+                f"Unknown sub-query id: {sub_query_id}",
+                "sequential",
+            )
+        if sub_query_id in seen_ids:
+            return _planning_validation_message(
+                f"Duplicate execution id: {sub_query_id}",
+                "sequential",
+            )
+        seen_ids.add(sub_query_id)
+        placement_stage[sub_query_id] = sequential_offset + offset
+
+    for item in _get_planning_sub_queries(session):
+        sub_query_id = item.get("id")
+        if sub_query_id not in placement_stage:
+            continue
+        for dependency in item.get("depends_on") or []:
+            dependency_stage = placement_stage.get(dependency)
+            current_stage = placement_stage[sub_query_id]
+            if dependency_stage is None:
+                continue
+            if dependency_stage >= current_stage:
+                return _planning_validation_message(
+                    f"Dependency order violation: {sub_query_id} depends on {dependency}",
+                    "parallel",
+                )
+
+    return None
+
+
 @mcp.tool(
     name="plan_intent",
     output_schema=None,
@@ -1192,6 +1310,9 @@ async def plan_sub_query(
         SubQuery(**item)
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid sub-query input.", _format_validation_details(exc))
+    validation_error = _validate_sub_query_item(planning_engine.get_session(session_id), item, is_revision)
+    if validation_error:
+        return validation_error
     return json.dumps(planning_engine.process_phase(
         phase="query_decomposition", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=item,
@@ -1236,6 +1357,9 @@ async def plan_search_term(
         )
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid search strategy input.", _format_validation_details(exc))
+    validation_error = _validate_sub_query_reference(session, purpose, "purpose")
+    if validation_error:
+        return validation_error
     return json.dumps(planning_engine.process_phase(
         phase="search_strategy", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=data,
@@ -1276,6 +1400,9 @@ async def plan_tool_mapping(
         if any(detail["type"] == "literal_error" for detail in _format_validation_details(exc)):
             return _planning_validation_error("invalid_tool", "tool must be one of web_search, web_fetch, web_map.")
         return _planning_validation_error("validation_error", "Invalid tool mapping input.", _format_validation_details(exc))
+    validation_error = _validate_sub_query_reference(planning_engine.get_session(session_id), sub_query_id, "sub_query_id")
+    if validation_error:
+        return validation_error
     return json.dumps(planning_engine.process_phase(
         phase="tool_selection", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=item,
@@ -1301,10 +1428,15 @@ async def plan_execution(
         return _planning_session_error(session_id)
     parallel = [_split_csv(g) for g in parallel_groups.split(";") if g.strip()] if parallel_groups else []
     seq = _split_csv(sequential)
+    session = planning_engine.get_session(session_id)
     try:
         ExecutionOrderOutput(parallel=parallel, sequential=seq, estimated_rounds=estimated_rounds)
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid execution plan input.", _format_validation_details(exc))
+    if "tool_selection" in session.phases or "execution_order" in session.phases:
+        validation_error = _validate_execution_plan(session, parallel, seq)
+        if validation_error:
+            return validation_error
     return json.dumps(planning_engine.process_phase(
         phase="execution_order", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence,
