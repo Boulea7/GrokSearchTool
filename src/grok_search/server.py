@@ -324,6 +324,40 @@ def _extra_results_to_sources(
     return sources
 
 
+def _extract_firecrawl_markdown_payload(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+
+    nested_data = data.get("data")
+    if isinstance(nested_data, dict):
+        markdown = nested_data.get("markdown")
+        if isinstance(markdown, str):
+            return markdown
+
+    markdown = data.get("markdown")
+    if isinstance(markdown, str):
+        return markdown
+
+    return ""
+
+
+def _extract_firecrawl_search_payload(data: dict) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+
+    nested_data = data.get("data")
+    if isinstance(nested_data, dict):
+        results = nested_data.get("web", [])
+        if isinstance(results, list):
+            return results
+
+    flat_results = data.get("web", [])
+    if isinstance(flat_results, list):
+        return flat_results
+
+    return []
+
+
 _VALID_SEARCH_TOPICS = {"general", "news"}
 _VALID_TIME_RANGES = {"day", "week", "month", "year"}
 
@@ -734,7 +768,7 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             data = response.json()
-            results = data.get("data", {}).get("web", [])
+            results = _extract_firecrawl_search_payload(data)
             return [
                 {"title": r.get("title", ""), "url": r.get("url", ""), "description": r.get("description", "")}
                 for r in results
@@ -767,7 +801,7 @@ async def _call_firecrawl_scrape(url: str, ctx=None) -> tuple[str | None, str | 
                 if _looks_like_login_page(response.text):
                     return None, "Firecrawl 返回登录页或认证页面，请检查代理认证状态"
                 data = response.json()
-                markdown = data.get("data", {}).get("markdown", "")
+                markdown = _extract_firecrawl_markdown_payload(data)
                 if markdown and markdown.strip():
                     if _is_probably_truncated_content(markdown):
                         last_error = "Firecrawl 返回的 markdown 疑似被截断"

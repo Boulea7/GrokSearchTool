@@ -1118,3 +1118,50 @@ async def test_call_tavily_map_returns_serialized_result(monkeypatch):
         "results": ["https://example.com/docs"],
         "response_time": 1.5,
     }
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_scrape_accepts_top_level_markdown_shape(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"markdown": "# flat markdown"},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    content, error = await server._call_firecrawl_scrape("https://example.com")
+
+    assert error is None
+    assert content == "# flat markdown"
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_search_accepts_flat_web_shape(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("POST", "https://api.firecrawl.dev/v2/search"): httpx.Response(
+            200,
+            json={
+                "web": [
+                    {
+                        "title": "Flat Result",
+                        "url": "https://example.com/flat",
+                        "description": "Flat response shape",
+                    }
+                ]
+            },
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    results = await server._call_firecrawl_search("test query", limit=3)
+
+    assert results == [
+        {
+            "title": "Flat Result",
+            "url": "https://example.com/flat",
+            "description": "Flat response shape",
+        }
+    ]
