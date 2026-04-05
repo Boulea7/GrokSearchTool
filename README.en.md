@@ -92,7 +92,16 @@ Notes:
 - `web_fetch` still works with Firecrawl only.
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` always injects local time context into the search prompt.
-- `get_config_info` currently validates `/models` only; it is not a full search-compatibility doctor.
+- `get_config_info` now provides a lightweight doctor view with additive compatibility and readiness checks, but it is still not a full end-to-end search guarantee.
+
+### `get_config_info` doctor output
+
+`get_config_info` keeps the current configuration snapshot and `connection_test`, and also adds:
+
+- `doctor`: overall doctor status, structured checks, and repair recommendations
+- `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, and `toggle_builtin_tools`
+
+Optional provider probes are read-only and run only when the corresponding configuration is already present.
 
 ### `web_search` response contract
 

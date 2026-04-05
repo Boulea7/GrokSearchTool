@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -10,6 +12,32 @@ def reset_server_state(monkeypatch):
     monkeypatch.setattr(server, "_SOURCES_CACHE", SourcesCache(max_size=32))
     monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
     monkeypatch.setenv("GROK_API_KEY", "test-key")
+
+
+class FakeAsyncClient:
+    def __init__(self, responses=None, exc=None, *args, **kwargs):
+        self._responses = responses or {}
+        self._exc = exc or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, url, headers=None):
+        if ("GET", url) in self._exc:
+            raise self._exc[("GET", url)]
+        response = self._responses[("GET", url)]
+        response.request = httpx.Request("GET", url, headers=headers)
+        return response
+
+    async def post(self, url, headers=None, json=None):
+        if ("POST", url) in self._exc:
+            raise self._exc[("POST", url)]
+        response = self._responses[("POST", url)]
+        response.request = httpx.Request("POST", url, headers=headers, json=json)
+        return response
 
 
 @pytest.mark.asyncio
@@ -34,6 +62,117 @@ async def test_web_search_surfaces_http_redirect(monkeypatch):
     assert "HTTP 307" in result["content"]
     assert "/zh-CN/login" in result["content"]
     assert result["sources_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/search"): httpx.Response(
+            200,
+            json={"results": [{"title": "Tavily", "url": "https://example.com"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/search"): httpx.Response(
+            200,
+            json={"data": {"web": [{"title": "Firecrawl", "url": "https://example.com"}]}},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+
+    assert payload["connection_test"]["status"] == "连接成功"
+    assert payload["doctor"]["status"] == "ok"
+    assert payload["doctor"]["checks"]
+    assert payload["feature_readiness"]["web_search"]["status"] == "ready"
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "ready"
+    assert payload["feature_readiness"]["web_map"]["status"] == "ready"
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_marks_missing_grok_config_as_not_ready(monkeypatch):
+    monkeypatch.delenv("GROK_API_URL", raising=False)
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient({}, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+
+    assert payload["connection_test"]["status"] == "配置错误"
+    assert payload["doctor"]["status"] == "error"
+    assert payload["feature_readiness"]["web_search"]["status"] == "not_ready"
+    assert payload["feature_readiness"]["get_sources"]["status"] == "not_ready"
+    assert payload["doctor"]["recommendations"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_skips_unconfigured_optional_providers(monkeypatch):
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert checks["tavily_search"]["status"] == "skipped"
+    assert checks["firecrawl_search"]["status"] == "skipped"
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "not_ready"
+    assert payload["feature_readiness"]["web_map"]["status"] == "not_ready"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_marks_provider_probe_failures_as_degraded(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    exceptions = {
+        ("POST", "https://api.tavily.com/search"): httpx.TimeoutException("timeout"),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, exceptions, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert payload["doctor"]["status"] == "partial"
+    assert checks["tavily_search"]["status"] == "error"
+    assert payload["feature_readiness"]["web_map"]["status"] == "degraded"
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "partial_ready"
+    assert payload["doctor"]["recommendations"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_warns_when_api_url_has_no_v1(monkeypatch):
+    monkeypatch.setenv("GROK_API_URL", "https://api.example.com")
+    responses = {
+        ("GET", "https://api.example.com/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert checks["grok_api_url_format"]["status"] == "warning"
+    assert payload["doctor"]["status"] == "partial"
+    assert any("/v1" in item for item in payload["doctor"]["recommendations"])
 
 
 @pytest.mark.asyncio
