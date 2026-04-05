@@ -10,6 +10,7 @@ from grok_search.sources import SourcesCache
 @pytest.fixture(autouse=True)
 def reset_server_state(monkeypatch):
     monkeypatch.setattr(server, "_SOURCES_CACHE", SourcesCache(max_size=32))
+    monkeypatch.setattr(server.config, "_cached_model", None, raising=False)
     monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
     monkeypatch.setenv("GROK_API_KEY", "test-key")
 
@@ -334,6 +335,70 @@ async def test_web_search_rejects_overlapping_include_and_exclude_domains():
     assert result["error"] == "validation_error"
     assert "同时出现在 include_domains 与 exclude_domains" in result["content"]
     assert result["sources_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_web_search_rejects_blank_query():
+    result = await server.web_search("   ")
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert result["content"] == "搜索失败: query 不能为空"
+    assert result["effective_params"]["topic"] == "general"
+    assert result["effective_params"]["time_range"] is None
+    assert result["sources_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_web_search_rejects_invalid_topic():
+    result = await server.web_search("test query", topic="finance")
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert result["content"] == "搜索失败: topic 仅支持 general 或 news"
+    assert result["effective_params"]["topic"] == "finance"
+
+
+@pytest.mark.asyncio
+async def test_web_search_rejects_invalid_time_range():
+    result = await server.web_search("test query", time_range="hour")
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert result["content"] == "搜索失败: time_range 仅支持 day、week、month、year"
+    assert result["effective_params"]["time_range"] == "hour"
+
+
+@pytest.mark.asyncio
+async def test_web_search_rejects_unknown_explicit_model(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            raise AssertionError("provider should not be created for an invalid explicit model")
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.1-fast", "grok-4-fast"]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query", model="missing-model")
+
+    assert result["status"] == "error"
+    assert result["error"] == "invalid_model"
+    assert result["content"] == "无效模型: missing-model"
+    assert result["sources_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_sources_returns_missing_session_error():
+    result = await server.get_sources("missing-session")
+
+    assert result == {
+        "session_id": "missing-session",
+        "sources": [],
+        "sources_count": 0,
+        "error": "session_id_not_found_or_expired",
+    }
 
 
 @pytest.mark.asyncio
