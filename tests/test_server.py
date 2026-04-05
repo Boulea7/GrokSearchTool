@@ -239,6 +239,52 @@ async def test_get_config_info_warns_when_api_url_has_no_v1(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_marks_configured_model_mismatch_as_degraded(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "missing-model")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}, {"id": "grok-4-fast"}]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+
+    assert payload["connection_test"]["status"] == "连接成功"
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "missing-model" in payload["feature_readiness"]["web_search"]["message"]
+    assert any("missing-model" in item for item in payload["doctor"]["recommendations"])
+    assert any("grok-4.1-fast" in item for item in payload["doctor"]["recommendations"])
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkeypatch):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "persisted-model" in payload["feature_readiness"]["web_search"]["message"]
+    assert any("persisted-model" in item for item in payload["doctor"]["recommendations"])
+    grok_check = next(
+        check for check in payload["doctor"]["checks"] if check.get("check_id") == "grok_model_selection"
+    )
+    assert grok_check["status"] == "warning"
+    assert "persisted-model" in grok_check["message"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_returns_structured_status_fields_for_legacy_call(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
