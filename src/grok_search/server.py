@@ -1050,6 +1050,7 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
     grok_models = checks_by_id["grok_models"]
+    grok_model_selection = checks_by_id.get("grok_model_selection")
     tavily_extract = checks_by_id["tavily_extract"]
     firecrawl_scrape = checks_by_id["firecrawl_scrape"]
     tavily_map = checks_by_id["tavily_map"]
@@ -1064,6 +1065,14 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
     else:
         web_search_status = "degraded"
         web_search_message = grok_models["message"]
+
+    if (
+        web_search_status == "ready"
+        and grok_model_selection
+        and grok_model_selection["status"] == "warning"
+    ):
+        web_search_status = "degraded"
+        web_search_message = grok_model_selection["message"]
 
     if tavily_extract["status"] == "ok" and firecrawl_scrape["status"] == "ok":
         web_fetch_status = "ready"
@@ -1206,6 +1215,24 @@ async def get_config_info() -> str:
         )
 
     checks.append(grok_models)
+    if grok_models["status"] == "ok":
+        configured_model = config.grok_model
+        available_models = grok_models.get("available_models") or []
+        if configured_model and available_models and configured_model not in available_models:
+            checks.append(
+                _build_doctor_check(
+                    "grok_model_selection",
+                    "warning",
+                    f"当前配置模型 {configured_model} 不在 /models 返回列表中。",
+                    configured_model=configured_model,
+                    available_models=available_models,
+                )
+            )
+            available_preview = ", ".join(available_models[:5])
+            _append_recommendation(
+                recommendations,
+                f"将 GROK_MODEL 或本地持久化模型从 {configured_model} 切换到 /models 返回的可用模型，例如：{available_preview}。",
+            )
     if config.tavily_enabled and config.tavily_api_key:
         tavily_extract = await _probe_json_endpoint(
             "tavily_extract",
