@@ -177,6 +177,23 @@ async def test_plan_intent_revision_requires_existing_session():
 
 
 @pytest.mark.asyncio
+async def test_plan_intent_revision_rejects_empty_session_id():
+    result = json.loads(
+        await server.plan_intent(
+            session_id="",
+            thought="Empty revision session should fail.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+            is_revision=True,
+        )
+    )
+
+    assert result["error"] == "session_not_found"
+    assert result["restart_from_intent_analysis"] is True
+
+
+@pytest.mark.asyncio
 async def test_plan_complexity_revision_rejects_existing_downstream_phases():
     intent = json.loads(
         await server.plan_intent(

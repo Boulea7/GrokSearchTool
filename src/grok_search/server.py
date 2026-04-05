@@ -30,6 +30,7 @@ try:
         ComplexityOutput,
         ExecutionOrderOutput,
         IntentOutput,
+        PHASE_NAMES,
         SearchTerm,
         StrategyOutput,
         SubQuery,
@@ -54,6 +55,7 @@ except ImportError:
         ComplexityOutput,
         ExecutionOrderOutput,
         IntentOutput,
+        PHASE_NAMES,
         SearchTerm,
         StrategyOutput,
         SubQuery,
@@ -1558,11 +1560,11 @@ def _validate_execution_plan(session, parallel: list[list[str]], sequential: lis
 
 
 def _validate_upstream_phase_revision(session, phase: str) -> str | None:
-    blocked_downstream = {
-        "intent_analysis": ("complexity_assessment", "query_decomposition", "search_strategy", "tool_selection", "execution_order"),
-        "complexity_assessment": ("query_decomposition", "search_strategy", "tool_selection", "execution_order"),
-    }
-    downstream_phases = blocked_downstream.get(phase, ())
+    try:
+        phase_index = PHASE_NAMES.index(phase)
+    except ValueError:
+        return None
+    downstream_phases = PHASE_NAMES[phase_index + 1 :]
     if any(name in session.phases for name in downstream_phases):
         return _planning_validation_message(
             f"{phase} revision would invalidate downstream phases. Restart planning from {phase} or open a new session.",
@@ -1596,9 +1598,9 @@ async def plan_intent(
     is_revision: Annotated[bool, "True to overwrite existing intent"] = False,
 ) -> str:
     import json
-    if is_revision and session_id and not planning_engine.get_session(session_id):
-        return _planning_session_error(session_id)
     session = planning_engine.get_session(session_id) if session_id else None
+    if is_revision and not session:
+        return _planning_session_error(session_id)
     if is_revision and session:
         revision_error = _validate_upstream_phase_revision(session, "intent_analysis")
         if revision_error:
