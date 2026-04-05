@@ -72,7 +72,11 @@ async def test_web_search_echoes_effective_params_for_new_controls(monkeypatch):
         async def search(self, query, platform):
             return "Search answer"
 
+    async def fake_tavily(query, max_results, **kwargs):
+        return [{"title": "Tavily", "url": "https://tavily.example.com", "content": "t"}]
+
     monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
 
     result = await server.web_search(
@@ -81,6 +85,7 @@ async def test_web_search_echoes_effective_params_for_new_controls(monkeypatch):
         time_range="week",
         include_domains=["openai.com"],
         exclude_domains=["example.com"],
+        extra_sources=1,
     )
 
     assert result["status"] == "ok"
@@ -88,6 +93,32 @@ async def test_web_search_echoes_effective_params_for_new_controls(monkeypatch):
     assert result["effective_params"]["time_range"] == "week"
     assert result["effective_params"]["include_domains"] == ["openai.com"]
     assert result["effective_params"]["exclude_domains"] == ["example.com"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_marks_partial_when_controls_are_not_applied_without_tavily_search(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search(
+        "test query",
+        topic="news",
+        time_range="week",
+        include_domains=["openai.com"],
+        extra_sources=0,
+    )
+
+    assert result["status"] == "partial"
+    assert "domain_controls_not_applied_without_tavily_search" in result["warnings"]
+    assert "time_range_not_applied_without_tavily_search" in result["warnings"]
+    assert "topic_not_applied_without_tavily_search" in result["warnings"]
 
 
 @pytest.mark.asyncio
@@ -130,6 +161,66 @@ async def test_web_search_marks_partial_when_controls_cannot_be_applied(monkeypa
     assert "time_range_not_applied_without_tavily" in result["warnings"]
     assert result["effective_params"]["topic"] == "news"
     assert result["effective_params"]["include_domains"] == ["openai.com"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_prioritizes_tavily_when_controls_need_it(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        calls["tavily"] = max_results
+        return [{"title": "Tavily", "url": "https://tavily.example.com", "content": "t"}]
+
+    async def fake_firecrawl(query, limit):
+        calls["firecrawl"] = limit
+        return [{"title": "Firecrawl", "url": "https://firecrawl.example.com", "description": "f"}]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_search", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_search(
+        "test query",
+        topic="news",
+        include_domains=["openai.com"],
+        extra_sources=1,
+    )
+
+    assert calls["tavily"] == 1
+    assert calls["firecrawl"] == 0
+    assert result["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_web_search_marks_partial_when_tavily_extra_search_fails(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search("test query", extra_sources=1)
+
+    assert result["status"] == "partial"
+    assert "tavily_search_unavailable" in result["warnings"]
+    assert result["error"] is None
 
 
 @pytest.mark.asyncio
@@ -333,6 +424,39 @@ async def test_get_sources_standardizes_merged_provider_metadata(monkeypatch):
             "rank": 2,
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_keeps_grok_citations_ahead_of_supplemental_sources(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Primary citation: [Primary Source](https://primary.example.com/)"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "title": "OpenAI Blog",
+                "url": "https://openai.com/blog",
+                "content": "Latest updates",
+                "score": 0.91,
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search("test query", extra_sources=1)
+    cached = await server.get_sources(result["session_id"])
+
+    assert [item["url"] for item in cached["sources"]] == [
+        "https://primary.example.com/",
+        "https://openai.com/blog",
+    ]
+    assert [item["provider"] for item in cached["sources"]] == ["grok", "tavily"]
 
 
 @pytest.mark.asyncio

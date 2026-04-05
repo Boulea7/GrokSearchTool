@@ -489,10 +489,19 @@ async def web_search(
     # 计算额外信源配额
     has_tavily = config.tavily_enabled and bool(config.tavily_api_key)
     has_firecrawl = bool(config.firecrawl_api_key)
+    needs_tavily_controls = (
+        effective_params["topic"] != "general"
+        or bool(effective_params["time_range"])
+        or bool(effective_params["include_domains"])
+        or bool(effective_params["exclude_domains"])
+    )
     firecrawl_count = 0
     tavily_count = 0
     if extra_sources > 0:
-        if has_firecrawl and has_tavily:
+        if has_tavily and needs_tavily_controls:
+            tavily_count = extra_sources if not has_firecrawl else 1
+            firecrawl_count = max(extra_sources - tavily_count, 0)
+        elif has_firecrawl and has_tavily:
             firecrawl_count = max(1, round(extra_sources * 0.7))
             firecrawl_count = min(firecrawl_count, extra_sources - 1) if extra_sources > 1 else extra_sources
             tavily_count = extra_sources - firecrawl_count
@@ -502,11 +511,21 @@ async def web_search(
             tavily_count = extra_sources
 
     # 并行执行搜索任务
-    if not has_tavily:
-        if effective_params["include_domains"] or effective_params["exclude_domains"]:
-            warnings.append("domain_controls_not_applied_without_tavily")
-        if effective_params["time_range"]:
-            warnings.append("time_range_not_applied_without_tavily")
+    if needs_tavily_controls and tavily_count == 0:
+        if not has_tavily:
+            if effective_params["topic"] != "general":
+                warnings.append("topic_not_applied_without_tavily")
+            if effective_params["include_domains"] or effective_params["exclude_domains"]:
+                warnings.append("domain_controls_not_applied_without_tavily")
+            if effective_params["time_range"]:
+                warnings.append("time_range_not_applied_without_tavily")
+        else:
+            if effective_params["topic"] != "general":
+                warnings.append("topic_not_applied_without_tavily_search")
+            if effective_params["include_domains"] or effective_params["exclude_domains"]:
+                warnings.append("domain_controls_not_applied_without_tavily_search")
+            if effective_params["time_range"]:
+                warnings.append("time_range_not_applied_without_tavily_search")
 
     async def _safe_grok() -> tuple[str, str | None, str | None]:
         try:
@@ -517,10 +536,10 @@ async def web_search(
             return "", "搜索失败: 上游返回空响应，请检查模型或代理配置", "upstream_empty_response"
         return result, None, None
 
-    async def _safe_tavily() -> list[dict] | None:
+    async def _safe_tavily() -> tuple[list[dict] | None, str | None]:
         try:
             if tavily_count:
-                return await _call_tavily_search(
+                results = await _call_tavily_search(
                     validated_params["query"],
                     tavily_count,
                     topic=effective_params["topic"],
@@ -528,15 +547,23 @@ async def web_search(
                     include_domains=effective_params["include_domains"],
                     exclude_domains=effective_params["exclude_domains"],
                 )
+                if results is None:
+                    return None, "tavily_search_unavailable"
+                return results, None
         except Exception:
-            return None
+            return None, "tavily_search_unavailable"
+        return None, None
 
-    async def _safe_firecrawl() -> list[dict] | None:
+    async def _safe_firecrawl() -> tuple[list[dict] | None, str | None]:
         try:
             if firecrawl_count:
-                return await _call_firecrawl_search(validated_params["query"], firecrawl_count)
+                results = await _call_firecrawl_search(validated_params["query"], firecrawl_count)
+                if results is None:
+                    return None, "firecrawl_search_unavailable"
+                return results, None
         except Exception:
-            return None
+            return None, "firecrawl_search_unavailable"
+        return None, None
 
     coros: list = [_safe_grok()]
     if tavily_count > 0:
@@ -551,10 +578,14 @@ async def web_search(
     firecrawl_results: list[dict] | None = None
     idx = 1
     if tavily_count > 0:
-        tavily_results = gathered[idx]
+        tavily_results, tavily_warning = gathered[idx]
+        if tavily_warning:
+            warnings.append(tavily_warning)
         idx += 1
     if firecrawl_count > 0:
-        firecrawl_results = gathered[idx]
+        firecrawl_results, firecrawl_warning = gathered[idx]
+        if firecrawl_warning:
+            warnings.append(firecrawl_warning)
 
     answer, grok_sources = split_answer_and_sources(grok_result)
     if not grok_sources:
@@ -681,9 +712,9 @@ async def _call_tavily_search(
             data = response.json()
             results = data.get("results", [])
             return [
-                {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", ""), "score": r.get("score", 0)}
+                {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", ""), "score": r.get("score")}
                 for r in results
-            ] if results else None
+            ] if results else []
     except Exception:
         return None
 
@@ -705,7 +736,7 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
             return [
                 {"title": r.get("title", ""), "url": r.get("url", ""), "description": r.get("description", "")}
                 for r in results
-            ] if results else None
+            ] if results else []
     except Exception:
         return None
 
