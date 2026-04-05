@@ -928,6 +928,16 @@ def _append_recommendation(recommendations: list[str], message: str) -> None:
         recommendations.append(message)
 
 
+def _find_git_root(start: Path | None = None) -> Path | None:
+    root = (start or Path.cwd()).resolve()
+    while True:
+        if (root / ".git").exists():
+            return root
+        if root == root.parent:
+            return None
+        root = root.parent
+
+
 def _summarize_doctor_status(doctor_status: str) -> str:
     if doctor_status == "ok":
         return "核心配置与可选依赖探测均正常。"
@@ -1038,8 +1048,9 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
     grok_models = checks_by_id["grok_models"]
-    tavily_search = checks_by_id["tavily_search"]
-    firecrawl_search = checks_by_id["firecrawl_search"]
+    tavily_extract = checks_by_id["tavily_extract"]
+    firecrawl_scrape = checks_by_id["firecrawl_scrape"]
+    tavily_map = checks_by_id["tavily_map"]
     claude_context = checks_by_id["claude_code_project"]
 
     if grok_config["status"] != "ok":
@@ -1052,25 +1063,25 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
         web_search_status = "degraded"
         web_search_message = grok_models["message"]
 
-    if tavily_search["status"] == "ok" and firecrawl_search["status"] == "ok":
+    if tavily_extract["status"] == "ok" and firecrawl_scrape["status"] == "ok":
         web_fetch_status = "ready"
         web_fetch_message = "Tavily 与 Firecrawl 均可用。"
-    elif tavily_search["status"] == "ok" or firecrawl_search["status"] == "ok":
+    elif tavily_extract["status"] == "ok" or firecrawl_scrape["status"] == "ok":
         web_fetch_status = "partial_ready"
         web_fetch_message = "仅部分抓取后端已验证可用。"
-    elif tavily_search["status"] == "skipped" and firecrawl_search["status"] == "skipped":
+    elif tavily_extract["status"] == "skipped" and firecrawl_scrape["status"] == "skipped":
         web_fetch_status = "not_ready"
         web_fetch_message = "Tavily / Firecrawl 均未配置。"
     else:
-        web_fetch_status = "partial_ready"
-        web_fetch_message = "至少一个抓取后端已配置，但当前探测未通过。"
+        web_fetch_status = "degraded"
+        web_fetch_message = "抓取后端已配置，但当前探测未通过。"
 
-    if tavily_search["status"] == "ok":
+    if tavily_map["status"] == "ok":
         web_map_status = "ready"
-        web_map_message = "Tavily search 探测成功，map 前置配置完整。"
-    elif tavily_search["status"] == "error":
+        web_map_message = "Tavily map 探测成功。"
+    elif tavily_map["status"] == "error":
         web_map_status = "degraded"
-        web_map_message = tavily_search["message"]
+        web_map_message = tavily_map["message"]
     else:
         web_map_status = "not_ready"
         web_map_message = "Tavily 未配置或已禁用。"
@@ -1080,8 +1091,8 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
     return {
         "web_search": {"status": web_search_status, "message": web_search_message},
         "get_sources": {
-            "status": web_search_status if web_search_status != "degraded" else "degraded",
-            "message": "需要之前成功的 web_search session_id。",
+            "status": "ready",
+            "message": "只依赖本地缓存中的历史 session_id，不依赖当前 Grok 配置。",
         },
         "web_fetch": {"status": web_fetch_status, "message": web_fetch_message},
         "web_map": {"status": web_map_status, "message": web_map_message},
@@ -1188,68 +1199,94 @@ async def get_config_info() -> str:
 
     checks.append(grok_models)
     if config.tavily_enabled and config.tavily_api_key:
-        tavily_check = await _probe_json_endpoint(
-            "tavily_search",
+        tavily_extract = await _probe_json_endpoint(
+            "tavily_extract",
             "POST",
-            f"{config.tavily_api_url.rstrip('/')}/search",
+            f"{config.tavily_api_url.rstrip('/')}/extract",
             {
                 "Authorization": f"Bearer {config.tavily_api_key}",
                 "Content-Type": "application/json",
             },
-            json_body={"query": "grok-search doctor", "max_results": 1, "search_depth": "basic"},
+            json_body={"urls": ["https://example.com"], "format": "markdown"},
             timeout=10.0,
         )
-        tavily_data = tavily_check.pop("data", None)
-        if tavily_check["status"] == "ok":
-            result_count = len((tavily_data or {}).get("results", []) or [])
-            tavily_check["message"] = f"Tavily search 探测成功，返回 {result_count} 条结果。"
+        tavily_extract_data = tavily_extract.pop("data", None)
+        if tavily_extract["status"] == "ok":
+            result_count = len((tavily_extract_data or {}).get("results", []) or [])
+            tavily_extract["message"] = f"Tavily extract 探测成功，返回 {result_count} 条结果。"
         else:
-            _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily search 端点可达。")
+            _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily extract 端点可达。")
+
+        tavily_map = await _probe_json_endpoint(
+            "tavily_map",
+            "POST",
+            f"{config.tavily_api_url.rstrip('/')}/map",
+            {
+                "Authorization": f"Bearer {config.tavily_api_key}",
+                "Content-Type": "application/json",
+            },
+            json_body={"url": "https://example.com", "max_depth": 1, "max_breadth": 1, "limit": 1, "timeout": 10},
+            timeout=10.0,
+        )
+        tavily_map_data = tavily_map.pop("data", None)
+        if tavily_map["status"] == "ok":
+            result_count = len((tavily_map_data or {}).get("results", []) or [])
+            tavily_map["message"] = f"Tavily map 探测成功，返回 {result_count} 条结果。"
+        else:
+            _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily map 端点可达。")
     else:
         tavily_reason = "TAVILY_ENABLED=false" if not config.tavily_enabled else "TAVILY_API_KEY 未配置"
-        tavily_check = _build_doctor_check(
-            "tavily_search",
+        tavily_extract = _build_doctor_check(
+            "tavily_extract",
             "skipped",
-            "未执行 Tavily search 探测。",
+            "未执行 Tavily extract 探测。",
+            skipped_reason=tavily_reason,
+        )
+        tavily_map = _build_doctor_check(
+            "tavily_map",
+            "skipped",
+            "未执行 Tavily map 探测。",
             skipped_reason=tavily_reason,
         )
         _append_recommendation(recommendations, "若需要 web_map 或 Tavily-first web_fetch，请配置并启用 Tavily。")
-    checks.append(tavily_check)
+    checks.append(tavily_extract)
+    checks.append(tavily_map)
 
     if config.firecrawl_api_key:
-        firecrawl_check = await _probe_json_endpoint(
-            "firecrawl_search",
+        firecrawl_scrape = await _probe_json_endpoint(
+            "firecrawl_scrape",
             "POST",
-            f"{config.firecrawl_api_url.rstrip('/')}/search",
+            f"{config.firecrawl_api_url.rstrip('/')}/scrape",
             {
                 "Authorization": f"Bearer {config.firecrawl_api_key}",
                 "Content-Type": "application/json",
             },
-            json_body={"query": "grok-search doctor", "limit": 1},
+            json_body={"url": "https://example.com", "formats": ["markdown"], "timeout": 1000},
             timeout=10.0,
         )
-        firecrawl_data = firecrawl_check.pop("data", None)
-        if firecrawl_check["status"] == "ok":
-            result_count = len(((firecrawl_data or {}).get("data", {}) or {}).get("web", []) or [])
-            firecrawl_check["message"] = f"Firecrawl search 探测成功，返回 {result_count} 条结果。"
+        firecrawl_data = firecrawl_scrape.pop("data", None)
+        if firecrawl_scrape["status"] == "ok":
+            has_markdown = bool((((firecrawl_data or {}).get("data", {}) or {}).get("markdown", "") or "").strip())
+            firecrawl_scrape["message"] = "Firecrawl scrape 探测成功。" if has_markdown else "Firecrawl scrape 已响应，但 markdown 为空。"
         else:
-            _append_recommendation(recommendations, "检查 FIRECRAWL_API_KEY / FIRECRAWL_API_URL，确认 Firecrawl search 端点可达。")
+            _append_recommendation(recommendations, "检查 FIRECRAWL_API_KEY / FIRECRAWL_API_URL，确认 Firecrawl scrape 端点可达。")
     else:
-        firecrawl_check = _build_doctor_check(
-            "firecrawl_search",
+        firecrawl_scrape = _build_doctor_check(
+            "firecrawl_scrape",
             "skipped",
-            "未执行 Firecrawl search 探测。",
+            "未执行 Firecrawl scrape 探测。",
             skipped_reason="FIRECRAWL_API_KEY 未配置",
         )
         _append_recommendation(recommendations, "若需要 Firecrawl fallback，请配置 FIRECRAWL_API_KEY。")
-    checks.append(firecrawl_check)
+    checks.append(firecrawl_scrape)
 
-    claude_context_status = "ok" if (Path.cwd() / ".git").exists() else "skipped"
+    claude_project_root = _find_git_root()
+    claude_context_status = "ok" if claude_project_root else "skipped"
     checks.append(
         _build_doctor_check(
             "claude_code_project",
             claude_context_status,
-            "当前目录具备项目级 Claude Code 设置上下文。" if claude_context_status == "ok" else "未检测到项目级 Git 上下文。",
+            f"已找到 Claude Code 项目根目录：{claude_project_root}" if claude_context_status == "ok" else "未检测到项目级 Git 上下文。",
             skipped_reason="" if claude_context_status == "ok" else "missing_git_context",
         )
     )
@@ -1338,10 +1375,14 @@ async def toggle_builtin_tools(
 ) -> str:
     import json
 
-    # Locate project root
-    root = Path.cwd()
-    while root != root.parent and not (root / ".git").exists():
-        root = root.parent
+    root = _find_git_root()
+    if root is None:
+        return json.dumps({
+            "blocked": False,
+            "deny_list": [],
+            "file": "",
+            "message": "未检测到项目级 Git 根目录，无法修改 Claude Code 项目设置"
+        }, ensure_ascii=False, indent=2)
 
     settings_path = root / ".claude" / "settings.json"
     tools = ["WebFetch", "WebSearch"]

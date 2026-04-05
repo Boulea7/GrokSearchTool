@@ -74,13 +74,17 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
             200,
             json={"data": [{"id": "grok-4.1-fast"}]},
         ),
-        ("POST", "https://api.tavily.com/search"): httpx.Response(
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
             200,
-            json={"results": [{"title": "Tavily", "url": "https://example.com"}]},
+            json={"results": [{"raw_content": "ok"}]},
         ),
-        ("POST", "https://api.firecrawl.dev/v2/search"): httpx.Response(
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
             200,
-            json={"data": {"web": [{"title": "Firecrawl", "url": "https://example.com"}]}},
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
         ),
     }
     monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
@@ -91,6 +95,7 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     assert payload["doctor"]["status"] == "ok"
     assert payload["doctor"]["checks"]
     assert payload["feature_readiness"]["web_search"]["status"] == "ready"
+    assert payload["feature_readiness"]["get_sources"]["status"] == "ready"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "ready"
     assert payload["feature_readiness"]["web_map"]["status"] == "ready"
     assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
@@ -107,7 +112,7 @@ async def test_get_config_info_marks_missing_grok_config_as_not_ready(monkeypatc
     assert payload["connection_test"]["status"] == "配置错误"
     assert payload["doctor"]["status"] == "error"
     assert payload["feature_readiness"]["web_search"]["status"] == "not_ready"
-    assert payload["feature_readiness"]["get_sources"]["status"] == "not_ready"
+    assert payload["feature_readiness"]["get_sources"]["status"] == "ready"
     assert payload["doctor"]["recommendations"]
 
 
@@ -126,8 +131,9 @@ async def test_get_config_info_skips_unconfigured_optional_providers(monkeypatch
     payload = json.loads(await server.get_config_info())
     checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
 
-    assert checks["tavily_search"]["status"] == "skipped"
-    assert checks["firecrawl_search"]["status"] == "skipped"
+    assert checks["tavily_extract"]["status"] == "skipped"
+    assert checks["firecrawl_scrape"]["status"] == "skipped"
+    assert checks["tavily_map"]["status"] == "skipped"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "not_ready"
     assert payload["feature_readiness"]["web_map"]["status"] == "not_ready"
 
@@ -142,7 +148,8 @@ async def test_get_config_info_marks_provider_probe_failures_as_degraded(monkeyp
         ),
     }
     exceptions = {
-        ("POST", "https://api.tavily.com/search"): httpx.TimeoutException("timeout"),
+        ("POST", "https://api.tavily.com/extract"): httpx.TimeoutException("timeout"),
+        ("POST", "https://api.tavily.com/map"): httpx.TimeoutException("timeout"),
     }
     monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, exceptions, *args, **kwargs))
 
@@ -150,10 +157,32 @@ async def test_get_config_info_marks_provider_probe_failures_as_degraded(monkeyp
     checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
 
     assert payload["doctor"]["status"] == "partial"
-    assert checks["tavily_search"]["status"] == "error"
+    assert checks["tavily_extract"]["status"] == "error"
+    assert checks["tavily_map"]["status"] == "error"
     assert payload["feature_readiness"]["web_map"]["status"] == "degraded"
-    assert payload["feature_readiness"]["web_fetch"]["status"] == "partial_ready"
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
     assert payload["doctor"]["recommendations"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_finds_claude_project_root_from_subdirectory(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    nested = repo_root / "nested" / "child"
+    (repo_root / ".git").mkdir(parents=True)
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["status"] == "ready"
 
 
 @pytest.mark.asyncio
