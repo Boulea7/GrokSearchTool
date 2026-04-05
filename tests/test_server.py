@@ -277,6 +277,11 @@ async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkey
     assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
     assert "persisted-model" in payload["feature_readiness"]["web_search"]["message"]
     assert any("persisted-model" in item for item in payload["doctor"]["recommendations"])
+    grok_check = next(
+        check for check in payload["doctor"]["checks"] if check.get("check_id") == "grok_model_selection"
+    )
+    assert grok_check["status"] == "warning"
+    assert "persisted-model" in grok_check["message"]
 
 
 @pytest.mark.asyncio
