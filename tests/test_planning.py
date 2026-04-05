@@ -406,3 +406,300 @@ async def test_plan_tool_mapping_rejects_invalid_params_json():
     )
 
     assert result["error"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_plan_sub_query_rejects_duplicate_ids():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need decomposition.",
+        level=2,
+        estimated_sub_queries=2,
+        estimated_tool_calls=4,
+        justification="Need multiple sub-queries.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="First sub-query.",
+        id="sq1",
+        goal="Compare pricing.",
+        expected_output="A concise pricing comparison.",
+        boundary="Exclude API compatibility discussion.",
+        tool_hint="web_search",
+    )
+
+    result = json.loads(
+        await server.plan_sub_query(
+            session_id=session_id,
+            thought="Duplicate sub-query id should fail.",
+            id="sq1",
+            goal="Compare API compatibility.",
+            expected_output="A concise compatibility comparison.",
+            boundary="Exclude pricing discussion.",
+            tool_hint="web_search",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "duplicate sub-query id" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_sub_query_rejects_unknown_dependency():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need decomposition.",
+        level=2,
+        estimated_sub_queries=2,
+        estimated_tool_calls=4,
+        justification="Need multiple sub-queries.",
+    )
+
+    result = json.loads(
+        await server.plan_sub_query(
+            session_id=session_id,
+            thought="Unknown dependency should fail.",
+            id="sq2",
+            goal="Compare API compatibility.",
+            expected_output="A concise compatibility comparison.",
+            boundary="Exclude pricing discussion.",
+            depends_on="sq1",
+            tool_hint="web_search",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "unknown sub-query dependency" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_search_term_rejects_unknown_sub_query_reference():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need decomposition.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Need one sub-query and one search term.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Only one valid sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    result = json.loads(
+        await server.plan_search_term(
+            session_id=session_id,
+            thought="Unknown purpose should fail.",
+            term="provider comparison",
+            purpose="sq2",
+            round=1,
+            approach="targeted",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "unknown sub-query id" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_tool_mapping_rejects_unknown_sub_query_reference():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need decomposition.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Need one sub-query and one mapping.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Only one valid sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Valid search term first.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Unknown mapping target should fail.",
+            sub_query_id="sq2",
+            tool="web_search",
+            reason="Should be rejected.",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "unknown sub-query id" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_execution_rejects_unknown_or_repeated_ids_and_dependency_order():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers deeply.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need full planning.",
+        level=3,
+        estimated_sub_queries=2,
+        estimated_tool_calls=6,
+        justification="Need dependency-aware execution order.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="First sub-query.",
+        id="sq1",
+        goal="Collect baseline facts.",
+        expected_output="A baseline summary.",
+        boundary="Exclude downstream comparison synthesis.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Second sub-query depends on first.",
+        id="sq2",
+        goal="Compare findings against baseline.",
+        expected_output="A comparison summary.",
+        boundary="Exclude baseline collection.",
+        depends_on="sq1",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="First search term.",
+        term="provider baseline",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Second search term.",
+        term="provider comparison",
+        purpose="sq2",
+        round=2,
+    )
+
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map sq1.",
+        sub_query_id="sq1",
+        tool="web_search",
+        reason="Need baseline facts.",
+    )
+
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map sq2.",
+        sub_query_id="sq2",
+        tool="web_search",
+        reason="Need comparison facts.",
+    )
+
+    unknown = json.loads(
+        await server.plan_execution(
+            session_id=session_id,
+            thought="Unknown ID should fail.",
+            parallel_groups="sq1,sq3",
+            sequential="sq2",
+            estimated_rounds=2,
+        )
+    )
+    assert unknown["error"] == "validation_error"
+    assert "unknown sub-query id" in unknown["message"].lower()
+
+    repeated = json.loads(
+        await server.plan_execution(
+            session_id=session_id,
+            thought="Repeated ID should fail.",
+            parallel_groups="sq1;sq2",
+            sequential="sq2",
+            estimated_rounds=2,
+        )
+    )
+    assert repeated["error"] == "validation_error"
+    assert "duplicate execution id" in repeated["message"].lower()
+
+    dependency = json.loads(
+        await server.plan_execution(
+            session_id=session_id,
+            thought="Dependency order should fail.",
+            parallel_groups="sq1,sq2",
+            sequential="",
+            estimated_rounds=1,
+        )
+    )
+    assert dependency["error"] == "validation_error"
+    assert "dependency order" in dependency["message"].lower()
