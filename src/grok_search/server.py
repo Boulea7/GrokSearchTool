@@ -1140,6 +1140,7 @@ def _planning_validation_message(message: str, field: str | None = None) -> str:
 def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | None:
     existing_ids = _get_planning_sub_query_ids(session)
     sub_query_id = item["id"]
+    valid_dependency_ids = {sub_query_id} if is_revision else existing_ids
 
     if is_revision and any(phase in session.phases for phase in ("search_strategy", "tool_selection", "execution_order")):
         return _planning_validation_message(
@@ -1167,7 +1168,7 @@ def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | No
                 "depends_on",
             )
         unique_dependencies.add(dependency)
-        if dependency not in existing_ids:
+        if dependency not in valid_dependency_ids:
             return _planning_validation_message(
                 f"Unknown sub-query dependency: {dependency}",
                 "depends_on",
@@ -1426,8 +1427,14 @@ async def plan_tool_mapping(
     is_revision: Annotated[bool, "True to replace all mappings"] = False,
 ) -> str:
     import json
-    if not planning_engine.get_session(session_id):
+    session = planning_engine.get_session(session_id)
+    if not session:
         return _planning_session_error(session_id)
+    if is_revision and "execution_order" in session.phases:
+        return _planning_validation_message(
+            "Tool mapping revision would invalidate execution_order. Restart planning from tool_selection or open a new session.",
+            "sub_query_id",
+        )
     item = {"sub_query_id": sub_query_id, "tool": tool, "reason": reason}
     if params_json:
         try:
@@ -1444,7 +1451,7 @@ async def plan_tool_mapping(
         if any(detail["type"] == "literal_error" for detail in _format_validation_details(exc)):
             return _planning_validation_error("invalid_tool", "tool must be one of web_search, web_fetch, web_map.")
         return _planning_validation_error("validation_error", "Invalid tool mapping input.", _format_validation_details(exc))
-    validation_error = _validate_sub_query_reference(planning_engine.get_session(session_id), sub_query_id, "sub_query_id")
+    validation_error = _validate_sub_query_reference(session, sub_query_id, "sub_query_id")
     if validation_error:
         return validation_error
     return json.dumps(planning_engine.process_phase(

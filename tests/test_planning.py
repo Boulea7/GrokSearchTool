@@ -849,3 +849,123 @@ async def test_plan_execution_requires_all_sub_queries_to_be_scheduled():
 
     assert result["error"] == "validation_error"
     assert "missing sub-query ids" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_sub_query_revision_rejects_dependencies_on_removed_ids():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need decomposition only.",
+        level=1,
+        estimated_sub_queries=2,
+        estimated_tool_calls=2,
+        justification="Need revision coverage.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="First sub-query.",
+        id="sq1",
+        goal="Collect baseline facts.",
+        expected_output="A baseline summary.",
+        boundary="Exclude downstream comparison synthesis.",
+        tool_hint="web_search",
+    )
+
+    result = json.loads(
+        await server.plan_sub_query(
+            session_id=session_id,
+            thought="Revision should not keep dependencies on removed ids.",
+            id="sq3",
+            goal="Replacement sub-query.",
+            expected_output="A replacement summary.",
+            boundary="Exclude the old decomposition.",
+            depends_on="sq1",
+            tool_hint="web_search",
+            is_revision=True,
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "unknown sub-query dependency" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_tool_mapping_revision_rejects_existing_execution_order():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers deeply.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need full planning.",
+        level=3,
+        estimated_sub_queries=1,
+        estimated_tool_calls=4,
+        justification="Need execution before revision.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Valid search term.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Initial mapping.",
+        sub_query_id="sq1",
+        tool="web_search",
+        reason="Need provider facts.",
+    )
+
+    await server.plan_execution(
+        session_id=session_id,
+        thought="Initial execution order.",
+        parallel_groups="sq1",
+        sequential="",
+        estimated_rounds=1,
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Revision should fail after execution order exists.",
+            sub_query_id="sq1",
+            tool="web_fetch",
+            reason="Try to rewrite mapping after execution.",
+            is_revision=True,
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "restart planning" in result["message"].lower()
