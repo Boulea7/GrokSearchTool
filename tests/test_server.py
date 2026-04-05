@@ -416,6 +416,27 @@ async def test_web_search_rejects_invalid_time_range():
 
 
 @pytest.mark.asyncio
+async def test_web_search_rejects_non_string_domain_filters():
+    result = await server.web_search(
+        "test query",
+        include_domains=["openai.com", 123],
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert result["content"] == "搜索失败: include_domains 和 exclude_domains 仅支持非空字符串"
+
+
+@pytest.mark.asyncio
+async def test_web_search_rejects_negative_extra_sources():
+    result = await server.web_search("test query", extra_sources=-1)
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert result["content"] == "搜索失败: extra_sources 不能为负数"
+
+
+@pytest.mark.asyncio
 async def test_web_search_rejects_unknown_explicit_model(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):

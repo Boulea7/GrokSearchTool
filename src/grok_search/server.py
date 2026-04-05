@@ -402,6 +402,7 @@ def _validate_search_inputs(
     time_range: str,
     include_domains: Optional[list[str]],
     exclude_domains: Optional[list[str]],
+    extra_sources: int,
 ) -> tuple[dict, str | None]:
     normalized_query = query.strip()
     normalized_topic = (topic or "general").strip() or "general"
@@ -425,6 +426,13 @@ def _validate_search_inputs(
 
     if normalized_time_range and normalized_time_range not in _VALID_TIME_RANGES:
         return effective_params, "搜索失败: time_range 仅支持 day、week、month、year"
+
+    if extra_sources < 0:
+        return effective_params, "搜索失败: extra_sources 不能为负数"
+
+    raw_domain_items = [*(include_domains or []), *(exclude_domains or [])]
+    if any(not isinstance(item, str) or not item.strip() for item in raw_domain_items):
+        return effective_params, "搜索失败: include_domains 和 exclude_domains 仅支持非空字符串"
 
     overlap = sorted(set(normalized_include_domains) & set(normalized_exclude_domains))
     if overlap:
@@ -468,6 +476,7 @@ async def web_search(
         time_range=time_range,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
+        extra_sources=extra_sources,
     )
     effective_params = {
         "platform": platform,
