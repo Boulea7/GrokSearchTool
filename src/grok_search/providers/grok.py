@@ -242,6 +242,17 @@ class GrokSearchProvider(BaseSearchProvider):
         )
         collected: list[dict] = []
 
+        def collect_nested(value):
+            if isinstance(value, dict):
+                collect_from_mapping(value)
+                for nested in value.values():
+                    collect_nested(nested)
+                return
+
+            if isinstance(value, list):
+                for item in value:
+                    collect_nested(item)
+
         def collect_from_mapping(mapping):
             nonlocal collected
             if not isinstance(mapping, dict):
@@ -253,14 +264,7 @@ class GrokSearchProvider(BaseSearchProvider):
         if not isinstance(data, dict):
             return []
 
-        collect_from_mapping(data)
-        for choice in data.get("choices", []) or []:
-            if not isinstance(choice, dict):
-                continue
-            collect_from_mapping(choice)
-            for key in ("message", "delta"):
-                nested = choice.get(key)
-                collect_from_mapping(nested)
+        collect_nested(data)
 
         return collected
 
@@ -332,6 +336,7 @@ class GrokSearchProvider(BaseSearchProvider):
         full_body_buffer = []
         empty_placeholder_detected = False
         response_headers = getattr(response, "headers", None)
+        collected_sources: list[dict] = []
 
         async for line in response.aiter_lines():
             line = line.strip()
@@ -351,6 +356,7 @@ class GrokSearchProvider(BaseSearchProvider):
                     if self._is_empty_placeholder_payload(data):
                         empty_placeholder_detected = True
                         continue
+                    collected_sources = merge_sources(collected_sources, self._extract_structured_sources(data))
                     choices = data.get("choices", [])
                     if isinstance(choices, list) and choices:
                         chunk = self._extract_content_from_choice(choices[0])
@@ -365,6 +371,7 @@ class GrokSearchProvider(BaseSearchProvider):
                 data = json.loads(full_text)
                 if self._is_empty_placeholder_payload(data):
                     empty_placeholder_detected = True
+                collected_sources = merge_sources(collected_sources, self._extract_structured_sources(data))
                 choices = data.get("choices", [])
                 if isinstance(choices, list) and choices:
                     content = self._extract_content_from_choice(choices[0])
@@ -373,6 +380,8 @@ class GrokSearchProvider(BaseSearchProvider):
 
         if not content and empty_placeholder_detected:
             raise self._build_placeholder_error(response_headers)
+
+        content = self._append_sources_block(content, collected_sources)
 
         await log_info(ctx, f"content: {content}", config.debug_enabled)
 

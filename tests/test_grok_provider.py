@@ -87,6 +87,40 @@ async def test_parse_completion_response_reads_message_content_blocks():
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_appends_sources_from_nested_content_blocks():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":[{"type":"output_text","text":"hello world","annotations":[{"title":"Nested Docs","url":"https://docs.example.com/nested"}]}]}}]}',
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "hello world",
+                                "annotations": [
+                                    {
+                                        "title": "Nested Docs",
+                                        "url": "https://docs.example.com/nested",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "## Sources" in result
+    assert "https://docs.example.com/nested" in result
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_appends_structured_citations():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(
@@ -169,6 +203,25 @@ async def test_parse_completion_response_falls_back_to_sse_text():
     result = await provider._parse_completion_response(response)
 
     assert result == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_response_falls_back_to_sse_text_and_sources():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text=(
+            'data: {"choices":[{"delta":{"content":[{"type":"output_text","text":"hello"}]}}]}\n\n'
+            'data: {"choices":[{"delta":{"content":[{"type":"output_text","text":" world","references":[{"title":"Docs","url":"https://docs.example.com/sse"}]}]}}]}\n\n'
+            'data:[DONE]\n'
+        ),
+        json_error=ValueError("not json"),
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "## Sources" in result
+    assert "https://docs.example.com/sse" in result
 
 
 @pytest.mark.asyncio
