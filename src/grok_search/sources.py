@@ -150,7 +150,9 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
 def _source_priority_key(item: dict) -> tuple:
     score = item.get("score")
     title = (item.get("title") or "").strip()
+    provider = (item.get("provider") or "").strip().lower()
     return (
+        0 if provider == "grok" else 1,
         0 if score is not None else 1,
         -(score if isinstance(score, (int, float)) else 0.0),
         0 if title else 1,
