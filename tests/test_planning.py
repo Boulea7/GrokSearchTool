@@ -123,6 +123,125 @@ async def test_revision_cannot_create_later_phase_out_of_order():
 
 
 @pytest.mark.asyncio
+async def test_plan_intent_revision_rejects_existing_downstream_phases():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need complexity before revision.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Need downstream phases to exist.",
+    )
+
+    result = json.loads(
+        await server.plan_intent(
+            session_id=session_id,
+            thought="Intent revision should fail once downstream exists.",
+            core_question="Compare providers in detail.",
+            query_type="comparative",
+            time_sensitivity="recent",
+            is_revision=True,
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "restart planning" in result["message"].lower()
+    assert result["details"][0]["field"] == "is_revision"
+
+
+@pytest.mark.asyncio
+async def test_plan_intent_revision_requires_existing_session():
+    result = json.loads(
+        await server.plan_intent(
+            session_id="missing-session",
+            thought="Revision against a missing session should fail.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+            is_revision=True,
+        )
+    )
+
+    assert result["error"] == "session_not_found"
+    assert result["restart_from_intent_analysis"] is True
+
+
+@pytest.mark.asyncio
+async def test_plan_intent_revision_rejects_empty_session_id():
+    result = json.loads(
+        await server.plan_intent(
+            session_id="",
+            thought="Empty revision session should fail.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+            is_revision=True,
+        )
+    )
+
+    assert result["error"] == "session_not_found"
+    assert result["restart_from_intent_analysis"] is True
+
+
+@pytest.mark.asyncio
+async def test_plan_complexity_revision_rejects_existing_downstream_phases():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Initial complexity.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Need search strategy.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Create downstream phase first.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    result = json.loads(
+        await server.plan_complexity(
+            session_id=session_id,
+            thought="Complexity revision should fail once downstream exists.",
+            level=1,
+            estimated_sub_queries=1,
+            estimated_tool_calls=2,
+            justification="Should force a restart instead of mutating in place.",
+            is_revision=True,
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "restart planning" in result["message"].lower()
+    assert result["details"][0]["field"] == "is_revision"
+
+
+@pytest.mark.asyncio
 async def test_level_1_blocks_later_phases():
     intent = json.loads(
         await server.plan_intent(
@@ -165,6 +284,153 @@ async def test_level_1_blocks_later_phases():
     )
 
     assert result["error"] == "Level 1 planning completes after query_decomposition."
+
+
+@pytest.mark.asyncio
+async def test_level_2_plan_success_returns_complete_executable_plan():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need search strategy and tool mapping.",
+        level=2,
+        estimated_sub_queries=2,
+        estimated_tool_calls=5,
+        justification="Need a complete level 2 plan.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="First sub-query.",
+        id="sq1",
+        goal="Compare pricing.",
+        expected_output="A concise pricing comparison.",
+        boundary="Exclude API compatibility discussion.",
+        tool_hint="web_search",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Second sub-query.",
+        id="sq2",
+        goal="Compare API compatibility.",
+        expected_output="A concise compatibility comparison.",
+        boundary="Exclude pricing discussion.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed strategy.",
+        term="provider pricing",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Append another search term.",
+        term="provider api compatibility",
+        purpose="sq2",
+        round=2,
+    )
+
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map pricing.",
+        sub_query_id="sq1",
+        tool="web_search",
+        reason="Need pricing facts.",
+    )
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Map compatibility.",
+            sub_query_id="sq2",
+            tool="web_search",
+            reason="Need compatibility facts.",
+        )
+    )
+
+    assert result["plan_complete"] is True
+    assert "phases_remaining" not in result
+    assert result["complexity_level"] == 2
+    assert result["completed_phases"] == [
+        "intent_analysis",
+        "complexity_assessment",
+        "query_decomposition",
+        "search_strategy",
+        "tool_selection",
+    ]
+    assert result["executable_plan"]["search_strategy"]["approach"] == "targeted"
+    assert [item["purpose"] for item in result["executable_plan"]["search_strategy"]["search_terms"]] == ["sq1", "sq2"]
+    assert [item["id"] for item in result["executable_plan"]["query_decomposition"]] == ["sq1", "sq2"]
+    assert [item["sub_query_id"] for item in result["executable_plan"]["tool_selection"]] == ["sq1", "sq2"]
+
+
+@pytest.mark.asyncio
+async def test_level_2_blocks_execution_phase_after_tool_selection():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need a complete level 2 plan.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Level 2 should stop at tool selection.",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed strategy.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map the only sub-query.",
+        sub_query_id="sq1",
+        tool="web_search",
+        reason="Need direct comparison facts.",
+    )
+
+    result = json.loads(
+        await server.plan_execution(
+            session_id=session_id,
+            thought="Execution should be blocked for level 2.",
+            parallel_groups="sq1",
+            sequential="",
+            estimated_rounds=1,
+        )
+    )
+
+    assert result["error"] == "Level 2 planning completes after tool_selection."
 
 
 @pytest.mark.asyncio
