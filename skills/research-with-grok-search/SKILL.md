@@ -9,9 +9,10 @@ Use this skill when a task needs current web information and the GrokSearch MCP 
 
 ## Core workflow
 
-### 1. Start simple
+### 1. Prefer the lightweight default path
 
-Use `web_search` directly for:
+Default to `plan_* -> web_search` when the task is not obviously trivial.  
+Use `web_search` directly only when the task is clearly single-hop and planning would add little value, such as:
 
 - single-hop factual questions
 - straightforward lookups

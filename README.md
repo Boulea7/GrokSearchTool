@@ -188,7 +188,7 @@ claude mcp list
 
 通过 Grok API 执行 AI 驱动的网络搜索，默认仅返回 Grok 的回答正文，并返回 `session_id` 以便后续获取信源。
 
-`web_search` 输出不展开信源，仅返回 `sources_count`；信源会按 `session_id` 缓存在服务端，可用 `get_sources` 拉取。
+`web_search` 输出不展开完整信源，仅返回 `sources_count` 与结构化状态字段；信源会按 `session_id` 缓存在服务端，可用 `get_sources` 拉取。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -196,6 +196,10 @@ claude mcp list
 | `platform` | string | 否 | `""` | 聚焦平台（如 `"Twitter"`, `"GitHub, Reddit"`） |
 | `model` | string | 否 | `null` | 按次指定 Grok 模型 ID |
 | `extra_sources` | int | 否 | `0` | 额外补充信源数量（Tavily/Firecrawl，可为 0 关闭） |
+| `topic` | string | 否 | `"general"` | 补充搜索主题，目前支持 `general` / `news` |
+| `time_range` | string | 否 | `null` | 相对时间范围，目前支持 `day` / `week` / `month` / `year` |
+| `include_domains` | string[] | 否 | `[]` | Tavily 补充搜索白名单域名 |
+| `exclude_domains` | string[] | 否 | `[]` | Tavily 补充搜索黑名单域名 |
 
 自动注入本地时间上下文，以提升时效性搜索的准确度。
 
@@ -203,6 +207,10 @@ claude mcp list
 - `session_id`: 本次查询的会话 ID
 - `content`: Grok 回答正文（已自动剥离信源）
 - `sources_count`: 已缓存的信源数量
+- `status`: `ok` / `partial` / `error`
+- `effective_params`: 最终生效的搜索参数回显
+- `warnings`: 非致命告警列表；例如 Tavily 不可用时，域名过滤和时间范围不会真正作用于补充搜索
+- `error`: 稳定的机器可读错误码；无错误时为 `null`
 
 ### `get_sources` — 获取信源
 
@@ -215,7 +223,7 @@ claude mcp list
 返回值（结构化字典）：
 - `session_id`
 - `sources_count`
-- `sources`: 信源列表（每项包含 `url`，可能包含 `title`/`description`/`provider`）
+- `sources`: 信源列表；每项至少包含 `title`、`url`、`provider`、`source_type`、`snippet`、`domain`、`score`、`published_at`、`retrieved_at`、`rank`
 
 ### `web_fetch` — 网页内容抓取
 

@@ -87,11 +87,30 @@ If your environment requires system certificates, add `--native-tls` to `uvx`.
 Notes:
 
 - the recommended core path is `plan_* -> web_search`
+- direct `web_search` is still allowed for clear single-hop lookups when planning adds little value
 - interactive `deep research` workflows are planned CLI-first rather than as conversational MCP/skill interactions
 - `web_fetch` still works with Firecrawl only.
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` always injects local time context into the search prompt.
 - `get_config_info` currently validates `/models` only; it is not a full search-compatibility doctor.
+
+### `web_search` response contract
+
+`web_search` keeps the legacy `session_id`, `content`, and `sources_count` fields, and also returns:
+
+- `status`: `ok`, `partial`, or `error`
+- `effective_params`: the final normalized search controls
+- `warnings`: non-fatal warnings, especially when Tavily-only filters cannot be applied
+- `error`: a stable machine-readable error code, or `null`
+
+Optional additive controls:
+
+- `topic`: `general` or `news`
+- `time_range`: `day`, `week`, `month`, or `year`
+- `include_domains`: Tavily allowlist for supplemental search
+- `exclude_domains`: Tavily denylist for supplemental search
+
+`get_sources` returns standardized metadata including `provider`, `domain`, `score`, `retrieved_at`, and `rank`.
 
 ## Companion Skill
 

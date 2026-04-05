@@ -206,6 +206,26 @@ def test_standardize_sources_normalizes_score_edge_cases():
     assert [item["rank"] for item in sources] == [1, 2, 3, 4, 5]
 
 
+def test_standardize_sources_prefers_higher_scores_and_clearer_identity():
+    sources = standardize_sources(
+        [
+            {"title": "Lower Score", "url": "https://example.com/lower", "score": 0.2},
+            {"title": "", "url": "https://example.com/untitled", "description": "Has no title"},
+            {"title": "Higher Score", "url": "https://example.com/higher", "score": 0.9},
+            {"title": "Named Source", "url": "https://example.com/named"},
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert [item["url"] for item in sources] == [
+        "https://example.com/higher",
+        "https://example.com/lower",
+        "https://example.com/named",
+        "https://example.com/untitled",
+    ]
+    assert [item["rank"] for item in sources] == [1, 2, 3, 4]
+
+
 def test_standardize_sources_maps_legacy_alias_fields():
     sources = standardize_sources(
         [
