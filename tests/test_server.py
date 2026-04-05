@@ -201,6 +201,43 @@ async def test_web_search_prioritizes_tavily_when_controls_need_it(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_uses_only_tavily_for_filtered_extra_sources(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        calls["tavily"] = max_results
+        return [{"title": "Tavily", "url": "https://tavily.example.com", "content": "t"}]
+
+    async def fake_firecrawl(query, limit):
+        calls["firecrawl"] = limit
+        return [{"title": "Firecrawl", "url": "https://firecrawl.example.com", "description": "f"}]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_search", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_search(
+        "test query",
+        topic="news",
+        include_domains=["openai.com"],
+        extra_sources=5,
+    )
+
+    assert calls["tavily"] == 5
+    assert calls["firecrawl"] == 0
+    assert result["status"] == "ok"
+
+
+@pytest.mark.asyncio
 async def test_web_search_marks_partial_when_tavily_extra_search_fails(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
