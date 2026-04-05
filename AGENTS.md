@@ -50,6 +50,10 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `session_id`：信源缓存 ID
 - `content`：搜索结果正文，失败时返回可诊断错误文本
 - `sources_count`：缓存的信源数量
+- `status`：`ok` / `partial` / `error`
+- `effective_params`：标准化后的生效搜索参数回显
+- `warnings`：非致命警告列表
+- `error`：稳定的机器可读错误码；无错误时为 `null`
 
 ### `get_sources`
 
@@ -82,5 +86,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 
 - `GROK_API_URL` 应尽量使用 OpenAI-compatible 根路径并显式带上 `/v1`
 - `get_config_info` 当前可用于配置与连通性初检，但还不是完整的端到端兼容性诊断
+- `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`
+- `get_sources` 当前会统一返回标准化 metadata，并按 `score`、来源身份清晰度与稳定去重后的顺序生成 `rank`
 - `web_fetch` 目前优先使用 Tavily extract，失败时回退到 Firecrawl scrape
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性

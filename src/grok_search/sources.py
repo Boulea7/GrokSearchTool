@@ -115,7 +115,7 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
     timestamp = retrieved_at or dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     standardized: list[dict] = []
 
-    for item in sources or []:
+    for index, item in enumerate(sources or []):
         raw_item = dict(item or {})
         url = _normalize_url(raw_item.get("url"))
         if not url:
@@ -136,10 +136,26 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
         raw_item["score"] = _normalize_score(raw_item.get("score"))
         raw_item["published_at"] = _normalize_optional_text(raw_item.get("published_at") or raw_item.get("published_date"))
         raw_item["retrieved_at"] = _normalize_optional_text(raw_item.get("retrieved_at")) or timestamp
-        raw_item["rank"] = len(standardized) + 1
+        raw_item["_source_order"] = index
         standardized.append(raw_item)
 
+    standardized.sort(key=_source_priority_key)
+    for rank, item in enumerate(standardized, start=1):
+        item["rank"] = rank
+        item.pop("_source_order", None)
+
     return standardized
+
+
+def _source_priority_key(item: dict) -> tuple:
+    score = item.get("score")
+    title = (item.get("title") or "").strip()
+    return (
+        0 if score is not None else 1,
+        -(score if isinstance(score, (int, float)) else 0.0),
+        0 if title else 1,
+        item.get("_source_order", 0),
+    )
 
 
 def split_answer_and_sources(text: str) -> tuple[str, list[dict]]:
