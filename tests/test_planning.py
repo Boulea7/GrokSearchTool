@@ -242,6 +242,52 @@ async def test_plan_complexity_revision_rejects_existing_downstream_phases():
 
 
 @pytest.mark.asyncio
+async def test_plan_complexity_rejects_implicit_overwrite_when_downstream_phases_exist():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Initial complexity.",
+        level=3,
+        estimated_sub_queries=1,
+        estimated_tool_calls=4,
+        justification="Need execution order later.",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Original sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    result = json.loads(
+        await server.plan_complexity(
+            session_id=session_id,
+            thought="Implicit overwrite should fail.",
+            level=1,
+            estimated_sub_queries=1,
+            estimated_tool_calls=2,
+            justification="Should require explicit revision instead of mutating in place.",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "is_revision=true" in result["message"].lower()
+    assert result["details"][0]["field"] == "is_revision"
+
+
+@pytest.mark.asyncio
 async def test_level_1_blocks_later_phases():
     intent = json.loads(
         await server.plan_intent(
@@ -1392,6 +1438,73 @@ async def test_plan_execution_rejects_incomplete_tool_mapping_coverage():
 
     assert result["error"] == "validation_error"
     assert "missing tool mapping" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_search_term_rejects_mutation_after_execution_order_exists():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers deeply.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need full planning.",
+        level=3,
+        estimated_sub_queries=1,
+        estimated_tool_calls=4,
+        justification="Need execution order first.",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Only sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed strategy.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map the only sub-query.",
+        sub_query_id="sq1",
+        tool="web_search",
+        reason="Need comparison facts.",
+    )
+    await server.plan_execution(
+        session_id=session_id,
+        thought="Complete execution ordering.",
+        parallel_groups="sq1",
+        sequential="",
+        estimated_rounds=1,
+    )
+
+    result = json.loads(
+        await server.plan_search_term(
+            session_id=session_id,
+            thought="Mutation after downstream planning should fail.",
+            term="provider pricing comparison",
+            purpose="sq1",
+            round=2,
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "restart planning" in result["message"].lower()
+    assert result["details"][0]["field"] == "is_revision"
 
 
 @pytest.mark.asyncio
