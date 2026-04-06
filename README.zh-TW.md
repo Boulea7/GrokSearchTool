@@ -94,6 +94,8 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
+若使用專案級 `.codex/config.toml`，建議不要直接把真實 key 提交到倉庫；本倉庫預設忽略 `.codex/`。本地開發更推薦把敏感變數寫入已忽略的 `.env.local`，再於使用前 `source ./.env.local`。若會呼叫 `toggle_builtin_tools`，也請避免提交專案級 `.claude/settings.json`；本倉庫同樣預設忽略 `.claude/`。
+
 #### Cherry Studio
 
 ```json
@@ -149,6 +151,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_map` 需要 Tavily，且 `TAVILY_ENABLED=true`。
 - `web_search` 會依 `GROK_TIME_CONTEXT_MODE` 決定是否注入本地時間上下文（預設 `always`）。
 - `get_config_info` 會保留基礎設定快照與 `connection_test`，並由 server 層補充輕量 `doctor`、`feature_readiness` 與最小真實 `search/fetch` 探針；但仍不是完整的端到端保證。
+- `web_fetch`、`web_map` 與 Tavily 補充搜尋目前只暴露 provider 能力的受控子集，不等同於 Tavily / Firecrawl 的全量原生參數面。
+- `web_fetch` 回傳的是提取後的 Markdown 文字，不會透傳 provider 的完整原始結構化 payload。
+- Tavily `web_map` 可能包含外部網域連結；若需要更接近站內 sitemap 的結果，請搭配 `instructions` 收斂並自行過濾。
 
 ### 最小 smoke check
 

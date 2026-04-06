@@ -56,6 +56,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `doctor.recommendations_detail` is an additive structured hint layer; clients that only read `recommendations` remain compatible
 - `feature_readiness.web_fetch.providers.verified_path` identifies the backend that passed the real fetch probe, and skipped providers may include `skipped_reason`
 - `get_config_info` is still not a full end-to-end compatibility guarantee
+- `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` intentionally expose a curated subset of provider options rather than the providers' complete native API surfaces
+- Tavily `map` may include external-domain URLs unless callers further constrain and post-filter the crawl results
 
 ## Feature Dependencies
 
@@ -85,5 +87,6 @@ If local `stdio` startup fails with certificate-chain errors in enterprise or se
 
 - endpoint compatibility still varies across Grok-compatible providers
 - source extraction is best-effort and may depend on how the upstream response encodes links or annotations
+- diagnostic payloads may still include local absolute paths, project-root hints, `request_id` values, or short upstream error summaries even when API keys are masked
 - `toggle_builtin_tools` is intentionally client-specific and should not be treated as a universal MCP feature
 - `toggle_builtin_tools` readiness in `get_config_info` currently indicates local Git project context detection, not a full Claude Code host validation

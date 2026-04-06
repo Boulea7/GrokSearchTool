@@ -96,7 +96,12 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
 - `doctor` 当前会保留字符串版 `recommendations`，并额外提供结构化 `recommendations_detail`
 - `feature_readiness.web_fetch` 当前会附带 provider 级细节，并在 `verified_path` 中标注真实抓取探针实际打通的后端；未执行的 provider 可能带有 `skipped_reason`
+- `feature_readiness.web_fetch` 当前应优先尊重真实 `web_fetch_probe` 的结果；即使单点 provider 探测通过，真实抓取探针失败时也应保持 `degraded`
 - `web_fetch` 目前优先使用 Tavily extract，失败时回退到 Firecrawl scrape
+- `web_fetch` / `web_map` / Tavily 补充搜索当前只暴露 provider 能力的受控子集，不等同于 Tavily / Firecrawl 的全量原生 API
+- `web_map` 当前可能返回外部域名链接；若需要更接近站内 sitemap 的结果，应在调用方进一步收敛或过滤
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性
 - 根包 `grok_search` 当前对 `mcp` 采用 lazy export；非 server 模块导入不应再因为 `fastmcp` 缺失而提前失败
+- `split_answer_and_sources` 当前应避免把 fenced code 中的 `sources(...)` 示例，或正文语义上的普通尾部链接列表，误拆成真实信源
+- server 主进程当前应在非预期致命异常下以非零退出码结束，而不是统一伪装成成功退出
 - 若本地 `stdio` 安装/启动在企业或自签证书环境中失败，优先在 `uvx` 启动命令中增加 `--native-tls`，不要草率记录成关闭 TLS 校验

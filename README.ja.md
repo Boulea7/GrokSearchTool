@@ -80,6 +80,8 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
+プロジェクトレベルの `.codex/config.toml` を使う場合は、実際のキーをリポジトリにコミットしないでください。このリポジトリは `.codex/` を既定で無視します。ローカル開発では、機密値を無視対象の `.env.local` に置き、実行前に `source ./.env.local` する運用を推奨します。`toggle_builtin_tools` を使う場合も、プロジェクトレベルの `.claude/settings.json` はコミットしないでください。このリポジトリは `.claude/` も既定で無視します。
+
 #### Cherry Studio
 
 ```json
@@ -135,6 +137,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_map` には Tavily と `TAVILY_ENABLED=true` が必要です。
 - `web_search` は `GROK_TIME_CONTEXT_MODE` に従ってローカル時間コンテキストを注入します（既定値は `always`）。
 - `get_config_info` はベース設定スナップショットと `connection_test` を維持しつつ、server 側で軽量な `doctor`、`feature_readiness`、最小の実検索/実取得プローブを追加します。ただし、完全なエンドツーエンド保証ではありません。
+- `web_fetch`、`web_map`、および Tavily ベースの補助 `web_search` は、provider の全ネイティブ API ではなく、厳選した subset のみを公開します。
+- `web_fetch` が返すのは抽出後の Markdown テキストであり、provider の完全な構造化 raw payload ではありません。
+- Tavily `web_map` は外部ドメインの URL を含む場合があります。サイト内に近い map が必要な場合は、`instructions` と返却結果の後処理で絞り込んでください。
 
 ### 最小 smoke check
 
