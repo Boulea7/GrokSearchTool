@@ -77,22 +77,26 @@ class SourcesCache:
     def __init__(self, max_size: int = 256):
         self._max_size = max_size
         self._lock = asyncio.Lock()
-        self._cache: OrderedDict[str, list[dict]] = OrderedDict()
+        self._cache: OrderedDict[str, object] = OrderedDict()
 
-    async def set(self, session_id: str, sources: list[dict]) -> None:
+    async def set(self, session_id: str, sources: object) -> None:
         async with self._lock:
             self._cache[session_id] = sources
             self._cache.move_to_end(session_id)
             while len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
 
-    async def get(self, session_id: str) -> list[dict] | None:
+    async def get(self, session_id: str) -> object | None:
         async with self._lock:
             sources = self._cache.get(session_id)
             if sources is None:
                 return None
             self._cache.move_to_end(session_id)
             return sources
+
+    async def size(self) -> int:
+        async with self._lock:
+            return len(self._cache)
 
 
 def merge_sources(*source_lists: list[dict]) -> list[dict]:

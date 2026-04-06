@@ -644,6 +644,40 @@ async def test_get_sources_returns_missing_session_error():
 
 
 @pytest.mark.asyncio
+async def test_get_sources_marks_failed_search_session_as_unavailable():
+    result = await server.web_search("   ")
+
+    cached = await server.get_sources(result["session_id"])
+
+    assert cached["sources"] == []
+    assert cached["sources_count"] == 0
+    assert cached["search_status"] == "error"
+    assert cached["search_error"] == "validation_error"
+    assert cached["source_state"] == "unavailable_due_to_search_error"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_distinguishes_successful_empty_source_sessions(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer without citations"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert cached["sources"] == []
+    assert cached["sources_count"] == 0
+    assert cached["search_status"] == "ok"
+    assert cached["search_error"] is None
+    assert cached["source_state"] == "empty"
+
+
+@pytest.mark.asyncio
 async def test_web_search_marks_partial_when_controls_cannot_be_applied(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):

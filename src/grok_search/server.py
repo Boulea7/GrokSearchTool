@@ -423,6 +423,42 @@ def _build_search_response(
     }
 
 
+def _build_sources_cache_entry(
+    sources: list[dict],
+    *,
+    search_status: str,
+    search_error: str | None,
+) -> dict:
+    if sources:
+        source_state = "available"
+    elif search_status == "error":
+        source_state = "unavailable_due_to_search_error"
+    else:
+        source_state = "empty"
+
+    return {
+        "sources": sources,
+        "search_status": search_status,
+        "search_error": search_error,
+        "source_state": source_state,
+    }
+
+
+def _normalize_sources_cache_entry(entry: object) -> dict | None:
+    if isinstance(entry, dict) and isinstance(entry.get("sources"), list):
+        return {
+            "sources": entry.get("sources", []),
+            "search_status": entry.get("search_status") or "ok",
+            "search_error": entry.get("search_error"),
+            "source_state": entry.get("source_state") or ("available" if entry.get("sources") else "empty"),
+        }
+
+    if isinstance(entry, list):
+        return _build_sources_cache_entry(entry, search_status="ok", search_error=None)
+
+    return None
+
+
 def _validate_search_inputs(
     query: str,
     topic: str,
@@ -521,7 +557,10 @@ async def web_search(
     }
 
     if validation_error:
-        await _SOURCES_CACHE.set(session_id, [])
+        await _SOURCES_CACHE.set(
+            session_id,
+            _build_sources_cache_entry([], search_status="error", search_error="validation_error"),
+        )
         return _build_search_response(
             session_id,
             validation_error,
@@ -535,7 +574,10 @@ async def web_search(
         api_url = config.grok_api_url
         api_key = config.grok_api_key
     except ValueError as e:
-        await _SOURCES_CACHE.set(session_id, [])
+        await _SOURCES_CACHE.set(
+            session_id,
+            _build_sources_cache_entry([], search_status="error", search_error="config_error"),
+        )
         return _build_search_response(
             session_id,
             f"配置错误: {str(e)}",
@@ -549,7 +591,10 @@ async def web_search(
     if model:
         available = await _get_available_models_cached(api_url, api_key)
         if available and model not in available:
-            await _SOURCES_CACHE.set(session_id, [])
+            await _SOURCES_CACHE.set(
+                session_id,
+                _build_sources_cache_entry([], search_status="error", search_error="invalid_model"),
+            )
             return _build_search_response(
                 session_id,
                 f"无效模型: {model}",
@@ -679,7 +724,6 @@ async def web_search(
             content = sanitize_answer_text(grok_result).strip() or "搜索失败: 上游未返回可用正文"
 
     standardized_sources = standardize_sources(all_sources)
-    await _SOURCES_CACHE.set(session_id, standardized_sources)
     status = "ok"
     error = None
     if grok_error:
@@ -687,6 +731,14 @@ async def web_search(
         error = grok_error_code or "upstream_request_failed"
     elif warnings:
         status = "partial"
+    await _SOURCES_CACHE.set(
+        session_id,
+        _build_sources_cache_entry(
+            standardized_sources,
+            search_status=status,
+            search_error=error,
+        ),
+    )
 
     return _build_search_response(
         session_id,
@@ -711,18 +763,47 @@ async def web_search(
 async def get_sources(
     session_id: Annotated[str, "Session ID from previous web_search call."]
 ) -> dict:
-    sources = await _SOURCES_CACHE.get(session_id)
-    if sources is None:
+    cached_entry = await _SOURCES_CACHE.get(session_id)
+    if cached_entry is None:
         return {
             "session_id": session_id,
             "sources": [],
             "sources_count": 0,
             "error": "session_id_not_found_or_expired",
         }
-    standardized_sources = standardize_sources(sources)
-    if standardized_sources != sources:
-        await _SOURCES_CACHE.set(session_id, standardized_sources)
-    return {"session_id": session_id, "sources": standardized_sources, "sources_count": len(standardized_sources)}
+    normalized_entry = _normalize_sources_cache_entry(cached_entry)
+    if normalized_entry is None:
+        return {
+            "session_id": session_id,
+            "sources": [],
+            "sources_count": 0,
+            "error": "session_id_not_found_or_expired",
+        }
+
+    standardized_sources = standardize_sources(normalized_entry["sources"])
+    updated_entry = {
+        **normalized_entry,
+        "sources": standardized_sources,
+        "source_state": (
+            "available"
+            if standardized_sources
+            else normalized_entry["source_state"]
+        ),
+    }
+    if updated_entry != cached_entry:
+        if isinstance(cached_entry, list):
+            await _SOURCES_CACHE.set(session_id, standardized_sources)
+        else:
+            await _SOURCES_CACHE.set(session_id, updated_entry)
+
+    return {
+        "session_id": session_id,
+        "sources": standardized_sources,
+        "sources_count": len(standardized_sources),
+        "search_status": normalized_entry["search_status"],
+        "search_error": normalized_entry["search_error"],
+        "source_state": updated_entry["source_state"],
+    }
 
 
 async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
