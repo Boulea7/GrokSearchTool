@@ -2227,6 +2227,15 @@ def _validate_upstream_phase_revision(session, phase: str) -> str | None:
     return None
 
 
+def _validate_singleton_phase_overwrite(session, phase: str, is_revision: bool) -> str | None:
+    if is_revision or phase not in session.phases:
+        return None
+    return _planning_validation_message(
+        f"{phase} already exists for this session. Set is_revision=true to replace it explicitly.",
+        "is_revision",
+    )
+
+
 @mcp.tool(
     name="plan_intent",
     output_schema=None,
@@ -2259,6 +2268,10 @@ async def plan_intent(
         revision_error = _validate_upstream_phase_revision(session, "intent_analysis")
         if revision_error:
             return revision_error
+    if session:
+        overwrite_error = _validate_singleton_phase_overwrite(session, "intent_analysis", is_revision)
+        if overwrite_error:
+            return overwrite_error
     data = {"core_question": core_question, "query_type": query_type, "time_sensitivity": time_sensitivity}
     if domain:
         data["domain"] = domain
@@ -2301,6 +2314,9 @@ async def plan_complexity(
         revision_error = _validate_upstream_phase_revision(session, "complexity_assessment")
         if revision_error:
             return revision_error
+    overwrite_error = _validate_singleton_phase_overwrite(session, "complexity_assessment", is_revision)
+    if overwrite_error:
+        return overwrite_error
     try:
         ComplexityOutput(
             level=level,
@@ -2376,6 +2392,11 @@ async def plan_search_term(
     session = planning_engine.get_session(session_id)
     if not session:
         return _planning_session_error(session_id)
+    if any(phase in session.phases for phase in ("tool_selection", "execution_order")):
+        return _planning_validation_message(
+            "Search strategy mutation would invalidate downstream phases. Restart planning from search_strategy or open a new session.",
+            "is_revision",
+        )
     if (is_revision or "search_strategy" not in session.phases) and not approach:
         return _planning_validation_error(
             "first_search_term_requires_approach",
