@@ -1498,12 +1498,15 @@ def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> 
     if web_fetch_probe["status"] == "ok":
         web_fetch_status = "ready"
         web_fetch_message = web_fetch_probe["message"]
+    elif web_fetch_probe["status"] == "error":
+        web_fetch_status = "degraded"
+        web_fetch_message = web_fetch_probe["message"]
     elif tavily_extract["status"] == "ok" and firecrawl_scrape["status"] == "ok":
         web_fetch_status = "ready"
         web_fetch_message = "Tavily 与 Firecrawl 均可用。"
     elif tavily_extract["status"] == "ok" or firecrawl_scrape["status"] == "ok":
         web_fetch_status = "degraded"
-        web_fetch_message = web_fetch_probe["message"] if web_fetch_probe["status"] == "error" else "仅部分抓取后端已验证可用。"
+        web_fetch_message = "仅部分抓取后端已验证可用。"
     elif tavily_extract["status"] == "skipped" and firecrawl_scrape["status"] == "skipped":
         web_fetch_status = "not_ready"
         web_fetch_message = "Tavily / Firecrawl 均未配置。"
