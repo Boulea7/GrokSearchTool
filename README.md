@@ -30,7 +30,7 @@ Claude ──MCP──► Grok Search Server
 
 - **双引擎**：Grok 搜索 + Tavily 抓取/映射，互补协作
 - **Firecrawl 托底**：Tavily 提取失败时自动降级到 Firecrawl Scrape，支持空内容自动重试
-- **OpenAI 兼容接口**，支持大多数 Grok-compatible 中转与镜像站（具体兼容性仍取决于 `/models` 与 `/chat/completions` 实现）
+- **OpenAI 兼容接口**，可对接 Grok-compatible 中转与镜像站，但实际兼容性仍取决于上游对 `/models` 与 `/chat/completions` 的实现
 - **自动时间注入**（默认注入本地时间上下文）
 - **推荐核心路径**：默认先 `plan_*` 再 `web_search`；对明确单跳查询仍允许直接 `web_search`
 - 一键禁用 Claude Code 官方 WebSearch/WebFetch，强制路由到本工具
@@ -64,6 +64,7 @@ Claude ──MCP──► Grok Search Server
 
 - 公开安装文档当前只承诺本地 `stdio` 路径
 - `toggle_builtin_tools` 仅适用于 Claude Code 项目级设置
+- `get_config_info` 中 `toggle_builtin_tools` 的 readiness 仅表示检测到了本地 Git 项目上下文，不代表已经完成完整的 Claude Code 宿主验证
 - 下面的安装片段默认使用当前维护中的公开安装源 `Boulea7/GrokSearchTool`
 
 <details>
@@ -326,6 +327,8 @@ claude mcp list
 - 默认最小真实 `web_search` / `web_fetch` 探针结果
 - `web_search` / `get_sources` / `web_fetch` / `web_map` / `toggle_builtin_tools` 的 readiness 汇总
 - 修复建议列表（API Key 自动脱敏）
+- `doctor.recommendations_detail`：与 `check_id` / `feature` 关联的结构化修复建议
+- `feature_readiness.web_fetch.providers`：provider 级状态，`verified_path` 表示真实抓取探针实际打通的后端；未执行的 provider 可能附带 `skipped_reason`
 
 ### `switch_model` — 模型切换
 

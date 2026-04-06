@@ -53,6 +53,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `web_search` depends on a working `/chat/completions` implementation
 - `Config.get_config_info()` returns only the base config snapshot; the MCP tool `get_config_info` keeps that snapshot and adds `connection_test`, `doctor`, `feature_readiness`, and minimal real `search/fetch` probes
 - `connection_test` reflects `/models` reachability only; use `doctor` and `feature_readiness` to judge runtime readiness
+- `doctor.recommendations_detail` is an additive structured hint layer; clients that only read `recommendations` remain compatible
+- `feature_readiness.web_fetch.providers.verified_path` identifies the backend that passed the real fetch probe, and skipped providers may include `skipped_reason`
 - `get_config_info` is still not a full end-to-end compatibility guarantee
 
 ## Feature Dependencies
@@ -84,3 +86,4 @@ If local `stdio` startup fails with certificate-chain errors in enterprise or se
 - endpoint compatibility still varies across Grok-compatible providers
 - source extraction is best-effort and may depend on how the upstream response encodes links or annotations
 - `toggle_builtin_tools` is intentionally client-specific and should not be treated as a universal MCP feature
+- `toggle_builtin_tools` readiness in `get_config_info` currently indicates local Git project context detection, not a full Claude Code host validation
