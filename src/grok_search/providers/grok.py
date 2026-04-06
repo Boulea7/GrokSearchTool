@@ -207,7 +207,10 @@ class GrokSearchProvider(BaseSearchProvider):
                 continue
 
             url = item.get("url") or item.get("href") or item.get("link")
-            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            if not isinstance(url, str):
+                continue
+            url = url.strip()
+            if not url.startswith(("http://", "https://")):
                 continue
 
             source = {"url": url}
