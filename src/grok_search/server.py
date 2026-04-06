@@ -425,9 +425,10 @@ def _extract_firecrawl_search_payload(data: dict) -> list[dict]:
     return empty_result or []
 
 
-_VALID_SEARCH_TOPICS = {"general", "news"}
+_VALID_SEARCH_TOPICS = {"general", "news", "finance"}
 _VALID_TIME_RANGES = {"day", "week", "month", "year"}
 _DOMAIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".lan", ".home", ".corp")
 
 
 def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
@@ -454,6 +455,29 @@ def _is_valid_domain_filter(domain: str) -> bool:
 
     labels = candidate.split(".")
     return all(_DOMAIN_LABEL_PATTERN.fullmatch(label) for label in labels)
+
+
+def _validate_public_target_url(url: str) -> str | None:
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return "仅支持 http/https URL"
+
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return "仅支持 http/https URL"
+    if host == "localhost" or host.startswith("127."):
+        return "目标 URL 不能指向本地或私有网络"
+
+    try:
+        ip = ip_address(host)
+    except ValueError:
+        if "." not in host or host.endswith(_PRIVATE_HOST_SUFFIXES):
+            return "目标 URL 不能指向本地或私有网络"
+        return None
+
+    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+        return "目标 URL 不能指向本地或私有网络"
+    return None
 
 
 def _build_search_response(
@@ -544,7 +568,7 @@ def _validate_search_inputs(
         return effective_params, "搜索失败: query 不能为空"
 
     if normalized_topic not in _VALID_SEARCH_TOPICS:
-        return effective_params, "搜索失败: topic 仅支持 general 或 news"
+        return effective_params, "搜索失败: topic 仅支持 general、news 或 finance"
 
     if normalized_time_range and normalized_time_range not in _VALID_TIME_RANGES:
         return effective_params, "搜索失败: time_range 仅支持 day、week、month、year"
@@ -945,7 +969,7 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
         return None
     endpoint = f"{config.firecrawl_api_url.rstrip('/')}/search"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"query": query, "limit": limit}
+    body = {"query": query, "limit": min(max(int(limit), 1), 100)}
     try:
         async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=90.0)) as client:
             response = await client.post(endpoint, headers=headers, json=body)
@@ -1029,7 +1053,11 @@ async def web_fetch(
     url: Annotated[str, "Valid HTTP/HTTPS web address pointing to the target page. Must be complete and accessible."],
     ctx: Context = None
 ) -> str:
-    await log_info(ctx, f"Begin Fetch: {url}", config.debug_enabled)
+    validation_error = _validate_public_target_url(url)
+    if validation_error:
+        return f"提取失败: {validation_error}"
+
+    await log_info(ctx, "Begin Fetch request", config.debug_enabled)
 
     tavily_error: str | None = None
     if config.tavily_enabled:
@@ -1100,9 +1128,9 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
     except httpx.TimeoutException:
         return f"映射超时: 请求超过{timeout}秒"
     except httpx.HTTPStatusError as e:
-        return f"HTTP错误: {e.response.status_code} - {e.response.text[:200]}"
+        return f"HTTP错误: {e.response.status_code} - {_mask_sensitive_text(e.response.text)[:200]}"
     except Exception as e:
-        return f"映射错误: {str(e)}"
+        return f"映射错误: {_mask_sensitive_text(str(e))}"
 
 
 @mcp.tool(
@@ -1130,6 +1158,10 @@ async def web_map(
     limit: Annotated[int, Field(description="Total number of links to process before stopping.", ge=1, le=500)] = 50,
     timeout: Annotated[int, Field(description="Maximum time in seconds for the operation.", ge=10, le=150)] = 150
 ) -> str:
+    validation_error = _validate_public_target_url(url)
+    if validation_error:
+        return f"映射失败: {validation_error}"
+
     result = await _call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
     return result
 
