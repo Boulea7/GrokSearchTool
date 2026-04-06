@@ -13,7 +13,7 @@ from .config import config
 from .utils import extract_unique_urls
 
 
-_MD_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)")
+_MD_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)", re.IGNORECASE)
 _SOURCES_HEADING_PATTERN = re.compile(
     r"(?im)^"
     r"(?:#{1,6}\s*)?"
@@ -381,7 +381,8 @@ def _is_link_only_line(line: str) -> bool:
     stripped = re.sub(r"^\s*(?:[-*]|\d+\.)\s*", "", line).strip()
     if not stripped:
         return False
-    if stripped.startswith(("http://", "https://")):
+    normalized_url = _normalize_url(stripped)
+    if normalized_url:
         return True
     if _MD_LINK_PATTERN.search(stripped):
         return True

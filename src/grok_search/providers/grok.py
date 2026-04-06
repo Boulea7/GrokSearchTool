@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
+from urllib.parse import urlparse
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
 from tenacity.wait import wait_base
 from .base import BaseSearchProvider, SearchResult
@@ -223,7 +224,8 @@ class GrokSearchProvider(BaseSearchProvider):
         for item in items:
             if isinstance(item, str):
                 url = item.strip()
-                if url.startswith(("http://", "https://")):
+                parsed = urlparse(url)
+                if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
                     normalized.append({"url": url})
                 continue
 
@@ -234,7 +236,8 @@ class GrokSearchProvider(BaseSearchProvider):
             if not isinstance(url, str):
                 continue
             url = url.strip()
-            if not url.startswith(("http://", "https://")):
+            parsed = urlparse(url)
+            if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
                 continue
 
             source = {"url": url}
