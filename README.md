@@ -137,6 +137,8 @@ source ./.env.local
 set +a
 ```
 
+如果会调用 `toggle_builtin_tools`，还应避免提交项目级 `.claude/settings.json`；当前仓库默认忽略 `.claude/`。
+
 #### Cherry Studio
 
 在 Cherry Studio 的 MCP 配置中新增一个 `STDIO` server，核心字段保持如下：
@@ -307,7 +309,11 @@ claude mcp list
 
 ### `web_fetch` — 网页内容抓取
 
-通过 Tavily Extract API 获取完整网页内容，返回 Markdown 格式。Tavily 失败时自动降级到 Firecrawl Scrape 进行托底抓取。
+通过 Tavily Extract API 获取网页正文，返回提取后的 Markdown 文本。Tavily 失败时自动降级到 Firecrawl Scrape 进行托底抓取。
+
+说明：
+- 当前 `web_fetch` / `web_map` / Tavily supplemental `web_search` 只暴露 provider 能力的一个受控子集，不等同于 Tavily / Firecrawl 全量原生参数面。
+- `web_fetch` 返回的是提取后的 Markdown 文本，不会透传 provider 的原始结构化响应字段。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -316,6 +322,9 @@ claude mcp list
 ### `web_map` — 站点结构映射
 
 通过 Tavily Map API 遍历网站结构，发现 URL 并生成站点地图。
+
+说明：
+- Tavily Map 默认可能返回外部域名链接；若你需要更接近站内 sitemap 的结果，请结合 `instructions` 收紧范围，并按返回结果自行过滤。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -337,6 +346,9 @@ claude mcp list
 - 修复建议列表（API Key 自动脱敏）
 - `doctor.recommendations_detail`：与 `check_id` / `feature` 关联的结构化修复建议
 - `feature_readiness.web_fetch.providers`：provider 级状态，`verified_path` 表示真实抓取探针实际打通的后端；未执行的 provider 可能附带 `skipped_reason`
+
+注意：
+- 输出中的 API Key 会脱敏，但诊断结果仍可能包含本机绝对路径、项目根目录、`request_id` 或上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
 
 ### `switch_model` — 模型切换
 
