@@ -88,6 +88,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 ## 稳定注意事项
 
 - `GROK_API_URL` 应尽量使用 OpenAI-compatible 根路径并显式带上 `/v1`
+- 配置读取当前应遵循：进程环境变量优先；若缺失，再回落到项目根目录的 `.env.local`，仍缺失时再看 `.env`
 - `get_config_info` 当前可用于配置与连通性初检，并默认执行最小真实 `search/fetch` 探针；但还不是完整的端到端兼容性诊断
 - `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`
 - `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`

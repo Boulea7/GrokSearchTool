@@ -8,9 +8,10 @@ from grok_search.sources import SourcesCache
 
 
 @pytest.fixture(autouse=True)
-def reset_server_state(monkeypatch):
+def reset_server_state(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_SOURCES_CACHE", SourcesCache(max_size=32))
     monkeypatch.setattr(server, "_AVAILABLE_MODELS_CACHE", {})
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
     server.config.reset_runtime_state()
     monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
     monkeypatch.setenv("GROK_API_KEY", "test-key")
