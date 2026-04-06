@@ -332,3 +332,76 @@ def test_standardize_sources_maps_legacy_alias_fields():
             "rank": 1,
         }
     ]
+
+
+def test_standardize_sources_skips_malformed_legacy_items():
+    sources = standardize_sources(
+        [
+            "https://example.com/string-entry",
+            None,
+            {"title": "Valid", "url": "https://valid.example.com/"},
+            ["unexpected", "list"],
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Valid",
+            "url": "https://valid.example.com/",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "valid.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
+def test_standardize_sources_deduplicates_urls_and_keeps_richer_item():
+    sources = standardize_sources(
+        [
+            {"url": "https://dup.example.com/page"},
+            {
+                "title": "Richer Source",
+                "url": "https://dup.example.com/page",
+                "description": "More context",
+                "score": 0.9,
+            },
+            {"title": "Other", "url": "https://other.example.com/page"},
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Richer Source",
+            "url": "https://dup.example.com/page",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "More context",
+            "snippet": "More context",
+            "domain": "dup.example.com",
+            "score": 0.9,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        },
+        {
+            "title": "Other",
+            "url": "https://other.example.com/page",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "other.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 2,
+        },
+    ]
