@@ -10,12 +10,12 @@ from grok_search.sources import SourcesCache
 @pytest.fixture(autouse=True)
 def reset_server_state(monkeypatch):
     monkeypatch.setattr(server, "_SOURCES_CACHE", SourcesCache(max_size=32))
-    monkeypatch.setattr(server.config, "_cached_model", None, raising=False)
+    server.config.reset_runtime_state()
     monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
     monkeypatch.setenv("GROK_API_KEY", "test-key")
 
 
-class FakeAsyncClient:
+class StubAsyncClient:
     def __init__(self, responses=None, exc=None, *args, **kwargs):
         self._responses = responses or {}
         self._exc = exc or {}
@@ -26,43 +26,9 @@ class FakeAsyncClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    async def get(self, url, headers=None):
-        if ("GET", url) in self._exc:
-            raise self._exc[("GET", url)]
-        response = self._responses[("GET", url)]
-        response.request = httpx.Request("GET", url, headers=headers)
-        return response
-
-    async def post(self, url, headers=None, json=None):
-        if ("POST", url) in self._exc:
-            raise self._exc[("POST", url)]
-        if ("POST", url) not in self._responses and url.endswith("/chat/completions"):
-            response = httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "probe ok"}}]},
-            )
-            response.request = httpx.Request("POST", url, headers=headers, json=json)
-            return response
-        response = self._responses[("POST", url)]
-        response.request = httpx.Request("POST", url, headers=headers, json=json)
-        return response
-
-
-class SequenceAsyncClient:
-    def __init__(self, responses=None, exc=None, *args, **kwargs):
-        self._responses = responses or {}
-        self._exc = exc or {}
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    def _pop(self, store, key):
+    def _take(self, store, key):
         items = store[key]
         if not isinstance(items, list):
-            del store[key]
             return items
         item = items.pop(0)
         if items:
@@ -74,15 +40,15 @@ class SequenceAsyncClient:
     async def get(self, url, headers=None):
         key = ("GET", url)
         if key in self._exc:
-            raise self._pop(self._exc, key)
-        response = self._pop(self._responses, key)
+            raise self._take(self._exc, key)
+        response = self._take(self._responses, key)
         response.request = httpx.Request("GET", url, headers=headers)
         return response
 
     async def post(self, url, headers=None, json=None):
         key = ("POST", url)
         if key in self._exc:
-            raise self._pop(self._exc, key)
+            raise self._take(self._exc, key)
         if key not in self._responses and url.endswith("/chat/completions"):
             response = httpx.Response(
                 200,
@@ -90,9 +56,25 @@ class SequenceAsyncClient:
             )
             response.request = httpx.Request("POST", url, headers=headers, json=json)
             return response
-        response = self._pop(self._responses, key)
+        response = self._take(self._responses, key)
         response.request = httpx.Request("POST", url, headers=headers, json=json)
         return response
+
+
+def patch_async_client(monkeypatch, responses=None, exceptions=None):
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: StubAsyncClient(responses, exceptions, *args, **kwargs),
+    )
+
+
+async def load_config_info():
+    return json.loads(await server.get_config_info())
+
+
+def doctor_checks(payload):
+    return {check["check_id"]: check for check in payload["doctor"]["checks"]}
 
 
 @pytest.mark.asyncio
@@ -143,10 +125,10 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
             json={"results": ["https://example.com"]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert payload["connection_test"]["status"] == "连接成功"
     assert payload["connection_test"]["scope"] == "models_endpoint"
@@ -169,9 +151,9 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
 async def test_get_config_info_marks_missing_grok_config_as_not_ready(monkeypatch):
     monkeypatch.delenv("GROK_API_URL", raising=False)
     monkeypatch.delenv("GROK_API_KEY", raising=False)
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient({}, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, {}, {})
 
-    payload = json.loads(await server.get_config_info())
+    payload = await load_config_info()
 
     assert payload["connection_test"]["status"] == "配置错误"
     assert payload["doctor"]["status"] == "error"
@@ -190,10 +172,10 @@ async def test_get_config_info_skips_unconfigured_optional_providers(monkeypatch
     }
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert checks["tavily_extract"]["status"] == "skipped"
     assert checks["firecrawl_scrape"]["status"] == "skipped"
@@ -215,10 +197,10 @@ async def test_get_config_info_marks_provider_probe_failures_as_degraded(monkeyp
         ("POST", "https://api.tavily.com/extract"): httpx.TimeoutException("timeout"),
         ("POST", "https://api.tavily.com/map"): httpx.TimeoutException("timeout"),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, exceptions, *args, **kwargs))
+    patch_async_client(monkeypatch, responses, exceptions)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert payload["doctor"]["status"] == "partial"
     assert checks["tavily_extract"]["status"] == "error"
@@ -245,10 +227,10 @@ async def test_get_config_info_rejects_tavily_login_html_probe(monkeypatch):
             json={"results": ["https://example.com"]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert checks["tavily_extract"]["status"] == "error"
     assert "登录页" in checks["tavily_extract"]["message"]
@@ -272,10 +254,10 @@ async def test_get_config_info_rejects_malformed_tavily_probe_shape(monkeypatch)
             json={"wrong": []},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert checks["tavily_extract"]["status"] == "error"
     assert "响应结构异常" in checks["tavily_extract"]["message"]
@@ -300,10 +282,10 @@ async def test_get_config_info_rejects_tavily_map_non_string_results(monkeypatch
             json={"results": [{"url": "https://example.com"}]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert checks["tavily_map"]["status"] == "error"
     assert "results[0]" in checks["tavily_map"]["message"]
@@ -326,10 +308,10 @@ async def test_get_config_info_rejects_empty_tavily_probe_results(monkeypatch):
             json={"results": ["https://example.com"]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert checks["tavily_extract"]["status"] == "error"
     assert "results 为空" in checks["tavily_extract"]["message"]
@@ -353,10 +335,10 @@ async def test_get_config_info_rejects_empty_tavily_probe_content(monkeypatch):
             json={"results": ["https://example.com"]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert checks["tavily_extract"]["status"] == "error"
     assert "内容为空" in checks["tavily_extract"]["message"]
@@ -386,10 +368,10 @@ async def test_get_config_info_marks_empty_firecrawl_markdown_as_warning(monkeyp
             json={"data": {"markdown": ""}},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert checks["firecrawl_scrape"]["status"] == "warning"
     assert "markdown 为空" in checks["firecrawl_scrape"]["message"]
@@ -412,10 +394,10 @@ async def test_get_config_info_accepts_firecrawl_top_level_markdown_shape(monkey
             json={"markdown": "# flat markdown"},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert checks["firecrawl_scrape"]["status"] == "ok"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "ready"
@@ -435,9 +417,9 @@ async def test_get_config_info_finds_claude_project_root_from_subdirectory(monke
             json={"data": [{"id": "grok-4.1-fast"}]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
+    payload = await load_config_info()
 
     assert payload["feature_readiness"]["toggle_builtin_tools"]["status"] == "ready"
 
@@ -466,9 +448,9 @@ async def test_get_config_info_ignores_client_specific_toggle_in_overall_doctor_
             json={"data": {"markdown": "# ok"}},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
+    payload = await load_config_info()
 
     assert payload["feature_readiness"]["toggle_builtin_tools"]["status"] == "not_ready"
     assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
@@ -484,10 +466,10 @@ async def test_get_config_info_warns_when_api_url_has_no_v1(monkeypatch):
             json={"data": [{"id": "grok-4.1-fast"}]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert checks["grok_api_url_format"]["status"] == "warning"
     assert payload["doctor"]["status"] == "partial"
@@ -502,9 +484,9 @@ async def test_get_config_info_maps_models_login_page_to_connection_failure(monk
             text="<html><body>Please login to continue</body></html>",
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
+    payload = await load_config_info()
 
     assert payload["connection_test"]["status"] == "连接失败"
     assert "登录页" in payload["connection_test"]["message"]
@@ -523,7 +505,7 @@ async def test_probe_web_fetch_uses_single_firecrawl_attempt_in_doctor_mode(monk
     monkeypatch.setattr(
         httpx,
         "AsyncClient",
-        lambda *args, **kwargs: SequenceAsyncClient(responses, {}, *args, **kwargs),
+        lambda *args, **kwargs: StubAsyncClient(responses, {}, *args, **kwargs),
     )
 
     result = await server._probe_web_fetch()
@@ -542,9 +524,9 @@ async def test_get_config_info_marks_configured_model_mismatch_as_degraded(monke
             json={"data": [{"id": "grok-4.1-fast"}, {"id": "grok-4-fast"}]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
+    payload = await load_config_info()
 
     assert payload["connection_test"]["status"] == "连接成功"
     assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
@@ -564,9 +546,9 @@ async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkey
             json={"data": [{"id": "grok-4.1-fast"}]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
+    payload = await load_config_info()
 
     assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
     assert "persisted-model" in payload["feature_readiness"]["web_search"]["message"]
@@ -589,10 +571,10 @@ async def test_get_config_info_marks_real_search_probe_failure_as_degraded(monke
     exceptions = {
         ("POST", "https://api.example.com/v1/chat/completions"): httpx.TimeoutException("timeout"),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, exceptions, *args, **kwargs))
+    patch_async_client(monkeypatch, responses, exceptions)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert payload["connection_test"]["status"] == "连接成功"
     assert checks["grok_search_probe"]["status"] == "error"
@@ -615,10 +597,10 @@ async def test_get_config_info_marks_web_fetch_as_degraded_when_only_firecrawl_p
             json={"data": {"markdown": ""}},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
-    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
 
     assert payload["connection_test"]["status"] == "连接成功"
     assert checks["firecrawl_scrape"]["status"] == "warning"
@@ -1530,7 +1512,7 @@ async def test_call_tavily_extract_rejects_login_page(monkeypatch):
             text="<html><body>Please login to continue</body></html>",
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     content, error = await server._call_tavily_extract("https://example.com")
 
@@ -1548,7 +1530,7 @@ async def test_call_tavily_extract_reports_empty_results(monkeypatch):
             json={"results": []},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     content, error = await server._call_tavily_extract("https://example.com")
 
@@ -1566,7 +1548,7 @@ async def test_call_tavily_extract_reports_truncated_content(monkeypatch):
             json={"results": [{"raw_content": f"{'A' * 140}[...]"}]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     content, error = await server._call_tavily_extract("https://example.com")
 
@@ -1584,7 +1566,7 @@ async def test_call_tavily_extract_reports_invalid_response_shape_for_non_dict_p
             json=["unexpected"],
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     content, error = await server._call_tavily_extract("https://example.com")
 
@@ -1602,7 +1584,7 @@ async def test_call_tavily_extract_reports_invalid_result_entry_shape(monkeypatc
             json={"results": ["unexpected"]},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     content, error = await server._call_tavily_extract("https://example.com")
 
@@ -1636,7 +1618,7 @@ async def test_call_tavily_map_surfaces_timeout(monkeypatch):
     exceptions = {
         ("POST", "https://api.tavily.com/map"): httpx.TimeoutException("timeout"),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient({}, exceptions, *args, **kwargs))
+    patch_async_client(monkeypatch, {}, exceptions)
 
     result = await server._call_tavily_map("https://example.com", timeout=12)
 
@@ -1653,7 +1635,7 @@ async def test_call_tavily_map_surfaces_http_error(monkeypatch):
             text="bad gateway",
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     result = await server._call_tavily_map("https://example.com")
 
@@ -1670,7 +1652,7 @@ async def test_call_tavily_map_rejects_login_html_response(monkeypatch):
             text="<html><body>Please login to continue</body></html>",
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     result = await server._call_tavily_map("https://example.com")
 
@@ -1687,7 +1669,7 @@ async def test_call_tavily_map_reports_invalid_json_response(monkeypatch):
             text="not-json",
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     result = await server._call_tavily_map("https://example.com")
 
@@ -1704,7 +1686,7 @@ async def test_call_tavily_map_reports_invalid_shape(monkeypatch):
             json={"base_url": "https://example.com"},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     result = await server._call_tavily_map("https://example.com")
 
@@ -1725,7 +1707,7 @@ async def test_call_tavily_map_returns_serialized_result(monkeypatch):
             },
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     result = await server._call_tavily_map("https://example.com", instructions="only docs")
 
@@ -1745,7 +1727,7 @@ async def test_call_firecrawl_scrape_accepts_top_level_markdown_shape(monkeypatc
             json={"markdown": "# flat markdown"},
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     content, error = await server._call_firecrawl_scrape("https://example.com")
 
@@ -1765,7 +1747,7 @@ async def test_call_firecrawl_scrape_retries_empty_markdown_then_succeeds(monkey
     monkeypatch.setattr(
         httpx,
         "AsyncClient",
-        lambda *args, **kwargs: SequenceAsyncClient(responses, {}, *args, **kwargs),
+        lambda *args, **kwargs: StubAsyncClient(responses, {}, *args, **kwargs),
     )
 
     content, error = await server._call_firecrawl_scrape("https://example.com")
@@ -1787,7 +1769,7 @@ async def test_call_firecrawl_scrape_returns_truncated_error_after_retry_budget_
     monkeypatch.setattr(
         httpx,
         "AsyncClient",
-        lambda *args, **kwargs: SequenceAsyncClient(responses, {}, *args, **kwargs),
+        lambda *args, **kwargs: StubAsyncClient(responses, {}, *args, **kwargs),
     )
 
     content, error = await server._call_firecrawl_scrape("https://example.com")
@@ -1813,7 +1795,7 @@ async def test_call_firecrawl_search_accepts_flat_web_shape(monkeypatch):
             },
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     results = await server._call_firecrawl_search("test query", limit=3)
 
@@ -1845,7 +1827,7 @@ async def test_call_firecrawl_search_accepts_nested_web_shape(monkeypatch):
             },
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     results = await server._call_firecrawl_search("test query", limit=3)
 
@@ -1876,7 +1858,7 @@ async def test_call_firecrawl_search_accepts_results_shape(monkeypatch):
         ),
     }
     monkeypatch.setenv("FIRECRAWL_API_URL", "https://api.firecrawl.com/v2")
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     results = await server._call_firecrawl_search("test query", limit=3)
 
@@ -1907,7 +1889,7 @@ async def test_call_firecrawl_search_prefers_non_empty_results_when_web_list_is_
             },
         ),
     }
-    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+    patch_async_client(monkeypatch, responses)
 
     results = await server._call_firecrawl_search("test query", limit=3)
 

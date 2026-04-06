@@ -172,6 +172,9 @@ class Config:
         self._save_config_file(config_data)
         self._cached_model = None
 
+    def reset_runtime_state(self) -> None:
+        self._cached_model = None
+
     @staticmethod
     def _mask_api_key(key: str) -> str:
         """脱敏显示 API Key，只显示前后各 4 个字符"""
