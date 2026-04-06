@@ -36,6 +36,13 @@ class FakeAsyncClient:
     async def post(self, url, headers=None, json=None):
         if ("POST", url) in self._exc:
             raise self._exc[("POST", url)]
+        if ("POST", url) not in self._responses and url.endswith("/chat/completions"):
+            response = httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "probe ok"}}]},
+            )
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
         response = self._responses[("POST", url)]
         response.request = httpx.Request("POST", url, headers=headers, json=json)
         return response
@@ -163,6 +170,61 @@ async def test_get_config_info_marks_provider_probe_failures_as_degraded(monkeyp
     assert payload["feature_readiness"]["web_map"]["status"] == "degraded"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
     assert payload["doctor"]["recommendations"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_rejects_tavily_login_html_probe(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            text="<html><body>Please login to continue</body></html>",
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert checks["tavily_extract"]["status"] == "error"
+    assert "登录页" in checks["tavily_extract"]["message"]
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_rejects_malformed_tavily_probe_shape(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"unexpected": []},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"wrong": []},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert checks["tavily_extract"]["status"] == "error"
+    assert "响应结构异常" in checks["tavily_extract"]["message"]
+    assert checks["tavily_map"]["status"] == "error"
+    assert "响应结构异常" in checks["tavily_map"]["message"]
 
 
 @pytest.mark.asyncio

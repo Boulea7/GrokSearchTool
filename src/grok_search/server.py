@@ -226,6 +226,10 @@ def _looks_like_login_page(body_text: str) -> bool:
     return any(token in normalized for token in ("login", "sign in", "signin", "auth"))
 
 
+def _looks_like_html_response(body_text: str) -> bool:
+    return "<html" in ((body_text or "").strip().lower())
+
+
 def _is_probably_truncated_content(content: str, min_length: int = 120) -> bool:
     stripped = (content or "").strip()
     if len(stripped) < min_length:
@@ -1042,10 +1046,38 @@ async def _probe_json_endpoint(
 
         response_time_ms = (time.perf_counter() - start_time) * 1000
         response_text = (response.text or "")[:120]
+        if _looks_like_login_page(response.text or ""):
+            return _build_doctor_check(
+                check_id,
+                "error",
+                "响应看起来是登录页或认证页面。",
+                endpoint=url,
+                response_time_ms=response_time_ms,
+                error_kind="login_page",
+                status_code=response.status_code,
+            )
         try:
             data = response.json()
         except Exception:
-            data = None
+            if _looks_like_html_response(response.text or ""):
+                return _build_doctor_check(
+                    check_id,
+                    "error",
+                    "响应看起来是 HTML 页面，不是合法 JSON。",
+                    endpoint=url,
+                    response_time_ms=response_time_ms,
+                    error_kind="html_response",
+                    status_code=response.status_code,
+                )
+            return _build_doctor_check(
+                check_id,
+                "error",
+                "响应不是合法 JSON。",
+                endpoint=url,
+                response_time_ms=response_time_ms,
+                error_kind="invalid_json",
+                status_code=response.status_code,
+            )
 
         if response.status_code >= 400:
             return _build_doctor_check(
@@ -1091,6 +1123,28 @@ async def _probe_json_endpoint(
             endpoint=url,
             error_kind="unexpected_error",
         )
+
+
+def _validate_tavily_extract_probe_payload(data: object) -> str | None:
+    if not isinstance(data, dict):
+        return "响应结构异常：缺少顶层对象。"
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        return "响应结构异常：缺少 results 列表。"
+
+    return None
+
+
+def _validate_tavily_map_probe_payload(data: object) -> str | None:
+    if not isinstance(data, dict):
+        return "响应结构异常：缺少顶层对象。"
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        return "响应结构异常：缺少 results 列表。"
+
+    return None
 
 
 def _build_connection_test_from_models_check(models_check: dict) -> dict:
@@ -1318,8 +1372,15 @@ async def get_config_info() -> str:
         )
         tavily_extract_data = tavily_extract.pop("data", None)
         if tavily_extract["status"] == "ok":
-            result_count = len((tavily_extract_data or {}).get("results", []) or [])
-            tavily_extract["message"] = f"Tavily extract 探测成功，返回 {result_count} 条结果。"
+            payload_error = _validate_tavily_extract_probe_payload(tavily_extract_data)
+            if payload_error:
+                tavily_extract["status"] = "error"
+                tavily_extract["message"] = payload_error
+                tavily_extract["error_kind"] = "invalid_response_shape"
+                _append_recommendation(recommendations, "检查 Tavily extract 是否返回了登录页、HTML 页面或异常 JSON 结构。")
+            else:
+                result_count = len((tavily_extract_data or {}).get("results", []) or [])
+                tavily_extract["message"] = f"Tavily extract 探测成功，返回 {result_count} 条结果。"
         else:
             _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily extract 端点可达。")
 
@@ -1336,8 +1397,15 @@ async def get_config_info() -> str:
         )
         tavily_map_data = tavily_map.pop("data", None)
         if tavily_map["status"] == "ok":
-            result_count = len((tavily_map_data or {}).get("results", []) or [])
-            tavily_map["message"] = f"Tavily map 探测成功，返回 {result_count} 条结果。"
+            payload_error = _validate_tavily_map_probe_payload(tavily_map_data)
+            if payload_error:
+                tavily_map["status"] = "error"
+                tavily_map["message"] = payload_error
+                tavily_map["error_kind"] = "invalid_response_shape"
+                _append_recommendation(recommendations, "检查 Tavily map 是否返回了异常 JSON 结构。")
+            else:
+                result_count = len((tavily_map_data or {}).get("results", []) or [])
+                tavily_map["message"] = f"Tavily map 探测成功，返回 {result_count} 条结果。"
         else:
             _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily map 端点可达。")
     else:
