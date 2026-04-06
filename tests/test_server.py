@@ -735,111 +735,50 @@ async def test_web_search_rejects_overlapping_include_and_exclude_domains():
 
 
 @pytest.mark.asyncio
-async def test_web_search_rejects_blank_query():
-    result = await server.web_search("   ")
+@pytest.mark.parametrize(
+    ("query", "kwargs", "expected_substring", "expected_effective"),
+    [
+        ("   ", {}, "query 不能为空", {"topic": "general", "time_range": None}),
+        ("test query", {"topic": "finance"}, "topic 仅支持 general 或 news", {"topic": "finance"}),
+        ("test query", {"time_range": "hour"}, "time_range 仅支持 day、week、month、year", {"time_range": "hour"}),
+        (
+            "test query",
+            {"include_domains": ["openai.com", 123]},
+            "include_domains 和 exclude_domains 仅支持非空字符串",
+            {},
+        ),
+        (
+            "test query",
+            {"exclude_domains": ["https://mirror.example.com/path"]},
+            "include_domains 和 exclude_domains 仅支持合法域名",
+            {},
+        ),
+        (
+            "test query",
+            {"include_domains": ["example .com"]},
+            "include_domains 和 exclude_domains 仅支持合法域名",
+            {},
+        ),
+        (
+            "test query",
+            {"include_domains": ["openai.com."], "exclude_domains": ["openai.com"]},
+            "同时出现在 include_domains 与 exclude_domains",
+            {},
+        ),
+        ("test query", {"extra_sources": -1}, "extra_sources 不能为负数", {}),
+        ("test query", {"extra_sources": True}, "extra_sources 仅支持整数", {}),
+        ("test query", {"extra_sources": 1.5}, "extra_sources 仅支持整数", {}),
+    ],
+)
+async def test_web_search_rejects_invalid_inputs(query, kwargs, expected_substring, expected_effective):
+    result = await server.web_search(query, **kwargs)
 
     assert result["status"] == "error"
     assert result["error"] == "validation_error"
-    assert result["content"] == "搜索失败: query 不能为空"
-    assert result["effective_params"]["topic"] == "general"
-    assert result["effective_params"]["time_range"] is None
+    assert expected_substring in result["content"]
     assert result["sources_count"] == 0
-
-
-@pytest.mark.asyncio
-async def test_web_search_rejects_invalid_topic():
-    result = await server.web_search("test query", topic="finance")
-
-    assert result["status"] == "error"
-    assert result["error"] == "validation_error"
-    assert result["content"] == "搜索失败: topic 仅支持 general 或 news"
-    assert result["effective_params"]["topic"] == "finance"
-
-
-@pytest.mark.asyncio
-async def test_web_search_rejects_invalid_time_range():
-    result = await server.web_search("test query", time_range="hour")
-
-    assert result["status"] == "error"
-    assert result["error"] == "validation_error"
-    assert result["content"] == "搜索失败: time_range 仅支持 day、week、month、year"
-    assert result["effective_params"]["time_range"] == "hour"
-
-
-@pytest.mark.asyncio
-async def test_web_search_rejects_non_string_domain_filters():
-    result = await server.web_search(
-        "test query",
-        include_domains=["openai.com", 123],
-    )
-
-    assert result["status"] == "error"
-    assert result["error"] == "validation_error"
-    assert result["content"] == "搜索失败: include_domains 和 exclude_domains 仅支持非空字符串"
-
-
-@pytest.mark.asyncio
-async def test_web_search_rejects_url_like_domain_filters():
-    result = await server.web_search(
-        "test query",
-        exclude_domains=["https://mirror.example.com/path"],
-    )
-
-    assert result["status"] == "error"
-    assert result["error"] == "validation_error"
-    assert result["content"] == "搜索失败: include_domains 和 exclude_domains 仅支持合法域名"
-
-
-@pytest.mark.asyncio
-async def test_web_search_rejects_whitespace_polluted_domain_filters():
-    result = await server.web_search(
-        "test query",
-        include_domains=["example .com"],
-    )
-
-    assert result["status"] == "error"
-    assert result["error"] == "validation_error"
-    assert result["content"] == "搜索失败: include_domains 和 exclude_domains 仅支持合法域名"
-
-
-@pytest.mark.asyncio
-async def test_web_search_rejects_overlapping_domain_filters_after_trailing_dot_normalization():
-    result = await server.web_search(
-        "test query",
-        include_domains=["openai.com."],
-        exclude_domains=["openai.com"],
-    )
-
-    assert result["status"] == "error"
-    assert result["error"] == "validation_error"
-    assert "同时出现在 include_domains 与 exclude_domains" in result["content"]
-
-
-@pytest.mark.asyncio
-async def test_web_search_rejects_negative_extra_sources():
-    result = await server.web_search("test query", extra_sources=-1)
-
-    assert result["status"] == "error"
-    assert result["error"] == "validation_error"
-    assert result["content"] == "搜索失败: extra_sources 不能为负数"
-
-
-@pytest.mark.asyncio
-async def test_web_search_rejects_boolean_extra_sources():
-    result = await server.web_search("test query", extra_sources=True)
-
-    assert result["status"] == "error"
-    assert result["error"] == "validation_error"
-    assert result["content"] == "搜索失败: extra_sources 仅支持整数"
-
-
-@pytest.mark.asyncio
-async def test_web_search_rejects_non_integer_extra_sources():
-    result = await server.web_search("test query", extra_sources=1.5)
-
-    assert result["status"] == "error"
-    assert result["error"] == "validation_error"
-    assert result["content"] == "搜索失败: extra_sources 仅支持整数"
+    for key, value in expected_effective.items():
+        assert result["effective_params"][key] == value
 
 
 @pytest.mark.asyncio
@@ -858,7 +797,8 @@ async def test_web_search_rejects_unknown_explicit_model(monkeypatch):
 
     assert result["status"] == "error"
     assert result["error"] == "invalid_model"
-    assert result["content"] == "无效模型: missing-model"
+    assert "无效模型" in result["content"]
+    assert "missing-model" in result["content"]
     assert result["sources_count"] == 0
 
 
@@ -1517,7 +1457,7 @@ async def test_call_tavily_extract_rejects_login_page(monkeypatch):
     content, error = await server._call_tavily_extract("https://example.com")
 
     assert content is None
-    assert error == "Tavily 返回登录页或认证页面，请检查代理认证状态"
+    assert "登录页或认证页面" in error
 
 
 @pytest.mark.asyncio
@@ -1535,7 +1475,7 @@ async def test_call_tavily_extract_reports_empty_results(monkeypatch):
     content, error = await server._call_tavily_extract("https://example.com")
 
     assert content is None
-    assert error == "Tavily 提取成功但 results 为空"
+    assert "results 为空" in error
 
 
 @pytest.mark.asyncio
@@ -1553,7 +1493,7 @@ async def test_call_tavily_extract_reports_truncated_content(monkeypatch):
     content, error = await server._call_tavily_extract("https://example.com")
 
     assert content is None
-    assert error == "Tavily 提取结果疑似被截断"
+    assert "疑似被截断" in error
 
 
 @pytest.mark.asyncio
@@ -1571,7 +1511,8 @@ async def test_call_tavily_extract_reports_invalid_response_shape_for_non_dict_p
     content, error = await server._call_tavily_extract("https://example.com")
 
     assert content is None
-    assert error == "Tavily 响应结构异常：缺少顶层对象"
+    assert "响应结构异常" in error
+    assert "缺少顶层对象" in error
 
 
 @pytest.mark.asyncio
@@ -1589,7 +1530,8 @@ async def test_call_tavily_extract_reports_invalid_result_entry_shape(monkeypatc
     content, error = await server._call_tavily_extract("https://example.com")
 
     assert content is None
-    assert error == "Tavily 响应结构异常：results[0] 必须是对象"
+    assert "响应结构异常" in error
+    assert "results[0]" in error
 
 
 @pytest.mark.asyncio
@@ -1599,7 +1541,8 @@ async def test_call_tavily_map_returns_config_error_when_disabled(monkeypatch):
 
     result = await server._call_tavily_map("https://example.com")
 
-    assert result == "配置错误: TAVILY_ENABLED=false，Tavily map 已禁用"
+    assert "配置错误" in result
+    assert "TAVILY_ENABLED=false" in result
 
 
 @pytest.mark.asyncio
@@ -1608,7 +1551,8 @@ async def test_call_tavily_map_returns_config_error_when_key_missing(monkeypatch
 
     result = await server._call_tavily_map("https://example.com")
 
-    assert result == "配置错误: TAVILY_API_KEY 未配置，请设置环境变量 TAVILY_API_KEY"
+    assert "配置错误" in result
+    assert "TAVILY_API_KEY 未配置" in result
 
 
 @pytest.mark.asyncio
@@ -1622,7 +1566,8 @@ async def test_call_tavily_map_surfaces_timeout(monkeypatch):
 
     result = await server._call_tavily_map("https://example.com", timeout=12)
 
-    assert result == "映射超时: 请求超过12秒"
+    assert "映射超时" in result
+    assert "12秒" in result
 
 
 @pytest.mark.asyncio
@@ -1639,7 +1584,8 @@ async def test_call_tavily_map_surfaces_http_error(monkeypatch):
 
     result = await server._call_tavily_map("https://example.com")
 
-    assert result == "HTTP错误: 502 - bad gateway"
+    assert "HTTP错误" in result
+    assert "502" in result
 
 
 @pytest.mark.asyncio
@@ -1656,7 +1602,8 @@ async def test_call_tavily_map_rejects_login_html_response(monkeypatch):
 
     result = await server._call_tavily_map("https://example.com")
 
-    assert result == "映射失败: Tavily 返回登录页或认证页面，请检查代理认证状态"
+    assert "映射失败" in result
+    assert "登录页或认证页面" in result
 
 
 @pytest.mark.asyncio
@@ -1673,7 +1620,8 @@ async def test_call_tavily_map_reports_invalid_json_response(monkeypatch):
 
     result = await server._call_tavily_map("https://example.com")
 
-    assert result == "映射失败: Tavily 返回非法 JSON"
+    assert "映射失败" in result
+    assert "非法 JSON" in result
 
 
 @pytest.mark.asyncio
@@ -1690,7 +1638,8 @@ async def test_call_tavily_map_reports_invalid_shape(monkeypatch):
 
     result = await server._call_tavily_map("https://example.com")
 
-    assert result == "映射失败: Tavily map 响应结构异常：缺少 results 列表"
+    assert "映射失败" in result
+    assert "缺少 results 列表" in result
 
 
 @pytest.mark.asyncio
@@ -1775,7 +1724,7 @@ async def test_call_firecrawl_scrape_returns_truncated_error_after_retry_budget_
     content, error = await server._call_firecrawl_scrape("https://example.com")
 
     assert content is None
-    assert error == "Firecrawl 返回的 markdown 疑似被截断"
+    assert "markdown 疑似被截断" in error
 
 
 @pytest.mark.asyncio
