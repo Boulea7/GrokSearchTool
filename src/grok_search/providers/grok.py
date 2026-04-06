@@ -401,48 +401,43 @@ class GrokSearchProvider(BaseSearchProvider):
 
     async def _parse_streaming_response(self, response, ctx=None, *, render_sources: bool = True) -> str:
         content = ""
-        full_body_buffer = []
         empty_placeholder_detected = False
         response_headers = getattr(response, "headers", None)
         collected_sources: list[dict] = []
+        event_data_lines: list[str] = []
+
+        def process_event(event_payload: str) -> None:
+            nonlocal content, empty_placeholder_detected, collected_sources
+            payload = event_payload.strip()
+            if not payload:
+                return
+            if payload == "[DONE]":
+                return
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                return
+
+            chunk, chunk_sources, is_placeholder = self._extract_payload_content_and_sources(data)
+            if is_placeholder:
+                empty_placeholder_detected = True
+                return
+            collected_sources = merge_sources(collected_sources, chunk_sources)
+            if chunk:
+                content += chunk
 
         async for line in response.aiter_lines():
-            line = line.strip()
-            if not line:
+            stripped = line.strip()
+            if not stripped:
+                if event_data_lines:
+                    process_event("\n".join(event_data_lines))
+                    event_data_lines.clear()
                 continue
+            if stripped.startswith("data:"):
+                event_data_lines.append(stripped[5:].lstrip())
 
-            full_body_buffer.append(line)
-
-            # 兼容 "data: {...}" 和 "data:{...}" 两种 SSE 格式
-            if line.startswith("data:"):
-                if line in ("data: [DONE]", "data:[DONE]"):
-                    continue
-                try:
-                    # 去掉 "data:" 前缀，并去除可能的空格
-                    json_str = line[5:].lstrip()
-                    data = json.loads(json_str)
-                    chunk, chunk_sources, is_placeholder = self._extract_payload_content_and_sources(data)
-                    if is_placeholder:
-                        empty_placeholder_detected = True
-                        continue
-                    collected_sources = merge_sources(collected_sources, chunk_sources)
-                    if chunk:
-                        content += chunk
-                except (json.JSONDecodeError, IndexError):
-                    continue
-
-        if not content and full_body_buffer:
-            try:
-                full_text = "".join(full_body_buffer)
-                data = json.loads(full_text)
-                chunk, chunk_sources, is_placeholder = self._extract_payload_content_and_sources(data)
-                if is_placeholder:
-                    empty_placeholder_detected = True
-                collected_sources = merge_sources(collected_sources, chunk_sources)
-                if chunk:
-                    content = chunk
-            except json.JSONDecodeError:
-                pass
+        if event_data_lines:
+            process_event("\n".join(event_data_lines))
 
         if not content and empty_placeholder_detected:
             raise self._build_placeholder_error(response_headers)
