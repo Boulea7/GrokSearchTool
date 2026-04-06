@@ -7,7 +7,7 @@ from typing import List, Optional
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
 from tenacity.wait import wait_base
 from .base import BaseSearchProvider, SearchResult
-from ..sources import merge_sources
+from ..sources import merge_sources, split_answer_and_sources
 from ..utils import search_prompt, fetch_prompt, url_describe_prompt, rank_sources_prompt
 from ..logger import log_info
 from ..config import config
@@ -288,10 +288,14 @@ class GrokSearchProvider(BaseSearchProvider):
 
     def _append_sources_block(self, content: str, sources: list[dict]) -> str:
         if not sources:
-            return content
+            return (content or "").strip()
+
+        existing_content, existing_sources = split_answer_and_sources(content or "")
+        if existing_sources:
+            return (content or "").strip()
 
         lines: list[str] = []
-        body = (content or "").strip()
+        body = existing_content.strip()
         if body:
             lines.append(body)
             lines.append("")
@@ -302,6 +306,32 @@ class GrokSearchProvider(BaseSearchProvider):
             lines.append(f"{index}. [{title}]({source['url']})")
 
         return "\n".join(lines).strip()
+
+    def _extract_payload_content_and_sources(self, data: dict) -> tuple[str, list[dict], bool]:
+        if not isinstance(data, dict):
+            return "", [], False
+
+        if self._is_empty_placeholder_payload(data):
+            return "", [], True
+
+        content = ""
+        choices = data.get("choices", [])
+        if isinstance(choices, list) and choices:
+            content = self._extract_content_from_choice(choices[0])
+
+        if not content:
+            for key in ("output_text", "output"):
+                content = self._flatten_text_content(data.get(key))
+                if content:
+                    break
+
+        return content, self._extract_structured_sources(data), False
+
+    def _finalize_content(self, content: str, sources: list[dict], *, render_sources: bool) -> str:
+        body = (content or "").strip()
+        if not render_sources:
+            return body
+        return self._append_sources_block(body, sources)
 
     def _extract_content_from_choice(self, choice: dict) -> str:
         if not isinstance(choice, dict):
@@ -349,7 +379,7 @@ class GrokSearchProvider(BaseSearchProvider):
             message += f"，request_id={request_id}"
         return ValueError(message)
 
-    async def _parse_streaming_response(self, response, ctx=None) -> str:
+    async def _parse_streaming_response(self, response, ctx=None, *, render_sources: bool = True) -> str:
         content = ""
         full_body_buffer = []
         empty_placeholder_detected = False
@@ -371,15 +401,13 @@ class GrokSearchProvider(BaseSearchProvider):
                     # 去掉 "data:" 前缀，并去除可能的空格
                     json_str = line[5:].lstrip()
                     data = json.loads(json_str)
-                    if self._is_empty_placeholder_payload(data):
+                    chunk, chunk_sources, is_placeholder = self._extract_payload_content_and_sources(data)
+                    if is_placeholder:
                         empty_placeholder_detected = True
                         continue
-                    collected_sources = merge_sources(collected_sources, self._extract_structured_sources(data))
-                    choices = data.get("choices", [])
-                    if isinstance(choices, list) and choices:
-                        chunk = self._extract_content_from_choice(choices[0])
-                        if chunk:
-                            content += chunk
+                    collected_sources = merge_sources(collected_sources, chunk_sources)
+                    if chunk:
+                        content += chunk
                 except (json.JSONDecodeError, IndexError):
                     continue
 
@@ -387,25 +415,25 @@ class GrokSearchProvider(BaseSearchProvider):
             try:
                 full_text = "".join(full_body_buffer)
                 data = json.loads(full_text)
-                if self._is_empty_placeholder_payload(data):
+                chunk, chunk_sources, is_placeholder = self._extract_payload_content_and_sources(data)
+                if is_placeholder:
                     empty_placeholder_detected = True
-                collected_sources = merge_sources(collected_sources, self._extract_structured_sources(data))
-                choices = data.get("choices", [])
-                if isinstance(choices, list) and choices:
-                    content = self._extract_content_from_choice(choices[0])
+                collected_sources = merge_sources(collected_sources, chunk_sources)
+                if chunk:
+                    content = chunk
             except json.JSONDecodeError:
                 pass
 
         if not content and empty_placeholder_detected:
             raise self._build_placeholder_error(response_headers)
 
-        content = self._append_sources_block(content, collected_sources)
+        content = self._finalize_content(content, collected_sources, render_sources=render_sources)
 
         await log_info(ctx, f"content: {content}", config.debug_enabled)
 
         return content
 
-    async def _parse_completion_response(self, response: httpx.Response, ctx=None) -> str:
+    async def _parse_completion_response(self, response: httpx.Response, ctx=None, *, render_sources: bool = True) -> str:
         content = ""
         body_text = response.text or ""
 
@@ -415,17 +443,10 @@ class GrokSearchProvider(BaseSearchProvider):
             data = None
 
         if isinstance(data, dict):
-            if self._is_empty_placeholder_payload(data):
+            content, sources, is_placeholder = self._extract_payload_content_and_sources(data)
+            if is_placeholder:
                 raise self._build_placeholder_error(response.headers)
-            choices = data.get("choices", [])
-            if isinstance(choices, list) and choices:
-                content = self._extract_content_from_choice(choices[0])
-            if not content:
-                for key in ("output_text", "output"):
-                    content = self._flatten_text_content(data.get(key))
-                    if content:
-                        break
-            content = self._append_sources_block(content, self._extract_structured_sources(data))
+            content = self._finalize_content(content, sources, render_sources=render_sources)
 
         if not content and any(line.lstrip().startswith("data:") for line in body_text.splitlines()):
             class _LineResponse:
@@ -437,7 +458,11 @@ class GrokSearchProvider(BaseSearchProvider):
                     for line in self._lines:
                         yield line
 
-            content = await self._parse_streaming_response(_LineResponse(body_text, response.headers), ctx)
+            content = await self._parse_streaming_response(
+                _LineResponse(body_text, response.headers),
+                ctx,
+                render_sources=render_sources,
+            )
 
         if not content and body_text.strip():
             normalized = body_text.lower()
@@ -449,7 +474,7 @@ class GrokSearchProvider(BaseSearchProvider):
 
         return content
 
-    async def _execute_stream_with_retry(self, headers: dict, payload: dict, ctx=None) -> str:
+    async def _execute_stream_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
         """执行带重试机制的流式 HTTP 请求"""
         timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
 
@@ -468,9 +493,9 @@ class GrokSearchProvider(BaseSearchProvider):
                         json=payload,
                     ) as response:
                         response.raise_for_status()
-                        return await self._parse_streaming_response(response, ctx)
+                        return await self._parse_streaming_response(response, ctx, render_sources=render_sources)
 
-    async def _execute_completion_with_retry(self, headers: dict, payload: dict, ctx=None) -> str:
+    async def _execute_completion_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
         """执行带重试机制的非流式 HTTP 请求，兼容 JSON completion 与 SSE 文本响应。"""
         timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
 
@@ -488,7 +513,7 @@ class GrokSearchProvider(BaseSearchProvider):
                         json=payload,
                     )
                     response.raise_for_status()
-                    return await self._parse_completion_response(response, ctx)
+                    return await self._parse_completion_response(response, ctx, render_sources=render_sources)
 
     async def describe_url(self, url: str, ctx=None) -> dict:
         """让 Grok 阅读单个 URL 并返回 title + extracts"""
@@ -501,7 +526,7 @@ class GrokSearchProvider(BaseSearchProvider):
             ],
             "stream": False,
         }
-        result = await self._execute_completion_with_retry(headers, payload, ctx)
+        result = await self._execute_completion_with_retry(headers, payload, ctx, render_sources=False)
         title, extracts = url, ""
         for line in result.strip().splitlines():
             if line.startswith("Title:"):
@@ -521,7 +546,7 @@ class GrokSearchProvider(BaseSearchProvider):
             ],
             "stream": False,
         }
-        result = await self._execute_completion_with_retry(headers, payload, ctx)
+        result = await self._execute_completion_with_retry(headers, payload, ctx, render_sources=False)
         order: list[int] = []
         seen: set[int] = set()
         for token in result.strip().split():

@@ -486,6 +486,40 @@ async def test_parse_completion_response_falls_back_to_sse_text_and_sources():
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_reads_sse_top_level_output_text():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text=(
+            'data: {"output_text":"hello"}\n\n'
+            'data: {"output_text":" world"}\n\n'
+            'data: [DONE]\n'
+        ),
+        json_error=ValueError("not json"),
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_response_reads_sse_top_level_output_variant():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text=(
+            'data: {"output":{"type":"output_text","text":"hello"}}\n\n'
+            'data: {"output":{"type":"output_text","text":" world"}}\n\n'
+            'data: [DONE]\n'
+        ),
+        json_error=ValueError("not json"),
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result == "hello world"
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_raises_on_empty_placeholder_sse():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(
@@ -522,6 +556,77 @@ async def test_parse_completion_response_raises_on_login_html():
 
     with pytest.raises(ValueError, match="登录页面"):
         await provider._parse_completion_response(response)
+
+
+@pytest.mark.asyncio
+async def test_parse_streaming_response_does_not_duplicate_existing_sources_heading():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    class LineResponse:
+        def __init__(self, text: str):
+            self._lines = text.splitlines()
+            self.headers = {}
+
+        async def aiter_lines(self):
+            for line in self._lines:
+                yield line
+
+    response = LineResponse(
+        'data: {"choices":[{"delta":{"content":"hello world\\n\\n## Sources\\n1. [Docs](https://docs.example.com/already)"}}],"citations":[{"title":"Docs","url":"https://docs.example.com/already"}]}\n\n'
+        'data: [DONE]\n'
+    )
+
+    result = await provider._parse_streaming_response(response)
+
+    assert result.count("## Sources") == 1
+    assert result.count("https://docs.example.com/already") == 1
+
+
+@pytest.mark.asyncio
+async def test_describe_url_ignores_appended_sources_block(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    async def fake_execute(headers, payload, ctx, render_sources=True):
+        assert render_sources is False
+        return (
+            "Title: Example Page\n"
+            "Extracts: \"Primary fragment\" | \"Second fragment\"\n\n"
+            "## Sources\n"
+            "1. [Docs](https://docs.example.com/page)"
+        )
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    result = await provider.describe_url("https://example.com/page")
+
+    assert result == {
+        "title": "Example Page",
+        "extracts": '"Primary fragment" | "Second fragment"',
+        "url": "https://example.com/page",
+    }
+
+
+@pytest.mark.asyncio
+async def test_rank_sources_ignores_appended_sources_block(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    async def fake_execute(headers, payload, ctx, render_sources=True):
+        assert render_sources is False
+        return "2 1 3\n\n## Sources\n1. [Docs](https://docs.example.com/page)"
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    result = await provider.rank_sources("test query", "1. a\n2. b\n3. c", total=3)
+
+    assert result == [2, 1, 3]
+
+
+def test_build_placeholder_error_includes_request_id():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    error = provider._build_placeholder_error({"x-request-id": "req-123"})
+
+    assert "req-123" in str(error)
 
 
 def test_wait_with_retry_after_parses_seconds_header():
