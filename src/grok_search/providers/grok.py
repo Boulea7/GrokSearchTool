@@ -7,7 +7,7 @@ from typing import List, Optional
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
 from tenacity.wait import wait_base
 from .base import BaseSearchProvider, SearchResult
-from ..sources import merge_sources, split_answer_and_sources
+from ..sources import merge_sources, sanitize_answer_text, split_answer_and_sources
 from ..utils import search_prompt, fetch_prompt, url_describe_prompt, rank_sources_prompt
 from ..logger import log_info
 from ..config import config
@@ -69,6 +69,18 @@ def _needs_time_context(query: str) -> bool:
     return False
 
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+_IGNORED_CONTENT_BLOCK_TYPES = {
+    "reasoning",
+    "thinking",
+    "analysis",
+    "thought",
+    "tool_call",
+    "tool",
+    "function_call",
+    "function",
+    "metadata",
+    "usage",
+}
 
 
 def _is_retryable_exception(exc) -> bool:
@@ -186,7 +198,7 @@ class GrokSearchProvider(BaseSearchProvider):
 
         if isinstance(value, dict):
             block_type = str(value.get("type", "")).strip().lower()
-            if block_type in {"reasoning", "thinking", "analysis", "thought"}:
+            if block_type in _IGNORED_CONTENT_BLOCK_TYPES:
                 return ""
             for key in ("text", "content", "value", "output_text"):
                 nested = self._flatten_text_content(value.get(key))
@@ -260,7 +272,7 @@ class GrokSearchProvider(BaseSearchProvider):
         def collect_nested(value):
             if isinstance(value, dict):
                 block_type = str(value.get("type", "")).strip().lower()
-                if block_type in {"reasoning", "thinking", "analysis", "thought"}:
+                if block_type in _IGNORED_CONTENT_BLOCK_TYPES:
                     return
                 collect_from_mapping(value)
                 for nested in value.values():
@@ -306,6 +318,11 @@ class GrokSearchProvider(BaseSearchProvider):
             lines.append(f"{index}. [{title}]({source['url']})")
 
         return "\n".join(lines).strip()
+
+    def _normalize_internal_text(self, content: str) -> str:
+        answer, _ = split_answer_and_sources(content or "")
+        cleaned = sanitize_answer_text(answer)
+        return (cleaned or answer or "").strip()
 
     def _extract_payload_content_and_sources(self, data: dict) -> tuple[str, list[dict], bool]:
         if not isinstance(data, dict):
@@ -526,13 +543,29 @@ class GrokSearchProvider(BaseSearchProvider):
             ],
             "stream": False,
         }
-        result = await self._execute_completion_with_retry(headers, payload, ctx, render_sources=False)
+        result = self._normalize_internal_text(
+            await self._execute_completion_with_retry(headers, payload, ctx, render_sources=False)
+        )
         title, extracts = url, ""
+        extract_lines: list[str] = []
+        reading_extracts = False
         for line in result.strip().splitlines():
-            if line.startswith("Title:"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("Title:"):
                 title = line[6:].strip() or url
-            elif line.startswith("Extracts:"):
-                extracts = line[9:].strip()
+                reading_extracts = False
+            elif stripped.startswith("Extracts:"):
+                extract_lines = []
+                first_line = line[9:].strip()
+                if first_line:
+                    extract_lines.append(first_line)
+                reading_extracts = True
+            elif reading_extracts:
+                extract_lines.append(stripped)
+        if extract_lines:
+            extracts = " ".join(extract_lines).strip()
         return {"title": title, "extracts": extracts, "url": url}
 
     async def rank_sources(self, query: str, sources_text: str, total: int, ctx=None) -> list[int]:
@@ -546,10 +579,12 @@ class GrokSearchProvider(BaseSearchProvider):
             ],
             "stream": False,
         }
-        result = await self._execute_completion_with_retry(headers, payload, ctx, render_sources=False)
+        result = self._normalize_internal_text(
+            await self._execute_completion_with_retry(headers, payload, ctx, render_sources=False)
+        )
         order: list[int] = []
         seen: set[int] = set()
-        for token in result.strip().split():
+        for token in re.findall(r"\b\d+\b", result):
             try:
                 n = int(token)
                 if 1 <= n <= total and n not in seen:
