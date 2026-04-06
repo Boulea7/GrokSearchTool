@@ -89,6 +89,7 @@ args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-se
 GROK_API_URL = "https://your-api-endpoint.com/v1"
 GROK_API_KEY = "your-grok-api-key"
 TAVILY_API_KEY = "tvly-your-tavily-key"
+TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
@@ -104,6 +105,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
     "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }
@@ -133,8 +135,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 補充：
 
+- 模型解析優先級為 `GROK_MODEL` 環境變數 > `~/.config/grok-search/config.json` 持久化值 > 程式預設值 `grok-4.1-fast`；若使用 OpenRouter 相容位址，執行期會自動補上 `:online` 後綴。
 - `switch_model` 只會更新 `~/.config/grok-search/config.json` 的持久化層；若同時設了 `GROK_MODEL`，仍以環境變數為準。
 - `GROK_TIME_CONTEXT_MODE` 預設為 `always`，保持目前一律注入本地時間上下文的行為。
+- 如需節省上下文，可將 `GROK_TIME_CONTEXT_MODE` 設為 `auto`（僅在明顯時效查詢或顯式時效控制下注入）或 `never`。
 
 說明：
 

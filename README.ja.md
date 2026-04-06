@@ -75,6 +75,7 @@ args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-se
 GROK_API_URL = "https://your-api-endpoint.com/v1"
 GROK_API_KEY = "your-grok-api-key"
 TAVILY_API_KEY = "tvly-your-tavily-key"
+TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
@@ -109,6 +110,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `TAVILY_ENABLED` | No | Tavily ルートを有効化するか |
 | `FIRECRAWL_API_KEY` | No | Firecrawl fallback Key |
 | `FIRECRAWL_API_URL` | No | Firecrawl API エンドポイント |
+| `GROK_DEBUG` | No | デバッグログを有効化するか |
+| `GROK_LOG_LEVEL` | No | ログレベル |
 | `GROK_LOG_DIR` | No | ログディレクトリ。`get_config_info` は解決後の実行時パスを返す |
 | `GROK_OUTPUT_CLEANUP` | No | `web_search` 出力クリーンアップを有効化するか |
 | `GROK_FILTER_THINK_TAGS` | No | `GROK_OUTPUT_CLEANUP` の旧エイリアス |
@@ -118,8 +121,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 補足:
 
+- モデル解決順は `GROK_MODEL` 環境変数 → `~/.config/grok-search/config.json` の永続値 → コード既定値 `grok-4.1-fast` です。OpenRouter 互換 URL を使う場合、必要に応じて `:online` が自動付与されます。
 - `switch_model` は `~/.config/grok-search/config.json` の永続値のみを更新します。`GROK_MODEL` が設定されている場合は env が優先されます。
 - `GROK_TIME_CONTEXT_MODE` の既定値は `always` で、現在の「常にローカル時間を注入する」動作を維持します。
+- コンテキストを節約したい場合は、`GROK_TIME_CONTEXT_MODE` を `auto`（明確に時系列依存の問い合わせ時のみ注入）または `never` に変更できます。
 
 補足:
 

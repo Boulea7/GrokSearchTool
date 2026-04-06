@@ -30,7 +30,7 @@ Claude ──MCP──► Grok Search Server
 
 - **双引擎**：Grok 搜索 + Tavily 抓取/映射，互补协作
 - **Firecrawl 托底**：Tavily 提取失败时自动降级到 Firecrawl Scrape，支持空内容自动重试
-- **OpenAI 兼容接口**，支持任意 Grok 镜像站
+- **OpenAI 兼容接口**，支持大多数 Grok-compatible 中转与镜像站（具体兼容性仍取决于 `/models` 与 `/chat/completions` 实现）
 - **自动时间注入**（默认注入本地时间上下文）
 - **推荐核心路径**：默认先 `plan_*` 再 `web_search`；对明确单跳查询仍允许直接 `web_search`
 - 一键禁用 Claude Code 官方 WebSearch/WebFetch，强制路由到本工具
@@ -124,6 +124,7 @@ args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-se
 GROK_API_URL = "https://your-api-endpoint.com/v1"
 GROK_API_KEY = "your-grok-api-key"
 TAVILY_API_KEY = "tvly-your-tavily-key"
+TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
@@ -141,6 +142,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
     "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }

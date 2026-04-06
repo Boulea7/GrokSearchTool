@@ -75,6 +75,7 @@ args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-se
 GROK_API_URL = "https://your-api-endpoint.com/v1"
 GROK_API_KEY = "your-grok-api-key"
 TAVILY_API_KEY = "tvly-your-tavily-key"
+TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
@@ -90,6 +91,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
     "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }
@@ -108,6 +110,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `TAVILY_ENABLED` | Нет | Включать ли Tavily-пути |
 | `FIRECRAWL_API_KEY` | Нет | Firecrawl fallback key |
 | `FIRECRAWL_API_URL` | Нет | Firecrawl API endpoint |
+| `GROK_DEBUG` | Нет | Включить debug-логи |
+| `GROK_LOG_LEVEL` | Нет | Уровень логирования |
 | `GROK_LOG_DIR` | Нет | Каталог логов; `get_config_info` возвращает уже разрешённый runtime path |
 | `GROK_OUTPUT_CLEANUP` | Нет | Включать ли очистку вывода `web_search` |
 | `GROK_FILTER_THINK_TAGS` | Нет | Старый алиас для `GROK_OUTPUT_CLEANUP` |
@@ -117,8 +121,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 Примечания:
 
+- Порядок разрешения модели: переменная окружения `GROK_MODEL` → сохранённое значение в `~/.config/grok-search/config.json` → кодовый default `grok-4.1-fast`. Для OpenRouter-совместимых URL при необходимости автоматически добавляется суффикс `:online`.
 - `switch_model` обновляет только сохранённое значение в `~/.config/grok-search/config.json`; если задан `GROK_MODEL`, приоритет остаётся у env.
 - `GROK_TIME_CONTEXT_MODE` по умолчанию равен `always`, то есть текущее поведение с постоянной инъекцией локального времени сохраняется.
+- Если нужно экономить контекст, можно переключить `GROK_TIME_CONTEXT_MODE` в `auto` (инъекция только для явно временных запросов) или `never`.
 
 Примечания:
 

@@ -93,6 +93,8 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`
 - `get_sources` 当前会统一返回标准化 metadata，并按 `score`、来源身份清晰度与稳定去重后的顺序生成 `rank`
 - `Config.get_config_info()` 只返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并新增 `connection_test`、`doctor`、`feature_readiness` 与最小真实探针结果
+- `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
+- `feature_readiness.web_fetch` 当前会附带 provider 级细节，并在 `verified_path` 中标注真实抓取探针实际打通的后端
 - `web_fetch` 目前优先使用 Tavily extract，失败时回退到 Firecrawl scrape
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性
 - 若本地 `stdio` 安装/启动在企业或自签证书环境中失败，优先在 `uvx` 启动命令中增加 `--native-tls`，不要草率记录成关闭 TLS 校验
