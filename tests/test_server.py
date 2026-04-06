@@ -540,6 +540,24 @@ def test_httpx_client_kwargs_disable_env_proxies_for_loopback_only():
     assert "trust_env" not in remote
 
 
+def test_mask_sensitive_text_redacts_bearer_and_query_tokens(monkeypatch):
+    monkeypatch.setenv("GROK_API_KEY", "sk-secret-value")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-secret-value")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-secret-value")
+    server.config.reset_runtime_state()
+
+    masked = server._mask_sensitive_text(
+        "Bearer sk-secret-value https://example.com?token=abc123&sig=zzz tvly-secret-value fc-secret-value"
+    )
+
+    assert "sk-secret-value" not in masked
+    assert "tvly-secret-value" not in masked
+    assert "fc-secret-value" not in masked
+    assert "Bearer ***" in masked
+    assert "token=***" in masked
+    assert "sig=***" in masked
+
+
 @pytest.mark.asyncio
 async def test_probe_web_fetch_uses_single_firecrawl_attempt_in_doctor_mode(monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)

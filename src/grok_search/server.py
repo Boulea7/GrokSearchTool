@@ -165,6 +165,32 @@ def _extract_request_id(headers) -> str:
     ).strip()
 
 
+def _mask_sensitive_text(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+
+    try:
+        configured_grok_key = config.grok_api_key
+    except ValueError:
+        configured_grok_key = None
+
+    for configured in (configured_grok_key, config.tavily_api_key, config.firecrawl_api_key):
+        if configured:
+            text = text.replace(configured, "***")
+
+    patterns = [
+        (r"Bearer\s+[A-Za-z0-9._\-]+", "Bearer ***"),
+        (r"\bsk-[A-Za-z0-9_\-]+\b", "sk-***"),
+        (r"\bfc-[A-Za-z0-9_\-]+\b", "fc-***"),
+        (r"\btvly-[A-Za-z0-9_\-]+\b", "tvly-***"),
+        (r"([?&](?:api[_-]?key|token|signature|sig)=)[^&\s]+", r"\1***"),
+    ]
+    for pattern, replacement in patterns:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
 def _extract_error_summary(response) -> str:
     if response is None:
         return ""
@@ -179,7 +205,7 @@ def _extract_error_summary(response) -> str:
         if isinstance(error, dict):
             message = (error.get("message") or "").strip()
             if message:
-                return message
+                return _mask_sensitive_text(message)
 
     body_text = (getattr(response, "text", "") or "").strip()
     if not body_text:
@@ -192,6 +218,7 @@ def _extract_error_summary(response) -> str:
         return "login_page"
 
     snippet = body_text[:180].replace("\n", " ").strip()
+    snippet = _mask_sensitive_text(snippet)
     return snippet
 
 
@@ -203,7 +230,7 @@ def _format_grok_error(exc: Exception) -> str:
 
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
-        location = exc.response.headers.get("location", "").strip()
+        location = _mask_sensitive_text(exc.response.headers.get("location", "").strip())
         request_id = _extract_request_id(exc.response.headers)
         summary = _extract_error_summary(exc.response)
         if status_code in {301, 302, 303, 307, 308} and location:
@@ -216,7 +243,7 @@ def _format_grok_error(exc: Exception) -> str:
             message += f"，request_id={request_id}"
         return message
 
-    message = str(exc).strip()
+    message = _mask_sensitive_text(str(exc).strip())
     if message:
         return f"搜索失败: {message}"
     return "搜索失败: 上游请求异常"
@@ -267,7 +294,7 @@ def _format_fetch_error(provider: str, exc: Exception) -> str:
 
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
-        location = exc.response.headers.get("location", "").strip()
+        location = _mask_sensitive_text(exc.response.headers.get("location", "").strip())
         request_id = _extract_request_id(exc.response.headers)
         summary = _extract_error_summary(exc.response)
         if status_code in {301, 302, 303, 307, 308} and location:
@@ -282,7 +309,7 @@ def _format_fetch_error(provider: str, exc: Exception) -> str:
             message += f"，request_id={request_id}"
         return message
 
-    message = str(exc).strip()
+    message = _mask_sensitive_text(str(exc).strip())
     if message:
         return f"{provider} 请求失败: {message}"
     return f"{provider} 请求失败"
