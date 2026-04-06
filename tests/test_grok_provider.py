@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 
 from grok_search.providers.grok import GrokSearchProvider, _WaitWithRetryAfter
@@ -123,6 +124,40 @@ async def test_search_never_mode_skips_time_context_even_for_temporal_query(monk
     await provider.search("What changed this week in FastAPI?")
 
     assert "[Current Time Context]" not in captured["payload"]["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_execute_completion_disables_env_proxies_for_loopback_api_url(monkeypatch):
+    provider = GrokSearchProvider("http://127.0.0.2:18080", "test-key", "test-model")
+    captured = {}
+
+    class StubAsyncClient:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            response = httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "ok"}}]},
+            )
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", StubAsyncClient)
+
+    result = await provider._execute_completion_with_retry(
+        provider._build_api_headers(),
+        {"model": "test-model", "messages": [], "stream": False},
+    )
+
+    assert result == "ok"
+    assert captured["kwargs"]["trust_env"] is False
 
 
 @pytest.mark.asyncio
