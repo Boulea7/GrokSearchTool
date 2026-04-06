@@ -2570,12 +2570,15 @@ def main():
 
         threading.Thread(target=monitor_parent, daemon=True).start()
 
+    exit_code = 0
     try:
         mcp.run(transport="stdio", show_banner=False)
     except KeyboardInterrupt:
         pass
+    except Exception:
+        exit_code = 1
     finally:
-        os._exit(0)
+        os._exit(exit_code)
 
 
 if __name__ == "__main__":
