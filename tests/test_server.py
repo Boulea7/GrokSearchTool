@@ -677,6 +677,51 @@ async def test_get_config_info_marks_web_fetch_as_degraded_when_only_firecrawl_p
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_marks_web_fetch_as_degraded_when_real_probe_fails_after_provider_checks_pass(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "ok"}},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    async def fake_probe_web_fetch():
+        return server._build_doctor_check(
+            "web_fetch_probe",
+            "error",
+            "真实抓取探针失败: Firecrawl: Firecrawl 请求超时",
+            error_kind="probe_failed",
+        )
+
+    monkeypatch.setattr(server, "_probe_web_fetch", fake_probe_web_fetch)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert checks["tavily_extract"]["status"] == "ok"
+    assert checks["firecrawl_scrape"]["status"] == "ok"
+    assert checks["web_fetch_probe"]["status"] == "error"
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
+    assert "真实抓取探针失败" in payload["feature_readiness"]["web_fetch"]["message"]
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["verified_path"] is None
+
+
+@pytest.mark.asyncio
 async def test_web_search_returns_structured_status_fields_for_legacy_call(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
