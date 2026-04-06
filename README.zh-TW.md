@@ -74,7 +74,56 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
-如需使用系統憑證庫，請在 `uvx` 參數中加入 `--native-tls`。
+如需使用系統憑證庫，請在 `uvx` 參數中加入 `--native-tls`。這是 `uvx` 啟動/安裝層的 TLS 排障選項，適合企業代理或自簽憑證鏈；不應將它理解成通用的關閉驗證替代方案。
+
+### 其他 `stdio` 客戶端最小設定
+
+#### Codex CLI / Codex 風格 MCP 客戶端
+
+```toml
+[mcp_servers.grok-search]
+command = "uvx"
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+
+[mcp_servers.grok-search.env]
+GROK_API_URL = "https://your-api-endpoint.com/v1"
+GROK_API_KEY = "your-grok-api-key"
+TAVILY_API_KEY = "tvly-your-tavily-key"
+FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
+```
+
+#### Cherry Studio
+
+```json
+{
+  "name": "grok-search",
+  "type": "stdio",
+  "command": "uvx",
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "env": {
+    "GROK_API_URL": "https://your-api-endpoint.com/v1",
+    "GROK_API_KEY": "your-grok-api-key",
+    "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
+  }
+}
+```
+
+### 核心環境變數
+
+| 變數 | 必填 | 說明 |
+| --- | --- | --- |
+| `GROK_API_URL` | 是 | OpenAI 相容 Grok 端點，建議顯式包含 `/v1` |
+| `GROK_API_KEY` | 是 | Grok API Key |
+| `GROK_MODEL` | 否 | 預設模型；優先級為 env > 持久化 config > 程式預設 |
+| `GROK_TIME_CONTEXT_MODE` | 否 | 時間上下文注入模式：`always` / `auto` / `never` |
+| `TAVILY_API_KEY` | 否 | `web_fetch` / `web_map` 用的 Tavily Key |
+| `FIRECRAWL_API_KEY` | 否 | Firecrawl fallback Key |
+
+補充：
+
+- `switch_model` 只會更新 `~/.config/grok-search/config.json` 的持久化層；若同時設了 `GROK_MODEL`，仍以環境變數為準。
+- `GROK_TIME_CONTEXT_MODE` 預設為 `always`，保持目前一律注入本地時間上下文的行為。
 
 說明：
 
@@ -82,8 +131,17 @@ claude mcp add-json grok-search --scope user '{
 - 互動式 `deep research` 體驗將優先放在 CLI，而不是 MCP / skill 的對話式互動。
 - `web_fetch` 在只配置 Firecrawl 時仍可使用。
 - `web_map` 需要 Tavily，且 `TAVILY_ENABLED=true`。
-- `web_search` 會注入本地時間上下文。
+- `web_search` 會依 `GROK_TIME_CONTEXT_MODE` 決定是否注入本地時間上下文（預設 `always`）。
 - `get_config_info` 會保留基礎設定快照與 `connection_test`，並由 server 層補充輕量 `doctor`、`feature_readiness` 與最小真實 `search/fetch` 探針；但仍不是完整的端到端保證。
+
+### 最小 smoke check
+
+對任何本地 `stdio` host，建議至少做以下驗證：
+
+1. 先呼叫 `get_config_info`
+2. 再執行一次 `web_search`
+3. 若需要核對來源，再呼叫 `get_sources`
+4. 僅在已配置 Tavily / Firecrawl 時，再額外驗證 `web_fetch` / `web_map`
 
 ## Companion Skill
 

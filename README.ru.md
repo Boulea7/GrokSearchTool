@@ -60,7 +60,56 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
-Если окружение требует системное хранилище сертификатов, добавьте `--native-tls` к аргументам `uvx`.
+Если окружение требует системное хранилище сертификатов, добавьте `--native-tls` к аргументам `uvx`. Это TLS-обход на уровне запуска/установки для корпоративных прокси и self-signed цепочек, а не универсальная замена отключению проверки сертификатов во время выполнения.
+
+### Минимальные `stdio`-примеры для других хостов
+
+#### Codex CLI / клиенты в стиле Codex
+
+```toml
+[mcp_servers.grok-search]
+command = "uvx"
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+
+[mcp_servers.grok-search.env]
+GROK_API_URL = "https://your-api-endpoint.com/v1"
+GROK_API_KEY = "your-grok-api-key"
+TAVILY_API_KEY = "tvly-your-tavily-key"
+FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
+```
+
+#### Cherry Studio
+
+```json
+{
+  "name": "grok-search",
+  "type": "stdio",
+  "command": "uvx",
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "env": {
+    "GROK_API_URL": "https://your-api-endpoint.com/v1",
+    "GROK_API_KEY": "your-grok-api-key",
+    "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
+  }
+}
+```
+
+### Основные переменные окружения
+
+| Переменная | Обязательна | Описание |
+| --- | --- | --- |
+| `GROK_API_URL` | Да | OpenAI-совместимый Grok endpoint, желательно с явным `/v1` |
+| `GROK_API_KEY` | Да | Grok API key |
+| `GROK_MODEL` | Нет | Модель по умолчанию; приоритет: env > persisted config > кодовый default |
+| `GROK_TIME_CONTEXT_MODE` | Нет | Режим внедрения временного контекста: `always` / `auto` / `never` |
+| `TAVILY_API_KEY` | Нет | Tavily key для `web_fetch` / `web_map` |
+| `FIRECRAWL_API_KEY` | Нет | Firecrawl fallback key |
+
+Примечания:
+
+- `switch_model` обновляет только сохранённое значение в `~/.config/grok-search/config.json`; если задан `GROK_MODEL`, приоритет остаётся у env.
+- `GROK_TIME_CONTEXT_MODE` по умолчанию равен `always`, то есть текущее поведение с постоянной инъекцией локального времени сохраняется.
 
 Примечания:
 
@@ -68,8 +117,17 @@ claude mcp add-json grok-search --scope user '{
 - Интерактивный опыт `deep research` планируется прежде всего для CLI, а не для диалоговых MCP / skill-интеграций.
 - `web_fetch` работает и только с Firecrawl.
 - `web_map` требует Tavily и `TAVILY_ENABLED=true`.
-- `web_search` всегда добавляет локальный временной контекст.
+- `web_search` добавляет локальный временной контекст в соответствии с `GROK_TIME_CONTEXT_MODE` (по умолчанию `always`).
 - `get_config_info` сохраняет базовый снимок конфигурации и `connection_test`, а сервер дополнительно добавляет лёгкие представления `doctor`, `feature_readiness` и минимальные реальные `search/fetch` пробы; это всё ещё не полная end-to-end гарантия.
+
+### Минимальный smoke check
+
+Для любого локально настроенного `stdio`-хоста рекомендуется минимум такой порядок проверки:
+
+1. вызвать `get_config_info`
+2. выполнить один `web_search`
+3. вызвать `get_sources`, если важна проверка источников
+4. проверять `web_fetch` / `web_map` только когда Tavily или Firecrawl уже настроены
 
 ## Companion Skill
 

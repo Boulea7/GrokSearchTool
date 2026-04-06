@@ -60,7 +60,56 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
-システム証明書ストアが必要な環境では、`uvx` に `--native-tls` を追加してください。
+システム証明書ストアが必要な環境では、`uvx` に `--native-tls` を追加してください。これは企業プロキシや自己署名証明書チェーン向けの起動/インストール層 TLS 回避策であり、一般的な実行時 `verify=false` の代替ではありません。
+
+### 他の `stdio` ホスト向け最小設定
+
+#### Codex CLI / Codex-style clients
+
+```toml
+[mcp_servers.grok-search]
+command = "uvx"
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+
+[mcp_servers.grok-search.env]
+GROK_API_URL = "https://your-api-endpoint.com/v1"
+GROK_API_KEY = "your-grok-api-key"
+TAVILY_API_KEY = "tvly-your-tavily-key"
+FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
+```
+
+#### Cherry Studio
+
+```json
+{
+  "name": "grok-search",
+  "type": "stdio",
+  "command": "uvx",
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "env": {
+    "GROK_API_URL": "https://your-api-endpoint.com/v1",
+    "GROK_API_KEY": "your-grok-api-key",
+    "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
+  }
+}
+```
+
+### 主要な環境変数
+
+| 変数 | 必須 | 説明 |
+| --- | --- | --- |
+| `GROK_API_URL` | Yes | OpenAI 互換 Grok エンドポイント。`/v1` を明示推奨 |
+| `GROK_API_KEY` | Yes | Grok API Key |
+| `GROK_MODEL` | No | デフォルトモデル。優先順位は env > 永続 config > コード既定値 |
+| `GROK_TIME_CONTEXT_MODE` | No | 時間コンテキスト注入モード：`always` / `auto` / `never` |
+| `TAVILY_API_KEY` | No | `web_fetch` / `web_map` 用 Tavily Key |
+| `FIRECRAWL_API_KEY` | No | Firecrawl fallback Key |
+
+補足:
+
+- `switch_model` は `~/.config/grok-search/config.json` の永続値のみを更新します。`GROK_MODEL` が設定されている場合は env が優先されます。
+- `GROK_TIME_CONTEXT_MODE` の既定値は `always` で、現在の「常にローカル時間を注入する」動作を維持します。
 
 補足:
 
@@ -68,8 +117,17 @@ claude mcp add-json grok-search --scope user '{
 - インタラクティブな `deep research` 体験は、MCP / skill ではなく CLI を優先して提供する予定です。
 - `web_fetch` は Firecrawl のみでも動作します。
 - `web_map` には Tavily と `TAVILY_ENABLED=true` が必要です。
-- `web_search` はローカル時間コンテキストを常に注入します。
+- `web_search` は `GROK_TIME_CONTEXT_MODE` に従ってローカル時間コンテキストを注入します（既定値は `always`）。
 - `get_config_info` はベース設定スナップショットと `connection_test` を維持しつつ、server 側で軽量な `doctor`、`feature_readiness`、最小の実検索/実取得プローブを追加します。ただし、完全なエンドツーエンド保証ではありません。
+
+### 最小 smoke check
+
+任意のローカル `stdio` ホストでは、少なくとも次の順で確認してください。
+
+1. `get_config_info` を呼ぶ
+2. `web_search` を 1 回実行する
+3. ソース確認が必要なら `get_sources` を呼ぶ
+4. Tavily / Firecrawl を設定している場合のみ `web_fetch` / `web_map` を検証する
 
 ## Companion Skill
 

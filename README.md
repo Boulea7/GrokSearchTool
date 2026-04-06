@@ -155,7 +155,7 @@ certificate verify failed
 self signed certificate in certificate chain
 ```
 
-可以在 uvx 参数中添加 --native-tls，使其使用系统证书库：
+可以在 `uvx` 参数中添加 `--native-tls`，让安装/启动过程使用系统证书库。它适合处理企业代理、自签证书或系统证书链问题，不应被理解为通用的运行时 `verify=false` 替代方案：
 
 ```bash
 claude mcp add-json grok-search --scope user '{
@@ -185,6 +185,7 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式） |
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
 | `GROK_MODEL` | 否 | `grok-4.1-fast` | 默认模型（设置后优先于 `~/.config/grok-search/config.json`） |
+| `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 web_fetch / web_map） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
 | `TAVILY_ENABLED` | 否 | `true` | 是否启用 Tavily |
@@ -202,7 +203,9 @@ claude mcp add-json grok-search --scope user '{
 | `PYTHONUNBUFFERED` | 否 | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
 | `PYTHONUTF8` | 否 | `1` | 强制 Python UTF-8 模式 |
 
-> 当前代码默认值是 `grok-4.1-fast`。如需切换到其他模型，请优先确认对应中转站的兼容质量。
+> 模型解析优先级为：`GROK_MODEL` 环境变量 > `~/.config/grok-search/config.json` 中由 `switch_model` 持久化的值 > 代码默认值 `grok-4.1-fast`。如使用 OpenRouter 兼容地址，运行时还会自动补齐 `:online` 后缀。
+
+> `GROK_TIME_CONTEXT_MODE` 默认是 `always`，保持当前“全量注入本地时间上下文”的行为；如需节省上下文，可改为 `auto` 或 `never`。
 
 ### 本地优先启动建议
 
@@ -216,6 +219,7 @@ uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
 
 - `GROK_API_URL` 尽量写成 OpenAI 兼容根路径并显式带上 `/v1`
 - `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
+- 如需更省上下文，可将 `GROK_TIME_CONTEXT_MODE` 设为 `auto`（只在明显时效查询或显式时效控制下注入）或 `never`
 - 若 `content` 为空，先检查中转站是否真的返回了正文；若 `sources_count=0`，再检查是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
 
 
@@ -266,7 +270,7 @@ claude mcp list
 | `include_domains` | string[] | 否 | `[]` | Tavily 补充搜索白名单域名 |
 | `exclude_domains` | string[] | 否 | `[]` | Tavily 补充搜索黑名单域名 |
 
-自动注入本地时间上下文，以提升时效性搜索的准确度。
+默认会注入本地时间上下文，以提升时效性搜索的准确度；可通过 `GROK_TIME_CONTEXT_MODE=always|auto|never` 调整。
 
 返回值（结构化字典）：
 - `session_id`: 本次查询的会话 ID
@@ -313,7 +317,7 @@ claude mcp list
 
 ### `get_config_info` — 配置诊断
 
-无需参数。工具会先读取基础配置快照，再由 server 层补充诊断结果，并返回：
+无需参数。`Config.get_config_info()` 只负责返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并由 server 层补充诊断结果，返回：
 
 - Grok `/models` 连通性与可用模型
 - Tavily / Firecrawl 的只读探测结果（仅在已配置时执行）

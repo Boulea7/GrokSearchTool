@@ -47,8 +47,11 @@ These hosts remain planned targets until remote transport and host-specific veri
 ## Provider Requirements
 
 - `GROK_API_URL` must be OpenAI-compatible and should include `/v1`
+- model resolution order is `GROK_MODEL` env -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.1-fast`
+- `GROK_TIME_CONTEXT_MODE` controls local time-context injection for `web_search`; the default is `always`
 - `web_search` depends on a working `/chat/completions` implementation
-- `get_config_info` now provides a lightweight doctor view over `/models`, optional provider probes, minimal real `search/fetch` probes, and feature readiness, but it is still not a full end-to-end compatibility guarantee
+- `Config.get_config_info()` returns only the base config snapshot; the MCP tool `get_config_info` keeps that snapshot and adds `connection_test`, `doctor`, `feature_readiness`, and minimal real `search/fetch` probes
+- `get_config_info` is still not a full end-to-end compatibility guarantee
 
 ## Feature Dependencies
 
@@ -71,6 +74,8 @@ For any locally configured `stdio` host:
 4. validate `web_fetch` / `web_map` only when the corresponding provider is configured
 
 Keep remote `HTTP` / `Streamable HTTP` validation out of the default install story until that transport is explicitly verified and documented.
+
+If local `stdio` startup fails with certificate-chain errors in enterprise or self-signed environments, prefer adding `--native-tls` to the `uvx` command line instead of documenting insecure TLS bypasses.
 
 ## Known Practical Limits
 

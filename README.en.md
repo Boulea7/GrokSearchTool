@@ -78,7 +78,7 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
-If your environment requires system certificates, add `--native-tls` to `uvx`.
+If your environment requires system certificates, add `--native-tls` to `uvx`. This is a startup/install-layer TLS workaround for enterprise proxies or self-signed chains, not a generic runtime replacement for disabling certificate verification.
 
 ### Minimal `stdio` examples for other hosts
 
@@ -126,6 +126,7 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint, ideally with `/v1` |
 | `GROK_API_KEY` | Yes | Grok API key |
 | `GROK_MODEL` | No | Default model |
+| `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |
 | `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
 | `TAVILY_ENABLED` | No | Enable or disable Tavily-backed fetch/map paths |
@@ -142,12 +143,15 @@ Create a `STDIO` MCP server entry with the same core fields:
 
 Notes:
 
+- model resolution order is `GROK_MODEL` env -> persisted `~/.config/grok-search/config.json` value from `switch_model` -> code default `grok-4.1-fast`
+- OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
+- `GROK_TIME_CONTEXT_MODE` defaults to `always`, which preserves the current behavior of always injecting local time context
 - the recommended core path is `plan_* -> web_search`
 - direct `web_search` is still allowed for clear single-hop lookups when planning adds little value
 - interactive `deep research` workflows are planned CLI-first rather than as conversational MCP/skill interactions
 - `web_fetch` still works with Firecrawl only.
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
-- `web_search` always injects local time context into the search prompt.
+- `web_search` injects local time context according to `GROK_TIME_CONTEXT_MODE` (`always` by default)
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 
 ### Minimal smoke check
