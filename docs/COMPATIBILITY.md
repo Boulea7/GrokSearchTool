@@ -68,10 +68,10 @@ These hosts remain planned targets until remote transport and host-specific veri
 
 For any locally configured `stdio` host:
 
-1. call `get_config_info`
+1. call `get_config_info` and confirm the base config snapshot, `connection_test`, `doctor`, and `feature_readiness` match your install target
 2. run one `web_search`
 3. call `get_sources` when source verification matters
-4. validate `web_fetch` / `web_map` only when the corresponding provider is configured
+4. validate `web_fetch` only when Tavily or Firecrawl is configured, and validate `web_map` only when Tavily is configured and enabled
 
 Keep remote `HTTP` / `Streamable HTTP` validation out of the default install story until that transport is explicitly verified and documented.
 

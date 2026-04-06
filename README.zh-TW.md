@@ -118,7 +118,16 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `GROK_MODEL` | 否 | 預設模型；優先級為 env > 持久化 config > 程式預設 |
 | `GROK_TIME_CONTEXT_MODE` | 否 | 時間上下文注入模式：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | 否 | `web_fetch` / `web_map` 用的 Tavily Key |
+| `TAVILY_API_URL` | 否 | Tavily API 端點 |
+| `TAVILY_ENABLED` | 否 | 是否啟用 Tavily 路徑 |
 | `FIRECRAWL_API_KEY` | 否 | Firecrawl fallback Key |
+| `FIRECRAWL_API_URL` | 否 | Firecrawl API 端點 |
+| `GROK_LOG_DIR` | 否 | 日誌目錄；`get_config_info` 會回傳解析後的執行期路徑 |
+| `GROK_OUTPUT_CLEANUP` | 否 | 是否啟用 `web_search` 輸出清洗 |
+| `GROK_FILTER_THINK_TAGS` | 否 | `GROK_OUTPUT_CLEANUP` 的舊別名 |
+| `GROK_RETRY_MAX_ATTEMPTS` | 否 | 最大重試次數 |
+| `GROK_RETRY_MULTIPLIER` | 否 | 重試退避倍數 |
+| `GROK_RETRY_MAX_WAIT` | 否 | 最大等待秒數 |
 
 補充：
 
@@ -138,10 +147,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 對任何本地 `stdio` host，建議至少做以下驗證：
 
-1. 先呼叫 `get_config_info`
+1. 先呼叫 `get_config_info`，確認基礎設定快照、`connection_test`、`doctor` 與 `feature_readiness` 符合你的安裝目標；未配置對應 provider 時，可選的 `search/fetch` 探針允許跳過
 2. 再執行一次 `web_search`
 3. 若需要核對來源，再呼叫 `get_sources`
-4. 僅在已配置 Tavily / Firecrawl 時，再額外驗證 `web_fetch` / `web_map`
+4. 僅在已配置 Tavily / Firecrawl 時驗證 `web_fetch`；僅在已配置並啟用 Tavily 時驗證 `web_map`
 
 ## Companion Skill
 

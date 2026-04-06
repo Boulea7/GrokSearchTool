@@ -158,10 +158,10 @@ Notes:
 
 For any local `stdio` host, start with this lightweight verification flow:
 
-1. Call `get_config_info`
+1. Call `get_config_info` and confirm the base config snapshot, `connection_test`, `doctor`, and `feature_readiness` match your install target; optional `search/fetch` probes may be skipped when their providers are not configured
 2. Run one `web_search`
 3. Use `get_sources` if source verification matters
-4. Only then validate `web_fetch` / `web_map` when Tavily or Firecrawl is configured
+4. Validate `web_fetch` only when Tavily or Firecrawl is configured, and validate `web_map` only when Tavily is configured and enabled
 
 ### `get_config_info` doctor output
 
@@ -172,6 +172,7 @@ For any local `stdio` host, start with this lightweight verification flow:
 - minimal real `web_search` / `web_fetch` probe results
 
 Optional provider probes are read-only and run only when the corresponding configuration is already present.
+The `/models` connection test uses a 10-second timeout; additional real `web_search` / `web_fetch` probes may take longer.
 
 ### `web_search` response contract
 

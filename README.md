@@ -233,10 +233,10 @@ claude mcp list
 
 无论你使用 Claude Code、Codex CLI 还是 Cherry Studio，建议至少做以下本地 `stdio` 验证：
 
-1. 先调用 `get_config_info`，确认 `doctor`、`feature_readiness`、`/models` 探测以及最小真实 `search/fetch` 探针结果正常
+1. 先调用 `get_config_info`，确认基础配置快照、`connection_test`、`doctor` 与 `feature_readiness` 符合你的安装目标；可选的 `search/fetch` 探针在未配置对应 provider 时允许跳过或显示 `not_ready`
 2. 再调用一次 `web_search`，验证主搜索链路可用
 3. 若需要引用核对，再调用 `get_sources`
-4. 只有在配置了 Tavily / Firecrawl 后，再额外验证 `web_fetch` / `web_map`
+4. 配置了 Tavily 或 Firecrawl 后再验证 `web_fetch`；仅在配置并启用 Tavily 后再验证 `web_map`
 
 显示连接成功后，我们**十分推荐**在 Claude 对话中输入
 ```

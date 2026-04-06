@@ -104,7 +104,16 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `GROK_MODEL` | No | デフォルトモデル。優先順位は env > 永続 config > コード既定値 |
 | `GROK_TIME_CONTEXT_MODE` | No | 時間コンテキスト注入モード：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | No | `web_fetch` / `web_map` 用 Tavily Key |
+| `TAVILY_API_URL` | No | Tavily API エンドポイント |
+| `TAVILY_ENABLED` | No | Tavily ルートを有効化するか |
 | `FIRECRAWL_API_KEY` | No | Firecrawl fallback Key |
+| `FIRECRAWL_API_URL` | No | Firecrawl API エンドポイント |
+| `GROK_LOG_DIR` | No | ログディレクトリ。`get_config_info` は解決後の実行時パスを返す |
+| `GROK_OUTPUT_CLEANUP` | No | `web_search` 出力クリーンアップを有効化するか |
+| `GROK_FILTER_THINK_TAGS` | No | `GROK_OUTPUT_CLEANUP` の旧エイリアス |
+| `GROK_RETRY_MAX_ATTEMPTS` | No | 最大リトライ回数 |
+| `GROK_RETRY_MULTIPLIER` | No | リトライ時のバックオフ倍率 |
+| `GROK_RETRY_MAX_WAIT` | No | 最大待機秒数 |
 
 補足:
 
@@ -124,10 +133,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 任意のローカル `stdio` ホストでは、少なくとも次の順で確認してください。
 
-1. `get_config_info` を呼ぶ
+1. `get_config_info` を呼び、ベース設定スナップショット、`connection_test`、`doctor`、`feature_readiness` が想定どおりか確認する。対応 provider 未設定時は追加の `search/fetch` probe が skip されても問題ない
 2. `web_search` を 1 回実行する
 3. ソース確認が必要なら `get_sources` を呼ぶ
-4. Tavily / Firecrawl を設定している場合のみ `web_fetch` / `web_map` を検証する
+4. Tavily / Firecrawl を設定している場合のみ `web_fetch` を検証し、`web_map` は Tavily を設定・有効化している場合のみ検証する
 
 ## Companion Skill
 

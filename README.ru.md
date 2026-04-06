@@ -104,7 +104,16 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `GROK_MODEL` | Нет | Модель по умолчанию; приоритет: env > persisted config > кодовый default |
 | `GROK_TIME_CONTEXT_MODE` | Нет | Режим внедрения временного контекста: `always` / `auto` / `never` |
 | `TAVILY_API_KEY` | Нет | Tavily key для `web_fetch` / `web_map` |
+| `TAVILY_API_URL` | Нет | Tavily API endpoint |
+| `TAVILY_ENABLED` | Нет | Включать ли Tavily-пути |
 | `FIRECRAWL_API_KEY` | Нет | Firecrawl fallback key |
+| `FIRECRAWL_API_URL` | Нет | Firecrawl API endpoint |
+| `GROK_LOG_DIR` | Нет | Каталог логов; `get_config_info` возвращает уже разрешённый runtime path |
+| `GROK_OUTPUT_CLEANUP` | Нет | Включать ли очистку вывода `web_search` |
+| `GROK_FILTER_THINK_TAGS` | Нет | Старый алиас для `GROK_OUTPUT_CLEANUP` |
+| `GROK_RETRY_MAX_ATTEMPTS` | Нет | Максимальное число повторных попыток |
+| `GROK_RETRY_MULTIPLIER` | Нет | Коэффициент backoff для retry |
+| `GROK_RETRY_MAX_WAIT` | Нет | Максимальное время ожидания в секундах |
 
 Примечания:
 
@@ -124,10 +133,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 Для любого локально настроенного `stdio`-хоста рекомендуется минимум такой порядок проверки:
 
-1. вызвать `get_config_info`
+1. вызвать `get_config_info` и убедиться, что базовый снимок конфигурации, `connection_test`, `doctor` и `feature_readiness` соответствуют целевой установке; дополнительные `search/fetch`-пробы могут быть пропущены, если provider не настроен
 2. выполнить один `web_search`
 3. вызвать `get_sources`, если важна проверка источников
-4. проверять `web_fetch` / `web_map` только когда Tavily или Firecrawl уже настроены
+4. проверять `web_fetch` только когда Tavily или Firecrawl уже настроены, а `web_map` — только когда Tavily настроен и включён
 
 ## Companion Skill
 
