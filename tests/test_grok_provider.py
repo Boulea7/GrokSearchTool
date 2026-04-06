@@ -273,6 +273,32 @@ async def test_parse_completion_response_appends_structured_citations():
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_accepts_mixed_case_structured_citations():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":"hello world","citations":[{"title":"OpenAI","url":"HTTPS://openai.com/"}]}}]}',
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": "hello world",
+                        "citations": [
+                            {"title": "OpenAI", "url": "HTTPS://openai.com/"},
+                        ],
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "## Sources" in result
+    assert "HTTPS://openai.com/" in result
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_appends_annotation_sources():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(

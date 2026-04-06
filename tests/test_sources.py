@@ -93,6 +93,23 @@ OpenAI is an AI research and deployment company.
     ]
 
 
+def test_split_answer_and_sources_extracts_mixed_case_urls_from_tail_link_block():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+- [OpenAI](HTTPS://openai.com/)
+- HTTPS://en.wikipedia.org/wiki/OpenAI
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert [item["url"] for item in sources] == [
+        "HTTPS://openai.com/",
+        "HTTPS://en.wikipedia.org/wiki/OpenAI",
+    ]
+
+
 def test_sanitize_answer_text_removes_trailing_policy_suffix():
     raw = """
 OpenAI is an AI research and deployment company.
