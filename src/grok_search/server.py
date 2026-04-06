@@ -470,11 +470,16 @@ def _build_sources_cache_entry(
 
 def _normalize_sources_cache_entry(entry: object) -> dict | None:
     if isinstance(entry, dict) and isinstance(entry.get("sources"), list):
+        search_status = entry.get("search_status") or "ok"
         return {
             "sources": entry.get("sources", []),
-            "search_status": entry.get("search_status") or "ok",
+            "search_status": search_status,
             "search_error": entry.get("search_error"),
-            "source_state": entry.get("source_state") or ("available" if entry.get("sources") else "empty"),
+            "source_state": entry.get("source_state") or (
+                "available"
+                if entry.get("sources")
+                else ("unavailable_due_to_search_error" if search_status == "error" else "empty")
+            ),
         }
 
     if isinstance(entry, list):
@@ -2199,7 +2204,7 @@ async def plan_tool_mapping(
             return _planning_validation_error(
                 "validation_error",
                 "Invalid tool mapping input.",
-                [{"loc": ["params_json"], "msg": "params_json must be valid JSON.", "type": "json_invalid"}],
+                [{"field": "params_json", "message": "params_json must be valid JSON.", "type": "json_invalid"}],
             )
     try:
         ToolPlanItem(**item)

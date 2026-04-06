@@ -42,6 +42,57 @@ OpenAI is an AI research and deployment company.
     ]
 
 
+def test_split_answer_and_sources_extracts_function_call_sources():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+sources([{"title": "OpenAI", "url": "https://openai.com/"}])
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert sources == [{"title": "OpenAI", "url": "https://openai.com/"}]
+
+
+def test_split_answer_and_sources_extracts_details_block_sources():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+<details>
+<summary>Sources</summary>
+
+- [OpenAI](https://openai.com/)
+- [Wikipedia](https://en.wikipedia.org/wiki/OpenAI)
+</details>
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert [item["url"] for item in sources] == [
+        "https://openai.com/",
+        "https://en.wikipedia.org/wiki/OpenAI",
+    ]
+
+
+def test_split_answer_and_sources_extracts_tail_link_block_sources():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+- [OpenAI](https://openai.com/)
+- https://en.wikipedia.org/wiki/OpenAI
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert [item["url"] for item in sources] == [
+        "https://openai.com/",
+        "https://en.wikipedia.org/wiki/OpenAI",
+    ]
+
+
 def test_sanitize_answer_text_removes_trailing_policy_suffix():
     raw = """
 OpenAI is an AI research and deployment company.

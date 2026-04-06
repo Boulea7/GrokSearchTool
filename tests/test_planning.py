@@ -1153,6 +1153,242 @@ async def test_plan_execution_requires_all_sub_queries_to_be_scheduled():
 
 
 @pytest.mark.asyncio
+async def test_level_3_plan_flow_completes_with_execution_order_in_executable_plan():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers deeply.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need full planning.",
+        level=3,
+        estimated_sub_queries=2,
+        estimated_tool_calls=6,
+        justification="Need complete decomposition and execution order.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="First sub-query.",
+        id="sq1",
+        goal="Collect baseline facts.",
+        expected_output="A baseline summary.",
+        boundary="Exclude downstream comparison synthesis.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Second sub-query depends on first.",
+        id="sq2",
+        goal="Compare findings against baseline.",
+        expected_output="A comparison summary.",
+        boundary="Exclude baseline collection.",
+        depends_on="sq1",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="First search term.",
+        term="provider baseline",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Second search term.",
+        term="provider comparison",
+        purpose="sq2",
+        round=2,
+    )
+
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map sq1.",
+        sub_query_id="sq1",
+        tool="web_search",
+        reason="Need baseline facts.",
+    )
+
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map sq2.",
+        sub_query_id="sq2",
+        tool="web_search",
+        reason="Need comparison facts.",
+    )
+
+    result = json.loads(
+        await server.plan_execution(
+            session_id=session_id,
+            thought="Schedule baseline first, comparison second.",
+            parallel_groups="sq1",
+            sequential="sq2",
+            estimated_rounds=2,
+        )
+    )
+
+    assert result["plan_complete"] is True
+    assert result["complexity_level"] == 3
+    assert result["executable_plan"]["execution_order"] == {
+        "parallel": [["sq1"]],
+        "sequential": ["sq2"],
+        "estimated_rounds": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_plan_sub_query_rejects_self_dependency():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need decomposition.",
+        level=1,
+        estimated_sub_queries=1,
+        estimated_tool_calls=2,
+        justification="Need dependency validation.",
+    )
+
+    result = json.loads(
+        await server.plan_sub_query(
+            session_id=session_id,
+            thought="Self dependency should fail.",
+            id="sq1",
+            goal="Compare providers.",
+            expected_output="A concise comparison.",
+            boundary="Exclude implementation details.",
+            depends_on="sq1",
+            tool_hint="web_search",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "cannot depend on itself" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_sub_query_rejects_duplicate_dependencies():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need decomposition.",
+        level=1,
+        estimated_sub_queries=2,
+        estimated_tool_calls=2,
+        justification="Need dependency validation.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Baseline sub-query.",
+        id="sq1",
+        goal="Collect baseline facts.",
+        expected_output="A baseline summary.",
+        boundary="Exclude comparison synthesis.",
+        tool_hint="web_search",
+    )
+
+    result = json.loads(
+        await server.plan_sub_query(
+            session_id=session_id,
+            thought="Duplicate dependency should fail.",
+            id="sq2",
+            goal="Compare findings against baseline.",
+            expected_output="A comparison summary.",
+            boundary="Exclude baseline collection.",
+            depends_on="sq1,sq1",
+            tool_hint="web_search",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "duplicate sub-query dependency" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_tool_mapping_invalid_params_json_uses_standard_details_shape():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need tool mapping.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Need mapping validation.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Only one sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Valid search term.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Invalid params JSON should fail.",
+            sub_query_id="sq1",
+            tool="web_search",
+            reason="Need baseline facts.",
+            params_json="{bad-json",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert result["details"][0]["field"] == "params_json"
+    assert result["details"][0]["type"] == "json_invalid"
+
+
+@pytest.mark.asyncio
 async def test_plan_sub_query_revision_rejects_dependencies_on_removed_ids():
     intent = json.loads(
         await server.plan_intent(

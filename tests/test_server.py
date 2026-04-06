@@ -1192,6 +1192,27 @@ async def test_get_sources_reuses_standardized_timestamp_for_legacy_cache():
     assert first["sources"][0]["retrieved_at"] == second["sources"][0]["retrieved_at"]
 
 
+@pytest.mark.asyncio
+async def test_get_sources_migrates_legacy_error_cache_to_unavailable_state():
+    session_id = "legacy-error-session"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [],
+            "search_status": "error",
+            "search_error": "validation_error",
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == []
+    assert cached["sources_count"] == 0
+    assert cached["search_status"] == "error"
+    assert cached["search_error"] == "validation_error"
+    assert cached["source_state"] == "unavailable_due_to_search_error"
+
+
 def test_probably_truncated_content_detects_obvious_markers():
     assert server._is_probably_truncated_content("Partial answer [...]", min_length=10) is True
     assert server._is_probably_truncated_content("```\ncode block never closes", min_length=10) is True
