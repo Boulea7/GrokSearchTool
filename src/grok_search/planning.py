@@ -166,6 +166,10 @@ class PlanningSession:
             if isinstance(item, dict) and isinstance(item.get("sub_query_id"), str) and item["sub_query_id"].strip()
         ]
 
+    def has_duplicate_tool_mapping_ids(self) -> bool:
+        mapping_ids = self.tool_mapping_ids()
+        return len(mapping_ids) != len(set(mapping_ids))
+
     def missing_search_term_ids(self) -> set[str]:
         return self.sub_query_ids() - self.search_term_purposes()
 
@@ -181,6 +185,8 @@ class PlanningSession:
             if self.missing_search_term_ids():
                 return False
             if self.missing_tool_mapping_ids():
+                return False
+            if self.has_duplicate_tool_mapping_ids():
                 return False
         return True
 
@@ -208,6 +214,14 @@ class PlanningEngine:
         confidence: float = 1.0,
         phase_data: dict | list | None = None,
     ) -> dict:
+        if session_id and session_id not in self._sessions:
+            return {
+                "error": "session_not_found",
+                "message": f"Session '{session_id}' not found. Restart from intent_analysis with an empty session_id.",
+                "session_id": session_id,
+                "restart_from_intent_analysis": True,
+                "expected_phase_order": PHASE_NAMES,
+            }
         if session_id and session_id in self._sessions:
             session = self._sessions[session_id]
         else:
@@ -249,6 +263,20 @@ class PlanningEngine:
                     "completed_phases": session.completed_phases,
                     "complexity_level": session.complexity_level,
                 }
+
+        if (
+            target == "tool_selection"
+            and not is_revision
+            and isinstance(phase_data, dict)
+            and isinstance(phase_data.get("sub_query_id"), str)
+            and phase_data["sub_query_id"] in session.tool_mapping_ids()
+        ):
+            return {
+                "error": f"Duplicate tool mapping for sub_query_id: {phase_data['sub_query_id']}",
+                "session_id": session.session_id,
+                "completed_phases": session.completed_phases,
+                "complexity_level": session.complexity_level,
+            }
 
         if target in _ACCUMULATIVE_LIST_PHASES:
             if is_revision:

@@ -1598,6 +1598,88 @@ async def test_plan_tool_mapping_rejects_duplicate_mapping_for_same_sub_query():
     assert "duplicate tool mapping" in result["message"].lower()
 
 
+def test_planning_engine_rejects_unknown_nonempty_session_id():
+    result = planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Should not create a missing session implicitly.",
+        session_id="missing-session",
+        phase_data={
+            "level": 1,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 2,
+            "justification": "Need a real session first.",
+        },
+    )
+
+    assert result["error"] == "session_not_found"
+    assert result["session_id"] == "missing-session"
+    assert result["restart_from_intent_analysis"] is True
+    assert planning.engine.get_session("missing-session") is None
+
+
+def test_planning_engine_rejects_duplicate_tool_mapping_invariant():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need level 2 coverage.",
+        session_id=session_id,
+        phase_data={
+            "level": 2,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 3,
+            "justification": "Need one mapped sub-query.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Single sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="search_strategy",
+        thought="Single search term.",
+        session_id=session_id,
+        phase_data={
+            "approach": "targeted",
+            "search_terms": [{"term": "provider comparison", "purpose": "sq1", "round": 1}],
+        },
+    )
+    first = planning.engine.process_phase(
+        phase="tool_selection",
+        thought="First mapping.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_search", "reason": "Need provider facts."},
+    )
+    duplicate = planning.engine.process_phase(
+        phase="tool_selection",
+        thought="Duplicate mapping should fail.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_fetch", "reason": "Should be rejected."},
+    )
+
+    assert first["plan_complete"] is True
+    assert "duplicate tool mapping" in duplicate["error"].lower()
+    session = planning.engine.get_session(session_id)
+    assert session is not None
+    assert session.tool_mapping_ids() == ["sq1"]
+
+
 @pytest.mark.asyncio
 async def test_plan_sub_query_revision_rejects_dependencies_on_removed_ids():
     intent = json.loads(
