@@ -1269,6 +1269,10 @@ def _validate_tavily_map_probe_payload(data: object) -> str | None:
     if not isinstance(results, list):
         return "响应结构异常：缺少 results 列表。"
 
+    for index, item in enumerate(results):
+        if not isinstance(item, str):
+            return f"响应结构异常：results[{index}] 必须是字符串。"
+
     return None
 
 
@@ -1287,6 +1291,7 @@ def _build_connection_test_from_models_check(models_check: dict) -> dict:
             "status": "连接成功",
             "message": models_check["message"],
             "response_time_ms": models_check.get("response_time_ms", 0),
+            "scope": "models_endpoint",
         }
         if models_check.get("available_models"):
             result["available_models"] = models_check["available_models"]
@@ -1296,6 +1301,7 @@ def _build_connection_test_from_models_check(models_check: dict) -> dict:
         "status": status_map.get(models_check.get("error_kind"), "测试失败"),
         "message": models_check["message"],
         "response_time_ms": models_check.get("response_time_ms", 0),
+        "scope": "models_endpoint",
     }
 
 
@@ -1386,6 +1392,14 @@ async def _probe_web_fetch() -> dict:
     )
 
 
+def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> dict:
+    if check["status"] == "ok":
+        return {"status": "ready", "message": check["message"]}
+    if check["status"] == "skipped":
+        return {"status": "not_ready", "message": not_ready_message}
+    return {"status": "degraded", "message": check["message"]}
+
+
 def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
@@ -1438,6 +1452,18 @@ def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> 
         web_fetch_status = "degraded"
         web_fetch_message = "抓取后端已配置，但当前探测未通过。"
 
+    web_fetch_providers = {
+        "verified_path": web_fetch_probe.get("provider") if web_fetch_probe["status"] == "ok" else None,
+        "tavily": _build_provider_readiness_item(
+            tavily_extract,
+            not_ready_message="Tavily 未配置或已禁用。",
+        ),
+        "firecrawl": _build_provider_readiness_item(
+            firecrawl_scrape,
+            not_ready_message="Firecrawl 未配置。",
+        ),
+    }
+
     if tavily_map["status"] == "ok":
         web_map_status = "ready"
         web_map_message = "Tavily map 探测成功。"
@@ -1465,7 +1491,11 @@ def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> 
                 "transient": True,
             }
         ),
-        "web_fetch": {"status": web_fetch_status, "message": web_fetch_message},
+        "web_fetch": {
+            "status": web_fetch_status,
+            "message": web_fetch_message,
+            "providers": web_fetch_providers,
+        },
         "web_map": {"status": web_map_status, "message": web_map_message},
         "toggle_builtin_tools": {
             "status": toggle_status,
