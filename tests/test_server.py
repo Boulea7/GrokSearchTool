@@ -182,6 +182,18 @@ async def test_get_config_info_skips_unconfigured_optional_providers(monkeypatch
     assert checks["tavily_map"]["status"] == "skipped"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "not_ready"
     assert payload["feature_readiness"]["web_map"]["status"] == "not_ready"
+    assert (
+        payload["feature_readiness"]["web_fetch"]["providers"]["tavily"]["skipped_reason"]
+        == "TAVILY_API_KEY 未配置"
+    )
+    assert (
+        payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["skipped_reason"]
+        == "FIRECRAWL_API_KEY 未配置"
+    )
+    assert payload["doctor"]["recommendations_detail"]
+    assert {
+        item["check_id"] for item in payload["doctor"]["recommendations_detail"]
+    } >= {"tavily_extract", "firecrawl_scrape"}
 
 
 @pytest.mark.asyncio
@@ -490,6 +502,32 @@ async def test_get_config_info_maps_models_login_page_to_connection_failure(monk
 
     assert payload["connection_test"]["status"] == "连接失败"
     assert "登录页" in payload["connection_test"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("error_kind", "expected_status"),
+    [
+        ("timeout", "连接超时"),
+        ("request_error", "连接失败"),
+        ("http_error", "连接异常"),
+        ("config_error", "配置错误"),
+        ("html_response", "连接异常"),
+        ("invalid_json", "连接异常"),
+    ],
+)
+def test_build_connection_test_from_models_check_maps_error_kinds(error_kind, expected_status):
+    result = server._build_connection_test_from_models_check(
+        {
+            "status": "error",
+            "message": "probe failed",
+            "error_kind": error_kind,
+            "response_time_ms": 12.3,
+        }
+    )
+
+    assert result["status"] == expected_status
+    assert result["scope"] == "models_endpoint"
+    assert result["message"] == "probe failed"
 
 
 @pytest.mark.asyncio

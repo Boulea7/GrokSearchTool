@@ -1131,9 +1131,29 @@ def _build_doctor_check(
     return check
 
 
-def _append_recommendation(recommendations: list[str], message: str) -> None:
+def _append_recommendation(
+    recommendations: list[str],
+    message: str,
+    *,
+    recommendation_details: list[dict] | None = None,
+    check_id: str = "",
+    feature: str = "",
+    severity: str = "warning",
+) -> None:
     if message and message not in recommendations:
         recommendations.append(message)
+    if recommendation_details is None or not message:
+        return
+    detail = {
+        "message": message,
+        "severity": severity,
+    }
+    if check_id:
+        detail["check_id"] = check_id
+    if feature:
+        detail["feature"] = feature
+    if detail not in recommendation_details:
+        recommendation_details.append(detail)
 
 
 def _find_git_root(start: Path | None = None) -> Path | None:
@@ -1396,7 +1416,10 @@ def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> di
     if check["status"] == "ok":
         return {"status": "ready", "message": check["message"]}
     if check["status"] == "skipped":
-        return {"status": "not_ready", "message": not_ready_message}
+        item = {"status": "not_ready", "message": not_ready_message}
+        if check.get("skipped_reason"):
+            item["skipped_reason"] = check["skipped_reason"]
+        return item
     return {"status": "degraded", "message": check["message"]}
 
 
@@ -1509,7 +1532,12 @@ def _feature_affects_overall_doctor_status(item: dict) -> bool:
     return not item.get("client_specific", False) and not item.get("transient", False)
 
 
-def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommendations: list[str]) -> dict:
+def _build_doctor_payload(
+    checks: list[dict],
+    feature_readiness: dict,
+    recommendations: list[str],
+    recommendation_details: list[dict],
+) -> dict:
     web_search_status = feature_readiness["web_search"]["status"]
     if web_search_status == "not_ready":
         doctor_status = "error"
@@ -1527,6 +1555,7 @@ def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommend
         "summary": _summarize_doctor_status(doctor_status),
         "checks": checks,
         "recommendations": recommendations,
+        "recommendations_detail": recommendation_details,
     }
 
 
@@ -1556,6 +1585,7 @@ async def get_config_info() -> str:
     config_info = config.get_config_info()
     checks: list[dict] = []
     recommendations: list[str] = []
+    recommendation_details: list[dict] = []
 
     try:
         api_url = config.grok_api_url
@@ -1565,14 +1595,27 @@ async def get_config_info() -> str:
         api_url = ""
         api_key = ""
         checks.append(_build_doctor_check("grok_config", "error", str(exc), error_kind="config_error"))
-        _append_recommendation(recommendations, "先配置 GROK_API_URL 与 GROK_API_KEY，再重新运行 get_config_info。")
+        _append_recommendation(
+            recommendations,
+            "先配置 GROK_API_URL 与 GROK_API_KEY，再重新运行 get_config_info。",
+            recommendation_details=recommendation_details,
+            check_id="grok_config",
+            feature="web_search",
+            severity="error",
+        )
 
     if api_url:
         if api_url.rstrip("/").endswith("/v1"):
             checks.append(_build_doctor_check("grok_api_url_format", "ok", "GROK_API_URL 已显式包含 /v1。"))
         else:
             checks.append(_build_doctor_check("grok_api_url_format", "warning", "GROK_API_URL 未显式包含 /v1。"))
-            _append_recommendation(recommendations, "将 GROK_API_URL 改为显式包含 /v1 的 OpenAI-compatible 根路径。")
+            _append_recommendation(
+                recommendations,
+                "将 GROK_API_URL 改为显式包含 /v1 的 OpenAI-compatible 根路径。",
+                recommendation_details=recommendation_details,
+                check_id="grok_api_url_format",
+                feature="web_search",
+            )
 
     if api_url and api_key:
         grok_models = await _probe_json_endpoint(
@@ -1595,7 +1638,14 @@ async def get_config_info() -> str:
             if model_names:
                 grok_models["available_models"] = model_names
         else:
-            _append_recommendation(recommendations, "检查 Grok 中转站是否支持 /models，并确认 API Key 与 URL 可达。")
+            _append_recommendation(
+                recommendations,
+                "检查 Grok 中转站是否支持 /models，并确认 API Key 与 URL 可达。",
+                recommendation_details=recommendation_details,
+                check_id="grok_models",
+                feature="web_search",
+                severity="error",
+            )
     else:
         grok_models = _build_doctor_check(
             "grok_models",
@@ -1622,11 +1672,21 @@ async def get_config_info() -> str:
             _append_recommendation(
                 recommendations,
                 f"将 GROK_MODEL 或本地持久化模型从 {configured_model} 切换到 /models 返回的可用模型，例如：{available_preview}。",
+                recommendation_details=recommendation_details,
+                check_id="grok_model_selection",
+                feature="web_search",
             )
     if api_url and api_key:
         grok_search_probe = await _probe_web_search(api_url, api_key, config.grok_model)
         if grok_search_probe["status"] != "ok":
-            _append_recommendation(recommendations, "检查 chat/completions 是否真实可用，并确认当前默认模型能返回可解析正文。")
+            _append_recommendation(
+                recommendations,
+                "检查 chat/completions 是否真实可用，并确认当前默认模型能返回可解析正文。",
+                recommendation_details=recommendation_details,
+                check_id="grok_search_probe",
+                feature="web_search",
+                severity="error",
+            )
     else:
         grok_search_probe = _build_doctor_check(
             "grok_search_probe",
@@ -1655,12 +1715,26 @@ async def get_config_info() -> str:
                 tavily_extract["status"] = "error"
                 tavily_extract["message"] = payload_error
                 tavily_extract["error_kind"] = "invalid_response_shape"
-                _append_recommendation(recommendations, "检查 Tavily extract 是否返回了登录页、HTML 页面或异常 JSON 结构。")
+                _append_recommendation(
+                    recommendations,
+                    "检查 Tavily extract 是否返回了登录页、HTML 页面或异常 JSON 结构。",
+                    recommendation_details=recommendation_details,
+                    check_id="tavily_extract",
+                    feature="web_fetch",
+                    severity="error",
+                )
             else:
                 result_count = len((tavily_extract_data or {}).get("results", []) or [])
                 tavily_extract["message"] = f"Tavily extract 探测成功，返回 {result_count} 条结果。"
         else:
-            _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily extract 端点可达。")
+            _append_recommendation(
+                recommendations,
+                "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily extract 端点可达。",
+                recommendation_details=recommendation_details,
+                check_id="tavily_extract",
+                feature="web_fetch",
+                severity="error",
+            )
 
         tavily_map = await _probe_json_endpoint(
             "tavily_map",
@@ -1680,12 +1754,26 @@ async def get_config_info() -> str:
                 tavily_map["status"] = "error"
                 tavily_map["message"] = payload_error
                 tavily_map["error_kind"] = "invalid_response_shape"
-                _append_recommendation(recommendations, "检查 Tavily map 是否返回了异常 JSON 结构。")
+                _append_recommendation(
+                    recommendations,
+                    "检查 Tavily map 是否返回了异常 JSON 结构。",
+                    recommendation_details=recommendation_details,
+                    check_id="tavily_map",
+                    feature="web_map",
+                    severity="error",
+                )
             else:
                 result_count = len((tavily_map_data or {}).get("results", []) or [])
                 tavily_map["message"] = f"Tavily map 探测成功，返回 {result_count} 条结果。"
         else:
-            _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily map 端点可达。")
+            _append_recommendation(
+                recommendations,
+                "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily map 端点可达。",
+                recommendation_details=recommendation_details,
+                check_id="tavily_map",
+                feature="web_map",
+                severity="error",
+            )
     else:
         tavily_reason = "TAVILY_ENABLED=false" if not config.tavily_enabled else "TAVILY_API_KEY 未配置"
         tavily_extract = _build_doctor_check(
@@ -1700,7 +1788,13 @@ async def get_config_info() -> str:
             "未执行 Tavily map 探测。",
             skipped_reason=tavily_reason,
         )
-        _append_recommendation(recommendations, "若需要 web_map 或 Tavily-first web_fetch，请配置并启用 Tavily。")
+        _append_recommendation(
+            recommendations,
+            "若需要 web_map 或 Tavily-first web_fetch，请配置并启用 Tavily。",
+            recommendation_details=recommendation_details,
+            check_id="tavily_extract",
+            feature="web_fetch",
+        )
     checks.append(tavily_extract)
     checks.append(tavily_map)
 
@@ -1724,9 +1818,22 @@ async def get_config_info() -> str:
             else:
                 firecrawl_scrape["status"] = "warning"
                 firecrawl_scrape["message"] = "Firecrawl scrape 已响应，但 markdown 为空。"
-                _append_recommendation(recommendations, "检查 Firecrawl scrape 返回内容是否为空，避免 web_fetch 被误判为 fully ready。")
+                _append_recommendation(
+                    recommendations,
+                    "检查 Firecrawl scrape 返回内容是否为空，避免 web_fetch 被误判为 fully ready。",
+                    recommendation_details=recommendation_details,
+                    check_id="firecrawl_scrape",
+                    feature="web_fetch",
+                )
         else:
-            _append_recommendation(recommendations, "检查 FIRECRAWL_API_KEY / FIRECRAWL_API_URL，确认 Firecrawl scrape 端点可达。")
+            _append_recommendation(
+                recommendations,
+                "检查 FIRECRAWL_API_KEY / FIRECRAWL_API_URL，确认 Firecrawl scrape 端点可达。",
+                recommendation_details=recommendation_details,
+                check_id="firecrawl_scrape",
+                feature="web_fetch",
+                severity="error",
+            )
     else:
         firecrawl_scrape = _build_doctor_check(
             "firecrawl_scrape",
@@ -1734,11 +1841,24 @@ async def get_config_info() -> str:
             "未执行 Firecrawl scrape 探测。",
             skipped_reason="FIRECRAWL_API_KEY 未配置",
         )
-        _append_recommendation(recommendations, "若需要 Firecrawl fallback，请配置 FIRECRAWL_API_KEY。")
+        _append_recommendation(
+            recommendations,
+            "若需要 Firecrawl fallback，请配置 FIRECRAWL_API_KEY。",
+            recommendation_details=recommendation_details,
+            check_id="firecrawl_scrape",
+            feature="web_fetch",
+        )
     checks.append(firecrawl_scrape)
     web_fetch_probe = await _probe_web_fetch()
     if web_fetch_probe["status"] == "error":
-        _append_recommendation(recommendations, "检查真实 web_fetch 路径是否能抓到最小页面正文，并确认提取结果不是登录页、空内容或异常结构。")
+        _append_recommendation(
+            recommendations,
+            "检查真实 web_fetch 路径是否能抓到最小页面正文，并确认提取结果不是登录页、空内容或异常结构。",
+            recommendation_details=recommendation_details,
+            check_id="web_fetch_probe",
+            feature="web_fetch",
+            severity="error",
+        )
     checks.append(web_fetch_probe)
 
     claude_project_root = _find_git_root()
@@ -1753,7 +1873,7 @@ async def get_config_info() -> str:
     )
 
     feature_readiness = _build_feature_readiness(checks, source_cache_size=await _SOURCES_CACHE.size())
-    doctor = _build_doctor_payload(checks, feature_readiness, recommendations)
+    doctor = _build_doctor_payload(checks, feature_readiness, recommendations, recommendation_details)
     config_info["connection_test"] = _build_connection_test_from_models_check(grok_models)
     config_info["doctor"] = doctor
     config_info["feature_readiness"] = feature_readiness
