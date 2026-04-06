@@ -8,7 +8,7 @@ class Config:
         'claude mcp add-json grok-search --scope user '
         '\'{"type":"stdio","command":"uvx","args":["--from",'
         '"git+https://github.com/Boulea7/GrokSearchTool@main","grok-search"],'
-        '"env":{"GROK_API_URL":"your-api-url","GROK_API_KEY":"your-api-key"}}\''
+        '"env":{"GROK_API_URL":"https://your-api-endpoint.com/v1","GROK_API_KEY":"your-api-key"}}\''
     )
     _DEFAULT_MODEL = "grok-4.1-fast"
 
@@ -69,6 +69,11 @@ class Config:
         if raw is None:
             raw = os.getenv("GROK_FILTER_THINK_TAGS", "true")
         return raw.lower() in ("true", "1", "yes")
+
+    @property
+    def time_context_mode(self) -> str:
+        raw = os.getenv("GROK_TIME_CONTEXT_MODE", "always").strip().lower()
+        return raw if raw in {"always", "auto", "never"} else "always"
 
     @property
     def grok_api_url(self) -> str:
@@ -165,7 +170,7 @@ class Config:
         config_data = self._load_config_file()
         config_data["model"] = model
         self._save_config_file(config_data)
-        self._cached_model = self._apply_model_suffix(model)
+        self._cached_model = None
 
     @staticmethod
     def _mask_api_key(key: str) -> str:
@@ -175,7 +180,7 @@ class Config:
         return f"{key[:4]}{'*' * (len(key) - 8)}{key[-4:]}"
 
     def get_config_info(self) -> dict:
-        """获取配置信息（API Key 已脱敏）"""
+        """Return the base config snapshot only; server-side doctor fields are added elsewhere."""
         try:
             api_url = self.grok_api_url
             api_key_raw = self.grok_api_key
@@ -192,6 +197,7 @@ class Config:
             "GROK_MODEL": self.grok_model,
             "GROK_DEBUG": self.debug_enabled,
             "GROK_OUTPUT_CLEANUP": self.output_cleanup_enabled,
+            "GROK_TIME_CONTEXT_MODE": self.time_context_mode,
             "GROK_LOG_LEVEL": self.log_level,
             "GROK_LOG_DIR": str(self.log_dir),
             "TAVILY_API_URL": self.tavily_api_url,

@@ -1,5 +1,6 @@
 import httpx
 import json
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
@@ -52,7 +53,7 @@ def _needs_time_context(query: str) -> bool:
         "this month", "last month", "next month",
         "this year", "last year", "next year",
         "latest", "recent", "recently", "just now",
-        "real-time", "realtime", "up-to-date",
+        "real-time", "up-to-date",
     ]
 
     query_lower = query.lower()
@@ -62,7 +63,7 @@ def _needs_time_context(query: str) -> bool:
             return True
 
     for keyword in en_keywords:
-        if keyword in query_lower:
+        if re.search(rf"\b{re.escape(keyword)}\b", query_lower):
             return True
 
     return False
@@ -140,7 +141,13 @@ class GrokSearchProvider(BaseSearchProvider):
         if platform:
             platform_prompt = "\n\nYou should search the web for the information you need, and focus on these platform: " + platform + "\n"
 
-        time_context = get_local_time_info() + "\n"
+        time_context_mode = config.time_context_mode
+        time_context_required = bool(getattr(self, "time_context_required", False))
+        should_inject_time_context = (
+            time_context_mode == "always"
+            or (time_context_mode == "auto" and (_needs_time_context(query) or time_context_required))
+        )
+        time_context = get_local_time_info() + "\n" if should_inject_time_context else ""
 
         payload = {
             "model": self.model,
@@ -178,6 +185,9 @@ class GrokSearchProvider(BaseSearchProvider):
             return value
 
         if isinstance(value, dict):
+            block_type = str(value.get("type", "")).strip().lower()
+            if block_type in {"reasoning", "thinking", "analysis", "thought"}:
+                return ""
             for key in ("text", "content", "value", "output_text"):
                 nested = self._flatten_text_content(value.get(key))
                 if nested:
@@ -199,15 +209,20 @@ class GrokSearchProvider(BaseSearchProvider):
         normalized: list[dict] = []
 
         for item in items:
-            if isinstance(item, str) and item.startswith(("http://", "https://")):
-                normalized.append({"url": item})
+            if isinstance(item, str):
+                url = item.strip()
+                if url.startswith(("http://", "https://")):
+                    normalized.append({"url": url})
                 continue
 
             if not isinstance(item, dict):
                 continue
 
             url = item.get("url") or item.get("href") or item.get("link")
-            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            if not isinstance(url, str):
+                continue
+            url = url.strip()
+            if not url.startswith(("http://", "https://")):
                 continue
 
             source = {"url": url}
@@ -242,6 +257,20 @@ class GrokSearchProvider(BaseSearchProvider):
         )
         collected: list[dict] = []
 
+        def collect_nested(value):
+            if isinstance(value, dict):
+                block_type = str(value.get("type", "")).strip().lower()
+                if block_type in {"reasoning", "thinking", "analysis", "thought"}:
+                    return
+                collect_from_mapping(value)
+                for nested in value.values():
+                    collect_nested(nested)
+                return
+
+            if isinstance(value, list):
+                for item in value:
+                    collect_nested(item)
+
         def collect_from_mapping(mapping):
             nonlocal collected
             if not isinstance(mapping, dict):
@@ -253,14 +282,7 @@ class GrokSearchProvider(BaseSearchProvider):
         if not isinstance(data, dict):
             return []
 
-        collect_from_mapping(data)
-        for choice in data.get("choices", []) or []:
-            if not isinstance(choice, dict):
-                continue
-            collect_from_mapping(choice)
-            for key in ("message", "delta"):
-                nested = choice.get(key)
-                collect_from_mapping(nested)
+        collect_nested(data)
 
         return collected
 
@@ -332,6 +354,7 @@ class GrokSearchProvider(BaseSearchProvider):
         full_body_buffer = []
         empty_placeholder_detected = False
         response_headers = getattr(response, "headers", None)
+        collected_sources: list[dict] = []
 
         async for line in response.aiter_lines():
             line = line.strip()
@@ -351,6 +374,7 @@ class GrokSearchProvider(BaseSearchProvider):
                     if self._is_empty_placeholder_payload(data):
                         empty_placeholder_detected = True
                         continue
+                    collected_sources = merge_sources(collected_sources, self._extract_structured_sources(data))
                     choices = data.get("choices", [])
                     if isinstance(choices, list) and choices:
                         chunk = self._extract_content_from_choice(choices[0])
@@ -365,6 +389,7 @@ class GrokSearchProvider(BaseSearchProvider):
                 data = json.loads(full_text)
                 if self._is_empty_placeholder_payload(data):
                     empty_placeholder_detected = True
+                collected_sources = merge_sources(collected_sources, self._extract_structured_sources(data))
                 choices = data.get("choices", [])
                 if isinstance(choices, list) and choices:
                     content = self._extract_content_from_choice(choices[0])
@@ -373,6 +398,8 @@ class GrokSearchProvider(BaseSearchProvider):
 
         if not content and empty_placeholder_detected:
             raise self._build_placeholder_error(response_headers)
+
+        content = self._append_sources_block(content, collected_sources)
 
         await log_info(ctx, f"content: {content}", config.debug_enabled)
 
@@ -393,6 +420,11 @@ class GrokSearchProvider(BaseSearchProvider):
             choices = data.get("choices", [])
             if isinstance(choices, list) and choices:
                 content = self._extract_content_from_choice(choices[0])
+            if not content:
+                for key in ("output_text", "output"):
+                    content = self._flatten_text_content(data.get(key))
+                    if content:
+                        break
             content = self._append_sources_block(content, self._extract_structured_sources(data))
 
         if not content and any(line.lstrip().startswith("data:") for line in body_text.splitlines()):

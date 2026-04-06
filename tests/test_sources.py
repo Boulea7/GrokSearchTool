@@ -42,6 +42,57 @@ OpenAI is an AI research and deployment company.
     ]
 
 
+def test_split_answer_and_sources_extracts_function_call_sources():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+sources([{"title": "OpenAI", "url": "https://openai.com/"}])
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert sources == [{"title": "OpenAI", "url": "https://openai.com/"}]
+
+
+def test_split_answer_and_sources_extracts_details_block_sources():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+<details>
+<summary>Sources</summary>
+
+- [OpenAI](https://openai.com/)
+- [Wikipedia](https://en.wikipedia.org/wiki/OpenAI)
+</details>
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert [item["url"] for item in sources] == [
+        "https://openai.com/",
+        "https://en.wikipedia.org/wiki/OpenAI",
+    ]
+
+
+def test_split_answer_and_sources_extracts_tail_link_block_sources():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+- [OpenAI](https://openai.com/)
+- https://en.wikipedia.org/wiki/OpenAI
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert [item["url"] for item in sources] == [
+        "https://openai.com/",
+        "https://en.wikipedia.org/wiki/OpenAI",
+    ]
+
+
 def test_sanitize_answer_text_removes_trailing_policy_suffix():
     raw = """
 OpenAI is an AI research and deployment company.
@@ -82,6 +133,31 @@ def test_extract_unique_urls_strips_trailing_markdown_emphasis():
     urls = extract_unique_urls(raw)
 
     assert urls == ["https://fastapi.tiangolo.com/"]
+
+
+def test_standardize_sources_accepts_mixed_case_http_scheme():
+    sources = standardize_sources(
+        [
+            {"title": "Mixed Case", "url": "HTTPS://Example.com/Guide"},
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Mixed Case",
+            "url": "HTTPS://Example.com/Guide",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
 
 
 def test_standardize_sources_skips_invalid_or_missing_urls():

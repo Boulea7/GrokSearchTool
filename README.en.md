@@ -6,6 +6,8 @@ GrokSearch is an independently maintained MCP server for assistants and clients 
 
 It combines `Grok` search with `Tavily` and `Firecrawl` extraction, then exposes a stable MCP tool surface for lightweight lookups, source verification, focused page fetching, a recommended `plan_* -> web_search` workflow for complex searches, and a future `deep research` direction for heavier exploration tasks. For clear, low-ambiguity single-hop lookups where planning adds little value, direct `web_search` is still acceptable.
 
+Public `stdio` installation snippets currently use the maintained release repo `Boulea7/GrokSearchTool`. Local worktrees, historical remote names, or legacy collaboration traces should not be read as an active `fork/upstream` PR workflow.
+
 ## Overview
 
 - `web_search`: AI-driven web search with cached sources
@@ -51,6 +53,7 @@ Notes:
 
 - Public installation guidance currently covers local `stdio` only.
 - `toggle_builtin_tools` is specific to Claude Code project settings.
+- The installation snippets below intentionally use the current maintained public install source `Boulea7/GrokSearchTool`.
 
 ### Add as an MCP server
 
@@ -69,12 +72,13 @@ claude mcp add-json grok-search --scope user '{
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
     "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }'
 ```
 
-If your environment requires system certificates, add `--native-tls` to `uvx`.
+If your environment requires system certificates, add `--native-tls` to `uvx`. This is a startup/install-layer TLS workaround for enterprise proxies or self-signed chains, not a generic runtime replacement for disabling certificate verification.
 
 ### Minimal `stdio` examples for other hosts
 
@@ -91,6 +95,7 @@ args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-se
 GROK_API_URL = "https://your-api-endpoint.com/v1"
 GROK_API_KEY = "your-grok-api-key"
 TAVILY_API_KEY = "tvly-your-tavily-key"
+TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
@@ -108,6 +113,7 @@ Create a `STDIO` MCP server entry with the same core fields:
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
     "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }
@@ -120,6 +126,7 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint, ideally with `/v1` |
 | `GROK_API_KEY` | Yes | Grok API key |
 | `GROK_MODEL` | No | Default model |
+| `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |
 | `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
 | `TAVILY_ENABLED` | No | Enable or disable Tavily-backed fetch/map paths |
@@ -127,38 +134,45 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `FIRECRAWL_API_URL` | No | Firecrawl endpoint |
 | `GROK_DEBUG` | No | Enable debug logging |
 | `GROK_LOG_LEVEL` | No | Log level |
+| `GROK_LOG_DIR` | No | Log directory; `get_config_info` returns the resolved runtime path |
 | `GROK_OUTPUT_CLEANUP` | No | Enable answer cleanup |
+| `GROK_FILTER_THINK_TAGS` | No | Legacy alias for `GROK_OUTPUT_CLEANUP`; prefer `GROK_OUTPUT_CLEANUP` |
 | `GROK_RETRY_MAX_ATTEMPTS` | No | Max retry attempts |
 | `GROK_RETRY_MULTIPLIER` | No | Retry backoff multiplier |
 | `GROK_RETRY_MAX_WAIT` | No | Max retry wait |
 
 Notes:
 
+- model resolution order is `GROK_MODEL` env -> persisted `~/.config/grok-search/config.json` value from `switch_model` -> code default `grok-4.1-fast`
+- OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
+- `GROK_TIME_CONTEXT_MODE` defaults to `always`, which preserves the current behavior of always injecting local time context
 - the recommended core path is `plan_* -> web_search`
 - direct `web_search` is still allowed for clear single-hop lookups when planning adds little value
 - interactive `deep research` workflows are planned CLI-first rather than as conversational MCP/skill interactions
 - `web_fetch` still works with Firecrawl only.
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
-- `web_search` always injects local time context into the search prompt.
-- `get_config_info` now provides a lightweight doctor view with additive compatibility and readiness checks, but it is still not a full end-to-end search guarantee.
+- `web_search` injects local time context according to `GROK_TIME_CONTEXT_MODE` (`always` by default)
+- `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 
 ### Minimal smoke check
 
 For any local `stdio` host, start with this lightweight verification flow:
 
-1. Call `get_config_info`
+1. Call `get_config_info` and confirm the base config snapshot, `connection_test`, `doctor`, and `feature_readiness` match your install target; optional `search/fetch` probes may be skipped when their providers are not configured
 2. Run one `web_search`
 3. Use `get_sources` if source verification matters
-4. Only then validate `web_fetch` / `web_map` when Tavily or Firecrawl is configured
+4. Validate `web_fetch` only when Tavily or Firecrawl is configured, and validate `web_map` only when Tavily is configured and enabled
 
 ### `get_config_info` doctor output
 
-`get_config_info` keeps the current configuration snapshot and `connection_test`, and also adds:
+`Config.get_config_info()` only returns the base config snapshot. The MCP tool `get_config_info` keeps that snapshot and also adds:
 
 - `doctor`: overall doctor status, structured checks, and repair recommendations
 - `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, and `toggle_builtin_tools`
+- minimal real `web_search` / `web_fetch` probe results
 
 Optional provider probes are read-only and run only when the corresponding configuration is already present.
+The `/models` connection test uses a 10-second timeout; additional real `web_search` / `web_fetch` probes may take longer.
 
 ### `web_search` response contract
 

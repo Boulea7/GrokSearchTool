@@ -2,7 +2,7 @@ import asyncio
 import re
 import sys
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from fastmcp import FastMCP, Context
 from pydantic import Field, ValidationError
@@ -69,6 +69,8 @@ mcp = FastMCP("grok-search")
 _SOURCES_CACHE = SourcesCache(max_size=256)
 _AVAILABLE_MODELS_CACHE: dict[tuple[str, str], list[str]] = {}
 _AVAILABLE_MODELS_LOCK = asyncio.Lock()
+_SEARCH_PROBE_QUERY = "Reply with the single word ready."
+_FETCH_PROBE_URL = "https://example.com"
 
 
 async def _fetch_available_models(api_url: str, api_key: str) -> list[str]:
@@ -226,6 +228,10 @@ def _looks_like_login_page(body_text: str) -> bool:
     return any(token in normalized for token in ("login", "sign in", "signin", "auth"))
 
 
+def _looks_like_html_response(body_text: str) -> bool:
+    return "<html" in ((body_text or "").strip().lower())
+
+
 def _is_probably_truncated_content(content: str, min_length: int = 120) -> bool:
     stripped = (content or "").strip()
     if len(stripped) < min_length:
@@ -324,8 +330,74 @@ def _extra_results_to_sources(
     return sources
 
 
+def _extract_firecrawl_markdown_payload(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+
+    nested_data = data.get("data")
+    if isinstance(nested_data, dict):
+        markdown = nested_data.get("markdown")
+        if isinstance(markdown, str) and markdown.strip():
+            return markdown
+
+    markdown = data.get("markdown")
+    if isinstance(markdown, str):
+        return markdown
+
+    return ""
+
+
+def _validate_tavily_extract_payload(data: object) -> tuple[str | None, str | None]:
+    if not isinstance(data, dict):
+        return None, "Tavily 响应结构异常：缺少顶层对象"
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        return None, "Tavily 响应结构异常：缺少 results 列表"
+
+    if not results:
+        return None, "Tavily 提取成功但 results 为空"
+
+    first_item = results[0]
+    if not isinstance(first_item, dict):
+        return None, "Tavily 响应结构异常：results[0] 必须是对象"
+
+    content = first_item.get("raw_content", "")
+    if isinstance(content, str) and content.strip():
+        return content, None
+
+    return None, "Tavily 提取成功但内容为空"
+
+
+def _extract_firecrawl_search_payload(data: dict) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+
+    empty_result: list[dict] | None = None
+    nested_data = data.get("data")
+    if isinstance(nested_data, dict):
+        for key in ("web", "results"):
+            results = nested_data.get(key)
+            if isinstance(results, list):
+                if results:
+                    return results
+                if empty_result is None:
+                    empty_result = results
+
+    for key in ("web", "results"):
+        flat_results = data.get(key)
+        if isinstance(flat_results, list):
+            if flat_results:
+                return flat_results
+            if empty_result is None:
+                empty_result = flat_results
+
+    return empty_result or []
+
+
 _VALID_SEARCH_TOPICS = {"general", "news"}
 _VALID_TIME_RANGES = {"day", "week", "month", "year"}
+_DOMAIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
@@ -333,12 +405,25 @@ def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
     for item in domains or []:
         if not isinstance(item, str):
             continue
-        domain = item.strip().lower()
+        domain = item.strip().lower().rstrip(".")
         if not domain:
             continue
         if domain not in normalized:
             normalized.append(domain)
     return normalized
+
+
+def _is_valid_domain_filter(domain: str) -> bool:
+    candidate = (domain or "").strip().lower().rstrip(".")
+    if not candidate:
+        return False
+    if "://" in candidate or "/" in candidate or any(ch.isspace() for ch in candidate):
+        return False
+    if candidate == "localhost":
+        return True
+
+    labels = candidate.split(".")
+    return all(_DOMAIN_LABEL_PATTERN.fullmatch(label) for label in labels)
 
 
 def _build_search_response(
@@ -362,12 +447,54 @@ def _build_search_response(
     }
 
 
+def _build_sources_cache_entry(
+    sources: list[dict],
+    *,
+    search_status: str,
+    search_error: str | None,
+) -> dict:
+    if sources:
+        source_state = "available"
+    elif search_status == "error":
+        source_state = "unavailable_due_to_search_error"
+    else:
+        source_state = "empty"
+
+    return {
+        "sources": sources,
+        "search_status": search_status,
+        "search_error": search_error,
+        "source_state": source_state,
+    }
+
+
+def _normalize_sources_cache_entry(entry: object) -> dict | None:
+    if isinstance(entry, dict) and isinstance(entry.get("sources"), list):
+        search_status = entry.get("search_status") or "ok"
+        return {
+            "sources": entry.get("sources", []),
+            "search_status": search_status,
+            "search_error": entry.get("search_error"),
+            "source_state": entry.get("source_state") or (
+                "available"
+                if entry.get("sources")
+                else ("unavailable_due_to_search_error" if search_status == "error" else "empty")
+            ),
+        }
+
+    if isinstance(entry, list):
+        return _build_sources_cache_entry(entry, search_status="ok", search_error=None)
+
+    return None
+
+
 def _validate_search_inputs(
     query: str,
     topic: str,
     time_range: str,
     include_domains: Optional[list[str]],
     exclude_domains: Optional[list[str]],
+    extra_sources: int,
 ) -> tuple[dict, str | None]:
     normalized_query = query.strip()
     normalized_topic = (topic or "general").strip() or "general"
@@ -391,6 +518,18 @@ def _validate_search_inputs(
 
     if normalized_time_range and normalized_time_range not in _VALID_TIME_RANGES:
         return effective_params, "搜索失败: time_range 仅支持 day、week、month、year"
+
+    if isinstance(extra_sources, bool) or not isinstance(extra_sources, int):
+        return effective_params, "搜索失败: extra_sources 仅支持整数"
+
+    if extra_sources < 0:
+        return effective_params, "搜索失败: extra_sources 不能为负数"
+
+    raw_domain_items = [*(include_domains or []), *(exclude_domains or [])]
+    if any(not isinstance(item, str) or not item.strip() for item in raw_domain_items):
+        return effective_params, "搜索失败: include_domains 和 exclude_domains 仅支持非空字符串"
+    if any(not _is_valid_domain_filter(item) for item in raw_domain_items):
+        return effective_params, "搜索失败: include_domains 和 exclude_domains 仅支持合法域名"
 
     overlap = sorted(set(normalized_include_domains) & set(normalized_exclude_domains))
     if overlap:
@@ -434,6 +573,7 @@ async def web_search(
         time_range=time_range,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
+        extra_sources=extra_sources,
     )
     effective_params = {
         "platform": platform,
@@ -446,7 +586,10 @@ async def web_search(
     }
 
     if validation_error:
-        await _SOURCES_CACHE.set(session_id, [])
+        await _SOURCES_CACHE.set(
+            session_id,
+            _build_sources_cache_entry([], search_status="error", search_error="validation_error"),
+        )
         return _build_search_response(
             session_id,
             validation_error,
@@ -460,7 +603,10 @@ async def web_search(
         api_url = config.grok_api_url
         api_key = config.grok_api_key
     except ValueError as e:
-        await _SOURCES_CACHE.set(session_id, [])
+        await _SOURCES_CACHE.set(
+            session_id,
+            _build_sources_cache_entry([], search_status="error", search_error="config_error"),
+        )
         return _build_search_response(
             session_id,
             f"配置错误: {str(e)}",
@@ -474,7 +620,10 @@ async def web_search(
     if model:
         available = await _get_available_models_cached(api_url, api_key)
         if available and model not in available:
-            await _SOURCES_CACHE.set(session_id, [])
+            await _SOURCES_CACHE.set(
+                session_id,
+                _build_sources_cache_entry([], search_status="error", search_error="invalid_model"),
+            )
             return _build_search_response(
                 session_id,
                 f"无效模型: {model}",
@@ -486,6 +635,9 @@ async def web_search(
         effective_model = model
 
     grok_provider = GrokSearchProvider(api_url, api_key, effective_model)
+    grok_provider.time_context_required = bool(
+        effective_params["topic"] != "general" or effective_params["time_range"]
+    )
     warnings: list[str] = []
 
     # 计算额外信源配额
@@ -604,7 +756,6 @@ async def web_search(
             content = sanitize_answer_text(grok_result).strip() or "搜索失败: 上游未返回可用正文"
 
     standardized_sources = standardize_sources(all_sources)
-    await _SOURCES_CACHE.set(session_id, standardized_sources)
     status = "ok"
     error = None
     if grok_error:
@@ -612,6 +763,14 @@ async def web_search(
         error = grok_error_code or "upstream_request_failed"
     elif warnings:
         status = "partial"
+    await _SOURCES_CACHE.set(
+        session_id,
+        _build_sources_cache_entry(
+            standardized_sources,
+            search_status=status,
+            search_error=error,
+        ),
+    )
 
     return _build_search_response(
         session_id,
@@ -636,18 +795,48 @@ async def web_search(
 async def get_sources(
     session_id: Annotated[str, "Session ID from previous web_search call."]
 ) -> dict:
-    sources = await _SOURCES_CACHE.get(session_id)
-    if sources is None:
+    cached_entry = await _SOURCES_CACHE.get(session_id)
+    if cached_entry is None:
         return {
             "session_id": session_id,
             "sources": [],
             "sources_count": 0,
             "error": "session_id_not_found_or_expired",
         }
-    standardized_sources = standardize_sources(sources)
-    if standardized_sources != sources:
-        await _SOURCES_CACHE.set(session_id, standardized_sources)
-    return {"session_id": session_id, "sources": standardized_sources, "sources_count": len(standardized_sources)}
+    normalized_entry = _normalize_sources_cache_entry(cached_entry)
+    if normalized_entry is None:
+        return {
+            "session_id": session_id,
+            "sources": [],
+            "sources_count": 0,
+            "error": "session_id_not_found_or_expired",
+        }
+
+    standardized_sources = standardize_sources(normalized_entry["sources"])
+    recalculated_state = _build_sources_cache_entry(
+        standardized_sources,
+        search_status=normalized_entry["search_status"],
+        search_error=normalized_entry["search_error"],
+    )["source_state"]
+    updated_entry = {
+        **normalized_entry,
+        "sources": standardized_sources,
+        "source_state": recalculated_state,
+    }
+    if updated_entry != cached_entry:
+        if isinstance(cached_entry, list):
+            await _SOURCES_CACHE.set(session_id, standardized_sources)
+        else:
+            await _SOURCES_CACHE.set(session_id, updated_entry)
+
+    return {
+        "session_id": session_id,
+        "sources": standardized_sources,
+        "sources_count": len(standardized_sources),
+        "search_status": normalized_entry["search_status"],
+        "search_error": normalized_entry["search_error"],
+        "source_state": updated_entry["source_state"],
+    }
 
 
 async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
@@ -666,14 +855,12 @@ async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
             if _looks_like_login_page(response.text):
                 return None, "Tavily 返回登录页或认证页面，请检查代理认证状态"
             data = response.json()
-            if data.get("results") and len(data["results"]) > 0:
-                content = data["results"][0].get("raw_content", "")
-                if content and content.strip():
-                    if _is_probably_truncated_content(content):
-                        return None, "Tavily 提取结果疑似被截断"
-                    return content, None
-                return None, "Tavily 提取成功但内容为空"
-            return None, "Tavily 提取成功但 results 为空"
+            content, payload_error = _validate_tavily_extract_payload(data)
+            if payload_error:
+                return None, payload_error
+            if content and _is_probably_truncated_content(content):
+                return None, "Tavily 提取结果疑似被截断"
+            return content, None
     except Exception as exc:
         return None, _format_fetch_error("Tavily", exc)
 
@@ -734,7 +921,7 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             data = response.json()
-            results = data.get("data", {}).get("web", [])
+            results = _extract_firecrawl_search_payload(data)
             return [
                 {"title": r.get("title", ""), "url": r.get("url", ""), "description": r.get("description", "")}
                 for r in results
@@ -743,7 +930,12 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
         return None
 
 
-async def _call_firecrawl_scrape(url: str, ctx=None) -> tuple[str | None, str | None]:
+async def _call_firecrawl_scrape(
+    url: str,
+    ctx=None,
+    *,
+    max_retries: int | None = None,
+) -> tuple[str | None, str | None]:
     import httpx
     api_url = config.firecrawl_api_url
     api_key = config.firecrawl_api_key
@@ -751,7 +943,7 @@ async def _call_firecrawl_scrape(url: str, ctx=None) -> tuple[str | None, str | 
         return None, None
     endpoint = f"{api_url.rstrip('/')}/scrape"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    max_retries = config.retry_max_attempts
+    max_retries = max_retries or config.retry_max_attempts
     last_error: str | None = None
     for attempt in range(max_retries):
         body = {
@@ -767,7 +959,9 @@ async def _call_firecrawl_scrape(url: str, ctx=None) -> tuple[str | None, str | 
                 if _looks_like_login_page(response.text):
                     return None, "Firecrawl 返回登录页或认证页面，请检查代理认证状态"
                 data = response.json()
-                markdown = data.get("data", {}).get("markdown", "")
+                if not isinstance(data, dict):
+                    return None, "Firecrawl 响应结构异常：缺少顶层对象"
+                markdown = _extract_firecrawl_markdown_payload(data)
                 if markdown and markdown.strip():
                     if _is_probably_truncated_content(markdown):
                         last_error = "Firecrawl 返回的 markdown 疑似被截断"
@@ -855,7 +1049,19 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
         async with httpx.AsyncClient(timeout=float(timeout + 10)) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
-            data = response.json()
+            if _looks_like_login_page(response.text):
+                return "映射失败: Tavily 返回登录页或认证页面，请检查代理认证状态"
+            try:
+                data = response.json()
+            except Exception:
+                if _looks_like_html_response(response.text):
+                    return "映射失败: Tavily 返回 HTML 页面，不是合法 JSON"
+                return "映射失败: Tavily 返回非法 JSON"
+            if not isinstance(data, dict):
+                return "映射失败: Tavily map 响应结构异常：缺少顶层对象"
+            payload_error = _validate_tavily_map_probe_payload(data)
+            if payload_error:
+                return f"映射失败: Tavily map {payload_error.rstrip('。')}"
             return json.dumps({
                 "base_url": data.get("base_url", ""),
                 "results": data.get("results", []),
@@ -971,10 +1177,38 @@ async def _probe_json_endpoint(
 
         response_time_ms = (time.perf_counter() - start_time) * 1000
         response_text = (response.text or "")[:120]
+        if _looks_like_login_page(response.text or ""):
+            return _build_doctor_check(
+                check_id,
+                "error",
+                "响应看起来是登录页或认证页面。",
+                endpoint=url,
+                response_time_ms=response_time_ms,
+                error_kind="login_page",
+                status_code=response.status_code,
+            )
         try:
             data = response.json()
         except Exception:
-            data = None
+            if _looks_like_html_response(response.text or ""):
+                return _build_doctor_check(
+                    check_id,
+                    "error",
+                    "响应看起来是 HTML 页面，不是合法 JSON。",
+                    endpoint=url,
+                    response_time_ms=response_time_ms,
+                    error_kind="html_response",
+                    status_code=response.status_code,
+                )
+            return _build_doctor_check(
+                check_id,
+                "error",
+                "响应不是合法 JSON。",
+                endpoint=url,
+                response_time_ms=response_time_ms,
+                error_kind="invalid_json",
+                status_code=response.status_code,
+            )
 
         if response.status_code >= 400:
             return _build_doctor_check(
@@ -1022,12 +1256,31 @@ async def _probe_json_endpoint(
         )
 
 
+def _validate_tavily_extract_probe_payload(data: object) -> str | None:
+    _, error = _validate_tavily_extract_payload(data)
+    return f"{error}。" if error else None
+
+
+def _validate_tavily_map_probe_payload(data: object) -> str | None:
+    if not isinstance(data, dict):
+        return "响应结构异常：缺少顶层对象。"
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        return "响应结构异常：缺少 results 列表。"
+
+    return None
+
+
 def _build_connection_test_from_models_check(models_check: dict) -> dict:
     status_map = {
         "timeout": "连接超时",
         "request_error": "连接失败",
         "http_error": "连接异常",
         "config_error": "配置错误",
+        "login_page": "连接失败",
+        "html_response": "连接异常",
+        "invalid_json": "连接异常",
     }
     if models_check["status"] == "ok":
         result = {
@@ -1046,22 +1299,117 @@ def _build_connection_test_from_models_check(models_check: dict) -> dict:
     }
 
 
-def _build_feature_readiness(checks: list[dict]) -> dict:
+async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
+    import time
+
+    start_time = time.perf_counter()
+    provider = GrokSearchProvider(api_url, api_key, model)
+    try:
+        content = await provider.search(_SEARCH_PROBE_QUERY)
+    except Exception as exc:
+        return _build_doctor_check(
+            "grok_search_probe",
+            "error",
+            f"真实搜索探针失败: {_format_grok_error(exc)}",
+            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            error_kind="probe_failed",
+        )
+
+    if not sanitize_answer_text(content).strip():
+        return _build_doctor_check(
+            "grok_search_probe",
+            "error",
+            "真实搜索探针失败: 上游未返回可用正文。",
+            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            error_kind="empty_probe_response",
+        )
+
+    return _build_doctor_check(
+        "grok_search_probe",
+        "ok",
+        "真实搜索探针成功。",
+        endpoint=f"{api_url.rstrip('/')}/chat/completions",
+        response_time_ms=(time.perf_counter() - start_time) * 1000,
+    )
+
+
+async def _probe_web_fetch() -> dict:
+    import time
+
+    start_time = time.perf_counter()
+    errors: list[str] = []
+
+    if config.tavily_enabled and config.tavily_api_key:
+        content, error = await _call_tavily_extract(_FETCH_PROBE_URL)
+        if content:
+            return _build_doctor_check(
+                "web_fetch_probe",
+                "ok",
+                "真实抓取探针成功（Tavily）。",
+                endpoint=f"{config.tavily_api_url.rstrip('/')}/extract",
+                response_time_ms=(time.perf_counter() - start_time) * 1000,
+                provider="tavily",
+            )
+        if error:
+            errors.append(f"Tavily: {error}")
+
+    if config.firecrawl_api_key:
+        content, error = await _call_firecrawl_scrape(_FETCH_PROBE_URL, max_retries=1)
+        if content:
+            return _build_doctor_check(
+                "web_fetch_probe",
+                "ok",
+                "真实抓取探针成功（Firecrawl）。",
+                endpoint=f"{config.firecrawl_api_url.rstrip('/')}/scrape",
+                response_time_ms=(time.perf_counter() - start_time) * 1000,
+                provider="firecrawl",
+            )
+        if error:
+            errors.append(f"Firecrawl: {error}")
+
+    if not errors:
+        return _build_doctor_check(
+            "web_fetch_probe",
+            "skipped",
+            "未执行真实抓取探针。",
+            skipped_reason="no_fetch_provider_configured",
+        )
+
+    return _build_doctor_check(
+        "web_fetch_probe",
+        "error",
+        f"真实抓取探针失败: {'；'.join(errors)}",
+        response_time_ms=(time.perf_counter() - start_time) * 1000,
+        error_kind="probe_failed",
+    )
+
+
+def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
     grok_models = checks_by_id["grok_models"]
     grok_model_selection = checks_by_id.get("grok_model_selection")
+    grok_search_probe = checks_by_id["grok_search_probe"]
     tavily_extract = checks_by_id["tavily_extract"]
     firecrawl_scrape = checks_by_id["firecrawl_scrape"]
+    web_fetch_probe = checks_by_id["web_fetch_probe"]
     tavily_map = checks_by_id["tavily_map"]
     claude_context = checks_by_id["claude_code_project"]
 
     if grok_config["status"] != "ok":
         web_search_status = "not_ready"
         web_search_message = grok_config["message"]
-    elif grok_models["status"] == "ok":
+    elif grok_search_probe["status"] == "ok" and grok_models["status"] == "ok":
         web_search_status = "ready"
-        web_search_message = "Grok 配置完整，/models 探测成功。"
+        web_search_message = "Grok 配置完整，真实搜索探针成功。"
+    elif grok_search_probe["status"] == "ok":
+        web_search_status = "degraded"
+        web_search_message = "真实搜索探针成功，但 /models 或模型可见性探测存在问题。"
+    elif grok_search_probe["status"] == "error":
+        web_search_status = "degraded"
+        web_search_message = grok_search_probe["message"]
     else:
         web_search_status = "degraded"
         web_search_message = grok_models["message"]
@@ -1074,12 +1422,15 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
         web_search_status = "degraded"
         web_search_message = grok_model_selection["message"]
 
-    if tavily_extract["status"] == "ok" and firecrawl_scrape["status"] == "ok":
+    if web_fetch_probe["status"] == "ok":
+        web_fetch_status = "ready"
+        web_fetch_message = web_fetch_probe["message"]
+    elif tavily_extract["status"] == "ok" and firecrawl_scrape["status"] == "ok":
         web_fetch_status = "ready"
         web_fetch_message = "Tavily 与 Firecrawl 均可用。"
     elif tavily_extract["status"] == "ok" or firecrawl_scrape["status"] == "ok":
-        web_fetch_status = "partial_ready"
-        web_fetch_message = "仅部分抓取后端已验证可用。"
+        web_fetch_status = "degraded"
+        web_fetch_message = web_fetch_probe["message"] if web_fetch_probe["status"] == "error" else "仅部分抓取后端已验证可用。"
     elif tavily_extract["status"] == "skipped" and firecrawl_scrape["status"] == "skipped":
         web_fetch_status = "not_ready"
         web_fetch_message = "Tavily / Firecrawl 均未配置。"
@@ -1101,10 +1452,19 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
 
     return {
         "web_search": {"status": web_search_status, "message": web_search_message},
-        "get_sources": {
-            "status": "ready",
-            "message": "只依赖本地缓存中的历史 session_id，不依赖当前 Grok 配置。",
-        },
+        "get_sources": (
+            {
+                "status": "ready",
+                "message": "当前进程内已存在可读取的 source session 缓存。",
+                "transient": True,
+            }
+            if source_cache_size > 0
+            else {
+                "status": "partial_ready" if web_search_status != "not_ready" else "not_ready",
+                "message": "接口可用，但当前进程内尚无可读取的 source session；需先执行成功的 web_search。",
+                "transient": True,
+            }
+        ),
         "web_fetch": {"status": web_fetch_status, "message": web_fetch_message},
         "web_map": {"status": web_map_status, "message": web_map_message},
         "toggle_builtin_tools": {
@@ -1116,7 +1476,7 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
 
 
 def _feature_affects_overall_doctor_status(item: dict) -> bool:
-    return not item.get("client_specific", False)
+    return not item.get("client_specific", False) and not item.get("transient", False)
 
 
 def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommendations: list[str]) -> dict:
@@ -1156,7 +1516,7 @@ def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommend
         - Use this tool first when debugging connection, provider readiness, or installation issues.
         - API keys are automatically masked for security in the response.
         - Optional provider probes only run when their configuration is present.
-        - Connection test timeout is 10 seconds; network issues may cause delays.
+        - The `/models` connection test timeout is 10 seconds; additional real `search/fetch` probes may take longer.
     """,
     meta={"version": "1.4.0", "author": "guda.studio"},
 )
@@ -1233,6 +1593,19 @@ async def get_config_info() -> str:
                 recommendations,
                 f"将 GROK_MODEL 或本地持久化模型从 {configured_model} 切换到 /models 返回的可用模型，例如：{available_preview}。",
             )
+    if api_url and api_key:
+        grok_search_probe = await _probe_web_search(api_url, api_key, config.grok_model)
+        if grok_search_probe["status"] != "ok":
+            _append_recommendation(recommendations, "检查 chat/completions 是否真实可用，并确认当前默认模型能返回可解析正文。")
+    else:
+        grok_search_probe = _build_doctor_check(
+            "grok_search_probe",
+            "skipped",
+            "未执行真实搜索探针。",
+            skipped_reason="missing_grok_config",
+        )
+    checks.append(grok_search_probe)
+
     if config.tavily_enabled and config.tavily_api_key:
         tavily_extract = await _probe_json_endpoint(
             "tavily_extract",
@@ -1247,8 +1620,15 @@ async def get_config_info() -> str:
         )
         tavily_extract_data = tavily_extract.pop("data", None)
         if tavily_extract["status"] == "ok":
-            result_count = len((tavily_extract_data or {}).get("results", []) or [])
-            tavily_extract["message"] = f"Tavily extract 探测成功，返回 {result_count} 条结果。"
+            payload_error = _validate_tavily_extract_probe_payload(tavily_extract_data)
+            if payload_error:
+                tavily_extract["status"] = "error"
+                tavily_extract["message"] = payload_error
+                tavily_extract["error_kind"] = "invalid_response_shape"
+                _append_recommendation(recommendations, "检查 Tavily extract 是否返回了登录页、HTML 页面或异常 JSON 结构。")
+            else:
+                result_count = len((tavily_extract_data or {}).get("results", []) or [])
+                tavily_extract["message"] = f"Tavily extract 探测成功，返回 {result_count} 条结果。"
         else:
             _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily extract 端点可达。")
 
@@ -1265,8 +1645,15 @@ async def get_config_info() -> str:
         )
         tavily_map_data = tavily_map.pop("data", None)
         if tavily_map["status"] == "ok":
-            result_count = len((tavily_map_data or {}).get("results", []) or [])
-            tavily_map["message"] = f"Tavily map 探测成功，返回 {result_count} 条结果。"
+            payload_error = _validate_tavily_map_probe_payload(tavily_map_data)
+            if payload_error:
+                tavily_map["status"] = "error"
+                tavily_map["message"] = payload_error
+                tavily_map["error_kind"] = "invalid_response_shape"
+                _append_recommendation(recommendations, "检查 Tavily map 是否返回了异常 JSON 结构。")
+            else:
+                result_count = len((tavily_map_data or {}).get("results", []) or [])
+                tavily_map["message"] = f"Tavily map 探测成功，返回 {result_count} 条结果。"
         else:
             _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily map 端点可达。")
     else:
@@ -1301,8 +1688,13 @@ async def get_config_info() -> str:
         )
         firecrawl_data = firecrawl_scrape.pop("data", None)
         if firecrawl_scrape["status"] == "ok":
-            has_markdown = bool((((firecrawl_data or {}).get("data", {}) or {}).get("markdown", "") or "").strip())
-            firecrawl_scrape["message"] = "Firecrawl scrape 探测成功。" if has_markdown else "Firecrawl scrape 已响应，但 markdown 为空。"
+            has_markdown = bool(_extract_firecrawl_markdown_payload(firecrawl_data or {}).strip())
+            if has_markdown:
+                firecrawl_scrape["message"] = "Firecrawl scrape 探测成功。"
+            else:
+                firecrawl_scrape["status"] = "warning"
+                firecrawl_scrape["message"] = "Firecrawl scrape 已响应，但 markdown 为空。"
+                _append_recommendation(recommendations, "检查 Firecrawl scrape 返回内容是否为空，避免 web_fetch 被误判为 fully ready。")
         else:
             _append_recommendation(recommendations, "检查 FIRECRAWL_API_KEY / FIRECRAWL_API_URL，确认 Firecrawl scrape 端点可达。")
     else:
@@ -1314,6 +1706,10 @@ async def get_config_info() -> str:
         )
         _append_recommendation(recommendations, "若需要 Firecrawl fallback，请配置 FIRECRAWL_API_KEY。")
     checks.append(firecrawl_scrape)
+    web_fetch_probe = await _probe_web_fetch()
+    if web_fetch_probe["status"] == "error":
+        _append_recommendation(recommendations, "检查真实 web_fetch 路径是否能抓到最小页面正文，并确认提取结果不是登录页、空内容或异常结构。")
+    checks.append(web_fetch_probe)
 
     claude_project_root = _find_git_root()
     claude_context_status = "ok" if claude_project_root else "skipped"
@@ -1326,7 +1722,7 @@ async def get_config_info() -> str:
         )
     )
 
-    feature_readiness = _build_feature_readiness(checks)
+    feature_readiness = _build_feature_readiness(checks, source_cache_size=await _SOURCES_CACHE.size())
     doctor = _build_doctor_payload(checks, feature_readiness, recommendations)
     config_info["connection_test"] = _build_connection_test_from_models_check(grok_models)
     config_info["doctor"] = doctor
@@ -1532,6 +1928,35 @@ def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -
     return None
 
 
+def _validate_search_strategy_coverage(session) -> str | None:
+    missing_ids = sorted(session.missing_search_term_ids())
+    if missing_ids:
+        return _planning_validation_message(
+            f"Missing search term for sub-query ids: {', '.join(missing_ids)}",
+            "purpose",
+        )
+    return None
+
+
+def _validate_tool_mapping_item(session, sub_query_id: str, is_revision: bool = False) -> str | None:
+    if not is_revision and sub_query_id in session.tool_mapping_ids():
+        return _planning_validation_message(
+            f"Duplicate tool mapping for sub-query id: {sub_query_id}",
+            "sub_query_id",
+        )
+    return None
+
+
+def _validate_tool_mapping_coverage(session) -> str | None:
+    missing_ids = sorted(session.missing_tool_mapping_ids())
+    if missing_ids:
+        return _planning_validation_message(
+            f"Missing tool mapping for sub-query ids: {', '.join(missing_ids)}",
+            "sub_query_id",
+        )
+    return None
+
+
 def _validate_execution_plan(session, parallel: list[list[str]], sequential: list[str]) -> str | None:
     existing_ids = _get_planning_sub_query_ids(session)
     placement_stage: dict[str, int] = {}
@@ -1711,7 +2136,7 @@ async def plan_sub_query(
     boundary: Annotated[str, "What this excludes — mutual exclusion with siblings"],
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
     depends_on: Annotated[str, "Comma-separated prerequisite IDs"] = "",
-    tool_hint: Annotated[str, "web_search | web_fetch | web_map"] = "",
+    tool_hint: Annotated[Optional[Literal["web_search", "web_fetch", "web_map"]], "web_search | web_fetch | web_map"] = None,
     is_revision: Annotated[bool, "True to replace all sub-queries"] = False,
 ) -> str:
     import json
@@ -1814,7 +2239,7 @@ async def plan_tool_mapping(
             return _planning_validation_error(
                 "validation_error",
                 "Invalid tool mapping input.",
-                [{"loc": ["params_json"], "msg": "params_json must be valid JSON.", "type": "json_invalid"}],
+                [{"field": "params_json", "message": "params_json must be valid JSON.", "type": "json_invalid"}],
             )
     try:
         ToolPlanItem(**item)
@@ -1823,6 +2248,9 @@ async def plan_tool_mapping(
             return _planning_validation_error("invalid_tool", "tool must be one of web_search, web_fetch, web_map.")
         return _planning_validation_error("validation_error", "Invalid tool mapping input.", _format_validation_details(exc))
     validation_error = _validate_sub_query_reference(session, sub_query_id, "sub_query_id")
+    if validation_error:
+        return validation_error
+    validation_error = _validate_tool_mapping_item(session, sub_query_id, is_revision=is_revision)
     if validation_error:
         return validation_error
     return json.dumps(planning_engine.process_phase(
@@ -1856,6 +2284,12 @@ async def plan_execution(
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid execution plan input.", _format_validation_details(exc))
     if "tool_selection" in session.phases or "execution_order" in session.phases:
+        validation_error = _validate_search_strategy_coverage(session)
+        if validation_error:
+            return validation_error
+        validation_error = _validate_tool_mapping_coverage(session)
+        if validation_error:
+            return validation_error
         validation_error = _validate_execution_plan(session, parallel, seq)
         if validation_error:
             return validation_error

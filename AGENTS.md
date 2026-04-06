@@ -29,13 +29,16 @@ uv run --with pytest --with pytest-asyncio pytest -q
 
 请参考 [README.md](./README.md) 与 [README.en.md](./README.en.md) 中的 `claude mcp add-json` 示例。
 
+当前公开的 `stdio` 安装示例默认以维护中的发布仓库 `Boulea7/GrokSearchTool` 为准；本地开发工作区与历史远端命名不应被理解为仍按 `fork/upstream` PR 模式协作。
+
 ## 参数说明
 
 ### 核心环境变量
 
 - `GROK_API_URL`：Grok/OpenAI-compatible API 地址
 - `GROK_API_KEY`：Grok API 密钥
-- `GROK_MODEL`：默认模型，未设置时使用代码默认值
+- `GROK_MODEL`：默认模型；优先级为环境变量 > `~/.config/grok-search/config.json` 持久化值 > 代码默认值
+- `GROK_TIME_CONTEXT_MODE`：时间上下文注入策略，支持 `always` / `auto` / `never`
 - `TAVILY_API_KEY` / `TAVILY_API_URL`：Tavily 配置
 - `FIRECRAWL_API_KEY` / `FIRECRAWL_API_URL`：Firecrawl 配置
 - `GROK_RETRY_MAX_ATTEMPTS` / `GROK_RETRY_MULTIPLIER` / `GROK_RETRY_MAX_WAIT`：重试配置
@@ -85,9 +88,11 @@ uv run --with pytest --with pytest-asyncio pytest -q
 ## 稳定注意事项
 
 - `GROK_API_URL` 应尽量使用 OpenAI-compatible 根路径并显式带上 `/v1`
-- `get_config_info` 当前可用于配置与连通性初检，但还不是完整的端到端兼容性诊断
+- `get_config_info` 当前可用于配置与连通性初检，并默认执行最小真实 `search/fetch` 探针；但还不是完整的端到端兼容性诊断
 - `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`
+- `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`
 - `get_sources` 当前会统一返回标准化 metadata，并按 `score`、来源身份清晰度与稳定去重后的顺序生成 `rank`
-- `get_config_info` 当前已支持轻量 doctor 输出：保留 `connection_test`，并新增 `doctor` 与 `feature_readiness`
+- `Config.get_config_info()` 只返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并新增 `connection_test`、`doctor`、`feature_readiness` 与最小真实探针结果
 - `web_fetch` 目前优先使用 Tavily extract，失败时回退到 Firecrawl scrape
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性
+- 若本地 `stdio` 安装/启动在企业或自签证书环境中失败，优先在 `uvx` 启动命令中增加 `--native-tls`，不要草率记录成关闭 TLS 校验

@@ -17,6 +17,8 @@
 
 Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的轻量 MCP 服务器，采用**双引擎架构**：**Grok** 负责 AI 驱动的智能搜索，**Tavily** 负责高保真网页抓取与站点映射，各取所长为 Claude Code / Cherry Studio / Codex CLI 等 LLM Client 提供可核验来源的实时网络上下文能力。当前推荐主路径是 `plan_* -> web_search`；对于明确单跳、低歧义、规划收益很低的查询，也允许直接调用 `web_search`。更重的深度探索能力将继续收口到 `deep research`，并优先在 CLI 落地。
 
+当前公开的 `stdio` 安装示例以维护中的发布仓库 `Boulea7/GrokSearchTool` 为准；本地开发工作区、历史远端命名或旧协作痕迹不代表项目仍按 `fork/upstream` PR 模式推进。
+
 ```
 Claude ──MCP──► Grok Search Server
                   ├─ web_search  ───► Grok API（AI 搜索）
@@ -62,6 +64,7 @@ Claude ──MCP──► Grok Search Server
 
 - 公开安装文档当前只承诺本地 `stdio` 路径
 - `toggle_builtin_tools` 仅适用于 Claude Code 项目级设置
+- 下面的安装片段默认使用当前维护中的公开安装源 `Boulea7/GrokSearchTool`
 
 <details>
 <summary><b>安装 uv</b></summary>
@@ -100,7 +103,8 @@ claude mcp add-json grok-search --scope user '{
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
-    "TAVILY_API_URL": "https://api.tavily.com"
+    "TAVILY_API_URL": "https://api.tavily.com",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }'
 ```
@@ -151,7 +155,7 @@ certificate verify failed
 self signed certificate in certificate chain
 ```
 
-可以在 uvx 参数中添加 --native-tls，使其使用系统证书库：
+可以在 `uvx` 参数中添加 `--native-tls`，让安装/启动过程使用系统证书库。它适合处理企业代理、自签证书或系统证书链问题，不应被理解为通用的运行时 `verify=false` 替代方案：
 
 ```bash
 claude mcp add-json grok-search --scope user '{
@@ -167,7 +171,8 @@ claude mcp add-json grok-search --scope user '{
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
-    "TAVILY_API_URL": "https://api.tavily.com"
+    "TAVILY_API_URL": "https://api.tavily.com",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }'
 ```
@@ -180,6 +185,7 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式） |
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
 | `GROK_MODEL` | 否 | `grok-4.1-fast` | 默认模型（设置后优先于 `~/.config/grok-search/config.json`） |
+| `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 web_fetch / web_map） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
 | `TAVILY_ENABLED` | 否 | `true` | 是否启用 Tavily |
@@ -187,8 +193,9 @@ claude mcp add-json grok-search --scope user '{
 | `FIRECRAWL_API_URL` | 否 | `https://api.firecrawl.dev/v2` | Firecrawl API 地址 |
 | `GROK_DEBUG` | 否 | `false` | 调试模式 |
 | `GROK_LOG_LEVEL` | 否 | `INFO` | 日志级别 |
-| `GROK_LOG_DIR` | 否 | `logs` | 日志目录 |
+| `GROK_LOG_DIR` | 否 | `logs` | 日志目录；`get_config_info` 中展示的是解析后的运行时绝对路径 |
 | `GROK_OUTPUT_CLEANUP` | 否 | `true` | 是否启用 `web_search` 输出清洗 |
+| `GROK_FILTER_THINK_TAGS` | 否 | 兼容别名 | `GROK_OUTPUT_CLEANUP` 的旧别名，优先推荐配置 `GROK_OUTPUT_CLEANUP` |
 | `GROK_RETRY_MAX_ATTEMPTS` | 否 | `3` | 最大重试次数 |
 | `GROK_RETRY_MULTIPLIER` | 否 | `1` | 重试退避乘数 |
 | `GROK_RETRY_MAX_WAIT` | 否 | `10` | 重试最大等待秒数 |
@@ -196,7 +203,9 @@ claude mcp add-json grok-search --scope user '{
 | `PYTHONUNBUFFERED` | 否 | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
 | `PYTHONUTF8` | 否 | `1` | 强制 Python UTF-8 模式 |
 
-> 当前代码默认值是 `grok-4.1-fast`。如需切换到其他模型，请优先确认对应中转站的兼容质量。
+> 模型解析优先级为：`GROK_MODEL` 环境变量 > `~/.config/grok-search/config.json` 中由 `switch_model` 持久化的值 > 代码默认值 `grok-4.1-fast`。如使用 OpenRouter 兼容地址，运行时还会自动补齐 `:online` 后缀。
+
+> `GROK_TIME_CONTEXT_MODE` 默认是 `always`，保持当前“全量注入本地时间上下文”的行为；如需节省上下文，可改为 `auto` 或 `never`。
 
 ### 本地优先启动建议
 
@@ -210,6 +219,7 @@ uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
 
 - `GROK_API_URL` 尽量写成 OpenAI 兼容根路径并显式带上 `/v1`
 - `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
+- 如需更省上下文，可将 `GROK_TIME_CONTEXT_MODE` 设为 `auto`（只在明显时效查询或显式时效控制下注入）或 `never`
 - 若 `content` 为空，先检查中转站是否真的返回了正文；若 `sources_count=0`，再检查是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
 
 
@@ -223,10 +233,10 @@ claude mcp list
 
 无论你使用 Claude Code、Codex CLI 还是 Cherry Studio，建议至少做以下本地 `stdio` 验证：
 
-1. 先调用 `get_config_info`，确认 `doctor`、`feature_readiness` 和 `/models` 探测结果正常
+1. 先调用 `get_config_info`，确认基础配置快照、`connection_test`、`doctor` 与 `feature_readiness` 符合你的安装目标；可选的 `search/fetch` 探针在未配置对应 provider 时允许跳过或显示 `not_ready`
 2. 再调用一次 `web_search`，验证主搜索链路可用
 3. 若需要引用核对，再调用 `get_sources`
-4. 只有在配置了 Tavily / Firecrawl 后，再额外验证 `web_fetch` / `web_map`
+4. 配置了 Tavily 或 Firecrawl 后再验证 `web_fetch`；仅在配置并启用 Tavily 后再验证 `web_map`
 
 显示连接成功后，我们**十分推荐**在 Claude 对话中输入
 ```
@@ -260,7 +270,7 @@ claude mcp list
 | `include_domains` | string[] | 否 | `[]` | Tavily 补充搜索白名单域名 |
 | `exclude_domains` | string[] | 否 | `[]` | Tavily 补充搜索黑名单域名 |
 
-自动注入本地时间上下文，以提升时效性搜索的准确度。
+默认会注入本地时间上下文，以提升时效性搜索的准确度；可通过 `GROK_TIME_CONTEXT_MODE=always|auto|never` 调整。
 
 返回值（结构化字典）：
 - `session_id`: 本次查询的会话 ID
@@ -307,10 +317,11 @@ claude mcp list
 
 ### `get_config_info` — 配置诊断
 
-无需参数。显示当前配置、执行轻量 doctor 检查，并返回：
+无需参数。`Config.get_config_info()` 只负责返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并由 server 层补充诊断结果，返回：
 
 - Grok `/models` 连通性与可用模型
 - Tavily / Firecrawl 的只读探测结果（仅在已配置时执行）
+- 默认最小真实 `web_search` / `web_fetch` 探针结果
 - `web_search` / `get_sources` / `web_fetch` / `web_map` / `toggle_builtin_tools` 的 readiness 汇总
 - 修复建议列表（API Key 自动脱敏）
 
