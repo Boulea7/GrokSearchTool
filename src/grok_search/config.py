@@ -17,7 +17,58 @@ class Config:
             cls._instance = super().__new__(cls)
             cls._instance._config_file = None
             cls._instance._cached_model = None
+            cls._instance._project_env_cache = None
         return cls._instance
+
+    def _project_root(self) -> Path:
+        root = Path.cwd().resolve()
+        while True:
+            if (root / ".git").exists() or (root / "pyproject.toml").exists() or (root / "AGENTS.md").exists():
+                return root
+            if root == root.parent:
+                return Path.cwd().resolve()
+            root = root.parent
+
+    def _parse_env_file(self, path: Path) -> dict[str, str]:
+        parsed: dict[str, str] = {}
+        if not path.exists():
+            return parsed
+        try:
+            for raw_line in path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                if not key:
+                    continue
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                    value = value[1:-1]
+                parsed[key] = value
+        except OSError:
+            return {}
+        return parsed
+
+    def _load_project_env(self) -> dict[str, str]:
+        if self._project_env_cache is not None:
+            return self._project_env_cache
+
+        project_root = self._project_root()
+        merged: dict[str, str] = {}
+        for name in (".env", ".env.local"):
+            merged.update(self._parse_env_file(project_root / name))
+        self._project_env_cache = merged
+        return merged
+
+    def _get_env_value(self, key: str, default: str | None = None) -> str | None:
+        value = os.getenv(key)
+        if value:
+            return value
+        project_value = self._load_project_env().get(key)
+        if project_value:
+            return project_value
+        return default
 
     @property
     def config_file(self) -> Path:
@@ -49,35 +100,35 @@ class Config:
 
     @property
     def debug_enabled(self) -> bool:
-        return os.getenv("GROK_DEBUG", "false").lower() in ("true", "1", "yes")
+        return (self._get_env_value("GROK_DEBUG", "false") or "false").lower() in ("true", "1", "yes")
 
     @property
     def retry_max_attempts(self) -> int:
-        return int(os.getenv("GROK_RETRY_MAX_ATTEMPTS", "3"))
+        return int(self._get_env_value("GROK_RETRY_MAX_ATTEMPTS", "3") or "3")
 
     @property
     def retry_multiplier(self) -> float:
-        return float(os.getenv("GROK_RETRY_MULTIPLIER", "1"))
+        return float(self._get_env_value("GROK_RETRY_MULTIPLIER", "1") or "1")
 
     @property
     def retry_max_wait(self) -> int:
-        return int(os.getenv("GROK_RETRY_MAX_WAIT", "10"))
+        return int(self._get_env_value("GROK_RETRY_MAX_WAIT", "10") or "10")
 
     @property
     def output_cleanup_enabled(self) -> bool:
-        raw = os.getenv("GROK_OUTPUT_CLEANUP")
+        raw = self._get_env_value("GROK_OUTPUT_CLEANUP")
         if raw is None:
-            raw = os.getenv("GROK_FILTER_THINK_TAGS", "true")
+            raw = self._get_env_value("GROK_FILTER_THINK_TAGS", "true")
         return raw.lower() in ("true", "1", "yes")
 
     @property
     def time_context_mode(self) -> str:
-        raw = os.getenv("GROK_TIME_CONTEXT_MODE", "always").strip().lower()
+        raw = (self._get_env_value("GROK_TIME_CONTEXT_MODE", "always") or "always").strip().lower()
         return raw if raw in {"always", "auto", "never"} else "always"
 
     @property
     def grok_api_url(self) -> str:
-        url = os.getenv("GROK_API_URL")
+        url = self._get_env_value("GROK_API_URL")
         if not url:
             raise ValueError(
                 f"Grok API URL 未配置！\n"
@@ -87,7 +138,7 @@ class Config:
 
     @property
     def grok_api_key(self) -> str:
-        key = os.getenv("GROK_API_KEY")
+        key = self._get_env_value("GROK_API_KEY")
         if not key:
             raise ValueError(
                 f"Grok API Key 未配置！\n"
@@ -97,31 +148,31 @@ class Config:
 
     @property
     def tavily_enabled(self) -> bool:
-        return os.getenv("TAVILY_ENABLED", "true").lower() in ("true", "1", "yes")
+        return (self._get_env_value("TAVILY_ENABLED", "true") or "true").lower() in ("true", "1", "yes")
 
     @property
     def tavily_api_url(self) -> str:
-        return os.getenv("TAVILY_API_URL", "https://api.tavily.com")
+        return self._get_env_value("TAVILY_API_URL", "https://api.tavily.com") or "https://api.tavily.com"
 
     @property
     def tavily_api_key(self) -> str | None:
-        return os.getenv("TAVILY_API_KEY")
+        return self._get_env_value("TAVILY_API_KEY")
 
     @property
     def firecrawl_api_url(self) -> str:
-        return os.getenv("FIRECRAWL_API_URL", "https://api.firecrawl.dev/v2")
+        return self._get_env_value("FIRECRAWL_API_URL", "https://api.firecrawl.dev/v2") or "https://api.firecrawl.dev/v2"
 
     @property
     def firecrawl_api_key(self) -> str | None:
-        return os.getenv("FIRECRAWL_API_KEY")
+        return self._get_env_value("FIRECRAWL_API_KEY")
 
     @property
     def log_level(self) -> str:
-        return os.getenv("GROK_LOG_LEVEL", "INFO").upper()
+        return (self._get_env_value("GROK_LOG_LEVEL", "INFO") or "INFO").upper()
 
     @property
     def log_dir(self) -> Path:
-        log_dir_str = os.getenv("GROK_LOG_DIR", "logs")
+        log_dir_str = self._get_env_value("GROK_LOG_DIR", "logs") or "logs"
         log_dir = Path(log_dir_str)
         if log_dir.is_absolute():
             return log_dir
@@ -159,7 +210,7 @@ class Config:
             return self._cached_model
 
         model = (
-            os.getenv("GROK_MODEL")
+            self._get_env_value("GROK_MODEL")
             or self._load_config_file().get("model")
             or self._DEFAULT_MODEL
         )
@@ -174,6 +225,7 @@ class Config:
 
     def reset_runtime_state(self) -> None:
         self._cached_model = None
+        self._project_env_cache = None
 
     @staticmethod
     def _mask_api_key(key: str) -> str:
