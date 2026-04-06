@@ -248,6 +248,8 @@ def _split_function_call_sources(text: str) -> tuple[str, list[dict]] | None:
         return None
 
     for m in reversed(matches):
+        if _is_inside_fenced_code_block(text, m.start()):
+            continue
         open_paren_idx = m.end() - 1
         extracted = _extract_balanced_call_at_end(text, open_paren_idx)
         if not extracted:
@@ -309,6 +311,8 @@ def _split_heading_sources(text: str) -> tuple[str, list[dict]] | None:
         return None
 
     for m in reversed(matches):
+        if _is_inside_fenced_code_block(text, m.start()):
+            continue
         start = m.start()
         sources_text = text[start:]
         sources = extract_sources_from_text(sources_text)
@@ -352,6 +356,8 @@ def _split_tail_link_block(text: str) -> tuple[str, list[dict]] | None:
         return None
 
     answer = "\n".join(lines[:tail_start]).rstrip()
+    if _looks_like_list_intro(answer):
+        return None
     return answer, sources
 
 
@@ -387,6 +393,18 @@ def _is_link_only_line(line: str) -> bool:
     if _MD_LINK_PATTERN.search(stripped):
         return True
     return False
+
+
+def _is_inside_fenced_code_block(text: str, index: int) -> bool:
+    return text[:index].count("```") % 2 == 1
+
+
+def _looks_like_list_intro(text: str) -> bool:
+    stripped = (text or "").rstrip()
+    if not stripped:
+        return False
+    last_line = stripped.splitlines()[-1].strip()
+    return bool(last_line) and last_line.endswith(":")
 
 
 def _parse_sources_payload(payload: str) -> list[dict]:
