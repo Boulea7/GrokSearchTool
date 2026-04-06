@@ -123,6 +123,7 @@ async def test_web_search_surfaces_http_redirect(monkeypatch):
 async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "auto")
 
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
@@ -148,6 +149,7 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
 
     assert payload["connection_test"]["status"] == "连接成功"
+    assert payload["GROK_TIME_CONTEXT_MODE"] == "auto"
     assert payload["doctor"]["status"] == "ok"
     assert payload["doctor"]["checks"]
     assert checks["grok_search_probe"]["status"] == "ok"
@@ -559,6 +561,31 @@ async def test_web_search_echoes_effective_params_for_new_controls(monkeypatch):
     assert result["effective_params"]["time_range"] == "week"
     assert result["effective_params"]["include_domains"] == ["openai.com"]
     assert result["effective_params"]["exclude_domains"] == ["example.com"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_sets_time_context_hint_for_auto_mode_when_controls_require_recency(monkeypatch):
+    captured = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            self.time_context_required = False
+
+        async def search(self, query, platform):
+            captured["time_context_required"] = self.time_context_required
+            return "Search answer"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "auto")
+
+    result = await server.web_search(
+        "OpenAI release notes",
+        topic="news",
+        time_range="week",
+    )
+
+    assert result["status"] in {"ok", "partial"}
+    assert captured["time_context_required"] is True
 
 
 @pytest.mark.asyncio

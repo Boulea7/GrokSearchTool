@@ -140,7 +140,13 @@ class GrokSearchProvider(BaseSearchProvider):
         if platform:
             platform_prompt = "\n\nYou should search the web for the information you need, and focus on these platform: " + platform + "\n"
 
-        time_context = get_local_time_info() + "\n"
+        time_context_mode = config.time_context_mode
+        time_context_required = bool(getattr(self, "time_context_required", False))
+        should_inject_time_context = (
+            time_context_mode == "always"
+            or (time_context_mode == "auto" and (_needs_time_context(query) or time_context_required))
+        )
+        time_context = get_local_time_info() + "\n" if should_inject_time_context else ""
 
         payload = {
             "model": self.model,

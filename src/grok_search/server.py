@@ -635,6 +635,9 @@ async def web_search(
         effective_model = model
 
     grok_provider = GrokSearchProvider(api_url, api_key, effective_model)
+    grok_provider.time_context_required = bool(
+        effective_params["topic"] != "general" or effective_params["time_range"]
+    )
     warnings: list[str] = []
 
     # 计算额外信源配额

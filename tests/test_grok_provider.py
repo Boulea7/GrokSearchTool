@@ -36,6 +36,76 @@ async def test_search_uses_non_stream_completion_and_user_agent(monkeypatch):
     assert captured["headers"]["User-Agent"] == "grok-search-mcp/0.1.0"
     assert captured["headers"]["Accept"] == "application/json, text/event-stream"
     assert captured["payload"]["stream"] is False
+    assert "[Current Time Context]" in captured["payload"]["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_search_auto_mode_skips_time_context_for_static_query(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    captured = {}
+    monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "auto")
+
+    async def fake_execute(headers, payload, ctx):
+        captured["payload"] = payload
+        return "ok"
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    await provider.search("Explain FastAPI dependency injection")
+
+    assert "[Current Time Context]" not in captured["payload"]["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_search_auto_mode_injects_time_context_for_temporal_query(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    captured = {}
+    monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "auto")
+
+    async def fake_execute(headers, payload, ctx):
+        captured["payload"] = payload
+        return "ok"
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    await provider.search("What changed this week in FastAPI?")
+
+    assert "[Current Time Context]" in captured["payload"]["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_search_auto_mode_injects_time_context_when_runtime_hint_is_set(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    provider.time_context_required = True
+    captured = {}
+    monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "auto")
+
+    async def fake_execute(headers, payload, ctx):
+        captured["payload"] = payload
+        return "ok"
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    await provider.search("OpenAI release notes")
+
+    assert "[Current Time Context]" in captured["payload"]["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_search_never_mode_skips_time_context_even_for_temporal_query(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    captured = {}
+    monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "never")
+
+    async def fake_execute(headers, payload, ctx):
+        captured["payload"] = payload
+        return "ok"
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    await provider.search("What changed this week in FastAPI?")
+
+    assert "[Current Time Context]" not in captured["payload"]["messages"][1]["content"]
 
 
 @pytest.mark.asyncio

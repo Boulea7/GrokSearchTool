@@ -71,6 +71,11 @@ class Config:
         return raw.lower() in ("true", "1", "yes")
 
     @property
+    def time_context_mode(self) -> str:
+        raw = os.getenv("GROK_TIME_CONTEXT_MODE", "always").strip().lower()
+        return raw if raw in {"always", "auto", "never"} else "always"
+
+    @property
     def grok_api_url(self) -> str:
         url = os.getenv("GROK_API_URL")
         if not url:
@@ -192,6 +197,7 @@ class Config:
             "GROK_MODEL": self.grok_model,
             "GROK_DEBUG": self.debug_enabled,
             "GROK_OUTPUT_CLEANUP": self.output_cleanup_enabled,
+            "GROK_TIME_CONTEXT_MODE": self.time_context_mode,
             "GROK_LOG_LEVEL": self.log_level,
             "GROK_LOG_DIR": str(self.log_dir),
             "TAVILY_API_URL": self.tavily_api_url,
