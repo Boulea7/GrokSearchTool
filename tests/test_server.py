@@ -833,6 +833,36 @@ async def test_web_search_echoes_effective_params_for_new_controls(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_accepts_finance_topic_for_tavily_search(monkeypatch):
+    captured = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        captured["topic"] = kwargs["topic"]
+        return [{"title": "Tavily", "url": "https://tavily.example.com", "content": "t"}]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search(
+        "test query",
+        topic="finance",
+        extra_sources=1,
+    )
+
+    assert result["status"] == "ok"
+    assert result["effective_params"]["topic"] == "finance"
+    assert captured["topic"] == "finance"
+
+
+@pytest.mark.asyncio
 async def test_web_search_sets_time_context_hint_for_auto_mode_when_controls_require_recency(monkeypatch):
     captured = {}
 
@@ -902,7 +932,6 @@ async def test_web_search_rejects_overlapping_include_and_exclude_domains():
     ("query", "kwargs", "expected_substring", "expected_effective"),
     [
         ("   ", {}, "query 不能为空", {"topic": "general", "time_range": None}),
-        ("test query", {"topic": "finance"}, "topic 仅支持 general 或 news", {"topic": "finance"}),
         ("test query", {"time_range": "hour"}, "time_range 仅支持 day、week、month、year", {"time_range": "hour"}),
         (
             "test query",
@@ -1661,6 +1690,39 @@ async def test_web_fetch_preserves_config_error_when_no_extractors(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_rejects_loopback_target_before_provider_calls(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    async def fake_tavily(url):
+        calls["tavily"] += 1
+        return "# Tavily", None
+
+    async def fake_firecrawl(url, ctx):
+        calls["firecrawl"] += 1
+        return "# Firecrawl", None
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_fetch("http://127.0.0.1/private")
+
+    assert "不能指向本地或私有网络" in result
+    assert calls == {"tavily": 0, "firecrawl": 0}
+
+
+@pytest.mark.asyncio
+async def test_web_map_rejects_invalid_scheme_before_provider_calls(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+
+    result = await server.web_map("file:///tmp/secret.txt")
+
+    assert "仅支持 http/https URL" in result
+
+
+@pytest.mark.asyncio
 async def test_web_fetch_falls_back_when_tavily_reports_truncated_content(monkeypatch):
     async def fake_tavily(url):
         return None, "Tavily 提取结果疑似被截断"
@@ -1822,6 +1884,27 @@ async def test_call_tavily_map_surfaces_http_error(monkeypatch):
 
     assert "HTTP错误" in result
     assert "502" in result
+
+
+@pytest.mark.asyncio
+async def test_call_tavily_map_masks_sensitive_http_error_text(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    responses = {
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            502,
+            text='{"error":"Bearer tvly-test token=abc123"}',
+            headers={"content-type": "application/json"},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    result = await server._call_tavily_map("https://example.com")
+
+    assert "tvly-test" not in result
+    assert "abc123" not in result
+    assert "Bearer ***" in result
+    assert "token=***" in result
 
 
 @pytest.mark.asyncio
@@ -2085,3 +2168,32 @@ async def test_call_firecrawl_search_prefers_non_empty_results_when_web_list_is_
             "description": "Fallback results shape",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_search_clamps_limit_to_provider_max(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    captured = {}
+
+    class CapturingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["json"] = json
+            response = httpx.Response(200, json={"results": []})
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", CapturingAsyncClient)
+
+    results = await server._call_firecrawl_search("test query", limit=150)
+
+    assert results == []
+    assert captured["json"]["limit"] == 100
