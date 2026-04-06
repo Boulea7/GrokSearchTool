@@ -165,6 +165,34 @@ async def test_get_config_info_marks_missing_grok_config_as_not_ready(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_probe_json_endpoint_masks_sensitive_http_error_text(monkeypatch):
+    monkeypatch.setenv("GROK_API_KEY", "sk-secret-value")
+    patch_async_client(
+        monkeypatch,
+        {
+            ("GET", "https://api.example.com/v1/models"): httpx.Response(
+                403,
+                text='{"error":"Bearer sk-secret-value token=abc123"}',
+                headers={"content-type": "application/json"},
+            ),
+        },
+    )
+
+    result = await server._probe_json_endpoint(
+        "grok_models",
+        "GET",
+        "https://api.example.com/v1/models",
+        {"Authorization": "Bearer sk-secret-value"},
+    )
+
+    assert result["status"] == "error"
+    assert "sk-secret-value" not in result["message"]
+    assert "abc123" not in result["message"]
+    assert "Bearer ***" in result["message"]
+    assert "token=***" in result["message"]
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_skips_unconfigured_optional_providers(monkeypatch):
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(

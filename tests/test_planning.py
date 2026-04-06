@@ -1508,6 +1508,73 @@ async def test_plan_search_term_rejects_mutation_after_execution_order_exists():
 
 
 @pytest.mark.asyncio
+async def test_plan_execution_rejects_implicit_overwrite_without_revision():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers deeply.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need full planning.",
+        level=3,
+        estimated_sub_queries=1,
+        estimated_tool_calls=4,
+        justification="Need execution order overwrite protection.",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Only sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed strategy.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map the only sub-query.",
+        sub_query_id="sq1",
+        tool="web_search",
+        reason="Need comparison facts.",
+    )
+    await server.plan_execution(
+        session_id=session_id,
+        thought="Complete execution ordering.",
+        parallel_groups="sq1",
+        sequential="",
+        estimated_rounds=1,
+    )
+
+    result = json.loads(
+        await server.plan_execution(
+            session_id=session_id,
+            thought="Implicit overwrite should fail.",
+            parallel_groups="",
+            sequential="sq1",
+            estimated_rounds=1,
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "is_revision=true" in result["message"].lower()
+    assert result["details"][0]["field"] == "is_revision"
+
+
+@pytest.mark.asyncio
 async def test_plan_sub_query_rejects_self_dependency():
     intent = json.loads(
         await server.plan_intent(
