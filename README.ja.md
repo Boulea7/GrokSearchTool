@@ -13,7 +13,7 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 - `web_fetch`: Tavily 優先、失敗時は Firecrawl にフォールバック
 - `web_map`: サイト構造をマッピング
 - `plan_*`: 複雑または曖昧な検索のための段階的プランニング
-- `get_config_info`: 設定確認と `/models` 接続テスト
+- `get_config_info`: 設定確認、`/models` 接続性、軽量 doctor
 - `switch_model`: デフォルト Grok モデルを切り替え
 - `toggle_builtin_tools`: Claude Code の組み込み WebSearch / WebFetch を切り替え
 
@@ -26,6 +26,18 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 - Python `3.10+`
 - `uv`
 - stdio MCP をサポートするクライアント
+
+### サポートレベル
+
+- `Officially tested`: Claude Code
+- `Community-tested`: Codex スタイルの MCP クライアント、Cherry Studio
+- `Planned`: Dify、n8n、Coze
+
+補足:
+
+- 公開ドキュメントが保証するのは現在ローカル `stdio` 構成のみです。
+- `toggle_builtin_tools` は Claude Code のプロジェクト設定専用です。
+- 以下のインストール例は、現在メンテナンスされている公開配布元 `Boulea7/GrokSearchTool` を使います。
 
 ### MCP として追加
 
@@ -42,19 +54,90 @@ claude mcp add-json grok-search --scope user '{
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
     "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }'
 ```
+
+システム証明書ストアが必要な環境では、`uvx` に `--native-tls` を追加してください。これは企業プロキシや自己署名証明書チェーン向けの起動/インストール層 TLS 回避策であり、一般的な実行時 `verify=false` の代替ではありません。
+
+### 他の `stdio` ホスト向け最小設定
+
+#### Codex CLI / Codex-style clients
+
+```toml
+[mcp_servers.grok-search]
+command = "uvx"
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+
+[mcp_servers.grok-search.env]
+GROK_API_URL = "https://api.example.com/v1"
+GROK_API_KEY = "your-grok-api-key"
+TAVILY_API_KEY = "tvly-your-tavily-key"
+FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
+```
+
+#### Cherry Studio
+
+```json
+{
+  "name": "grok-search",
+  "type": "stdio",
+  "command": "uvx",
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "env": {
+    "GROK_API_URL": "https://api.example.com/v1",
+    "GROK_API_KEY": "your-grok-api-key",
+    "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
+  }
+}
+```
+
+### 主要な環境変数
+
+| 変数 | 必須 | 説明 |
+| --- | --- | --- |
+| `GROK_API_URL` | Yes | OpenAI 互換 Grok エンドポイント。`/v1` を明示推奨 |
+| `GROK_API_KEY` | Yes | Grok API Key |
+| `GROK_MODEL` | No | デフォルトモデル。優先順位は env > 永続 config > コード既定値 |
+| `GROK_TIME_CONTEXT_MODE` | No | 時間コンテキスト注入モード：`always` / `auto` / `never` |
+| `TAVILY_API_KEY` | No | `web_fetch` / `web_map` 用 Tavily Key |
+| `TAVILY_API_URL` | No | Tavily API エンドポイント |
+| `TAVILY_ENABLED` | No | Tavily ルートを有効化するか |
+| `FIRECRAWL_API_KEY` | No | Firecrawl fallback Key |
+| `FIRECRAWL_API_URL` | No | Firecrawl API エンドポイント |
+| `GROK_LOG_DIR` | No | ログディレクトリ。`get_config_info` は解決後の実行時パスを返す |
+| `GROK_OUTPUT_CLEANUP` | No | `web_search` 出力クリーンアップを有効化するか |
+| `GROK_FILTER_THINK_TAGS` | No | `GROK_OUTPUT_CLEANUP` の旧エイリアス |
+| `GROK_RETRY_MAX_ATTEMPTS` | No | 最大リトライ回数 |
+| `GROK_RETRY_MULTIPLIER` | No | リトライ時のバックオフ倍率 |
+| `GROK_RETRY_MAX_WAIT` | No | 最大待機秒数 |
+
+補足:
+
+- `switch_model` は `~/.config/grok-search/config.json` の永続値のみを更新します。`GROK_MODEL` が設定されている場合は env が優先されます。
+- `GROK_TIME_CONTEXT_MODE` の既定値は `always` で、現在の「常にローカル時間を注入する」動作を維持します。
 
 補足:
 
 - 推奨されるコア経路は `plan_* -> web_search` です。明確な単発検索では直接 `web_search` も利用できます。
 - インタラクティブな `deep research` 体験は、MCP / skill ではなく CLI を優先して提供する予定です。
 - `web_fetch` は Firecrawl のみでも動作します。
-- `web_map` には Tavily が必要です。
-- `web_search` はローカル時間コンテキストを常に注入します。
-- `get_config_info` は現在 `/models` のみを検証します。
+- `web_map` には Tavily と `TAVILY_ENABLED=true` が必要です。
+- `web_search` は `GROK_TIME_CONTEXT_MODE` に従ってローカル時間コンテキストを注入します（既定値は `always`）。
+- `get_config_info` はベース設定スナップショットと `connection_test` を維持しつつ、server 側で軽量な `doctor`、`feature_readiness`、最小の実検索/実取得プローブを追加します。ただし、完全なエンドツーエンド保証ではありません。
+
+### 最小 smoke check
+
+任意のローカル `stdio` ホストでは、少なくとも次の順で確認してください。
+
+1. `get_config_info` を呼び、ベース設定スナップショット、`connection_test`、`doctor`、`feature_readiness` が想定どおりか確認する。対応 provider 未設定時は追加の `search/fetch` probe が skip されても問題ない
+2. `web_search` を 1 回実行する
+3. ソース確認が必要なら `get_sources` を呼ぶ
+4. Tavily / Firecrawl を設定している場合のみ `web_fetch` を検証し、`web_map` は Tavily を設定・有効化している場合のみ検証する
 
 ## Companion Skill
 

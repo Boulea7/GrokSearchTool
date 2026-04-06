@@ -35,7 +35,10 @@ class SubQuery(BaseModel):
     id: str = Field(description="Unique identifier (e.g., 'sq1')")
     goal: str
     expected_output: str = Field(description="What a successful result looks like")
-    tool_hint: Optional[str] = Field(default=None, description="Suggested tool: web_search | web_fetch | web_map")
+    tool_hint: Optional[Literal["web_search", "web_fetch", "web_map"]] = Field(
+        default=None,
+        description="Suggested tool: web_search | web_fetch | web_map",
+    )
     boundary: str = Field(description="What this sub-query explicitly excludes — MUST state mutual exclusion with sibling sub-queries, not just the broader domain")
     depends_on: Optional[list[str]] = Field(default=None, description="IDs of prerequisite sub-queries")
 
@@ -132,10 +135,54 @@ class PlanningSession:
     def required_phases(self) -> set[str]:
         return REQUIRED_PHASES.get(self.complexity_level or 3, REQUIRED_PHASES[3])
 
+    def sub_query_ids(self) -> set[str]:
+        record = self.phases.get("query_decomposition")
+        if not record or not isinstance(record.data, list):
+            return set()
+        return {
+            item["id"]
+            for item in record.data
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
+        }
+
+    def search_term_purposes(self) -> set[str]:
+        record = self.phases.get("search_strategy")
+        if not record or not isinstance(record.data, dict):
+            return set()
+        terms = record.data.get("search_terms") or []
+        return {
+            item["purpose"]
+            for item in terms
+            if isinstance(item, dict) and isinstance(item.get("purpose"), str) and item["purpose"].strip()
+        }
+
+    def tool_mapping_ids(self) -> list[str]:
+        record = self.phases.get("tool_selection")
+        if not record or not isinstance(record.data, list):
+            return []
+        return [
+            item["sub_query_id"]
+            for item in record.data
+            if isinstance(item, dict) and isinstance(item.get("sub_query_id"), str) and item["sub_query_id"].strip()
+        ]
+
+    def missing_search_term_ids(self) -> set[str]:
+        return self.sub_query_ids() - self.search_term_purposes()
+
+    def missing_tool_mapping_ids(self) -> set[str]:
+        return self.sub_query_ids() - set(self.tool_mapping_ids())
+
     def is_complete(self) -> bool:
         if self.complexity_level is None:
             return False
-        return self.required_phases().issubset(self.phases.keys())
+        if not self.required_phases().issubset(self.phases.keys()):
+            return False
+        if self.complexity_level in {2, 3}:
+            if self.missing_search_term_ids():
+                return False
+            if self.missing_tool_mapping_ids():
+                return False
+        return True
 
     def build_executable_plan(self) -> dict:
         return {name: record.data for name, record in self.phases.items()}

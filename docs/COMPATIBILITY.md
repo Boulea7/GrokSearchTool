@@ -37,6 +37,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 ## Transport Scope
 
 - Public documentation currently prioritizes local `stdio`
+- Public `stdio` install snippets currently use the maintained release repo `Boulea7/GrokSearchTool`
 - Remote `HTTP` / `Streamable HTTP` remains a later compatibility track
 - Long-running `deep research` workflows should not be treated as the default MCP install story
 - The recommended core interaction path remains `plan_* -> web_search`
@@ -46,8 +47,11 @@ These hosts remain planned targets until remote transport and host-specific veri
 ## Provider Requirements
 
 - `GROK_API_URL` must be OpenAI-compatible and should include `/v1`
+- model resolution order is `GROK_MODEL` env -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.1-fast`
+- `GROK_TIME_CONTEXT_MODE` controls local time-context injection for `web_search`; the default is `always`
 - `web_search` depends on a working `/chat/completions` implementation
-- `get_config_info` now provides a lightweight doctor view over `/models`, optional provider probes, and feature readiness, but it is still not a full end-to-end compatibility guarantee
+- `Config.get_config_info()` returns only the base config snapshot; the MCP tool `get_config_info` keeps that snapshot and adds `connection_test`, `doctor`, `feature_readiness`, and minimal real `search/fetch` probes
+- `get_config_info` is still not a full end-to-end compatibility guarantee
 
 ## Feature Dependencies
 
@@ -64,12 +68,14 @@ These hosts remain planned targets until remote transport and host-specific veri
 
 For any locally configured `stdio` host:
 
-1. call `get_config_info`
+1. call `get_config_info` and confirm the base config snapshot, `connection_test`, `doctor`, and `feature_readiness` match your install target
 2. run one `web_search`
 3. call `get_sources` when source verification matters
-4. validate `web_fetch` / `web_map` only when the corresponding provider is configured
+4. validate `web_fetch` only when Tavily or Firecrawl is configured, and validate `web_map` only when Tavily is configured and enabled
 
 Keep remote `HTTP` / `Streamable HTTP` validation out of the default install story until that transport is explicitly verified and documented.
+
+If local `stdio` startup fails with certificate-chain errors in enterprise or self-signed environments, prefer adding `--native-tls` to the `uvx` command line instead of documenting insecure TLS bypasses.
 
 ## Known Practical Limits
 
