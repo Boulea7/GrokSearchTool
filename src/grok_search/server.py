@@ -2,7 +2,7 @@ import asyncio
 import re
 import sys
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from fastmcp import FastMCP, Context
 from pydantic import Field, ValidationError
@@ -2136,7 +2136,7 @@ async def plan_sub_query(
     boundary: Annotated[str, "What this excludes — mutual exclusion with siblings"],
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
     depends_on: Annotated[str, "Comma-separated prerequisite IDs"] = "",
-    tool_hint: Annotated[str, "web_search | web_fetch | web_map"] = "",
+    tool_hint: Annotated[Optional[Literal["web_search", "web_fetch", "web_map"]], "web_search | web_fetch | web_map"] = None,
     is_revision: Annotated[bool, "True to replace all sub-queries"] = False,
 ) -> str:
     import json
