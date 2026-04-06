@@ -149,6 +149,7 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
 
     assert payload["connection_test"]["status"] == "连接成功"
+    assert payload["connection_test"]["scope"] == "models_endpoint"
     assert payload["GROK_TIME_CONTEXT_MODE"] == "auto"
     assert payload["doctor"]["status"] == "ok"
     assert payload["doctor"]["checks"]
@@ -157,6 +158,9 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     assert payload["feature_readiness"]["web_search"]["status"] == "ready"
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "ready"
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["verified_path"] == "tavily"
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["tavily"]["status"] == "ready"
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["status"] == "ready"
     assert payload["feature_readiness"]["web_map"]["status"] == "ready"
     assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
 
@@ -277,6 +281,32 @@ async def test_get_config_info_rejects_malformed_tavily_probe_shape(monkeypatch)
     assert "响应结构异常" in checks["tavily_extract"]["message"]
     assert checks["tavily_map"]["status"] == "error"
     assert "响应结构异常" in checks["tavily_map"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_rejects_tavily_map_non_string_results(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": [{"url": "https://example.com"}]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert checks["tavily_map"]["status"] == "error"
+    assert "results[0]" in checks["tavily_map"]["message"]
 
 
 @pytest.mark.asyncio
@@ -594,6 +624,8 @@ async def test_get_config_info_marks_web_fetch_as_degraded_when_only_firecrawl_p
     assert checks["firecrawl_scrape"]["status"] == "warning"
     assert checks["web_fetch_probe"]["status"] == "error"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["verified_path"] is None
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["status"] == "degraded"
 
 
 @pytest.mark.asyncio
