@@ -200,6 +200,30 @@ async def test_get_config_info_marks_empty_firecrawl_markdown_as_warning(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_accepts_firecrawl_top_level_markdown_shape(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"markdown": "# flat markdown"},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert checks["firecrawl_scrape"]["status"] == "ok"
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "partial_ready"
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_finds_claude_project_root_from_subdirectory(monkeypatch, tmp_path):
     repo_root = tmp_path / "repo"
     nested = repo_root / "nested" / "child"

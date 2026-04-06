@@ -1365,7 +1365,7 @@ async def get_config_info() -> str:
         )
         firecrawl_data = firecrawl_scrape.pop("data", None)
         if firecrawl_scrape["status"] == "ok":
-            has_markdown = bool((((firecrawl_data or {}).get("data", {}) or {}).get("markdown", "") or "").strip())
+            has_markdown = bool(_extract_firecrawl_markdown_payload(firecrawl_data or {}).strip())
             if has_markdown:
                 firecrawl_scrape["message"] = "Firecrawl scrape 探测成功。"
             else:
