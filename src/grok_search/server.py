@@ -360,6 +360,7 @@ def _extract_firecrawl_search_payload(data: dict) -> list[dict]:
 
 _VALID_SEARCH_TOPICS = {"general", "news"}
 _VALID_TIME_RANGES = {"day", "week", "month", "year"}
+_DOMAIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
@@ -373,6 +374,19 @@ def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
         if domain not in normalized:
             normalized.append(domain)
     return normalized
+
+
+def _is_valid_domain_filter(domain: str) -> bool:
+    candidate = (domain or "").strip().lower().rstrip(".")
+    if not candidate:
+        return False
+    if "://" in candidate or "/" in candidate or any(ch.isspace() for ch in candidate):
+        return False
+    if candidate == "localhost":
+        return True
+
+    labels = candidate.split(".")
+    return all(_DOMAIN_LABEL_PATTERN.fullmatch(label) for label in labels)
 
 
 def _build_search_response(
@@ -436,6 +450,8 @@ def _validate_search_inputs(
     raw_domain_items = [*(include_domains or []), *(exclude_domains or [])]
     if any(not isinstance(item, str) or not item.strip() for item in raw_domain_items):
         return effective_params, "搜索失败: include_domains 和 exclude_domains 仅支持非空字符串"
+    if any(not _is_valid_domain_filter(item) for item in raw_domain_items):
+        return effective_params, "搜索失败: include_domains 和 exclude_domains 仅支持合法域名"
 
     overlap = sorted(set(normalized_include_domains) & set(normalized_exclude_domains))
     if overlap:

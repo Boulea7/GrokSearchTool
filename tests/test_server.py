@@ -462,6 +462,30 @@ async def test_web_search_rejects_non_string_domain_filters():
 
 
 @pytest.mark.asyncio
+async def test_web_search_rejects_url_like_domain_filters():
+    result = await server.web_search(
+        "test query",
+        exclude_domains=["https://mirror.example.com/path"],
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert result["content"] == "搜索失败: include_domains 和 exclude_domains 仅支持合法域名"
+
+
+@pytest.mark.asyncio
+async def test_web_search_rejects_whitespace_polluted_domain_filters():
+    result = await server.web_search(
+        "test query",
+        include_domains=["example .com"],
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert result["content"] == "搜索失败: include_domains 和 exclude_domains 仅支持合法域名"
+
+
+@pytest.mark.asyncio
 async def test_web_search_rejects_negative_extra_sources():
     result = await server.web_search("test query", extra_sources=-1)
 
