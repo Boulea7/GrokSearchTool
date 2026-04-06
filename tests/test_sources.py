@@ -135,6 +135,27 @@ def test_extract_unique_urls_strips_trailing_markdown_emphasis():
     assert urls == ["https://fastapi.tiangolo.com/"]
 
 
+def test_extract_unique_urls_accepts_mixed_case_scheme():
+    raw = "Official docs: HTTPS://fastapi.tiangolo.com/"
+
+    urls = extract_unique_urls(raw)
+
+    assert urls == ["HTTPS://fastapi.tiangolo.com/"]
+
+
+def test_split_answer_and_sources_extracts_mixed_case_urls_from_function_call_sources():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+sources([{"title": "OpenAI", "url": "HTTPS://openai.com/"}])
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert sources == [{"title": "OpenAI", "url": "HTTPS://openai.com/"}]
+
+
 def test_standardize_sources_accepts_mixed_case_http_scheme():
     sources = standardize_sources(
         [

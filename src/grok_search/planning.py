@@ -193,6 +193,60 @@ class PlanningSession:
     def build_executable_plan(self) -> dict:
         return {name: record.data for name, record in self.phases.items()}
 
+    def sub_queries(self) -> list[dict]:
+        record = self.phases.get("query_decomposition")
+        if not record or not isinstance(record.data, list):
+            return []
+        return [item for item in record.data if isinstance(item, dict)]
+
+
+def _validate_execution_order(session: PlanningSession, phase_data: dict | None) -> str | None:
+    if not isinstance(phase_data, dict):
+        return None
+
+    existing_ids = session.sub_query_ids()
+    placement_stage: dict[str, int] = {}
+    seen_ids: set[str] = set()
+
+    for stage_index, group in enumerate(phase_data.get("parallel") or []):
+        if not isinstance(group, list):
+            continue
+        for sub_query_id in group:
+            if sub_query_id not in existing_ids:
+                return f"Unknown sub-query id: {sub_query_id}"
+            if sub_query_id in seen_ids:
+                return f"Duplicate execution id: {sub_query_id}"
+            seen_ids.add(sub_query_id)
+            placement_stage[sub_query_id] = stage_index
+
+    sequential = phase_data.get("sequential") or []
+    sequential_offset = len(phase_data.get("parallel") or [])
+    for offset, sub_query_id in enumerate(sequential):
+        if sub_query_id not in existing_ids:
+            return f"Unknown sub-query id: {sub_query_id}"
+        if sub_query_id in seen_ids:
+            return f"Duplicate execution id: {sub_query_id}"
+        seen_ids.add(sub_query_id)
+        placement_stage[sub_query_id] = sequential_offset + offset
+
+    missing_ids = sorted(existing_ids - seen_ids)
+    if missing_ids:
+        return f"Missing sub-query ids in execution plan: {', '.join(missing_ids)}"
+
+    for item in session.sub_queries():
+        sub_query_id = item.get("id")
+        if sub_query_id not in placement_stage:
+            continue
+        for dependency in item.get("depends_on") or []:
+            dependency_stage = placement_stage.get(dependency)
+            current_stage = placement_stage[sub_query_id]
+            if dependency_stage is None:
+                continue
+            if dependency_stage >= current_stage:
+                return f"Dependency order violation: {sub_query_id} depends on {dependency}"
+
+    return None
+
 
 class PlanningEngine:
     def __init__(self):
@@ -277,6 +331,30 @@ class PlanningEngine:
                 "completed_phases": session.completed_phases,
                 "complexity_level": session.complexity_level,
             }
+
+        if (
+            target == "query_decomposition"
+            and not is_revision
+            and isinstance(phase_data, dict)
+            and isinstance(phase_data.get("id"), str)
+            and phase_data["id"] in session.sub_query_ids()
+        ):
+            return {
+                "error": f"Duplicate sub-query id: {phase_data['id']}",
+                "session_id": session.session_id,
+                "completed_phases": session.completed_phases,
+                "complexity_level": session.complexity_level,
+            }
+
+        if target == "execution_order":
+            execution_error = _validate_execution_order(session, phase_data)
+            if execution_error:
+                return {
+                    "error": execution_error,
+                    "session_id": session.session_id,
+                    "completed_phases": session.completed_phases,
+                    "complexity_level": session.complexity_level,
+                }
 
         if target in _ACCUMULATIVE_LIST_PHASES:
             if is_revision:

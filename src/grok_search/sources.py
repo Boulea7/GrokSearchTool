@@ -436,8 +436,9 @@ def _normalize_sources(data: Any) -> list[dict]:
 
         if isinstance(item, (list, tuple)) and len(item) >= 2:
             title, url = item[0], item[1]
-            if isinstance(url, str) and url.startswith(("http://", "https://")) and url not in seen:
-                seen.add(url)
+            normalized_url = _normalize_url(url)
+            if normalized_url and normalized_url not in seen:
+                seen.add(normalized_url)
                 out: dict = {"url": url}
                 if isinstance(title, str) and title.strip():
                     out["title"] = title.strip()
@@ -446,11 +447,12 @@ def _normalize_sources(data: Any) -> list[dict]:
 
         if isinstance(item, dict):
             url = item.get("url") or item.get("href") or item.get("link")
-            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            normalized_url = _normalize_url(url)
+            if not normalized_url:
                 continue
-            if url in seen:
+            if normalized_url in seen:
                 continue
-            seen.add(url)
+            seen.add(normalized_url)
             out: dict = {"url": url}
             title = item.get("title") or item.get("name") or item.get("label")
             if isinstance(title, str) and title.strip():
