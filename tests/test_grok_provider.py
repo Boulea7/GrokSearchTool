@@ -607,6 +607,30 @@ async def test_describe_url_ignores_appended_sources_block(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_describe_url_supports_multiline_extracts(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    async def fake_execute(headers, payload, ctx, render_sources=True):
+        assert render_sources is False
+        return (
+            "Title: Example Page\n"
+            "Extracts: \"Primary fragment\"\n"
+            "\"Second fragment\"\n"
+            "\"Third fragment\""
+        )
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    result = await provider.describe_url("https://example.com/page")
+
+    assert result == {
+        "title": "Example Page",
+        "extracts": '"Primary fragment" "Second fragment" "Third fragment"',
+        "url": "https://example.com/page",
+    }
+
+
+@pytest.mark.asyncio
 async def test_rank_sources_ignores_appended_sources_block(monkeypatch):
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
 
@@ -619,6 +643,59 @@ async def test_rank_sources_ignores_appended_sources_block(monkeypatch):
     result = await provider.rank_sources("test query", "1. a\n2. b\n3. c", total=3)
 
     assert result == [2, 1, 3]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_result",
+    [
+        "2, 1, 3",
+        "2.\n1.\n3.",
+        "Recommended order: 2 1 3",
+    ],
+)
+async def test_rank_sources_accepts_common_number_formats(monkeypatch, raw_result):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    async def fake_execute(headers, payload, ctx, render_sources=True):
+        assert render_sources is False
+        return raw_result
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    result = await provider.rank_sources("test query", "1. a\n2. b\n3. c", total=3)
+
+    assert result == [2, 1, 3]
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_response_ignores_sources_inside_tool_blocks():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":[{"type":"tool_call","text":"hidden","references":[{"title":"Leak","url":"https://docs.example.com/leak"}]},{"type":"output_text","text":"hello world"}]}}]}',
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_call",
+                                "text": "hidden",
+                                "references": [
+                                    {"title": "Leak", "url": "https://docs.example.com/leak"},
+                                ],
+                            },
+                            {"type": "output_text", "text": "hello world"},
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result == "hello world"
 
 
 def test_build_placeholder_error_includes_request_id():
