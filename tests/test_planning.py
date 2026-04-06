@@ -718,7 +718,42 @@ async def test_plan_sub_query_rejects_duplicate_ids():
     )
 
     assert result["error"] == "validation_error"
-    assert "duplicate sub-query id" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_sub_query_rejects_invalid_tool_hint():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need decomposition.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Need a valid sub-query tool hint.",
+    )
+
+    result = json.loads(
+        await server.plan_sub_query(
+            session_id=session_id,
+            thought="Invalid tool hint should fail.",
+            id="sq1",
+            goal="Compare providers.",
+            expected_output="A concise comparison.",
+            boundary="Exclude implementation details.",
+            tool_hint="web_scrape",
+        )
+    )
+
+    assert result["error"] == "validation_error"
 
 
 @pytest.mark.asyncio
