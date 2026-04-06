@@ -1262,3 +1262,66 @@ async def test_call_firecrawl_search_accepts_flat_web_shape(monkeypatch):
             "description": "Flat response shape",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_search_accepts_nested_web_shape(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("POST", "https://api.firecrawl.dev/v2/search"): httpx.Response(
+            200,
+            json={
+                "data": {
+                    "web": [
+                        {
+                            "title": "Nested Result",
+                            "url": "https://example.com/nested",
+                            "description": "Nested response shape",
+                        }
+                    ]
+                }
+            },
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    results = await server._call_firecrawl_search("test query", limit=3)
+
+    assert results == [
+        {
+            "title": "Nested Result",
+            "url": "https://example.com/nested",
+            "description": "Nested response shape",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_search_accepts_results_shape(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("POST", "https://api.firecrawl.com/v2/search"): httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "Results Entry",
+                        "url": "https://example.com/results",
+                        "description": "Results response shape",
+                    }
+                ]
+            },
+        ),
+    }
+    monkeypatch.setenv("FIRECRAWL_API_URL", "https://api.firecrawl.com/v2")
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    results = await server._call_firecrawl_search("test query", limit=3)
+
+    assert results == [
+        {
+            "title": "Results Entry",
+            "url": "https://example.com/results",
+            "description": "Results response shape",
+        }
+    ]

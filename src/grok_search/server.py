@@ -347,13 +347,15 @@ def _extract_firecrawl_search_payload(data: dict) -> list[dict]:
 
     nested_data = data.get("data")
     if isinstance(nested_data, dict):
-        results = nested_data.get("web", [])
-        if isinstance(results, list):
-            return results
+        for key in ("web", "results"):
+            results = nested_data.get(key)
+            if isinstance(results, list):
+                return results
 
-    flat_results = data.get("web", [])
-    if isinstance(flat_results, list):
-        return flat_results
+    for key in ("web", "results"):
+        flat_results = data.get(key)
+        if isinstance(flat_results, list):
+            return flat_results
 
     return []
 
