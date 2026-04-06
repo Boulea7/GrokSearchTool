@@ -13,7 +13,7 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `web_fetch`: сначала Tavily, затем Firecrawl как fallback
 - `web_map`: карта структуры сайта
 - `plan_*`: поэтапное планирование для сложных или неоднозначных запросов
-- `get_config_info`: проверка конфигурации и тест `/models`
+- `get_config_info`: проверка конфигурации, `/models` и лёгкий doctor
 - `switch_model`: смена модели Grok по умолчанию
 - `toggle_builtin_tools`: переключение встроенных WebSearch / WebFetch в Claude Code
 
@@ -26,6 +26,18 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - Python `3.10+`
 - `uv`
 - клиент с поддержкой stdio MCP
+
+### Уровни поддержки
+
+- `Officially tested`: Claude Code
+- `Community-tested`: MCP-клиенты в стиле Codex, Cherry Studio
+- `Planned`: Dify, n8n, Coze
+
+Примечания:
+
+- Публичная документация пока обещает только локальный сценарий `stdio`.
+- `toggle_builtin_tools` относится только к проектным настройкам Claude Code.
+- Ниже используются актуальные публичные установочные ссылки из поддерживаемого репозитория `Boulea7/GrokSearchTool`.
 
 ### Добавление как MCP
 
@@ -47,14 +59,16 @@ claude mcp add-json grok-search --scope user '{
 }'
 ```
 
+Если окружение требует системное хранилище сертификатов, добавьте `--native-tls` к аргументам `uvx`.
+
 Примечания:
 
 - Рекомендуемый основной путь: `plan_* -> web_search`. Для ясных одношаговых запросов можно вызывать `web_search` напрямую.
 - Интерактивный опыт `deep research` планируется прежде всего для CLI, а не для диалоговых MCP / skill-интеграций.
 - `web_fetch` работает и только с Firecrawl.
-- `web_map` требует Tavily.
+- `web_map` требует Tavily и `TAVILY_ENABLED=true`.
 - `web_search` всегда добавляет локальный временной контекст.
-- `get_config_info` сейчас проверяет только `/models`.
+- `get_config_info` сохраняет `connection_test` и дополнительно возвращает лёгкие представления `doctor` и `feature_readiness`, но всё ещё не является полной end-to-end гарантией.
 
 ## Companion Skill
 
