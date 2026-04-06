@@ -427,6 +427,9 @@ def _validate_search_inputs(
     if normalized_time_range and normalized_time_range not in _VALID_TIME_RANGES:
         return effective_params, "搜索失败: time_range 仅支持 day、week、month、year"
 
+    if isinstance(extra_sources, bool) or not isinstance(extra_sources, int):
+        return effective_params, "搜索失败: extra_sources 仅支持整数"
+
     if extra_sources < 0:
         return effective_params, "搜索失败: extra_sources 不能为负数"
 

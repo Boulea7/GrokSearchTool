@@ -471,6 +471,24 @@ async def test_web_search_rejects_negative_extra_sources():
 
 
 @pytest.mark.asyncio
+async def test_web_search_rejects_boolean_extra_sources():
+    result = await server.web_search("test query", extra_sources=True)
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert result["content"] == "搜索失败: extra_sources 仅支持整数"
+
+
+@pytest.mark.asyncio
+async def test_web_search_rejects_non_integer_extra_sources():
+    result = await server.web_search("test query", extra_sources=1.5)
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert result["content"] == "搜索失败: extra_sources 仅支持整数"
+
+
+@pytest.mark.asyncio
 async def test_web_search_rejects_unknown_explicit_model(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
