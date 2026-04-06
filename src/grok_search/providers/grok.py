@@ -3,6 +3,7 @@ import json
 import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from ipaddress import ip_address
 from typing import List, Optional
 from urllib.parse import urlparse
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
@@ -91,6 +92,20 @@ def _is_retryable_exception(exc) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in RETRYABLE_STATUS_CODES
     return False
+
+
+def _httpx_client_kwargs_for_url(url: str, *, timeout: httpx.Timeout) -> dict:
+    host = (urlparse(url).hostname or "").lower()
+    kwargs = {"timeout": timeout, "follow_redirects": True}
+    is_loopback = host == "localhost"
+    if not is_loopback:
+        try:
+            is_loopback = ip_address(host).is_loopback
+        except ValueError:
+            is_loopback = host.startswith("127.")
+    if is_loopback:
+        kwargs["trust_env"] = False
+    return kwargs
 
 
 class _WaitWithRetryAfter(wait_base):
@@ -492,8 +507,9 @@ class GrokSearchProvider(BaseSearchProvider):
     async def _execute_stream_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
         """执行带重试机制的流式 HTTP 请求"""
         timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
+        endpoint = f"{self.api_url}/chat/completions"
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(config.retry_max_attempts + 1),
                 wait=_WaitWithRetryAfter(config.retry_multiplier, config.retry_max_wait),
@@ -503,7 +519,7 @@ class GrokSearchProvider(BaseSearchProvider):
                 with attempt:
                     async with client.stream(
                         "POST",
-                        f"{self.api_url}/chat/completions",
+                        endpoint,
                         headers=headers,
                         json=payload,
                     ) as response:
@@ -513,8 +529,9 @@ class GrokSearchProvider(BaseSearchProvider):
     async def _execute_completion_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
         """执行带重试机制的非流式 HTTP 请求，兼容 JSON completion 与 SSE 文本响应。"""
         timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
+        endpoint = f"{self.api_url}/chat/completions"
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(config.retry_max_attempts + 1),
                 wait=_WaitWithRetryAfter(config.retry_multiplier, config.retry_max_wait),
@@ -523,7 +540,7 @@ class GrokSearchProvider(BaseSearchProvider):
             ):
                 with attempt:
                     response = await client.post(
-                        f"{self.api_url}/chat/completions",
+                        endpoint,
                         headers=headers,
                         json=payload,
                     )

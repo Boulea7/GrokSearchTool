@@ -1,6 +1,7 @@
 import asyncio
 import re
 import sys
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Literal, Optional
 from urllib.parse import urlparse
@@ -1206,7 +1207,13 @@ def _summarize_doctor_status(doctor_status: str) -> str:
 def _httpx_client_kwargs_for_url(url: str, *, timeout: float) -> dict:
     host = (urlparse(url).hostname or "").lower()
     kwargs = {"timeout": timeout}
-    if host in {"localhost", "127.0.0.1", "::1"}:
+    is_loopback = host == "localhost"
+    if not is_loopback:
+        try:
+            is_loopback = ip_address(host).is_loopback
+        except ValueError:
+            is_loopback = host.startswith("127.")
+    if is_loopback:
         kwargs["trust_env"] = False
     return kwargs
 

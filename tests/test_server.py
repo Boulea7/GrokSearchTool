@@ -560,13 +560,17 @@ def test_build_connection_test_from_models_check_maps_error_kinds(error_kind, ex
     assert result["message"] == "probe failed"
 
 
-def test_httpx_client_kwargs_disable_env_proxies_for_loopback_only():
+def test_httpx_client_kwargs_disable_env_proxies_for_full_loopback_range():
     local = server._httpx_client_kwargs_for_url("http://localhost:18080/extract", timeout=10.0)
     loopback = server._httpx_client_kwargs_for_url("http://127.0.0.1:18080/map", timeout=10.0)
+    loopback_alias = server._httpx_client_kwargs_for_url("http://127.0.0.2:18080/map", timeout=10.0)
+    short_loopback = server._httpx_client_kwargs_for_url("http://127.1:18080/map", timeout=10.0)
     remote = server._httpx_client_kwargs_for_url("https://api.tavily.com/extract", timeout=10.0)
 
     assert local["trust_env"] is False
     assert loopback["trust_env"] is False
+    assert loopback_alias["trust_env"] is False
+    assert short_loopback["trust_env"] is False
     assert "trust_env" not in remote
 
 
