@@ -103,7 +103,8 @@ claude mcp add-json grok-search --scope user '{
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
-    "TAVILY_API_URL": "https://api.tavily.com"
+    "TAVILY_API_URL": "https://api.tavily.com",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }'
 ```
@@ -170,7 +171,8 @@ claude mcp add-json grok-search --scope user '{
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
-    "TAVILY_API_URL": "https://api.tavily.com"
+    "TAVILY_API_URL": "https://api.tavily.com",
+    "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }'
 ```
@@ -190,8 +192,9 @@ claude mcp add-json grok-search --scope user '{
 | `FIRECRAWL_API_URL` | 否 | `https://api.firecrawl.dev/v2` | Firecrawl API 地址 |
 | `GROK_DEBUG` | 否 | `false` | 调试模式 |
 | `GROK_LOG_LEVEL` | 否 | `INFO` | 日志级别 |
-| `GROK_LOG_DIR` | 否 | `logs` | 日志目录 |
+| `GROK_LOG_DIR` | 否 | `logs` | 日志目录；`get_config_info` 中展示的是解析后的运行时绝对路径 |
 | `GROK_OUTPUT_CLEANUP` | 否 | `true` | 是否启用 `web_search` 输出清洗 |
+| `GROK_FILTER_THINK_TAGS` | 否 | 兼容别名 | `GROK_OUTPUT_CLEANUP` 的旧别名，优先推荐配置 `GROK_OUTPUT_CLEANUP` |
 | `GROK_RETRY_MAX_ATTEMPTS` | 否 | `3` | 最大重试次数 |
 | `GROK_RETRY_MULTIPLIER` | 否 | `1` | 重试退避乘数 |
 | `GROK_RETRY_MAX_WAIT` | 否 | `10` | 重试最大等待秒数 |
@@ -226,7 +229,7 @@ claude mcp list
 
 无论你使用 Claude Code、Codex CLI 还是 Cherry Studio，建议至少做以下本地 `stdio` 验证：
 
-1. 先调用 `get_config_info`，确认 `doctor`、`feature_readiness` 和 `/models` 探测结果正常
+1. 先调用 `get_config_info`，确认 `doctor`、`feature_readiness`、`/models` 探测以及最小真实 `search/fetch` 探针结果正常
 2. 再调用一次 `web_search`，验证主搜索链路可用
 3. 若需要引用核对，再调用 `get_sources`
 4. 只有在配置了 Tavily / Firecrawl 后，再额外验证 `web_fetch` / `web_map`
@@ -310,10 +313,11 @@ claude mcp list
 
 ### `get_config_info` — 配置诊断
 
-无需参数。显示当前配置、执行轻量 doctor 检查，并返回：
+无需参数。工具会先读取基础配置快照，再由 server 层补充诊断结果，并返回：
 
 - Grok `/models` 连通性与可用模型
 - Tavily / Firecrawl 的只读探测结果（仅在已配置时执行）
+- 默认最小真实 `web_search` / `web_fetch` 探针结果
 - `web_search` / `get_sources` / `web_fetch` / `web_map` / `toggle_builtin_tools` 的 readiness 汇总
 - 修复建议列表（API Key 自动脱敏）
 

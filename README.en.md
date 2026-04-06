@@ -72,6 +72,7 @@ claude mcp add-json grok-search --scope user '{
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
     "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }'
@@ -94,6 +95,7 @@ args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-se
 GROK_API_URL = "https://your-api-endpoint.com/v1"
 GROK_API_KEY = "your-grok-api-key"
 TAVILY_API_KEY = "tvly-your-tavily-key"
+TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
@@ -111,6 +113,7 @@ Create a `STDIO` MCP server entry with the same core fields:
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
     "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }
@@ -130,7 +133,9 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `FIRECRAWL_API_URL` | No | Firecrawl endpoint |
 | `GROK_DEBUG` | No | Enable debug logging |
 | `GROK_LOG_LEVEL` | No | Log level |
+| `GROK_LOG_DIR` | No | Log directory; `get_config_info` returns the resolved runtime path |
 | `GROK_OUTPUT_CLEANUP` | No | Enable answer cleanup |
+| `GROK_FILTER_THINK_TAGS` | No | Legacy alias for `GROK_OUTPUT_CLEANUP`; prefer `GROK_OUTPUT_CLEANUP` |
 | `GROK_RETRY_MAX_ATTEMPTS` | No | Max retry attempts |
 | `GROK_RETRY_MULTIPLIER` | No | Retry backoff multiplier |
 | `GROK_RETRY_MAX_WAIT` | No | Max retry wait |
@@ -143,7 +148,7 @@ Notes:
 - `web_fetch` still works with Firecrawl only.
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` always injects local time context into the search prompt.
-- `get_config_info` now provides a lightweight doctor view with additive compatibility and readiness checks, but it is still not a full end-to-end search guarantee.
+- `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 
 ### Minimal smoke check
 
@@ -156,10 +161,11 @@ For any local `stdio` host, start with this lightweight verification flow:
 
 ### `get_config_info` doctor output
 
-`get_config_info` keeps the current configuration snapshot and `connection_test`, and also adds:
+`Config.get_config_info()` only returns the base config snapshot. The MCP tool `get_config_info` keeps that snapshot and also adds:
 
 - `doctor`: overall doctor status, structured checks, and repair recommendations
 - `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, and `toggle_builtin_tools`
+- minimal real `web_search` / `web_fetch` probe results
 
 Optional provider probes are read-only and run only when the corresponding configuration is already present.
 

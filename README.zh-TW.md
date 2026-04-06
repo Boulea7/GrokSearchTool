@@ -68,6 +68,7 @@ claude mcp add-json grok-search --scope user '{
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
     "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }'
@@ -82,7 +83,7 @@ claude mcp add-json grok-search --scope user '{
 - `web_fetch` 在只配置 Firecrawl 時仍可使用。
 - `web_map` 需要 Tavily，且 `TAVILY_ENABLED=true`。
 - `web_search` 會注入本地時間上下文。
-- `get_config_info` 會保留 `connection_test`，並提供輕量 `doctor` 與 `feature_readiness` 視圖，但仍不是完整的端到端保證。
+- `get_config_info` 會保留基礎設定快照與 `connection_test`，並由 server 層補充輕量 `doctor`、`feature_readiness` 與最小真實 `search/fetch` 探針；但仍不是完整的端到端保證。
 
 ## Companion Skill
 

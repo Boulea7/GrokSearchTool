@@ -175,7 +175,7 @@ class Config:
         return f"{key[:4]}{'*' * (len(key) - 8)}{key[-4:]}"
 
     def get_config_info(self) -> dict:
-        """获取配置信息（API Key 已脱敏）"""
+        """Return the base config snapshot only; server-side doctor fields are added elsewhere."""
         try:
             api_url = self.grok_api_url
             api_key_raw = self.grok_api_key

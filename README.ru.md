@@ -54,6 +54,7 @@ claude mcp add-json grok-search --scope user '{
     "GROK_API_URL": "https://your-api-endpoint.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
     "TAVILY_API_KEY": "tvly-your-tavily-key",
+    "TAVILY_API_URL": "https://api.tavily.com",
     "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
   }
 }'
@@ -68,7 +69,7 @@ claude mcp add-json grok-search --scope user '{
 - `web_fetch` работает и только с Firecrawl.
 - `web_map` требует Tavily и `TAVILY_ENABLED=true`.
 - `web_search` всегда добавляет локальный временной контекст.
-- `get_config_info` сохраняет `connection_test` и дополнительно возвращает лёгкие представления `doctor` и `feature_readiness`, но всё ещё не является полной end-to-end гарантией.
+- `get_config_info` сохраняет базовый снимок конфигурации и `connection_test`, а сервер дополнительно добавляет лёгкие представления `doctor`, `feature_readiness` и минимальные реальные `search/fetch` пробы; это всё ещё не полная end-to-end гарантия.
 
 ## Companion Skill
 
