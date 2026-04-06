@@ -74,6 +74,16 @@ def test_process_env_takes_precedence_over_project_env_files(monkeypatch, tmp_pa
     assert config.grok_api_url == "https://env.example.com/v1"
 
 
+def test_empty_process_env_still_blocks_project_env_fallback(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("TAVILY_API_KEY", "")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text("TAVILY_API_KEY=tvly-file-value\n", encoding="utf-8")
+    config.reset_runtime_state()
+
+    assert config.tavily_api_key == ""
+
+
 def test_project_env_local_takes_precedence_over_project_env(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.delenv("TAVILY_API_URL", raising=False)

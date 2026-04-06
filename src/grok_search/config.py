@@ -62,12 +62,11 @@ class Config:
         return merged
 
     def _get_env_value(self, key: str, default: str | None = None) -> str | None:
-        value = os.getenv(key)
-        if value:
-            return value
-        project_value = self._load_project_env().get(key)
-        if project_value:
-            return project_value
+        if key in os.environ:
+            return os.environ[key]
+        project_env = self._load_project_env()
+        if key in project_env:
+            return project_env[key]
         return default
 
     @property

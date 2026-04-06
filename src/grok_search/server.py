@@ -185,6 +185,7 @@ def _mask_sensitive_text(value: str) -> str:
         (r"\bfc-[A-Za-z0-9_\-]+\b", "fc-***"),
         (r"\btvly-[A-Za-z0-9_\-]+\b", "tvly-***"),
         (r"([?&](?:api[_-]?key|token|signature|sig)=)[^&\s]+", r"\1***"),
+        (r"((?:api[_-]?key|token|signature|sig)=)[^&\s\"'}]+", r"\1***"),
     ]
     for pattern, replacement in patterns:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
@@ -1232,7 +1233,7 @@ async def _probe_json_endpoint(
                 response = await client.post(url, headers=headers, json=json_body)
 
         response_time_ms = (time.perf_counter() - start_time) * 1000
-        response_text = (response.text or "")[:120]
+        response_text = _mask_sensitive_text(response.text or "")[:120]
         if _looks_like_login_page(response.text or ""):
             return _build_doctor_check(
                 check_id,
@@ -1287,26 +1288,29 @@ async def _probe_json_endpoint(
             status_code=response.status_code,
         )
     except httpx.TimeoutException as exc:
+        masked_message = _mask_sensitive_text(str(exc) or "timeout")
         return _build_doctor_check(
             check_id,
             "error",
-            f"请求超时: {str(exc) or 'timeout'}",
+            f"请求超时: {masked_message}",
             endpoint=url,
             error_kind="timeout",
         )
     except httpx.RequestError as exc:
+        masked_message = _mask_sensitive_text(str(exc))
         return _build_doctor_check(
             check_id,
             "error",
-            f"网络错误: {str(exc)}",
+            f"网络错误: {masked_message}",
             endpoint=url,
             error_kind="request_error",
         )
     except Exception as exc:
+        masked_message = _mask_sensitive_text(str(exc))
         return _build_doctor_check(
             check_id,
             "error",
-            f"未知错误: {str(exc)}",
+            f"未知错误: {masked_message}",
             endpoint=url,
             error_kind="unexpected_error",
         )
@@ -2496,6 +2500,9 @@ async def plan_execution(
     parallel = [_split_csv(g) for g in parallel_groups.split(";") if g.strip()] if parallel_groups else []
     seq = _split_csv(sequential)
     session = planning_engine.get_session(session_id)
+    overwrite_error = _validate_singleton_phase_overwrite(session, "execution_order", is_revision)
+    if overwrite_error:
+        return overwrite_error
     try:
         ExecutionOrderOutput(parallel=parallel, sequential=seq, estimated_rounds=estimated_rounds)
     except ValidationError as exc:
