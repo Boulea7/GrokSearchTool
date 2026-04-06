@@ -199,8 +199,10 @@ class GrokSearchProvider(BaseSearchProvider):
         normalized: list[dict] = []
 
         for item in items:
-            if isinstance(item, str) and item.startswith(("http://", "https://")):
-                normalized.append({"url": item})
+            if isinstance(item, str):
+                url = item.strip()
+                if url.startswith(("http://", "https://")):
+                    normalized.append({"url": url})
                 continue
 
             if not isinstance(item, dict):

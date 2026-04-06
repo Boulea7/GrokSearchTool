@@ -510,6 +510,19 @@ async def test_web_search_rejects_whitespace_polluted_domain_filters():
 
 
 @pytest.mark.asyncio
+async def test_web_search_rejects_overlapping_domain_filters_after_trailing_dot_normalization():
+    result = await server.web_search(
+        "test query",
+        include_domains=["openai.com."],
+        exclude_domains=["openai.com"],
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == "validation_error"
+    assert "同时出现在 include_domains 与 exclude_domains" in result["content"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_rejects_negative_extra_sources():
     result = await server.web_search("test query", extra_sources=-1)
 
@@ -991,6 +1004,15 @@ def test_probably_truncated_content_detects_obvious_markers():
     assert server._is_probably_truncated_content("A complete sentence.\n\nAnother paragraph.", min_length=10) is False
 
 
+def test_extract_firecrawl_markdown_payload_falls_back_to_top_level_markdown_when_nested_is_blank():
+    assert server._extract_firecrawl_markdown_payload(
+        {
+            "data": {"markdown": ""},
+            "markdown": "# top level markdown",
+        }
+    ) == "# top level markdown"
+
+
 @pytest.mark.asyncio
 async def test_web_search_surfaces_sources_only_response_without_empty_content(monkeypatch):
     class DummyProvider:
@@ -1347,5 +1369,36 @@ async def test_call_firecrawl_search_accepts_results_shape(monkeypatch):
             "title": "Results Entry",
             "url": "https://example.com/results",
             "description": "Results response shape",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_search_prefers_non_empty_results_when_web_list_is_empty(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("POST", "https://api.firecrawl.dev/v2/search"): httpx.Response(
+            200,
+            json={
+                "web": [],
+                "results": [
+                    {
+                        "title": "Fallback Result",
+                        "url": "https://example.com/fallback",
+                        "description": "Fallback results shape",
+                    }
+                ],
+            },
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    results = await server._call_firecrawl_search("test query", limit=3)
+
+    assert results == [
+        {
+            "title": "Fallback Result",
+            "url": "https://example.com/fallback",
+            "description": "Fallback results shape",
         }
     ]

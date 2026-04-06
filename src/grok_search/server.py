@@ -331,7 +331,7 @@ def _extract_firecrawl_markdown_payload(data: dict) -> str:
     nested_data = data.get("data")
     if isinstance(nested_data, dict):
         markdown = nested_data.get("markdown")
-        if isinstance(markdown, str):
+        if isinstance(markdown, str) and markdown.strip():
             return markdown
 
     markdown = data.get("markdown")
@@ -345,19 +345,26 @@ def _extract_firecrawl_search_payload(data: dict) -> list[dict]:
     if not isinstance(data, dict):
         return []
 
+    empty_result: list[dict] | None = None
     nested_data = data.get("data")
     if isinstance(nested_data, dict):
         for key in ("web", "results"):
             results = nested_data.get(key)
             if isinstance(results, list):
-                return results
+                if results:
+                    return results
+                if empty_result is None:
+                    empty_result = results
 
     for key in ("web", "results"):
         flat_results = data.get(key)
         if isinstance(flat_results, list):
-            return flat_results
+            if flat_results:
+                return flat_results
+            if empty_result is None:
+                empty_result = flat_results
 
-    return []
+    return empty_result or []
 
 
 _VALID_SEARCH_TOPICS = {"general", "news"}
@@ -370,7 +377,7 @@ def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
     for item in domains or []:
         if not isinstance(item, str):
             continue
-        domain = item.strip().lower()
+        domain = item.strip().lower().rstrip(".")
         if not domain:
             continue
         if domain not in normalized:

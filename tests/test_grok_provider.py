@@ -233,6 +233,23 @@ async def test_parse_completion_response_accepts_whitespace_padded_source_urls()
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_accepts_whitespace_padded_string_url_lists():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":"hello world"}}],"urls":[" https://docs.example.com/list "]}',
+        json_data={
+            "choices": [{"message": {"content": "hello world"}}],
+            "urls": [" https://docs.example.com/list "],
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "https://docs.example.com/list" in result
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_appends_url_list_sources():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(
