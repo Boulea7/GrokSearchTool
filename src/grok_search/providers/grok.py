@@ -178,6 +178,9 @@ class GrokSearchProvider(BaseSearchProvider):
             return value
 
         if isinstance(value, dict):
+            block_type = str(value.get("type", "")).strip().lower()
+            if block_type in {"reasoning", "thinking", "analysis", "thought"}:
+                return ""
             for key in ("text", "content", "value", "output_text"):
                 nested = self._flatten_text_content(value.get(key))
                 if nested:
@@ -407,6 +410,11 @@ class GrokSearchProvider(BaseSearchProvider):
             choices = data.get("choices", [])
             if isinstance(choices, list) and choices:
                 content = self._extract_content_from_choice(choices[0])
+            if not content:
+                for key in ("output_text", "output"):
+                    content = self._flatten_text_content(data.get(key))
+                    if content:
+                        break
             content = self._append_sources_block(content, self._extract_structured_sources(data))
 
         if not content and any(line.lstrip().startswith("data:") for line in body_text.splitlines()):

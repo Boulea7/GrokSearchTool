@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from grok_search.providers.grok import GrokSearchProvider, _WaitWithRetryAfter
@@ -63,6 +65,19 @@ async def test_parse_completion_response_reads_choice_text_variant():
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_reads_top_level_output_text():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"output_text":"hello world"}',
+        json_data={"output_text": "hello world"},
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result == "hello world"
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_reads_message_content_blocks():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(
@@ -84,6 +99,30 @@ async def test_parse_completion_response_reads_message_content_blocks():
     result = await provider._parse_completion_response(response)
 
     assert result == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_response_skips_reasoning_blocks():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":[{"type":"reasoning","text":"hidden"},{"type":"output_text","text":"visible"}]}}]}',
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {"type": "reasoning", "text": "hidden"},
+                            {"type": "output_text", "text": "visible"},
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result == "visible"
 
 
 @pytest.mark.asyncio
@@ -205,6 +244,33 @@ async def test_parse_completion_response_deduplicates_nested_structured_sources(
 
     assert result.startswith("hello world")
     assert result.count("https://docs.example.com/guide") == 1
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_response_accepts_source_alias_shapes():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"output_text":"hello world","source_cards":[{"label":"Docs","href":"https://docs.example.com/alias"}],"searchResults":[{"name":"Guide","link":"https://docs.example.com/guide","snippet":"Guide text"}]}',
+        json_data={
+            "output_text": "hello world",
+            "source_cards": [
+                {"label": "Docs", "href": "https://docs.example.com/alias"},
+            ],
+            "searchResults": [
+                {
+                    "name": "Guide",
+                    "link": "https://docs.example.com/guide",
+                    "snippet": "Guide text",
+                }
+            ],
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "https://docs.example.com/alias" in result
+    assert "https://docs.example.com/guide" in result
 
 
 @pytest.mark.asyncio
@@ -346,3 +412,14 @@ def test_wait_with_retry_after_parses_seconds_header():
     request = DummyResponse(headers={"Retry-After": "3"})
 
     assert strategy._parse_retry_after(request) == 3.0
+
+
+def test_wait_with_retry_after_parses_http_date_header():
+    strategy = _WaitWithRetryAfter(multiplier=1, max_wait=10)
+    future_time = datetime.now(timezone.utc) + timedelta(seconds=5)
+    request = DummyResponse(headers={"Retry-After": future_time.strftime("%a, %d %b %Y %H:%M:%S GMT")})
+
+    delay = strategy._parse_retry_after(request)
+
+    assert delay is not None
+    assert 0.0 <= delay <= 5.5
