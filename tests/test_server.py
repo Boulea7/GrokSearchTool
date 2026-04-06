@@ -48,6 +48,53 @@ class FakeAsyncClient:
         return response
 
 
+class SequenceAsyncClient:
+    def __init__(self, responses=None, exc=None, *args, **kwargs):
+        self._responses = responses or {}
+        self._exc = exc or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def _pop(self, store, key):
+        items = store[key]
+        if not isinstance(items, list):
+            del store[key]
+            return items
+        item = items.pop(0)
+        if items:
+            store[key] = items
+        else:
+            del store[key]
+        return item
+
+    async def get(self, url, headers=None):
+        key = ("GET", url)
+        if key in self._exc:
+            raise self._pop(self._exc, key)
+        response = self._pop(self._responses, key)
+        response.request = httpx.Request("GET", url, headers=headers)
+        return response
+
+    async def post(self, url, headers=None, json=None):
+        key = ("POST", url)
+        if key in self._exc:
+            raise self._pop(self._exc, key)
+        if key not in self._responses and url.endswith("/chat/completions"):
+            response = httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "probe ok"}}]},
+            )
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+        response = self._pop(self._responses, key)
+        response.request = httpx.Request("POST", url, headers=headers, json=json)
+        return response
+
+
 @pytest.mark.asyncio
 async def test_web_search_surfaces_http_redirect(monkeypatch):
     class DummyProvider:
@@ -423,9 +470,36 @@ async def test_get_config_info_marks_real_search_probe_failure_as_degraded(monke
     payload = json.loads(await server.get_config_info())
     checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
 
+    assert payload["connection_test"]["status"] == "连接成功"
     assert checks["grok_search_probe"]["status"] == "error"
     assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
     assert "真实搜索探针" in payload["feature_readiness"]["web_search"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_marks_web_fetch_as_degraded_when_only_firecrawl_probe_warns(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": ""}},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert payload["connection_test"]["status"] == "连接成功"
+    assert checks["firecrawl_scrape"]["status"] == "warning"
+    assert checks["web_fetch_probe"]["status"] == "error"
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
 
 
 @pytest.mark.asyncio
@@ -1309,6 +1383,42 @@ async def test_call_tavily_extract_reports_truncated_content(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_tavily_extract_reports_invalid_response_shape_for_non_dict_payload(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    responses = {
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json=["unexpected"],
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    content, error = await server._call_tavily_extract("https://example.com")
+
+    assert content is None
+    assert error == "Tavily 响应结构异常：缺少顶层对象"
+
+
+@pytest.mark.asyncio
+async def test_call_tavily_extract_reports_invalid_result_entry_shape(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    responses = {
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": ["unexpected"]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    content, error = await server._call_tavily_extract("https://example.com")
+
+    assert content is None
+    assert error == "Tavily 响应结构异常：results[0] 必须是对象"
+
+
+@pytest.mark.asyncio
 async def test_call_tavily_map_returns_config_error_when_disabled(monkeypatch):
     monkeypatch.setenv("TAVILY_ENABLED", "false")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
@@ -1359,6 +1469,57 @@ async def test_call_tavily_map_surfaces_http_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_tavily_map_rejects_login_html_response(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    responses = {
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            text="<html><body>Please login to continue</body></html>",
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    result = await server._call_tavily_map("https://example.com")
+
+    assert result == "映射失败: Tavily 返回登录页或认证页面，请检查代理认证状态"
+
+
+@pytest.mark.asyncio
+async def test_call_tavily_map_reports_invalid_json_response(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    responses = {
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            text="not-json",
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    result = await server._call_tavily_map("https://example.com")
+
+    assert result == "映射失败: Tavily 返回非法 JSON"
+
+
+@pytest.mark.asyncio
+async def test_call_tavily_map_reports_invalid_shape(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    responses = {
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"base_url": "https://example.com"},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    result = await server._call_tavily_map("https://example.com")
+
+    assert result == "映射失败: Tavily map 响应结构异常：缺少 results 列表"
+
+
+@pytest.mark.asyncio
 async def test_call_tavily_map_returns_serialized_result(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
@@ -1398,6 +1559,49 @@ async def test_call_firecrawl_scrape_accepts_top_level_markdown_shape(monkeypatc
 
     assert error is None
     assert content == "# flat markdown"
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_scrape_retries_empty_markdown_then_succeeds(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): [
+            httpx.Response(200, json={"data": {"markdown": ""}}),
+            httpx.Response(200, json={"data": {"markdown": "# recovered"}}),
+        ],
+    }
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: SequenceAsyncClient(responses, {}, *args, **kwargs),
+    )
+
+    content, error = await server._call_firecrawl_scrape("https://example.com")
+
+    assert error is None
+    assert content == "# recovered"
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_scrape_returns_truncated_error_after_retry_budget_exhausted(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "2")
+    responses = {
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): [
+            httpx.Response(200, json={"data": {"markdown": f"{'A' * 140}[...]"}}),
+            httpx.Response(200, json={"data": {"markdown": f"{'B' * 140}[...]"}}),
+        ],
+    }
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: SequenceAsyncClient(responses, {}, *args, **kwargs),
+    )
+
+    content, error = await server._call_firecrawl_scrape("https://example.com")
+
+    assert content is None
+    assert error == "Firecrawl 返回的 markdown 疑似被截断"
 
 
 @pytest.mark.asyncio

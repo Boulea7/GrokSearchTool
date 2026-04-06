@@ -347,6 +347,28 @@ def _extract_firecrawl_markdown_payload(data: dict) -> str:
     return ""
 
 
+def _validate_tavily_extract_payload(data: object) -> tuple[str | None, str | None]:
+    if not isinstance(data, dict):
+        return None, "Tavily 响应结构异常：缺少顶层对象"
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        return None, "Tavily 响应结构异常：缺少 results 列表"
+
+    if not results:
+        return None, "Tavily 提取成功但 results 为空"
+
+    first_item = results[0]
+    if not isinstance(first_item, dict):
+        return None, "Tavily 响应结构异常：results[0] 必须是对象"
+
+    content = first_item.get("raw_content", "")
+    if isinstance(content, str) and content.strip():
+        return content, None
+
+    return None, "Tavily 提取成功但内容为空"
+
+
 def _extract_firecrawl_search_payload(data: dict) -> list[dict]:
     if not isinstance(data, dict):
         return []
@@ -824,14 +846,12 @@ async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
             if _looks_like_login_page(response.text):
                 return None, "Tavily 返回登录页或认证页面，请检查代理认证状态"
             data = response.json()
-            if data.get("results") and len(data["results"]) > 0:
-                content = data["results"][0].get("raw_content", "")
-                if content and content.strip():
-                    if _is_probably_truncated_content(content):
-                        return None, "Tavily 提取结果疑似被截断"
-                    return content, None
-                return None, "Tavily 提取成功但内容为空"
-            return None, "Tavily 提取成功但 results 为空"
+            content, payload_error = _validate_tavily_extract_payload(data)
+            if payload_error:
+                return None, payload_error
+            if content and _is_probably_truncated_content(content):
+                return None, "Tavily 提取结果疑似被截断"
+            return content, None
     except Exception as exc:
         return None, _format_fetch_error("Tavily", exc)
 
@@ -925,6 +945,8 @@ async def _call_firecrawl_scrape(url: str, ctx=None) -> tuple[str | None, str | 
                 if _looks_like_login_page(response.text):
                     return None, "Firecrawl 返回登录页或认证页面，请检查代理认证状态"
                 data = response.json()
+                if not isinstance(data, dict):
+                    return None, "Firecrawl 响应结构异常：缺少顶层对象"
                 markdown = _extract_firecrawl_markdown_payload(data)
                 if markdown and markdown.strip():
                     if _is_probably_truncated_content(markdown):
@@ -1013,7 +1035,19 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
         async with httpx.AsyncClient(timeout=float(timeout + 10)) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
-            data = response.json()
+            if _looks_like_login_page(response.text):
+                return "映射失败: Tavily 返回登录页或认证页面，请检查代理认证状态"
+            try:
+                data = response.json()
+            except Exception:
+                if _looks_like_html_response(response.text):
+                    return "映射失败: Tavily 返回 HTML 页面，不是合法 JSON"
+                return "映射失败: Tavily 返回非法 JSON"
+            if not isinstance(data, dict):
+                return "映射失败: Tavily map 响应结构异常：缺少顶层对象"
+            payload_error = _validate_tavily_map_probe_payload(data)
+            if payload_error:
+                return f"映射失败: Tavily map {payload_error.rstrip('。')}"
             return json.dumps({
                 "base_url": data.get("base_url", ""),
                 "results": data.get("results", []),
