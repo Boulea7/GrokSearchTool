@@ -160,6 +160,14 @@ def test_extract_unique_urls_accepts_mixed_case_scheme():
     assert urls == ["HTTPS://fastapi.tiangolo.com/"]
 
 
+def test_extract_unique_urls_deduplicates_mixed_case_scheme_variants():
+    raw = "Docs: HTTPS://fastapi.tiangolo.com/ and https://fastapi.tiangolo.com/"
+
+    urls = extract_unique_urls(raw)
+
+    assert urls == ["HTTPS://fastapi.tiangolo.com/"]
+
+
 def test_split_answer_and_sources_extracts_mixed_case_urls_from_function_call_sources():
     raw = """
 OpenAI is an AI research and deployment company.

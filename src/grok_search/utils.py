@@ -11,8 +11,9 @@ def extract_unique_urls(text: str) -> list[str]:
     urls: list[str] = []
     for m in _URL_PATTERN.finditer(text):
         url = m.group().rstrip('.,;:!?*_')
-        if url not in seen:
-            seen.add(url)
+        dedupe_key = re.sub(r"^(https?)://", lambda match: match.group(1).lower() + "://", url, count=1, flags=re.IGNORECASE)
+        if dedupe_key not in seen:
+            seen.add(dedupe_key)
             urls.append(url)
     return urls
 

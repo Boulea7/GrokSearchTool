@@ -129,6 +129,14 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
+若使用项目级 `.codex/config.toml`，建议不要直接把真实 key 提交到仓库；当前仓库默认忽略 `.codex/`。本地开发更推荐把敏感变量写入已忽略的 `.env.local`，使用前执行：
+
+```bash
+set -a
+source ./.env.local
+set +a
+```
+
 #### Cherry Studio
 
 在 Cherry Studio 的 MCP 配置中新增一个 `STDIO` server，核心字段保持如下：

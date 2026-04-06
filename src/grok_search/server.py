@@ -3,6 +3,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Annotated, Literal, Optional
+from urllib.parse import urlparse
 
 from fastmcp import FastMCP, Context
 from pydantic import Field, ValidationError
@@ -77,7 +78,7 @@ async def _fetch_available_models(api_url: str, api_key: str) -> list[str]:
     import httpx
 
     models_url = f"{api_url.rstrip('/')}/models"
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(models_url, timeout=10.0)) as client:
         response = await client.get(
             models_url,
             headers={
@@ -849,7 +850,7 @@ async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     body = {"urls": [url], "format": "markdown"}
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=60.0)) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             if _looks_like_login_page(response.text):
@@ -895,7 +896,7 @@ async def _call_tavily_search(
     if exclude_domains:
         body["exclude_domains"] = exclude_domains
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=90.0)) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             data = response.json()
@@ -917,7 +918,7 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     body = {"query": query, "limit": limit}
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=90.0)) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             data = response.json()
@@ -953,7 +954,7 @@ async def _call_firecrawl_scrape(
             "waitFor": (attempt + 1) * 1500,
         }
         try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
+            async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=90.0)) as client:
                 response = await client.post(endpoint, headers=headers, json=body)
                 response.raise_for_status()
                 if _looks_like_login_page(response.text):
@@ -1046,7 +1047,7 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
     if instructions:
         body["instructions"] = instructions
     try:
-        async with httpx.AsyncClient(timeout=float(timeout + 10)) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=float(timeout + 10))) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             if _looks_like_login_page(response.text):
@@ -1174,6 +1175,14 @@ def _summarize_doctor_status(doctor_status: str) -> str:
     return "核心 Grok 可用，但部分可选能力未配置、未生效或探测失败。"
 
 
+def _httpx_client_kwargs_for_url(url: str, *, timeout: float) -> dict:
+    host = (urlparse(url).hostname or "").lower()
+    kwargs = {"timeout": timeout}
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        kwargs["trust_env"] = False
+    return kwargs
+
+
 async def _probe_json_endpoint(
     check_id: str,
     method: str,
@@ -1189,7 +1198,7 @@ async def _probe_json_endpoint(
 
     start_time = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(url, timeout=timeout)) as client:
             if method == "GET":
                 response = await client.get(url, headers=headers)
             else:
@@ -1794,6 +1803,13 @@ async def get_config_info() -> str:
             recommendation_details=recommendation_details,
             check_id="tavily_extract",
             feature="web_fetch",
+        )
+        _append_recommendation(
+            recommendations,
+            "若需要 web_map，请配置并启用 Tavily。",
+            recommendation_details=recommendation_details,
+            check_id="tavily_map",
+            feature="web_map",
         )
     checks.append(tavily_extract)
     checks.append(tavily_map)
