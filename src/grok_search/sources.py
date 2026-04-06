@@ -117,10 +117,13 @@ def merge_sources(*source_lists: list[dict]) -> list[dict]:
 
 def standardize_sources(sources: list[dict], retrieved_at: str | None = None) -> list[dict]:
     timestamp = retrieved_at or dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    standardized: list[dict] = []
+    standardized_by_url: OrderedDict[str, dict] = OrderedDict()
 
     for index, item in enumerate(sources or []):
-        raw_item = dict(item or {})
+        if not isinstance(item, dict):
+            continue
+
+        raw_item = dict(item)
         url = _normalize_url(raw_item.get("url"))
         if not url:
             continue
@@ -141,8 +144,11 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
         raw_item["published_at"] = _normalize_optional_text(raw_item.get("published_at") or raw_item.get("published_date"))
         raw_item["retrieved_at"] = _normalize_optional_text(raw_item.get("retrieved_at")) or timestamp
         raw_item["_source_order"] = index
-        standardized.append(raw_item)
+        existing = standardized_by_url.get(url)
+        if existing is None or _should_replace_standardized_source(existing, raw_item):
+            standardized_by_url[url] = raw_item
 
+    standardized = list(standardized_by_url.values())
     standardized.sort(key=_source_priority_key)
     for rank, item in enumerate(standardized, start=1):
         item["rank"] = rank
@@ -154,14 +160,20 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
 def _source_priority_key(item: dict) -> tuple:
     score = item.get("score")
     title = (item.get("title") or "").strip()
+    description = (item.get("description") or "").strip()
     provider = (item.get("provider") or "").strip().lower()
     return (
         0 if provider == "grok" else 1,
         0 if score is not None else 1,
         -(score if isinstance(score, (int, float)) else 0.0),
         0 if title else 1,
+        0 if description else 1,
         item.get("_source_order", 0),
     )
+
+
+def _should_replace_standardized_source(existing: dict, candidate: dict) -> bool:
+    return _source_priority_key(candidate) < _source_priority_key(existing)
 
 
 def split_answer_and_sources(text: str) -> tuple[str, list[dict]]:
