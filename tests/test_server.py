@@ -10,6 +10,7 @@ from grok_search.sources import SourcesCache
 @pytest.fixture(autouse=True)
 def reset_server_state(monkeypatch):
     monkeypatch.setattr(server, "_SOURCES_CACHE", SourcesCache(max_size=32))
+    monkeypatch.setattr(server, "_AVAILABLE_MODELS_CACHE", {})
     server.config.reset_runtime_state()
     monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
     monkeypatch.setenv("GROK_API_KEY", "test-key")
@@ -674,6 +675,24 @@ async def test_get_config_info_marks_web_fetch_as_degraded_when_only_firecrawl_p
     assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
     assert payload["feature_readiness"]["web_fetch"]["providers"]["verified_path"] is None
     assert payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["status"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_cached_reuses_cached_results(monkeypatch):
+    calls = {"count": 0}
+
+    async def fake_fetch(api_url, api_key):
+        calls["count"] += 1
+        return ["grok-4.1-fast", "grok-4.1-mini"]
+
+    monkeypatch.setattr(server, "_fetch_available_models", fake_fetch)
+
+    first = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+    second = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+
+    assert first == ["grok-4.1-fast", "grok-4.1-mini"]
+    assert second == first
+    assert calls["count"] == 1
 
 
 @pytest.mark.asyncio
@@ -1510,6 +1529,39 @@ def test_main_exits_nonzero_on_unexpected_runtime_error(monkeypatch):
         server.main()
 
     assert exc.value.code == 1
+
+
+@pytest.mark.asyncio
+async def test_switch_model_persists_to_temp_config_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr(server.config, "_config_file", config_file, raising=False)
+    server.config.reset_runtime_state()
+
+    payload = json.loads(await server.switch_model("grok-4.1-mini"))
+
+    assert payload["status"] == "成功"
+    assert payload["current_model"] == "grok-4.1-mini"
+    assert payload["config_file"] == str(config_file)
+    assert json.loads(config_file.read_text(encoding="utf-8"))["model"] == "grok-4.1-mini"
+
+
+@pytest.mark.asyncio
+async def test_toggle_builtin_tools_updates_project_settings_file(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    git_root.mkdir()
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+
+    status = json.loads(await server.toggle_builtin_tools("status"))
+    enabled = json.loads(await server.toggle_builtin_tools("on"))
+    disabled = json.loads(await server.toggle_builtin_tools("off"))
+
+    assert status["blocked"] is False
+    assert enabled["blocked"] is True
+    assert sorted(enabled["deny_list"]) == ["WebFetch", "WebSearch"]
+    assert disabled["blocked"] is False
+    assert disabled["deny_list"] == []
+    assert (git_root / ".claude" / "settings.json").exists()
 
 
 @pytest.mark.asyncio
