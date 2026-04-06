@@ -1472,6 +1472,46 @@ def test_configure_windows_event_loop_policy(monkeypatch):
     assert isinstance(captured["policy"], DummyPolicy)
 
 
+def test_main_exits_zero_on_keyboard_interrupt(monkeypatch):
+    import os
+    import signal
+
+    def fake_run(**kwargs):
+        raise KeyboardInterrupt
+
+    def fake_exit(code):
+        raise SystemExit(code)
+
+    monkeypatch.setattr(server.mcp, "run", fake_run)
+    monkeypatch.setattr(signal, "signal", lambda *args, **kwargs: None)
+    monkeypatch.setattr(os, "_exit", fake_exit)
+
+    with pytest.raises(SystemExit) as exc:
+        server.main()
+
+    assert exc.value.code == 0
+
+
+def test_main_exits_nonzero_on_unexpected_runtime_error(monkeypatch):
+    import os
+    import signal
+
+    def fake_run(**kwargs):
+        raise RuntimeError("boom")
+
+    def fake_exit(code):
+        raise SystemExit(code)
+
+    monkeypatch.setattr(server.mcp, "run", fake_run)
+    monkeypatch.setattr(signal, "signal", lambda *args, **kwargs: None)
+    monkeypatch.setattr(os, "_exit", fake_exit)
+
+    with pytest.raises(SystemExit) as exc:
+        server.main()
+
+    assert exc.value.code == 1
+
+
 @pytest.mark.asyncio
 async def test_web_fetch_surfaces_provider_errors(monkeypatch):
     async def fake_tavily(url):
