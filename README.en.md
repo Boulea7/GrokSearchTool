@@ -53,6 +53,7 @@ Notes:
 
 - Public installation guidance currently covers local `stdio` only.
 - `toggle_builtin_tools` is specific to Claude Code project settings.
+- `toggle_builtin_tools` readiness in `get_config_info` only means a local Git project context was detected; it is not a full Claude Code host verification.
 - The installation snippets below intentionally use the current maintained public install source `Boulea7/GrokSearchTool`.
 
 ### Add as an MCP server
@@ -169,6 +170,8 @@ For any local `stdio` host, start with this lightweight verification flow:
 
 - `doctor`: overall doctor status, structured checks, and repair recommendations
 - `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, and `toggle_builtin_tools`
+- `doctor.recommendations_detail`: additive structured repair hints linked to `check_id` and feature scope
+- `feature_readiness.web_fetch.providers`: provider-level readiness details; `verified_path` shows which real fetch probe succeeded, and skipped providers may include `skipped_reason`
 - minimal real `web_search` / `web_fetch` probe results
 
 Optional provider probes are read-only and run only when the corresponding configuration is already present.

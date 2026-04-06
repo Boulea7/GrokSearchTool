@@ -37,6 +37,7 @@ GrokSearch — это независимо поддерживаемый MCP-се
 
 - Публичная документация пока обещает только локальный сценарий `stdio`.
 - `toggle_builtin_tools` относится только к проектным настройкам Claude Code.
+- readiness для `toggle_builtin_tools` в `get_config_info` означает только то, что обнаружен локальный Git-контекст проекта; это не полная проверка хоста Claude Code.
 - Ниже используются актуальные публичные установочные ссылки из поддерживаемого репозитория `Boulea7/GrokSearchTool`.
 
 ### Добавление как MCP
@@ -143,6 +144,11 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 2. выполнить один `web_search`
 3. вызвать `get_sources`, если важна проверка источников
 4. проверять `web_fetch` только когда Tavily или Firecrawl уже настроены, а `web_map` — только когда Tavily настроен и включён
+
+Примечания:
+
+- `doctor.recommendations_detail` даёт структурированные подсказки по исправлению, связанные с `check_id` и feature.
+- `feature_readiness.web_fetch.providers` содержит состояние по каждому provider; `verified_path` показывает backend, который прошёл реальный fetch-probe, а для пропущенных provider может присутствовать `skipped_reason`.
 
 ## Companion Skill
 
