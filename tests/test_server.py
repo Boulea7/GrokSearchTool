@@ -193,7 +193,7 @@ async def test_get_config_info_skips_unconfigured_optional_providers(monkeypatch
     assert payload["doctor"]["recommendations_detail"]
     assert {
         item["check_id"] for item in payload["doctor"]["recommendations_detail"]
-    } >= {"tavily_extract", "firecrawl_scrape"}
+    } >= {"tavily_extract", "tavily_map", "firecrawl_scrape"}
 
 
 @pytest.mark.asyncio
@@ -528,6 +528,16 @@ def test_build_connection_test_from_models_check_maps_error_kinds(error_kind, ex
     assert result["status"] == expected_status
     assert result["scope"] == "models_endpoint"
     assert result["message"] == "probe failed"
+
+
+def test_httpx_client_kwargs_disable_env_proxies_for_loopback_only():
+    local = server._httpx_client_kwargs_for_url("http://localhost:18080/extract", timeout=10.0)
+    loopback = server._httpx_client_kwargs_for_url("http://127.0.0.1:18080/map", timeout=10.0)
+    remote = server._httpx_client_kwargs_for_url("https://api.tavily.com/extract", timeout=10.0)
+
+    assert local["trust_env"] is False
+    assert loopback["trust_env"] is False
+    assert "trust_env" not in remote
 
 
 @pytest.mark.asyncio

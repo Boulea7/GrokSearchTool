@@ -100,6 +100,14 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
+If you use a project-level `.codex/config.toml`, avoid committing real keys into the repository; this repo now ignores `.codex/` by default. For local development, prefer keeping secrets in an ignored `.env.local` and loading them before running commands:
+
+```bash
+set -a
+source ./.env.local
+set +a
+```
+
 #### Cherry Studio
 
 Create a `STDIO` MCP server entry with the same core fields:

@@ -324,7 +324,7 @@ class GrokSearchProvider(BaseSearchProvider):
 
     def _normalize_internal_text(self, content: str) -> str:
         answer, _ = split_answer_and_sources(content or "")
-        cleaned = sanitize_answer_text(answer)
+        cleaned = sanitize_answer_text(answer) if config.output_cleanup_enabled else answer
         return (cleaned or answer or "").strip()
 
     def _extract_payload_content_and_sources(self, data: dict) -> tuple[str, list[dict], bool]:
@@ -557,11 +557,11 @@ class GrokSearchProvider(BaseSearchProvider):
             if not stripped:
                 continue
             if stripped.startswith("Title:"):
-                title = line[6:].strip() or url
+                title = stripped[6:].strip() or url
                 reading_extracts = False
             elif stripped.startswith("Extracts:"):
                 extract_lines = []
-                first_line = line[9:].strip()
+                first_line = stripped[9:].strip()
                 if first_line:
                     extract_lines.append(first_line)
                 reading_extracts = True

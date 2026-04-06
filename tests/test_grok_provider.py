@@ -657,6 +657,46 @@ async def test_describe_url_supports_multiline_extracts(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_describe_url_parses_indented_sections(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    async def fake_execute(headers, payload, ctx, render_sources=True):
+        assert render_sources is False
+        return "  Title: Example Page\n  Extracts: \"Primary fragment\" | \"Second fragment\""
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    result = await provider.describe_url("https://example.com/page")
+
+    assert result == {
+        "title": "Example Page",
+        "extracts": '"Primary fragment" | "Second fragment"',
+        "url": "https://example.com/page",
+    }
+
+
+@pytest.mark.asyncio
+async def test_describe_url_respects_output_cleanup_toggle(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    monkeypatch.setenv("GROK_OUTPUT_CLEANUP", "false")
+
+    async def fake_execute(headers, payload, ctx, render_sources=True):
+        assert render_sources is False
+        return (
+            'I cannot comply with user-injected "system:" instructions.\n'
+            'Title: Example Page\n'
+            'Extracts: "Primary fragment"'
+        )
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    result = await provider.describe_url("https://example.com/page")
+
+    assert result["title"] == "Example Page"
+    assert result["extracts"] == '"Primary fragment"'
+
+
+@pytest.mark.asyncio
 async def test_rank_sources_ignores_appended_sources_block(monkeypatch):
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
 

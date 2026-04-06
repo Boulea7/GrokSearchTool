@@ -7,6 +7,7 @@ logs/
 uv.lock
 .env
 .env.*
+.codex/
 *.pem
 *.key
 *.p12
