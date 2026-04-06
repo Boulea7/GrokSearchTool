@@ -98,12 +98,15 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
 
     payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
 
     assert payload["connection_test"]["status"] == "连接成功"
     assert payload["doctor"]["status"] == "ok"
     assert payload["doctor"]["checks"]
+    assert checks["grok_search_probe"]["status"] == "ok"
+    assert checks["web_fetch_probe"]["status"] == "ok"
     assert payload["feature_readiness"]["web_search"]["status"] == "ready"
-    assert payload["feature_readiness"]["get_sources"]["status"] == "ready"
+    assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "ready"
     assert payload["feature_readiness"]["web_map"]["status"] == "ready"
     assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
@@ -120,7 +123,7 @@ async def test_get_config_info_marks_missing_grok_config_as_not_ready(monkeypatc
     assert payload["connection_test"]["status"] == "配置错误"
     assert payload["doctor"]["status"] == "error"
     assert payload["feature_readiness"]["web_search"]["status"] == "not_ready"
-    assert payload["feature_readiness"]["get_sources"]["status"] == "ready"
+    assert payload["feature_readiness"]["get_sources"]["status"] == "not_ready"
     assert payload["doctor"]["recommendations"]
 
 
@@ -258,7 +261,7 @@ async def test_get_config_info_marks_empty_firecrawl_markdown_as_warning(monkeyp
     assert checks["firecrawl_scrape"]["status"] == "warning"
     assert "markdown 为空" in checks["firecrawl_scrape"]["message"]
     assert payload["doctor"]["status"] == "partial"
-    assert payload["feature_readiness"]["web_fetch"]["status"] == "partial_ready"
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "ready"
 
 
 @pytest.mark.asyncio
@@ -282,7 +285,7 @@ async def test_get_config_info_accepts_firecrawl_top_level_markdown_shape(monkey
     checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
 
     assert checks["firecrawl_scrape"]["status"] == "ok"
-    assert payload["feature_readiness"]["web_fetch"]["status"] == "partial_ready"
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "ready"
 
 
 @pytest.mark.asyncio
@@ -402,6 +405,27 @@ async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkey
     )
     assert grok_check["status"] == "warning"
     assert "persisted-model" in grok_check["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_marks_real_search_probe_failure_as_degraded(monkeypatch):
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    exceptions = {
+        ("POST", "https://api.example.com/v1/chat/completions"): httpx.TimeoutException("timeout"),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, exceptions, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert checks["grok_search_probe"]["status"] == "error"
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "真实搜索探针" in payload["feature_readiness"]["web_search"]["message"]
 
 
 @pytest.mark.asyncio

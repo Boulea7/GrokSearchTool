@@ -69,6 +69,8 @@ mcp = FastMCP("grok-search")
 _SOURCES_CACHE = SourcesCache(max_size=256)
 _AVAILABLE_MODELS_CACHE: dict[tuple[str, str], list[str]] = {}
 _AVAILABLE_MODELS_LOCK = asyncio.Lock()
+_SEARCH_PROBE_QUERY = "Reply with the single word ready."
+_FETCH_PROBE_URL = "https://example.com"
 
 
 async def _fetch_available_models(api_url: str, api_key: str) -> list[str]:
@@ -1252,22 +1254,117 @@ def _build_connection_test_from_models_check(models_check: dict) -> dict:
     }
 
 
-def _build_feature_readiness(checks: list[dict]) -> dict:
+async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
+    import time
+
+    start_time = time.perf_counter()
+    provider = GrokSearchProvider(api_url, api_key, model)
+    try:
+        content = await provider.search(_SEARCH_PROBE_QUERY)
+    except Exception as exc:
+        return _build_doctor_check(
+            "grok_search_probe",
+            "error",
+            f"真实搜索探针失败: {_format_grok_error(exc)}",
+            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            error_kind="probe_failed",
+        )
+
+    if not sanitize_answer_text(content).strip():
+        return _build_doctor_check(
+            "grok_search_probe",
+            "error",
+            "真实搜索探针失败: 上游未返回可用正文。",
+            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            error_kind="empty_probe_response",
+        )
+
+    return _build_doctor_check(
+        "grok_search_probe",
+        "ok",
+        "真实搜索探针成功。",
+        endpoint=f"{api_url.rstrip('/')}/chat/completions",
+        response_time_ms=(time.perf_counter() - start_time) * 1000,
+    )
+
+
+async def _probe_web_fetch() -> dict:
+    import time
+
+    start_time = time.perf_counter()
+    errors: list[str] = []
+
+    if config.tavily_enabled and config.tavily_api_key:
+        content, error = await _call_tavily_extract(_FETCH_PROBE_URL)
+        if content:
+            return _build_doctor_check(
+                "web_fetch_probe",
+                "ok",
+                "真实抓取探针成功（Tavily）。",
+                endpoint=f"{config.tavily_api_url.rstrip('/')}/extract",
+                response_time_ms=(time.perf_counter() - start_time) * 1000,
+                provider="tavily",
+            )
+        if error:
+            errors.append(f"Tavily: {error}")
+
+    if config.firecrawl_api_key:
+        content, error = await _call_firecrawl_scrape(_FETCH_PROBE_URL)
+        if content:
+            return _build_doctor_check(
+                "web_fetch_probe",
+                "ok",
+                "真实抓取探针成功（Firecrawl）。",
+                endpoint=f"{config.firecrawl_api_url.rstrip('/')}/scrape",
+                response_time_ms=(time.perf_counter() - start_time) * 1000,
+                provider="firecrawl",
+            )
+        if error:
+            errors.append(f"Firecrawl: {error}")
+
+    if not errors:
+        return _build_doctor_check(
+            "web_fetch_probe",
+            "skipped",
+            "未执行真实抓取探针。",
+            skipped_reason="no_fetch_provider_configured",
+        )
+
+    return _build_doctor_check(
+        "web_fetch_probe",
+        "error",
+        f"真实抓取探针失败: {'；'.join(errors)}",
+        response_time_ms=(time.perf_counter() - start_time) * 1000,
+        error_kind="probe_failed",
+    )
+
+
+def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
     grok_models = checks_by_id["grok_models"]
     grok_model_selection = checks_by_id.get("grok_model_selection")
+    grok_search_probe = checks_by_id["grok_search_probe"]
     tavily_extract = checks_by_id["tavily_extract"]
     firecrawl_scrape = checks_by_id["firecrawl_scrape"]
+    web_fetch_probe = checks_by_id["web_fetch_probe"]
     tavily_map = checks_by_id["tavily_map"]
     claude_context = checks_by_id["claude_code_project"]
 
     if grok_config["status"] != "ok":
         web_search_status = "not_ready"
         web_search_message = grok_config["message"]
-    elif grok_models["status"] == "ok":
+    elif grok_search_probe["status"] == "ok" and grok_models["status"] == "ok":
         web_search_status = "ready"
-        web_search_message = "Grok 配置完整，/models 探测成功。"
+        web_search_message = "Grok 配置完整，真实搜索探针成功。"
+    elif grok_search_probe["status"] == "ok":
+        web_search_status = "degraded"
+        web_search_message = "真实搜索探针成功，但 /models 或模型可见性探测存在问题。"
+    elif grok_search_probe["status"] == "error":
+        web_search_status = "degraded"
+        web_search_message = grok_search_probe["message"]
     else:
         web_search_status = "degraded"
         web_search_message = grok_models["message"]
@@ -1280,12 +1377,15 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
         web_search_status = "degraded"
         web_search_message = grok_model_selection["message"]
 
-    if tavily_extract["status"] == "ok" and firecrawl_scrape["status"] == "ok":
+    if web_fetch_probe["status"] == "ok":
+        web_fetch_status = "ready"
+        web_fetch_message = web_fetch_probe["message"]
+    elif tavily_extract["status"] == "ok" and firecrawl_scrape["status"] == "ok":
         web_fetch_status = "ready"
         web_fetch_message = "Tavily 与 Firecrawl 均可用。"
     elif tavily_extract["status"] == "ok" or firecrawl_scrape["status"] == "ok":
-        web_fetch_status = "partial_ready"
-        web_fetch_message = "仅部分抓取后端已验证可用。"
+        web_fetch_status = "degraded"
+        web_fetch_message = web_fetch_probe["message"] if web_fetch_probe["status"] == "error" else "仅部分抓取后端已验证可用。"
     elif tavily_extract["status"] == "skipped" and firecrawl_scrape["status"] == "skipped":
         web_fetch_status = "not_ready"
         web_fetch_message = "Tavily / Firecrawl 均未配置。"
@@ -1307,10 +1407,19 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
 
     return {
         "web_search": {"status": web_search_status, "message": web_search_message},
-        "get_sources": {
-            "status": "ready",
-            "message": "只依赖本地缓存中的历史 session_id，不依赖当前 Grok 配置。",
-        },
+        "get_sources": (
+            {
+                "status": "ready",
+                "message": "当前进程内已存在可读取的 source session 缓存。",
+                "transient": True,
+            }
+            if source_cache_size > 0
+            else {
+                "status": "partial_ready" if web_search_status != "not_ready" else "not_ready",
+                "message": "接口可用，但当前进程内尚无可读取的 source session；需先执行成功的 web_search。",
+                "transient": True,
+            }
+        ),
         "web_fetch": {"status": web_fetch_status, "message": web_fetch_message},
         "web_map": {"status": web_map_status, "message": web_map_message},
         "toggle_builtin_tools": {
@@ -1322,7 +1431,7 @@ def _build_feature_readiness(checks: list[dict]) -> dict:
 
 
 def _feature_affects_overall_doctor_status(item: dict) -> bool:
-    return not item.get("client_specific", False)
+    return not item.get("client_specific", False) and not item.get("transient", False)
 
 
 def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommendations: list[str]) -> dict:
@@ -1439,6 +1548,19 @@ async def get_config_info() -> str:
                 recommendations,
                 f"将 GROK_MODEL 或本地持久化模型从 {configured_model} 切换到 /models 返回的可用模型，例如：{available_preview}。",
             )
+    if api_url and api_key:
+        grok_search_probe = await _probe_web_search(api_url, api_key, config.grok_model)
+        if grok_search_probe["status"] != "ok":
+            _append_recommendation(recommendations, "检查 chat/completions 是否真实可用，并确认当前默认模型能返回可解析正文。")
+    else:
+        grok_search_probe = _build_doctor_check(
+            "grok_search_probe",
+            "skipped",
+            "未执行真实搜索探针。",
+            skipped_reason="missing_grok_config",
+        )
+    checks.append(grok_search_probe)
+
     if config.tavily_enabled and config.tavily_api_key:
         tavily_extract = await _probe_json_endpoint(
             "tavily_extract",
@@ -1539,6 +1661,10 @@ async def get_config_info() -> str:
         )
         _append_recommendation(recommendations, "若需要 Firecrawl fallback，请配置 FIRECRAWL_API_KEY。")
     checks.append(firecrawl_scrape)
+    web_fetch_probe = await _probe_web_fetch()
+    if web_fetch_probe["status"] == "error":
+        _append_recommendation(recommendations, "检查真实 web_fetch 路径是否能抓到最小页面正文，并确认提取结果不是登录页、空内容或异常结构。")
+    checks.append(web_fetch_probe)
 
     claude_project_root = _find_git_root()
     claude_context_status = "ok" if claude_project_root else "skipped"
@@ -1551,7 +1677,7 @@ async def get_config_info() -> str:
         )
     )
 
-    feature_readiness = _build_feature_readiness(checks)
+    feature_readiness = _build_feature_readiness(checks, source_cache_size=await _SOURCES_CACHE.size())
     doctor = _build_doctor_payload(checks, feature_readiness, recommendations)
     config_info["connection_test"] = _build_connection_test_from_models_check(grok_models)
     config_info["doctor"] = doctor
