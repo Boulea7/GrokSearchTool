@@ -181,6 +181,34 @@ sources([{"title": "OpenAI", "url": "HTTPS://openai.com/"}])
     assert sources == [{"title": "OpenAI", "url": "HTTPS://openai.com/"}]
 
 
+def test_split_answer_and_sources_keeps_function_call_example_inside_fenced_code():
+    raw = """
+Example:
+
+```python
+sources([{"title": "OpenAI", "url": "https://openai.com/"}])
+```
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == raw.strip()
+    assert sources == []
+
+
+def test_split_answer_and_sources_keeps_generic_tail_link_lists_as_body_content():
+    raw = """
+Useful endpoints:
+- https://a.example.com
+- https://b.example.com
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == raw.strip()
+    assert sources == []
+
+
 def test_standardize_sources_accepts_mixed_case_http_scheme():
     sources = standardize_sources(
         [
