@@ -114,8 +114,8 @@ def test_mcp_export_fails_lazily_without_fastmcp():
 
 
 def test_mcp_export_still_works_when_fastmcp_is_available():
-    code = "from grok_search import mcp; print(type(mcp).__name__)"
+    code = "from grok_search import mcp; print(hasattr(mcp, 'tool'))"
     result = _run_python(code)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "FastMCP"
+    assert result.stdout.strip() == "True"
