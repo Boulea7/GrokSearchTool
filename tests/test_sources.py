@@ -135,6 +135,31 @@ def test_extract_unique_urls_strips_trailing_markdown_emphasis():
     assert urls == ["https://fastapi.tiangolo.com/"]
 
 
+def test_standardize_sources_accepts_mixed_case_http_scheme():
+    sources = standardize_sources(
+        [
+            {"title": "Mixed Case", "url": "HTTPS://Example.com/Guide"},
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Mixed Case",
+            "url": "HTTPS://Example.com/Guide",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
 def test_standardize_sources_skips_invalid_or_missing_urls():
     sources = standardize_sources(
         [

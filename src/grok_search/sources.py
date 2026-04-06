@@ -480,9 +480,9 @@ def _normalize_url(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     url = value.strip()
-    if not url.startswith(("http://", "https://")):
-        return ""
     parsed = urlparse(url)
+    if parsed.scheme.lower() not in ("http", "https"):
+        return ""
     if not parsed.netloc:
         return ""
     return url

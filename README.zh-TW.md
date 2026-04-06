@@ -122,6 +122,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `TAVILY_ENABLED` | 否 | 是否啟用 Tavily 路徑 |
 | `FIRECRAWL_API_KEY` | 否 | Firecrawl fallback Key |
 | `FIRECRAWL_API_URL` | 否 | Firecrawl API 端點 |
+| `GROK_DEBUG` | 否 | 是否啟用除錯日誌 |
+| `GROK_LOG_LEVEL` | 否 | 日誌等級 |
 | `GROK_LOG_DIR` | 否 | 日誌目錄；`get_config_info` 會回傳解析後的執行期路徑 |
 | `GROK_OUTPUT_CLEANUP` | 否 | 是否啟用 `web_search` 輸出清洗 |
 | `GROK_FILTER_THINK_TAGS` | 否 | `GROK_OUTPUT_CLEANUP` 的舊別名 |
