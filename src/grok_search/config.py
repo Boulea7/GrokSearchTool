@@ -170,7 +170,7 @@ class Config:
         config_data = self._load_config_file()
         config_data["model"] = model
         self._save_config_file(config_data)
-        self._cached_model = self._apply_model_suffix(model)
+        self._cached_model = None
 
     @staticmethod
     def _mask_api_key(key: str) -> str:

@@ -20,3 +20,26 @@ def test_time_context_mode_rejects_unknown_values(monkeypatch):
     config = Config()
 
     assert config.time_context_mode == "always"
+
+
+def test_grok_model_prefers_env_over_persisted_config(monkeypatch):
+    config = Config()
+    monkeypatch.setattr(config, "_cached_model", None, raising=False)
+    monkeypatch.setenv("GROK_MODEL", "env-model")
+    monkeypatch.setattr(config, "_load_config_file", lambda: {"model": "persisted-model"})
+
+    assert config.grok_model == "env-model"
+
+
+def test_set_model_does_not_override_env_priority_in_current_process(monkeypatch):
+    config = Config()
+    monkeypatch.setattr(config, "_cached_model", None, raising=False)
+    monkeypatch.setenv("GROK_MODEL", "env-model")
+    monkeypatch.setattr(config, "_load_config_file", lambda: {"model": "persisted-model"})
+    saved = {}
+    monkeypatch.setattr(config, "_save_config_file", lambda data: saved.update(data))
+
+    config.set_model("new-persisted-model")
+
+    assert saved["model"] == "new-persisted-model"
+    assert config.grok_model == "env-model"

@@ -1,5 +1,6 @@
 import httpx
 import json
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
@@ -52,7 +53,7 @@ def _needs_time_context(query: str) -> bool:
         "this month", "last month", "next month",
         "this year", "last year", "next year",
         "latest", "recent", "recently", "just now",
-        "real-time", "realtime", "up-to-date",
+        "real-time", "up-to-date",
     ]
 
     query_lower = query.lower()
@@ -62,7 +63,7 @@ def _needs_time_context(query: str) -> bool:
             return True
 
     for keyword in en_keywords:
-        if keyword in query_lower:
+        if re.search(rf"\b{re.escape(keyword)}\b", query_lower):
             return True
 
     return False
@@ -258,6 +259,9 @@ class GrokSearchProvider(BaseSearchProvider):
 
         def collect_nested(value):
             if isinstance(value, dict):
+                block_type = str(value.get("type", "")).strip().lower()
+                if block_type in {"reasoning", "thinking", "analysis", "thought"}:
+                    return
                 collect_from_mapping(value)
                 for nested in value.values():
                     collect_nested(nested)

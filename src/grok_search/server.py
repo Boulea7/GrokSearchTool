@@ -813,14 +813,15 @@ async def get_sources(
         }
 
     standardized_sources = standardize_sources(normalized_entry["sources"])
+    recalculated_state = _build_sources_cache_entry(
+        standardized_sources,
+        search_status=normalized_entry["search_status"],
+        search_error=normalized_entry["search_error"],
+    )["source_state"]
     updated_entry = {
         **normalized_entry,
         "sources": standardized_sources,
-        "source_state": (
-            "available"
-            if standardized_sources
-            else normalized_entry["source_state"]
-        ),
+        "source_state": recalculated_state,
     }
     if updated_entry != cached_entry:
         if isinstance(cached_entry, list):
@@ -929,7 +930,12 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
         return None
 
 
-async def _call_firecrawl_scrape(url: str, ctx=None) -> tuple[str | None, str | None]:
+async def _call_firecrawl_scrape(
+    url: str,
+    ctx=None,
+    *,
+    max_retries: int | None = None,
+) -> tuple[str | None, str | None]:
     import httpx
     api_url = config.firecrawl_api_url
     api_key = config.firecrawl_api_key
@@ -937,7 +943,7 @@ async def _call_firecrawl_scrape(url: str, ctx=None) -> tuple[str | None, str | 
         return None, None
     endpoint = f"{api_url.rstrip('/')}/scrape"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    max_retries = config.retry_max_attempts
+    max_retries = max_retries or config.retry_max_attempts
     last_error: str | None = None
     for attempt in range(max_retries):
         body = {
@@ -1251,14 +1257,8 @@ async def _probe_json_endpoint(
 
 
 def _validate_tavily_extract_probe_payload(data: object) -> str | None:
-    if not isinstance(data, dict):
-        return "响应结构异常：缺少顶层对象。"
-
-    results = data.get("results")
-    if not isinstance(results, list):
-        return "响应结构异常：缺少 results 列表。"
-
-    return None
+    _, error = _validate_tavily_extract_payload(data)
+    return f"{error}。" if error else None
 
 
 def _validate_tavily_map_probe_payload(data: object) -> str | None:
@@ -1278,6 +1278,9 @@ def _build_connection_test_from_models_check(models_check: dict) -> dict:
         "request_error": "连接失败",
         "http_error": "连接异常",
         "config_error": "配置错误",
+        "login_page": "连接失败",
+        "html_response": "连接异常",
+        "invalid_json": "连接异常",
     }
     if models_check["status"] == "ok":
         result = {
@@ -1353,7 +1356,7 @@ async def _probe_web_fetch() -> dict:
             errors.append(f"Tavily: {error}")
 
     if config.firecrawl_api_key:
-        content, error = await _call_firecrawl_scrape(_FETCH_PROBE_URL)
+        content, error = await _call_firecrawl_scrape(_FETCH_PROBE_URL, max_retries=1)
         if content:
             return _build_doctor_check(
                 "web_fetch_probe",
@@ -1513,7 +1516,7 @@ def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommend
         - Use this tool first when debugging connection, provider readiness, or installation issues.
         - API keys are automatically masked for security in the response.
         - Optional provider probes only run when their configuration is present.
-        - Connection test timeout is 10 seconds; network issues may cause delays.
+        - The `/models` connection test timeout is 10 seconds; additional real `search/fetch` probes may take longer.
     """,
     meta={"version": "1.4.0", "author": "guda.studio"},
 )
@@ -1925,6 +1928,35 @@ def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -
     return None
 
 
+def _validate_search_strategy_coverage(session) -> str | None:
+    missing_ids = sorted(session.missing_search_term_ids())
+    if missing_ids:
+        return _planning_validation_message(
+            f"Missing search term for sub-query ids: {', '.join(missing_ids)}",
+            "purpose",
+        )
+    return None
+
+
+def _validate_tool_mapping_item(session, sub_query_id: str, is_revision: bool = False) -> str | None:
+    if not is_revision and sub_query_id in session.tool_mapping_ids():
+        return _planning_validation_message(
+            f"Duplicate tool mapping for sub-query id: {sub_query_id}",
+            "sub_query_id",
+        )
+    return None
+
+
+def _validate_tool_mapping_coverage(session) -> str | None:
+    missing_ids = sorted(session.missing_tool_mapping_ids())
+    if missing_ids:
+        return _planning_validation_message(
+            f"Missing tool mapping for sub-query ids: {', '.join(missing_ids)}",
+            "sub_query_id",
+        )
+    return None
+
+
 def _validate_execution_plan(session, parallel: list[list[str]], sequential: list[str]) -> str | None:
     existing_ids = _get_planning_sub_query_ids(session)
     placement_stage: dict[str, int] = {}
@@ -2218,6 +2250,9 @@ async def plan_tool_mapping(
     validation_error = _validate_sub_query_reference(session, sub_query_id, "sub_query_id")
     if validation_error:
         return validation_error
+    validation_error = _validate_tool_mapping_item(session, sub_query_id, is_revision=is_revision)
+    if validation_error:
+        return validation_error
     return json.dumps(planning_engine.process_phase(
         phase="tool_selection", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=item,
@@ -2249,6 +2284,12 @@ async def plan_execution(
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid execution plan input.", _format_validation_details(exc))
     if "tool_selection" in session.phases or "execution_order" in session.phases:
+        validation_error = _validate_search_strategy_coverage(session)
+        if validation_error:
+            return validation_error
+        validation_error = _validate_tool_mapping_coverage(session)
+        if validation_error:
+            return validation_error
         validation_error = _validate_execution_plan(session, parallel, seq)
         if validation_error:
             return validation_error

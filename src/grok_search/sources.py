@@ -479,7 +479,13 @@ def extract_sources_from_text(text: str) -> list[dict]:
 def _normalize_url(value: Any) -> str:
     if not isinstance(value, str):
         return ""
-    return value.strip()
+    url = value.strip()
+    if not url.startswith(("http://", "https://")):
+        return ""
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        return ""
+    return url
 
 
 def _normalize_text(value: Any) -> str:

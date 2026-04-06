@@ -74,6 +74,23 @@ async def test_search_auto_mode_injects_time_context_for_temporal_query(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_search_auto_mode_does_not_match_partial_english_tokens(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    captured = {}
+    monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "auto")
+
+    async def fake_execute(headers, payload, ctx):
+        captured["payload"] = payload
+        return "ok"
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    await provider.search("Explain currentColor in CSS and Firebase Realtime Database")
+
+    assert "[Current Time Context]" not in captured["payload"]["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_search_auto_mode_injects_time_context_when_runtime_hint_is_set(monkeypatch):
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     provider.time_context_required = True
@@ -314,6 +331,36 @@ async def test_parse_completion_response_deduplicates_nested_structured_sources(
 
     assert result.startswith("hello world")
     assert result.count("https://docs.example.com/guide") == 1
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_response_ignores_sources_inside_reasoning_blocks():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":[{"type":"reasoning","text":"hidden","references":[{"title":"Leak","url":"https://docs.example.com/leak"}]},{"type":"output_text","text":"hello world"}]}}]}',
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {
+                                "type": "reasoning",
+                                "text": "hidden",
+                                "references": [
+                                    {"title": "Leak", "url": "https://docs.example.com/leak"},
+                                ],
+                            },
+                            {"type": "output_text", "text": "hello world"},
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result == "hello world"
 
 
 @pytest.mark.asyncio

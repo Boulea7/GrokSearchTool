@@ -280,6 +280,60 @@ async def test_get_config_info_rejects_malformed_tavily_probe_shape(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_rejects_empty_tavily_probe_results(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": []},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert checks["tavily_extract"]["status"] == "error"
+    assert "results 为空" in checks["tavily_extract"]["message"]
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_rejects_empty_tavily_probe_content(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": ""}]},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+    checks = {check["check_id"]: check for check in payload["doctor"]["checks"]}
+
+    assert checks["tavily_extract"]["status"] == "error"
+    assert "内容为空" in checks["tavily_extract"]["message"]
+    assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_marks_empty_firecrawl_markdown_as_warning(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
@@ -408,6 +462,44 @@ async def test_get_config_info_warns_when_api_url_has_no_v1(monkeypatch):
     assert checks["grok_api_url_format"]["status"] == "warning"
     assert payload["doctor"]["status"] == "partial"
     assert any("/v1" in item for item in payload["doctor"]["recommendations"])
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_maps_models_login_page_to_connection_failure(monkeypatch):
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            text="<html><body>Please login to continue</body></html>",
+        ),
+    }
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(responses, {}, *args, **kwargs))
+
+    payload = json.loads(await server.get_config_info())
+
+    assert payload["connection_test"]["status"] == "连接失败"
+    assert "登录页" in payload["connection_test"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_probe_web_fetch_uses_single_firecrawl_attempt_in_doctor_mode(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): [
+            httpx.Response(200, json={"data": {"markdown": ""}}),
+            httpx.Response(200, json={"data": {"markdown": "# recovered"}}),
+        ],
+    }
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: SequenceAsyncClient(responses, {}, *args, **kwargs),
+    )
+
+    result = await server._probe_web_fetch()
+
+    assert result["status"] == "error"
+    assert "Firecrawl 返回空 markdown" in result["message"]
 
 
 @pytest.mark.asyncio
@@ -1238,6 +1330,26 @@ async def test_get_sources_migrates_legacy_error_cache_to_unavailable_state():
     assert cached["search_status"] == "error"
     assert cached["search_error"] == "validation_error"
     assert cached["source_state"] == "unavailable_due_to_search_error"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_does_not_keep_available_state_for_invalid_legacy_urls():
+    session_id = "legacy-invalid-session"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [{"title": "Bad Source", "url": "not-a-valid-url"}],
+            "search_status": "ok",
+            "search_error": None,
+            "source_state": "available",
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == []
+    assert cached["sources_count"] == 0
+    assert cached["source_state"] == "empty"
 
 
 def test_probably_truncated_content_detects_obvious_markers():
