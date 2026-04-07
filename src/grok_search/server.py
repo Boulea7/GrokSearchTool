@@ -290,7 +290,6 @@ def _format_grok_error(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
         location = _mask_sensitive_url(exc.response.headers.get("location", "").strip())
-        request_id = _extract_request_id(exc.response.headers)
         summary = _extract_error_summary(exc.response)
         if status_code in {301, 302, 303, 307, 308} and location:
             message = f"搜索失败: 上游返回 HTTP {status_code} 重定向到 {location}，请检查代理认证状态"
@@ -298,8 +297,6 @@ def _format_grok_error(exc: Exception) -> str:
             message = f"搜索失败: 上游返回 HTTP {status_code}"
         if summary:
             message += f"，摘要={summary}"
-        if request_id:
-            message += f"，request_id={request_id}"
         return message
 
     message = _mask_sensitive_text(str(exc).strip())
@@ -354,7 +351,6 @@ def _format_fetch_error(provider: str, exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
         location = _mask_sensitive_url(exc.response.headers.get("location", "").strip())
-        request_id = _extract_request_id(exc.response.headers)
         summary = _extract_error_summary(exc.response)
         if status_code in {301, 302, 303, 307, 308} and location:
             message = f"{provider} 返回 HTTP {status_code} 重定向到 {location}，请检查认证状态"
@@ -364,8 +360,6 @@ def _format_fetch_error(provider: str, exc: Exception) -> str:
             message = f"{provider} 返回 HTTP {status_code}"
         if summary:
             message += f"，摘要={summary}"
-        if request_id:
-            message += f"，request_id={request_id}"
         return message
 
     message = _mask_sensitive_text(str(exc).strip())
@@ -2187,7 +2181,7 @@ async def get_config_info() -> str:
         _build_doctor_check(
             "claude_code_project",
             claude_context_status,
-            f"已找到 Claude Code 项目根目录：{claude_project_root}" if claude_context_status == "ok" else "未检测到项目级 Git 上下文。",
+            "已检测到 Claude Code 项目级 Git 上下文。" if claude_context_status == "ok" else "未检测到项目级 Git 上下文。",
             skipped_reason="" if claude_context_status == "ok" else "missing_git_context",
         )
     )
