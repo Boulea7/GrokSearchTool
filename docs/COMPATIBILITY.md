@@ -4,7 +4,7 @@
 
 Compatibility claims are grouped into three levels:
 
-- `Officially tested`: validated end-to-end in a clean environment
+- `Officially tested`: maintainer-validated for the documented local `stdio` path in a clean environment, not a full host-level E2E matrix
 - `Community-tested`: supported by host documentation and maintainer usage, but not yet documented as a full official validation matrix
 - `Planned`: a future target, not a current install promise
 
@@ -13,7 +13,7 @@ Compatibility claims are grouped into three levels:
 ### Officially tested
 
 - Claude Code
-  - full core MCP tool surface
+  - documented local `stdio` MCP flow is maintainer-validated
   - `toggle_builtin_tools` is specifically designed for Claude Code project settings
 
 ### Community-tested
@@ -49,6 +49,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `GROK_API_URL` must be OpenAI-compatible and should include `/v1`
 - model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.1-fast`
 - process env presence overrides project `.env.local` / `.env` fallback, even when the env value is explicitly empty
+- project env fallback accepts both `KEY=value` and optional `export KEY=value` lines
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` controls local time-context injection for `web_search`; the default is `always`
 - `web_search` depends on a working `/chat/completions` implementation
@@ -65,7 +66,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` intentionally expose a curated subset of provider options rather than the providers' complete native API surfaces
 - Tavily `map` may include external-domain URLs unless callers further constrain and post-filter the crawl results; this reflects Tavily's default `allow_external=true` behavior
 - loopback upstream endpoints are requested with `trust_env=False`, which also bypasses proxy and local-CA environment variables for that request
-- `web_fetch` / `web_map` now reject non-HTTP(S), loopback, obviously private-network targets, and common public DNS aliases that encode local/private IPs
+- `web_fetch` / `web_map` now reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, and common public DNS aliases that encode local/private IPs
+- after static URL validation passes, `web_fetch` / `web_map` also re-check visible redirect targets before dispatching the provider call
 
 ## Feature Dependencies
 
@@ -97,6 +99,6 @@ If local `stdio` startup fails with certificate-chain errors in enterprise or se
 
 - endpoint compatibility still varies across Grok-compatible providers
 - source extraction is best-effort and may depend on how the upstream response encodes links or annotations
-- diagnostic payloads may still include local absolute paths, project-root hints, endpoint/hostname details, `request_id` values, or short upstream error summaries even when API keys and obvious token/signature strings are masked
+- diagnostic payloads may still include local absolute paths, endpoint/hostname details, or short upstream error summaries even when API keys and obvious token/signature strings are masked
 - `toggle_builtin_tools` is intentionally client-specific and should not be treated as a universal MCP feature
 - `toggle_builtin_tools` readiness in `get_config_info` currently indicates local Git project context detection, not a full Claude Code host validation

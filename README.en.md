@@ -45,7 +45,7 @@ The public MCP surface currently includes `13` tools:
 
 ### Support levels
 
-- `Officially tested`: Claude Code
+- `Officially tested`: Claude Code for the documented local `stdio` flow and project-level settings path, not as a full host-level E2E matrix
 - `Community-tested`: Codex-style MCP clients, Cherry Studio
 - `Planned`: Dify, n8n, Coze
 
@@ -108,6 +108,8 @@ source ./.env.local
 set +a
 ```
 
+Project env fallback currently accepts both plain dotenv lines like `KEY=value` and optional `export KEY=value` prefixes.
+
 If you plan to call `toggle_builtin_tools`, also avoid committing project-level `.claude/settings.json`; this repo now ignores `.claude/` by default.
 
 #### Cherry Studio
@@ -136,7 +138,7 @@ Create a `STDIO` MCP server entry with the same core fields:
 | --- | --- | --- |
 | `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint, ideally with `/v1` |
 | `GROK_API_KEY` | Yes | Grok API key |
-| `GROK_MODEL` | No | Default model |
+| `GROK_MODEL` | No | Default model; see the precedence notes below |
 | `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |
 | `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
@@ -165,7 +167,8 @@ Notes:
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` injects local time context according to `GROK_TIME_CONTEXT_MODE` (`always` by default)
 - loopback upstream endpoints are requested with `trust_env=False`, which also bypasses `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` and `SSL_CERT_FILE` / `SSL_CERT_DIR` for that request
-- `web_fetch` and `web_map` reject non-HTTP(S), loopback, obviously private-network targets, and common public DNS aliases that encode local/private IPs
+- `web_fetch` and `web_map` reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, and common public DNS aliases that encode local/private IPs
+- after the static URL check passes, `web_fetch` and `web_map` also re-check visible redirect targets before dispatching the provider call
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` expose a curated subset of provider options rather than the providers' full native API surfaces.
 - `web_fetch` returns extracted Markdown text, not the provider's full structured raw response payload.
@@ -193,7 +196,7 @@ For any local `stdio` host, start with this lightweight verification flow:
 Optional provider probes are read-only and run only when the corresponding configuration is already present.
 The `/models` connection test uses a 10-second timeout; additional real `web_search` / `web_fetch` probes may take longer.
 
-Even with API keys masked, the diagnostic payload may still include local absolute paths, project-root hints, endpoint/hostname details, and `request_id` values. Sensitive query tokens, bearer values, and similar obvious secrets are masked, but you should still review the payload before sharing it externally.
+Even with API keys masked, the diagnostic payload may still include local absolute paths, endpoint/hostname details, and short upstream error summaries. Sensitive query tokens, bearer values, and similar obvious secrets are masked, but you should still review the payload before sharing it externally.
 
 ### `web_search` response contract
 
