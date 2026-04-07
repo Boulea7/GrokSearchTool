@@ -37,7 +37,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 
 - `GROK_API_URL`：Grok/OpenAI-compatible API 地址
 - `GROK_API_KEY`：Grok API 密钥
-- `GROK_MODEL`：默认模型；优先级为环境变量 > `~/.config/grok-search/config.json` 持久化值 > 代码默认值
+- `GROK_MODEL`：默认模型；优先级为进程环境变量 > 项目 `.env.local` > 项目 `.env` > `~/.config/grok-search/config.json` 持久化值 > 代码默认值
 - `GROK_TIME_CONTEXT_MODE`：时间上下文注入策略，支持 `always` / `auto` / `never`
 - `TAVILY_API_KEY` / `TAVILY_API_URL`：Tavily 配置
 - `FIRECRAWL_API_KEY` / `FIRECRAWL_API_URL`：Firecrawl 配置
@@ -65,6 +65,10 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `session_id`
 - `sources`
 - `sources_count`
+- `search_status`
+- `search_error`
+- `source_state`
+- `error`：仅在 `session_id` 缺失或过期时返回
 
 ## 文档政策
 
@@ -90,19 +94,21 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `GROK_API_URL` 应尽量使用 OpenAI-compatible 根路径并显式带上 `/v1`
 - 配置读取当前应遵循：进程环境变量优先；若缺失，再回落到项目根目录的 `.env.local`，仍缺失时再看 `.env`。这里的“优先”按键是否存在判断：即使环境变量值为空字符串，也不会再回落到项目文件
 - `get_config_info` 当前可用于配置与连通性初检，并默认执行最小真实 `search/fetch` 探针；但还不是完整的端到端兼容性诊断
-- `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`；其中 `topic` 当前支持 `general` / `news` / `finance`
+- `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`；其中 `topic` 当前支持 `general` / `news` / `finance`，`time_range` 当前支持 `day` / `week` / `month` / `year`，并兼容 `d` / `w` / `m` / `y`
 - `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`
-- `get_sources` 当前会统一返回标准化 metadata，并按 `score`、来源身份清晰度与稳定去重后的顺序生成 `rank`
+- `get_sources` 当前会统一返回标准化 metadata；`rank` 当前会优先保留 Grok 主引用，再结合 `score`、来源身份清晰度与稳定去重顺序生成
 - `Config.get_config_info()` 只返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并新增 `connection_test`、`doctor`、`feature_readiness` 与最小真实探针结果
 - `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
 - `doctor` 当前会保留字符串版 `recommendations`，并额外提供结构化 `recommendations_detail`
 - `feature_readiness.web_fetch` 当前会附带 provider 级细节，并在 `verified_path` 中标注真实抓取探针实际打通的后端；未执行的 provider 可能带有 `skipped_reason`
 - `feature_readiness.web_fetch` 当前应优先尊重真实 `web_fetch_probe` 的结果；即使单点 provider 探测通过，真实抓取探针失败时也应保持 `degraded`
 - `web_fetch` 目前优先使用 Tavily extract，失败时回退到 Firecrawl scrape
+- Tavily supplemental search 当前会把 `max_results` 限制在 provider 官方上限 `20`
 - `web_fetch` / `web_map` / Tavily 补充搜索当前只暴露 provider 能力的受控子集，不等同于 Tavily / Firecrawl 的全量原生 API
 - `web_map` 当前可能返回外部域名链接；若需要更接近站内 sitemap 的结果，应在调用方进一步收敛或过滤。这一表现当前对应 Tavily 默认 `allow_external=true`
 - `web_fetch` / `web_map` 当前会默认拒绝非 `http/https`、loopback 与明显私有网络目标，避免工具被误用成内网抓取入口
 - `split_answer_and_sources` / `standardize_sources` 当前会尽量避免把 generic 尾部链接列表误拆成真实信源，并会对明显敏感的 query 签名参数做最小遮罩
+- `standardize_sources` 当前会保留普通锚点（fragment）以避免不同页面段落引用被误合并；但 URL `userinfo` 与常见签名参数会被遮罩
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性
 - 根包 `grok_search` 当前对 `mcp` 采用 lazy export；非 server 模块导入不应再因为 `fastmcp` 缺失而提前失败
 - `split_answer_and_sources` 当前应避免把 fenced code 中的 `sources(...)` 示例，或正文语义上的普通尾部链接列表，误拆成真实信源

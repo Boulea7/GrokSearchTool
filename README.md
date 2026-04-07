@@ -216,7 +216,7 @@ claude mcp add-json grok-search --scope user '{
 | `PYTHONUNBUFFERED` | 否 | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
 | `PYTHONUTF8` | 否 | `1` | 强制 Python UTF-8 模式 |
 
-> 模型解析优先级为：`GROK_MODEL` 环境变量 > `~/.config/grok-search/config.json` 中由 `switch_model` 持久化的值 > 代码默认值 `grok-4.1-fast`。如使用 OpenRouter 兼容地址，运行时还会自动补齐 `:online` 后缀。
+> 模型解析优先级为：进程里的 `GROK_MODEL` > 项目 `.env.local` > 项目 `.env` > `~/.config/grok-search/config.json` 中由 `switch_model` 持久化的值 > 代码默认值 `grok-4.1-fast`。如使用 OpenRouter 兼容地址，运行时还会自动补齐 `:online` 后缀。
 
 > 环境变量优先级按“是否存在”判断：只要进程环境里显式设置了某个键，即使值为空字符串，也不会再回落到项目 `.env.local` / `.env`。
 
@@ -281,11 +281,12 @@ claude mcp list
 | `model` | string | 否 | `null` | 按次指定 Grok 模型 ID |
 | `extra_sources` | int | 否 | `0` | 额外补充信源数量（Tavily/Firecrawl，可为 0 关闭） |
 | `topic` | string | 否 | `"general"` | 补充搜索主题，目前支持 `general` / `news` / `finance` |
-| `time_range` | string | 否 | `null` | 相对时间范围，目前支持 `day` / `week` / `month` / `year` |
+| `time_range` | string | 否 | `null` | 相对时间范围，目前支持 `day` / `week` / `month` / `year`，并兼容 `d` / `w` / `m` / `y` |
 | `include_domains` | string[] | 否 | `[]` | Tavily 补充搜索白名单域名 |
 | `exclude_domains` | string[] | 否 | `[]` | Tavily 补充搜索黑名单域名 |
 
 默认会注入本地时间上下文，以提升时效性搜索的准确度；可通过 `GROK_TIME_CONTEXT_MODE=always|auto|never` 调整。
+若补充搜索走 Tavily，`max_results` 当前会自动收敛到 provider 官方上限 `20`。
 
 返回值（结构化字典）：
 - `session_id`: 本次查询的会话 ID
@@ -308,6 +309,14 @@ claude mcp list
 - `session_id`
 - `sources_count`
 - `sources`: 信源列表；每项至少包含 `title`、`url`、`provider`、`source_type`、`snippet`、`domain`、`score`、`published_at`、`retrieved_at`、`rank`
+- `search_status`: 原始 `web_search` 的状态，便于区分成功但无信源、部分成功和失败
+- `search_error`: 原始 `web_search` 的机器可读错误码；无错误时为 `null`
+- `source_state`: `available` / `empty` / `unavailable_due_to_search_error`
+- `error`: 仅在 `session_id` 缺失或过期时返回，例如 `session_id_not_found_or_expired`
+
+说明：
+- `rank` 当前会优先保留 Grok 主引用，再结合 `score`、来源身份清晰度与稳定去重顺序生成。
+- `standardize_sources` 会保留普通锚点（fragment），避免不同页面段落引用被误合并；同时会剥离 URL `userinfo`，并继续遮罩常见 query / fragment 签名参数。
 
 ### `web_fetch` — 网页内容抓取
 
@@ -361,6 +370,7 @@ claude mcp list
 | `model` | string | 是 | 模型 ID（如 `"grok-4-fast"`, `"grok-2-latest"`） |
 
 切换后配置持久化到 `~/.config/grok-search/config.json`，跨会话保持。
+若当前进程或项目 `.env.local` / `.env` 已显式设置 `GROK_MODEL`，`switch_model` 仍会写入持久化配置，但当前进程的实际生效模型不会立刻改变。
 
 ### `toggle_builtin_tools` — 工具路由控制
 
