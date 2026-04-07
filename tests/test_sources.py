@@ -224,6 +224,32 @@ Useful endpoints
     assert sources == []
 
 
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "Sources I used:",
+        "Further reading:",
+        "Related sources:",
+    ],
+)
+def test_split_answer_and_sources_extracts_real_trailing_source_lists(heading):
+    raw = f"""
+Answer body.
+
+{heading}
+- [OpenAI](https://openai.com/)
+- https://docs.example.com/guide
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "Answer body."
+    assert [item["url"] for item in sources] == [
+        "https://openai.com/",
+        "https://docs.example.com/guide",
+    ]
+
+
 def test_standardize_sources_accepts_mixed_case_http_scheme():
     sources = standardize_sources(
         [
