@@ -1920,6 +1920,31 @@ async def test_toggle_builtin_tools_returns_stable_error_when_write_fails(monkey
 
 
 @pytest.mark.asyncio
+async def test_toggle_builtin_tools_returns_stable_error_when_git_root_is_missing(monkeypatch):
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: None)
+
+    payload = json.loads(await server.toggle_builtin_tools("status"))
+
+    assert payload["blocked"] is False
+    assert payload["deny_list"] == []
+    assert payload["error"] == "git_root_not_found"
+
+
+@pytest.mark.asyncio
+async def test_toggle_builtin_tools_rejects_unknown_action(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    git_root.mkdir()
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+
+    payload = json.loads(await server.toggle_builtin_tools("garbage"))
+
+    assert payload["blocked"] is False
+    assert payload["deny_list"] == []
+    assert payload["error"] == "invalid_action"
+    assert "status" in payload["message"]
+
+
+@pytest.mark.asyncio
 async def test_web_fetch_surfaces_provider_errors(monkeypatch):
     async def fake_tavily(url):
         return None, "Tavily 返回 HTTP 307 重定向到 /login"
