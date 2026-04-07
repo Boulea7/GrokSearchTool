@@ -1,6 +1,6 @@
 import pytest
 
-from grok_search.sources import SourcesCache, sanitize_answer_text, split_answer_and_sources, standardize_sources
+from grok_search.sources import SourcesCache, new_session_id, sanitize_answer_text, split_answer_and_sources, standardize_sources
 from grok_search.utils import extract_unique_urls
 
 
@@ -627,3 +627,37 @@ async def test_sources_cache_get_refreshes_recently_used_order():
     assert await cache.get("s1") == ["one"]
     assert await cache.get("s2") is None
     assert await cache.get("s3") == ["three"]
+
+
+def test_new_session_id_returns_longer_opaque_token():
+    session_id = new_session_id()
+
+    assert len(session_id) >= 24
+    assert session_id.isalnum()
+
+
+@pytest.mark.asyncio
+async def test_sources_cache_expires_entries_after_ttl():
+    current_time = {"value": 1000.0}
+    cache = SourcesCache(max_size=2, ttl_seconds=10, now_fn=lambda: current_time["value"])
+
+    await cache.set("s1", ["one"])
+    assert await cache.get("s1") == ["one"]
+
+    current_time["value"] = 1011.0
+
+    assert await cache.get("s1") is None
+
+
+@pytest.mark.asyncio
+async def test_sources_cache_size_excludes_expired_entries():
+    current_time = {"value": 2000.0}
+    cache = SourcesCache(max_size=3, ttl_seconds=10, now_fn=lambda: current_time["value"])
+
+    await cache.set("s1", ["one"])
+    await cache.set("s2", ["two"])
+    assert await cache.size() == 2
+
+    current_time["value"] = 2015.0
+
+    assert await cache.size() == 0
