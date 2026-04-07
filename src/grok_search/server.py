@@ -4,7 +4,7 @@ import sys
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Literal, Optional
-from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
 from fastmcp import FastMCP, Context
 from pydantic import Field, ValidationError
@@ -567,6 +567,102 @@ def _validate_public_target_url(url: str) -> str | None:
     if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
         return "目标 URL 不能指向本地或私有网络"
     return None
+
+
+def _is_non_public_ip(ip) -> bool:
+    return ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+
+
+def _default_port_for_scheme(scheme: str) -> int:
+    return 443 if scheme.lower() == "https" else 80
+
+
+def _resolve_hostname_ips(host: str, port: int) -> list:
+    import socket
+
+    resolved_ips = []
+    seen: set[str] = set()
+    try:
+        records = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return []
+
+    for record in records:
+        sockaddr = record[4] if len(record) >= 5 else None
+        if not sockaddr:
+            continue
+        candidate = sockaddr[0]
+        try:
+            resolved_ip = ip_address(candidate)
+        except ValueError:
+            continue
+        normalized = str(resolved_ip)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        resolved_ips.append(resolved_ip)
+    return resolved_ips
+
+
+def _resolve_and_validate_public_target(url: str) -> str | None:
+    parsed = urlparse((url or "").strip())
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return None
+
+    try:
+        host_ip = ip_address(host)
+    except ValueError:
+        port = parsed.port or _default_port_for_scheme(parsed.scheme)
+        resolved_ips = _resolve_hostname_ips(host, port)
+        if not resolved_ips:
+            return None
+        if any(_is_non_public_ip(resolved_ip) for resolved_ip in resolved_ips):
+            return "目标 URL 不能指向本地或私有网络"
+        return None
+
+    if _is_non_public_ip(host_ip):
+        return "目标 URL 不能指向本地或私有网络"
+    return None
+
+
+async def _preflight_redirect_targets(url: str, *, max_redirects: int = 5) -> str | None:
+    import httpx
+
+    current_url = url
+    for _ in range(max_redirects):
+        try:
+            async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(current_url, timeout=5.0)) as client:
+                response = await client.get(current_url, headers={"Accept": "*/*"})
+        except Exception:
+            return None
+
+        location = (response.headers.get("location") or "").strip()
+        if response.status_code not in {301, 302, 303, 307, 308} or not location:
+            return None
+
+        next_url = urljoin(current_url, location)
+        validation_error = _validate_public_target_url(next_url)
+        if validation_error:
+            return validation_error
+        resolution_error = _resolve_and_validate_public_target(next_url)
+        if resolution_error:
+            return resolution_error
+        current_url = next_url
+
+    return "目标 URL 重定向次数过多"
+
+
+async def _preflight_public_target_url(url: str) -> str | None:
+    validation_error = _validate_public_target_url(url)
+    if validation_error:
+        return validation_error
+
+    resolution_error = _resolve_and_validate_public_target(url)
+    if resolution_error:
+        return resolution_error
+
+    return await _preflight_redirect_targets(url)
 
 
 def _looks_like_ipv4_loopback_shorthand(host: str) -> bool:
@@ -1181,7 +1277,7 @@ async def web_fetch(
     url: Annotated[str, "Valid HTTP/HTTPS web address pointing to the target page. Must be complete and accessible."],
     ctx: Context = None
 ) -> str:
-    validation_error = _validate_public_target_url(url)
+    validation_error = await _preflight_public_target_url(url)
     if validation_error:
         return f"提取失败: {validation_error}"
 
@@ -1293,7 +1389,7 @@ async def web_map(
     limit: Annotated[int, Field(description="Total number of links to process before stopping.", ge=1, le=500)] = 50,
     timeout: Annotated[int, Field(description="Maximum time in seconds for the operation.", ge=10, le=150)] = 150
 ) -> str:
-    validation_error = _validate_public_target_url(url)
+    validation_error = await _preflight_public_target_url(url)
     if validation_error:
         return f"映射失败: {validation_error}"
 
