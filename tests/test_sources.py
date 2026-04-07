@@ -349,6 +349,25 @@ def test_standardize_sources_masks_userinfo_and_extended_sensitive_params():
     )
 
 
+def test_standardize_sources_masks_sensitive_fragment_params_and_drops_userinfo():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Signed URL",
+                "url": (
+                    "https://user:pass@signed.example.com/path"
+                    "#token=abc123&code=otp987&keep=ok"
+                ),
+            }
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources[0]["url"] == (
+        "https://signed.example.com/path#token=REDACTED&code=REDACTED&keep=ok"
+    )
+
+
 def test_standardize_sources_preserves_distinct_safe_anchor_sources():
     sources = standardize_sources(
         [
