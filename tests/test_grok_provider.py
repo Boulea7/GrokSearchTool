@@ -989,6 +989,60 @@ async def test_execute_completion_does_not_retry_non_retryable_status(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_execute_stream_retries_remote_protocol_error_then_succeeds(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("GROK_RETRY_MULTIPLIER", "0")
+    monkeypatch.setenv("GROK_RETRY_MAX_WAIT", "0")
+    attempts = {"count": 0}
+
+    class StreamResponse:
+        def __init__(self):
+            self.headers = {}
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"ok"}}]}'
+            yield ""
+            yield "data: [DONE]"
+
+    class StreamContext:
+        async def __aenter__(self):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise httpx.RemoteProtocolError("broken chunk")
+            return StreamResponse()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class StreamAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, headers=None, json=None):
+            return StreamContext()
+
+    monkeypatch.setattr(httpx, "AsyncClient", StreamAsyncClient)
+
+    result = await provider._execute_stream_with_retry(
+        provider._build_api_headers(),
+        {"model": "test-model", "messages": [], "stream": True},
+    )
+
+    assert result == "ok"
+    assert attempts["count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_fetch_uses_fetch_prompt(monkeypatch):
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     captured = {}
