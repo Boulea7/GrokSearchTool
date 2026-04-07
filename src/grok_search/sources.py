@@ -1,13 +1,13 @@
 import ast
+import asyncio
 import datetime as dt
 import json
 import re
-import uuid
+import secrets
+import time
 from collections import OrderedDict
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
-
-import asyncio
 
 from .config import config
 from .utils import extract_unique_urls
@@ -91,32 +91,61 @@ _POLICY_CONTEXT_KEYWORDS = (
 
 
 def new_session_id() -> str:
-    return uuid.uuid4().hex[:12]
+    return secrets.token_hex(16)
 
 
 class SourcesCache:
-    def __init__(self, max_size: int = 256):
+    def __init__(
+        self,
+        max_size: int = 256,
+        ttl_seconds: float = 3600.0,
+        now_fn=None,
+    ):
         self._max_size = max_size
+        self._ttl_seconds = ttl_seconds
+        self._now = now_fn or time.monotonic
         self._lock = asyncio.Lock()
-        self._cache: OrderedDict[str, object] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[float | None, object]] = OrderedDict()
+
+    def _expires_at(self) -> float | None:
+        if self._ttl_seconds <= 0:
+            return None
+        return self._now() + self._ttl_seconds
+
+    def _purge_expired_locked(self) -> None:
+        if self._ttl_seconds <= 0:
+            return
+
+        now = self._now()
+        expired_ids = [
+            session_id
+            for session_id, (expires_at, _) in self._cache.items()
+            if expires_at is not None and expires_at <= now
+        ]
+        for session_id in expired_ids:
+            self._cache.pop(session_id, None)
 
     async def set(self, session_id: str, sources: object) -> None:
         async with self._lock:
-            self._cache[session_id] = sources
+            self._purge_expired_locked()
+            self._cache[session_id] = (self._expires_at(), sources)
             self._cache.move_to_end(session_id)
             while len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
 
     async def get(self, session_id: str) -> object | None:
         async with self._lock:
-            sources = self._cache.get(session_id)
-            if sources is None:
+            self._purge_expired_locked()
+            cached = self._cache.get(session_id)
+            if cached is None:
                 return None
+            _, sources = cached
             self._cache.move_to_end(session_id)
             return sources
 
     async def size(self) -> int:
         async with self._lock:
+            self._purge_expired_locked()
             return len(self._cache)
 
 

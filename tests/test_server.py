@@ -1299,6 +1299,54 @@ async def test_get_sources_returns_missing_session_error():
 
 
 @pytest.mark.asyncio
+async def test_web_search_returns_longer_opaque_session_ids(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+
+    assert len(result["session_id"]) >= 24
+    assert result["session_id"].isalnum()
+
+
+@pytest.mark.asyncio
+async def test_get_sources_returns_missing_error_after_session_ttl_expires(monkeypatch):
+    current_time = {"value": 5000.0}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer with [OpenAI](https://openai.com/)"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(
+        server,
+        "_SOURCES_CACHE",
+        server.SourcesCache(max_size=32, ttl_seconds=10, now_fn=lambda: current_time["value"]),
+    )
+
+    result = await server.web_search("test query")
+
+    current_time["value"] = 5011.0
+    cached = await server.get_sources(result["session_id"])
+
+    assert cached == {
+        "session_id": result["session_id"],
+        "sources": [],
+        "sources_count": 0,
+        "error": "session_id_not_found_or_expired",
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_sources_marks_failed_search_session_as_unavailable():
     result = await server.web_search("   ")
 
