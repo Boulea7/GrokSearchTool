@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -66,12 +67,28 @@ class Config:
                 value = value.strip()
                 if not key:
                     continue
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-                    value = value[1:-1]
+                value = self._normalize_env_value(value)
                 parsed[key] = value
         except OSError:
             return {}
         return parsed
+
+    @staticmethod
+    def _normalize_env_value(value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            return ""
+
+        if text[0] in {'"', "'"}:
+            quote = text[0]
+            closing_index = 1
+            while closing_index < len(text):
+                if text[closing_index] == quote and text[closing_index - 1] != "\\":
+                    return text[1:closing_index]
+                closing_index += 1
+            return text
+
+        return re.sub(r"\s+#.*$", "", text).strip()
 
     def _load_project_env(self) -> dict[str, str]:
         if self._project_env_cache is not None:

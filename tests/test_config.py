@@ -79,6 +79,45 @@ def test_project_env_fallback_accepts_export_prefixed_entries(monkeypatch, tmp_p
     assert config.tavily_api_url == "https://mirror.example.com"
 
 
+def test_project_env_fallback_strips_unquoted_inline_comments(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("TAVILY_API_URL", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text(
+        "TAVILY_API_URL=https://api.tavily.com # local mirror comment\n",
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    assert config.tavily_api_url == "https://api.tavily.com"
+
+
+def test_project_env_fallback_keeps_hash_fragments_in_unquoted_values(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("FIRECRAWL_API_URL", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text(
+        "FIRECRAWL_API_URL=https://api.firecrawl.dev/v2#section\n",
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    assert config.firecrawl_api_url == "https://api.firecrawl.dev/v2#section"
+
+
+def test_project_env_fallback_strips_comments_after_quoted_values(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text(
+        'GROK_API_KEY="project-key" # trailing comment\n',
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    assert config.grok_api_key == "project-key"
+
+
 def test_process_env_takes_precedence_over_project_env_files(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.setenv("GROK_API_URL", "https://env.example.com/v1")
