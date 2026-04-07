@@ -1773,6 +1773,63 @@ async def test_toggle_builtin_tools_preserves_unrelated_deny_entries(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_toggle_builtin_tools_returns_stable_error_for_invalid_settings_json(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    settings_path = git_root / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text("{bad json", encoding="utf-8")
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+
+    payload = json.loads(await server.toggle_builtin_tools("status"))
+
+    assert payload["blocked"] is False
+    assert payload["deny_list"] == []
+    assert payload["error"] == "settings_file_invalid"
+    assert "无法读取" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_toggle_builtin_tools_returns_stable_error_for_non_list_deny(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    settings_path = git_root / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps({"permissions": {"deny": "WebSearch"}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+
+    payload = json.loads(await server.toggle_builtin_tools("on"))
+
+    assert payload["blocked"] is False
+    assert payload["deny_list"] == []
+    assert payload["error"] == "settings_file_invalid"
+    assert "deny" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_toggle_builtin_tools_returns_stable_error_when_write_fails(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    git_root.mkdir()
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+    original_dump = json.dump
+
+    def failing_dump(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(json, "dump", failing_dump)
+    try:
+        payload = json.loads(await server.toggle_builtin_tools("on"))
+    finally:
+        monkeypatch.setattr(json, "dump", original_dump)
+
+    assert payload["blocked"] is False
+    assert payload["deny_list"] == []
+    assert payload["error"] == "settings_write_failed"
+    assert "disk full" in payload["message"]
+
+
+@pytest.mark.asyncio
 async def test_web_fetch_surfaces_provider_errors(monkeypatch):
     async def fake_tavily(url):
         return None, "Tavily 返回 HTTP 307 重定向到 /login"
