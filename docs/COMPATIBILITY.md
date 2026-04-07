@@ -48,16 +48,19 @@ These hosts remain planned targets until remote transport and host-specific veri
 
 - `GROK_API_URL` must be OpenAI-compatible and should include `/v1`
 - model resolution order is `GROK_MODEL` env -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.1-fast`
+- process env presence overrides project `.env.local` / `.env` fallback, even when the env value is explicitly empty
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` controls local time-context injection for `web_search`; the default is `always`
 - `web_search` depends on a working `/chat/completions` implementation
+- `web_search.topic` currently supports `general`, `news`, and `finance`
 - `Config.get_config_info()` returns only the base config snapshot; the MCP tool `get_config_info` keeps that snapshot and adds `connection_test`, `doctor`, `feature_readiness`, and minimal real `search/fetch` probes
 - `connection_test` reflects `/models` reachability only; use `doctor` and `feature_readiness` to judge runtime readiness
 - `doctor.recommendations_detail` is an additive structured hint layer; clients that only read `recommendations` remain compatible
 - `feature_readiness.web_fetch.providers.verified_path` identifies the backend that passed the real fetch probe, and skipped providers may include `skipped_reason`
 - `get_config_info` is still not a full end-to-end compatibility guarantee
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` intentionally expose a curated subset of provider options rather than the providers' complete native API surfaces
-- Tavily `map` may include external-domain URLs unless callers further constrain and post-filter the crawl results
+- Tavily `map` may include external-domain URLs unless callers further constrain and post-filter the crawl results; this reflects Tavily's default `allow_external=true` behavior
+- `web_fetch` / `web_map` now reject non-HTTP(S), loopback, and obviously private-network targets by default
 
 ## Feature Dependencies
 
@@ -87,6 +90,6 @@ If local `stdio` startup fails with certificate-chain errors in enterprise or se
 
 - endpoint compatibility still varies across Grok-compatible providers
 - source extraction is best-effort and may depend on how the upstream response encodes links or annotations
-- diagnostic payloads may still include local absolute paths, project-root hints, `request_id` values, or short upstream error summaries even when API keys are masked
+- diagnostic payloads may still include local absolute paths, project-root hints, endpoint/hostname details, `request_id` values, or short upstream error summaries even when API keys and obvious token/signature strings are masked
 - `toggle_builtin_tools` is intentionally client-specific and should not be treated as a universal MCP feature
 - `toggle_builtin_tools` readiness in `get_config_info` currently indicates local Git project context detection, not a full Claude Code host validation
