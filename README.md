@@ -15,35 +15,59 @@
 
 ## 一、概述
 
-Grok Search MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的轻量 MCP 服务器，采用**双引擎架构**：**Grok** 负责 AI 驱动的智能搜索，**Tavily** 负责高保真网页抓取与站点映射，各取所长为 Claude Code / Cherry Studio / Codex CLI 等 LLM Client 提供可核验来源的实时网络上下文能力。当前推荐主路径是 `plan_* -> web_search`；对于明确单跳、低歧义、规划收益很低的查询，也允许直接调用 `web_search`。更重的深度探索能力将继续收口到 `deep research`，并优先在 CLI 落地。
+GrokSearch MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的轻量 MCP 服务器，面向 Claude Code、Codex CLI、Cherry Studio 等支持 MCP 的客户端，提供**最新、可核验、低摩擦**的网络上下文能力。
+
+它不是一个以浏览器自动化为核心的重型系统，而是一层为研究型问答优化的搜索基础设施：
+
+- `Grok` 负责主答案生成
+- `Tavily` 负责搜索控制、网页提取与站点映射
+- `Firecrawl` 负责抓取托底与补充信源
+- `plan_*` 负责复杂问题的轻量规划
+- `get_sources` 负责把来源从“答案里的链接”升级成结构化可读取的信源数据
+
+当前推荐主路径是 `plan_* -> web_search -> get_sources`；对明确单跳、低歧义、规划收益很低的查询，也允许直接调用 `web_search`。更重的深度探索能力继续收口到 `deep research`，并优先在 CLI 落地。
 
 当前公开的 `stdio` 安装示例以维护中的发布仓库 `Boulea7/GrokSearchTool` 为准；本地开发工作区、历史远端命名或旧协作痕迹不代表项目仍按 `fork/upstream` PR 模式推进。
 
+```text
+Client / Assistant
+  └─ MCP / companion skill
+      └─ GrokSearch Server
+          ├─ plan_*      -> 轻量规划层
+          ├─ web_search  -> Grok 主答案
+          │                + Tavily supplemental search
+          │                + Firecrawl supplemental search
+          │                + Sources cache / get_sources
+          ├─ web_fetch   -> Tavily Extract
+          │                -> Firecrawl Scrape fallback
+          └─ web_map     -> Tavily Map
 ```
-Claude ──MCP──► Grok Search Server
-                  ├─ web_search  ───► Grok API（AI 搜索）
-                  ├─ web_fetch   ───► Tavily Extract → Firecrawl Scrape（内容抓取，自动降级）
-                  └─ web_map     ───► Tavily Map（站点映射）
-```
 
-### 功能特性
+### 项目定位
 
-- **双引擎**：Grok 搜索 + Tavily 抓取/映射，互补协作
-- **Firecrawl 托底**：Tavily 提取失败时自动降级到 Firecrawl Scrape，支持空内容自动重试
-- **OpenAI 兼容接口**，可对接 Grok-compatible 中转与镜像站，但实际兼容性仍取决于上游对 `/models` 与 `/chat/completions` 的实现
-- **自动时间注入**（默认注入本地时间上下文）
-- **推荐核心路径**：默认先 `plan_*` 再 `web_search`；对明确单跳查询仍允许直接 `web_search`
-- 一键禁用 Claude Code 官方 WebSearch/WebFetch，强制路由到本工具
-- 智能重试（支持 Retry-After 头解析 + 指数退避）
-- 父进程监控（Windows 下自动检测父进程退出，防止僵尸进程）
-- **未来高级能力方向**：更重的深度探索能力将以 `deep research` 框架推进，交互式体验优先在 CLI 落地
+推荐分层：
 
-### 效果展示
-我们以在`cherry studio`中配置本MCP为例，展示了`claude-opus-4.6`模型如何通过本项目实现外部知识搜集，降低幻觉率。
-![](./images/wogrok.png)
-如上图，**为公平实验，我们打开了claude模型内置的搜索工具**，然而opus 4.6仍然相信自己的内部常识，不查询FastAPI的官方文档，以获取最新示例。
-![](./images/wgrok.png)
-如上图，当打开`grok-search MCP`时，在相同的实验条件下，opus 4.6主动调用多次搜索，以**获取官方文档，回答更可靠。** 
+- `plan_* -> web_search -> get_sources`：默认轻量研究路径
+- `web_fetch`：抓单页正文
+- `web_map`：看站点结构
+- `deep research`：更长时间、更强编排的高级研究层，当前优先在 CLI 里承接
+
+### 核心价值
+
+- **答案与来源分离**：`web_search` 返回正文，`get_sources` 返回结构化来源，便于后续核验、排序和复用
+- **多 provider 协作**：Grok 负责主回答，Tavily 负责搜索控制 / 抓取 / 映射，Firecrawl 负责托底和补充
+- **轻量规划优先**：复杂任务先走 `plan_*`，简单任务直接搜，避免无意义的重编排
+- **面向真实运维**：内置 `get_config_info`、feature readiness、最小真实探针、稳定错误契约
+- **运行时安全边界**：对抓取/映射目标做 URL 边界收口，对诊断输出和来源 URL 做敏感信息遮罩
+- **兼容 OpenAI 风格接入**：可对接 Grok-compatible 中转与镜像站，但实际兼容性仍取决于上游对 `/models` 与 `/chat/completions` 的实现
+
+### 适用场景
+
+- 让代码助手在回答前先查最新文档、API、规范或公告
+- 对模型生成内容做来源核验，而不是只看“像不像对”
+- 对某个网页做可靠正文抓取，而不是只拿搜索摘要
+- 先列清复杂研究任务，再逐步执行
+- 在 Claude Code 项目里收口官方 WebSearch/WebFetch 的调用入口
 
 
 ## 二、安装

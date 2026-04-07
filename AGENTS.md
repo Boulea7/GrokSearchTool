@@ -76,6 +76,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - 详细开发文档、研究笔记、内部决策、发布准备清单统一放在 `.local/docs/`
 - `.local/` 必须保持在 `.gitignore` 中，不得提交到 GitHub
 - `AGENTS.md` 只保留稳定操作上下文，不承担内部迭代计划与临时研究记录
+- README 首屏应优先说明项目定位、推荐路径、能力分层与运行时边界，不保留时效性强的“效果展示”截图作为主内容
 
 ## 当前定位
 
