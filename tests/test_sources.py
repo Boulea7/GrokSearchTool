@@ -211,6 +211,19 @@ Useful endpoints:
     assert sources == []
 
 
+def test_split_answer_and_sources_keeps_generic_tail_link_lists_without_colon():
+    raw = """
+Useful endpoints
+- https://a.example.com
+- https://b.example.com
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == raw.strip()
+    assert sources == []
+
+
 def test_standardize_sources_accepts_mixed_case_http_scheme():
     sources = standardize_sources(
         [
@@ -263,6 +276,22 @@ def test_standardize_sources_skips_invalid_or_missing_urls():
             "rank": 1,
         }
     ]
+
+
+def test_standardize_sources_masks_sensitive_query_params_and_drops_fragment():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Signed URL",
+                "url": "https://signed.example.com/path?lang=en&token=abc123&signature=xyz#frag",
+            }
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources[0]["url"] == (
+        "https://signed.example.com/path?lang=en&token=REDACTED&signature=REDACTED"
+    )
 
 
 def test_standardize_sources_applies_defaults_and_ranks():
