@@ -6,12 +6,19 @@ import pytest
 from grok_search import server
 from grok_search.sources import SourcesCache
 
+ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL = server._preflight_public_target_url
+
+
+async def allow_public_target(url: str) -> None:
+    return None
+
 
 @pytest.fixture(autouse=True)
 def reset_server_state(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_SOURCES_CACHE", SourcesCache(max_size=32))
     monkeypatch.setattr(server, "_AVAILABLE_MODELS_CACHE", {})
     monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server, "_preflight_public_target_url", allow_public_target)
     server.config.reset_runtime_state()
     monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
     monkeypatch.setenv("GROK_API_KEY", "test-key")
@@ -2032,6 +2039,7 @@ async def test_web_fetch_rejects_loopback_target_before_provider_calls(monkeypat
 
     monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
     monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
 
@@ -2042,13 +2050,91 @@ async def test_web_fetch_rejects_loopback_target_before_provider_calls(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_rejects_dns_resolved_private_target_before_provider_calls(monkeypatch):
+    import socket
+
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    async def fake_tavily(url):
+        calls["tavily"] += 1
+        return "# Tavily", None
+
+    async def fake_firecrawl(url, ctx):
+        calls["firecrawl"] += 1
+        return "# Firecrawl", None
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        assert host == "public.example.com"
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", port or 443)),
+        ]
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_fetch("https://public.example.com/path")
+
+    assert "不能指向本地或私有网络" in result
+    assert calls == {"tavily": 0, "firecrawl": 0}
+
+
+@pytest.mark.asyncio
 async def test_web_map_rejects_invalid_scheme_before_provider_calls(monkeypatch):
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
 
     result = await server.web_map("file:///tmp/secret.txt")
 
     assert "仅支持 http/https URL" in result
+
+
+@pytest.mark.asyncio
+async def test_web_map_rejects_redirect_chain_to_private_target_before_provider_calls(monkeypatch):
+    import socket
+
+    calls = {"map": 0}
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        calls["map"] += 1
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        assert host == "public.example.com"
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 443)),
+        ]
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            response = httpx.Response(302, headers={"location": "http://127.0.0.1/private"})
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+
+    result = await server.web_map("https://public.example.com/start")
+
+    assert "不能指向本地或私有网络" in result
+    assert calls == {"map": 0}
 
 
 @pytest.mark.asyncio
