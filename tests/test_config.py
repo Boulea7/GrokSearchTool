@@ -159,6 +159,15 @@ def test_grok_model_adds_online_suffix_for_openrouter_urls(monkeypatch):
     assert config.grok_model == "openai/gpt-4.1:online"
 
 
+def test_grok_model_adds_online_suffix_for_mixed_case_openrouter_urls(monkeypatch):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.setenv("GROK_API_URL", "https://OpenRouter.ai/api/v1")
+    monkeypatch.setenv("GROK_MODEL", "openai/gpt-4.1")
+
+    assert config.grok_model == "openai/gpt-4.1:online"
+
+
 def test_grok_model_keeps_existing_online_suffix_for_openrouter_urls(monkeypatch):
     config = Config()
     config.reset_runtime_state()

@@ -119,3 +119,85 @@ def test_mcp_export_still_works_when_fastmcp_is_available():
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "True"
+
+
+def test_mcp_export_propagates_non_fastmcp_dependency_errors():
+    code = textwrap.dedent(
+        """
+        import builtins
+        import importlib
+        import json
+
+        original_import = builtins.__import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "pydantic" or name.startswith("pydantic."):
+                raise ModuleNotFoundError("No module named 'pydantic'", name="pydantic")
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = blocked_import
+
+        package = importlib.import_module("grok_search")
+        try:
+            package.mcp
+        except Exception as exc:
+            print(json.dumps({
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "name": getattr(exc, "name", ""),
+            }))
+        else:
+            print(json.dumps({"type": "ok"}))
+        """
+    )
+
+    result = _run_python(code)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["type"] == "ModuleNotFoundError"
+    assert payload["name"] == "pydantic"
+    assert "fastmcp is required" not in payload["message"]
+
+
+def test_provider_lazy_export_propagates_dependency_errors_only_on_access():
+    code = textwrap.dedent(
+        """
+        import builtins
+        import importlib
+        import json
+
+        original_import = builtins.__import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "tenacity" or name.startswith("tenacity."):
+                raise ModuleNotFoundError("No module named 'tenacity'", name="tenacity")
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = blocked_import
+
+        providers = importlib.import_module("grok_search.providers")
+        package_import_ok = hasattr(providers, "BaseSearchProvider")
+        try:
+            providers.GrokSearchProvider
+        except Exception as exc:
+            payload = {
+                "package_import_ok": package_import_ok,
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "name": getattr(exc, "name", ""),
+            }
+        else:
+            payload = {"package_import_ok": package_import_ok, "type": "ok"}
+
+        print(json.dumps(payload))
+        """
+    )
+
+    result = _run_python(code)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["package_import_ok"] is True
+    assert payload["type"] == "ModuleNotFoundError"
+    assert payload["name"] == "tenacity"
