@@ -39,8 +39,8 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `GROK_API_KEY`：Grok API 密钥
 - `GROK_MODEL`：默认模型；优先级为进程环境变量 > 项目 `.env.local` > 项目 `.env` > `~/.config/grok-search/config.json` 持久化值 > 代码默认值
 - `GROK_TIME_CONTEXT_MODE`：时间上下文注入策略，支持 `always` / `auto` / `never`
-- `TAVILY_API_KEY` / `TAVILY_API_URL`：Tavily 配置
-- `FIRECRAWL_API_KEY` / `FIRECRAWL_API_URL`：Firecrawl 配置
+- `TAVILY_API_KEY` / `TAVILY_API_URL`：Tavily 配置；用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`
+- `FIRECRAWL_API_KEY` / `FIRECRAWL_API_URL`：Firecrawl 配置；用于 `web_fetch` 托底，也可用于 supplemental `web_search`
 - `GROK_RETRY_MAX_ATTEMPTS` / `GROK_RETRY_MULTIPLIER` / `GROK_RETRY_MAX_WAIT`：重试配置
 - `GROK_OUTPUT_CLEANUP`：是否启用 `web_search` 输出清洗
 
@@ -106,7 +106,8 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - Tavily supplemental search 当前会把 `max_results` 限制在 provider 官方上限 `20`
 - `web_fetch` / `web_map` / Tavily 补充搜索当前只暴露 provider 能力的受控子集，不等同于 Tavily / Firecrawl 的全量原生 API
 - `web_map` 当前可能返回外部域名链接；若需要更接近站内 sitemap 的结果，应在调用方进一步收敛或过滤。这一表现当前对应 Tavily 默认 `allow_external=true`
-- `web_fetch` / `web_map` 当前会默认拒绝非 `http/https`、loopback 与明显私有网络目标，避免工具被误用成内网抓取入口
+- 若上游 endpoint 指向 loopback，本地请求当前会强制 `trust_env=False`，因此也会绕过 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 与 `SSL_CERT_FILE` / `SSL_CERT_DIR`
+- `web_fetch` / `web_map` 当前会默认拒绝非 `http/https`、loopback、明显私有网络目标，以及常见把本地/私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`），避免工具被误用成内网抓取入口
 - `split_answer_and_sources` / `standardize_sources` 当前会尽量避免把 generic 尾部链接列表误拆成真实信源，并会对明显敏感的 query 签名参数做最小遮罩
 - `standardize_sources` 当前会保留普通锚点（fragment）以避免不同页面段落引用被误合并；但 URL `userinfo` 与常见签名参数会被遮罩
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性

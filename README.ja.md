@@ -108,10 +108,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `GROK_API_KEY` | Yes | Grok API Key |
 | `GROK_MODEL` | No | デフォルトモデル。優先順位は env > 永続 config > コード既定値 |
 | `GROK_TIME_CONTEXT_MODE` | No | 時間コンテキスト注入モード：`always` / `auto` / `never` |
-| `TAVILY_API_KEY` | No | `web_fetch` / `web_map` 用 Tavily Key |
+| `TAVILY_API_KEY` | No | `web_fetch` / `web_map` 用 Tavily Key。Tavily ベースの supplemental `web_search` にも使用 |
 | `TAVILY_API_URL` | No | Tavily API エンドポイント |
 | `TAVILY_ENABLED` | No | Tavily ルートを有効化するか |
-| `FIRECRAWL_API_KEY` | No | Firecrawl fallback Key |
+| `FIRECRAWL_API_KEY` | No | Firecrawl fallback Key。supplemental `web_search` にも使用可能 |
 | `FIRECRAWL_API_URL` | No | Firecrawl API エンドポイント |
 | `GROK_DEBUG` | No | デバッグログを有効化するか |
 | `GROK_LOG_LEVEL` | No | ログレベル |
@@ -124,7 +124,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 補足:
 
-- モデル解決順は `GROK_MODEL` 環境変数 → `~/.config/grok-search/config.json` の永続値 → コード既定値 `grok-4.1-fast` です。OpenRouter 互換 URL を使う場合、必要に応じて `:online` が自動付与されます。
+- モデル解決順はプロセス `GROK_MODEL` 環境変数 → プロジェクト `.env.local` → プロジェクト `.env` → `~/.config/grok-search/config.json` の永続値 → コード既定値 `grok-4.1-fast` です。OpenRouter 互換 URL を使う場合、必要に応じて `:online` が自動付与されます。
+- 環境変数の優先は「キーが存在するか」で判定されます。プロセス環境に明示的にキーがある場合、値が空文字でもプロジェクト `.env.local` / `.env` にはフォールバックしません。
 - `switch_model` は `~/.config/grok-search/config.json` の永続値のみを更新します。`GROK_MODEL` が設定されている場合は env が優先されます。
 - `GROK_TIME_CONTEXT_MODE` の既定値は `always` で、現在の「常にローカル時間を注入する」動作を維持します。
 - コンテキストを節約したい場合は、`GROK_TIME_CONTEXT_MODE` を `auto`（明確に時系列依存の問い合わせ時のみ注入）または `never` に変更できます。
@@ -136,10 +137,12 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch` は Firecrawl のみでも動作します。
 - `web_map` には Tavily と `TAVILY_ENABLED=true` が必要です。
 - `web_search` は `GROK_TIME_CONTEXT_MODE` に従ってローカル時間コンテキストを注入します（既定値は `always`）。
+- upstream endpoint が loopback を指す場合、そのリクエストでは `trust_env=False` が強制され、`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` と `SSL_CERT_FILE` / `SSL_CERT_DIR` も同時に無効になります。
 - `get_config_info` はベース設定スナップショットと `connection_test` を維持しつつ、server 側で軽量な `doctor`、`feature_readiness`、最小の実検索/実取得プローブを追加します。ただし、完全なエンドツーエンド保証ではありません。
 - `web_fetch`、`web_map`、および Tavily ベースの補助 `web_search` は、provider の全ネイティブ API ではなく、厳選した subset のみを公開します。
 - `web_fetch` が返すのは抽出後の Markdown テキストであり、provider の完全な構造化 raw payload ではありません。
 - Tavily `web_map` は外部ドメインの URL を含む場合があります。サイト内に近い map が必要な場合は、`instructions` と返却結果の後処理で絞り込んでください。
+- `web_fetch` / `web_map` は、非 `http/https`、loopback、明らかな private network target に加え、ローカル/私用 IP を公開 DNS 名に埋め込む代表的な alias（`nip.io` / `xip.io` / `sslip.io`）も既定で拒否します。
 
 ### 最小 smoke check
 

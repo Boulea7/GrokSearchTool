@@ -138,10 +138,10 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `GROK_API_KEY` | Yes | Grok API key |
 | `GROK_MODEL` | No | Default model |
 | `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |
-| `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map` |
+| `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
 | `TAVILY_ENABLED` | No | Enable or disable Tavily-backed fetch/map paths |
-| `FIRECRAWL_API_KEY` | No | Firecrawl fallback key |
+| `FIRECRAWL_API_KEY` | No | Firecrawl key for fetch fallback and optional supplemental `web_search` |
 | `FIRECRAWL_API_URL` | No | Firecrawl endpoint |
 | `GROK_DEBUG` | No | Enable debug logging |
 | `GROK_LOG_LEVEL` | No | Log level |
@@ -164,7 +164,8 @@ Notes:
 - `web_fetch` still works with Firecrawl only.
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` injects local time context according to `GROK_TIME_CONTEXT_MODE` (`always` by default)
-- `web_fetch` and `web_map` reject non-HTTP(S), loopback, and obviously private-network targets by default
+- loopback upstream endpoints are requested with `trust_env=False`, which also bypasses `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` and `SSL_CERT_FILE` / `SSL_CERT_DIR` for that request
+- `web_fetch` and `web_map` reject non-HTTP(S), loopback, obviously private-network targets, and common public DNS aliases that encode local/private IPs
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` expose a curated subset of provider options rather than the providers' full native API surfaces.
 - `web_fetch` returns extracted Markdown text, not the provider's full structured raw response payload.
