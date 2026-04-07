@@ -645,6 +645,22 @@ async def test_parse_completion_response_reads_multiline_sse_event_payloads():
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_reads_compact_sse_done_without_blank_separator():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text=(
+            'data: {"choices":[{"delta":{"content":"hello world"}}]}\n'
+            'data: [DONE]\n'
+        ),
+        json_error=ValueError("not json"),
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result == "hello world"
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_raises_on_empty_placeholder_sse():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(
