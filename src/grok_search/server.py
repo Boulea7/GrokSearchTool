@@ -784,8 +784,9 @@ async def web_search(
 
     effective_model = config.grok_model
     if model:
+        normalized_explicit_model = config._apply_model_suffix(model)
         available = await _get_available_models_cached(api_url, api_key)
-        if available and model not in available:
+        if available and model not in available and normalized_explicit_model not in available:
             await _SOURCES_CACHE.set(
                 session_id,
                 _build_sources_cache_entry([], search_status="error", search_error="invalid_model"),
@@ -798,7 +799,10 @@ async def web_search(
                 effective_params=effective_params,
                 error="invalid_model",
             )
-        effective_model = model
+        effective_model = normalized_explicit_model
+        effective_params["model"] = effective_model
+    else:
+        effective_params["model"] = effective_model
 
     grok_provider = GrokSearchProvider(api_url, api_key, effective_model)
     grok_provider.time_context_required = bool(

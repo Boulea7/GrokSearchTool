@@ -106,6 +106,16 @@ def test_grok_model_uses_project_env_fallback_before_persisted_config(monkeypatc
     assert config.grok_model == "project-model"
 
 
+def test_empty_grok_model_env_blocks_persisted_fallback(monkeypatch):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.setenv("GROK_MODEL", "")
+    monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
+    monkeypatch.setattr(config, "_load_config_file", lambda: {"model": "persisted-model"})
+
+    assert config.grok_model == ""
+
+
 def test_grok_model_adds_online_suffix_for_openrouter_urls(monkeypatch):
     config = Config()
     config.reset_runtime_state()

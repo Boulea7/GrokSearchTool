@@ -214,6 +214,8 @@ class Config:
         return tmp_log_dir
 
     def _apply_model_suffix(self, model: str) -> str:
+        if not model:
+            return model
         try:
             url = self.grok_api_url
         except ValueError:
@@ -227,11 +229,11 @@ class Config:
         if self._cached_model is not None:
             return self._cached_model
 
-        model = (
-            self._get_env_value("GROK_MODEL")
-            or self._load_config_file().get("model")
-            or self._DEFAULT_MODEL
-        )
+        env_model = self._get_env_value("GROK_MODEL")
+        if env_model is not None:
+            model = env_model
+        else:
+            model = self._load_config_file().get("model") or self._DEFAULT_MODEL
         self._cached_model = self._apply_model_suffix(model)
         return self._cached_model
 
