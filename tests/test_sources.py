@@ -1,4 +1,6 @@
-from grok_search.sources import sanitize_answer_text, split_answer_and_sources, standardize_sources
+import pytest
+
+from grok_search.sources import SourcesCache, sanitize_answer_text, split_answer_and_sources, standardize_sources
 from grok_search.utils import extract_unique_urls
 
 
@@ -479,3 +481,31 @@ def test_standardize_sources_deduplicates_urls_and_keeps_richer_item():
             "rank": 2,
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_sources_cache_evicts_least_recently_used_entry():
+    cache = SourcesCache(max_size=2)
+
+    await cache.set("s1", ["one"])
+    await cache.set("s2", ["two"])
+    await cache.set("s3", ["three"])
+
+    assert await cache.get("s1") is None
+    assert await cache.get("s2") == ["two"]
+    assert await cache.get("s3") == ["three"]
+
+
+@pytest.mark.asyncio
+async def test_sources_cache_get_refreshes_recently_used_order():
+    cache = SourcesCache(max_size=2)
+
+    await cache.set("s1", ["one"])
+    await cache.set("s2", ["two"])
+    assert await cache.get("s1") == ["one"]
+
+    await cache.set("s3", ["three"])
+
+    assert await cache.get("s1") == ["one"]
+    assert await cache.get("s2") is None
+    assert await cache.get("s3") == ["three"]

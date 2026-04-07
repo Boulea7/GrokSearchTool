@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from grok_search.providers.grok import GrokSearchProvider, _WaitWithRetryAfter
+from grok_search.utils import fetch_prompt
 
 
 class DummyResponse:
@@ -841,3 +842,104 @@ def test_wait_with_retry_after_parses_http_date_header():
 
     assert delay is not None
     assert 0.0 <= delay <= 5.5
+
+
+@pytest.mark.asyncio
+async def test_execute_completion_retries_retryable_status_then_succeeds(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("GROK_RETRY_MULTIPLIER", "0")
+    monkeypatch.setenv("GROK_RETRY_MAX_WAIT", "0")
+    attempts = {"count": 0}
+
+    class SequenceAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                response = httpx.Response(
+                    429,
+                    headers={"Retry-After": "0"},
+                    json={"error": {"message": "rate limited"}},
+                )
+            else:
+                response = httpx.Response(
+                    200,
+                    json={"choices": [{"message": {"content": "ok"}}]},
+                )
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", SequenceAsyncClient)
+
+    result = await provider._execute_completion_with_retry(
+        provider._build_api_headers(),
+        {"model": "test-model", "messages": [], "stream": False},
+    )
+
+    assert result == "ok"
+    assert attempts["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_completion_does_not_retry_non_retryable_status(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("GROK_RETRY_MULTIPLIER", "0")
+    monkeypatch.setenv("GROK_RETRY_MAX_WAIT", "0")
+    attempts = {"count": 0}
+
+    class SingleFailureAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            attempts["count"] += 1
+            response = httpx.Response(
+                400,
+                json={"error": {"message": "bad request"}},
+            )
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", SingleFailureAsyncClient)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await provider._execute_completion_with_retry(
+            provider._build_api_headers(),
+            {"model": "test-model", "messages": [], "stream": False},
+        )
+
+    assert attempts["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_uses_fetch_prompt(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    captured = {}
+
+    async def fake_execute(headers, payload, ctx):
+        captured["payload"] = payload
+        return "ok"
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    result = await provider.fetch("https://example.com")
+
+    assert result == "ok"
+    assert captured["payload"]["messages"][0]["content"] == fetch_prompt
+    assert "https://example.com" in captured["payload"]["messages"][1]["content"]
