@@ -276,7 +276,19 @@ class Config:
             host = f"[{hostname}]"
         else:
             host = hostname
-        netloc = f"{host}:{split.port}" if split.port is not None else host
+        raw_port = ""
+        hostinfo = split.netloc.rsplit("@", 1)[-1]
+        if hostinfo.startswith("["):
+            closing_idx = hostinfo.find("]")
+            if closing_idx != -1 and closing_idx + 1 < len(hostinfo) and hostinfo[closing_idx + 1] == ":":
+                raw_port = hostinfo[closing_idx + 2 :]
+        else:
+            if ":" in hostinfo:
+                raw_port = hostinfo.rsplit(":", 1)[-1]
+        if raw_port:
+            netloc = f"{host}:{raw_port}"
+        else:
+            netloc = host
         query = urlencode(
             [
                 (key, "***" if key.lower() in _SENSITIVE_URL_PARAM_KEYS else value)

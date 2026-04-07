@@ -682,6 +682,17 @@ def test_build_doctor_check_masks_sensitive_endpoint_url():
     assert check["endpoint"] == "https://example.com/v1/models?access_token=***#code=***"
 
 
+def test_build_doctor_check_tolerates_invalid_port_in_endpoint_url():
+    check = server._build_doctor_check(
+        "demo",
+        "ok",
+        "ok",
+        endpoint="https://example.com:abc/v1/models?access_token=abc123",
+    )
+
+    assert check["endpoint"] == "https://example.com:abc/v1/models?access_token=***"
+
+
 @pytest.mark.asyncio
 async def test_probe_web_fetch_uses_single_firecrawl_attempt_in_doctor_mode(monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
