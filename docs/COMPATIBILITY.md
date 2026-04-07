@@ -47,12 +47,14 @@ These hosts remain planned targets until remote transport and host-specific veri
 ## Provider Requirements
 
 - `GROK_API_URL` must be OpenAI-compatible and should include `/v1`
-- model resolution order is `GROK_MODEL` env -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.1-fast`
+- model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.1-fast`
 - process env presence overrides project `.env.local` / `.env` fallback, even when the env value is explicitly empty
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` controls local time-context injection for `web_search`; the default is `always`
 - `web_search` depends on a working `/chat/completions` implementation
 - `web_search.topic` currently supports `general`, `news`, and `finance`
+- `web_search.time_range` currently supports `day`, `week`, `month`, `year`, and normalizes aliases `d`, `w`, `m`, `y`
+- Tavily-backed supplemental search currently clamps `max_results` to the provider's documented limit of `20`
 - `Config.get_config_info()` returns only the base config snapshot; the MCP tool `get_config_info` keeps that snapshot and adds `connection_test`, `doctor`, `feature_readiness`, and minimal real `search/fetch` probes
 - `connection_test` reflects `/models` reachability only; use `doctor` and `feature_readiness` to judge runtime readiness
 - `doctor.recommendations_detail` is an additive structured hint layer; clients that only read `recommendations` remain compatible
@@ -68,7 +70,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 | --- | --- |
 | `plan_*` | none beyond a working MCP host |
 | `web_search` | `GROK_API_URL`, `GROK_API_KEY` |
-| `get_sources` | a previous successful `web_search` call |
+| `get_sources` | any previous `web_search` session ID; richer status fields are returned when the original search failed or yielded no sources |
 | `web_fetch` | `FIRECRAWL_API_KEY`, or `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `web_map` | `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `toggle_builtin_tools` | Claude Code project layout |

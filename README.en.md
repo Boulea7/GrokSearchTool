@@ -154,7 +154,7 @@ Create a `STDIO` MCP server entry with the same core fields:
 
 Notes:
 
-- model resolution order is `GROK_MODEL` env -> persisted `~/.config/grok-search/config.json` value from `switch_model` -> code default `grok-4.1-fast`
+- model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value from `switch_model` -> code default `grok-4.1-fast`
 - process env presence wins over project `.env.local` / `.env`, even when the env value is explicitly empty
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` defaults to `always`, which preserves the current behavior of always injecting local time context
@@ -206,11 +206,21 @@ Even with API keys masked, the diagnostic payload may still include local absolu
 Optional additive controls:
 
 - `topic`: `general`, `news`, or `finance`
-- `time_range`: `day`, `week`, `month`, or `year`
+- `time_range`: `day`, `week`, `month`, or `year` (aliases `d`, `w`, `m`, `y` are normalized)
 - `include_domains`: Tavily allowlist for supplemental search
 - `exclude_domains`: Tavily denylist for supplemental search
 
-`get_sources` returns standardized metadata including `provider`, `domain`, `score`, `retrieved_at`, and `rank`.
+If supplemental search goes through Tavily, `max_results` is currently clamped to the provider's documented limit of `20`.
+
+`get_sources` returns standardized metadata including `provider`, `domain`, `score`, `retrieved_at`, and `rank`, and also returns:
+
+- `search_status`
+- `search_error`
+- `source_state`
+- `error` when the `session_id` is missing or expired
+
+`rank` currently keeps Grok-origin citations ahead of supplemental sources, then sorts by `score`, source identity quality, and stable dedupe order.
+`standardize_sources` preserves ordinary URL fragments so section-level citations do not collapse together, while still removing URL userinfo and masking common signature/token parameters.
 
 ## Companion Skill
 
