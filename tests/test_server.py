@@ -924,7 +924,7 @@ async def test_web_search_returns_structured_status_fields_for_legacy_call(monke
         "time_range": None,
         "include_domains": [],
         "exclude_domains": [],
-        "model": "",
+        "model": server.config.grok_model,
         "extra_sources": 0,
     }
 
