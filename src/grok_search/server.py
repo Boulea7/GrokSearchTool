@@ -1228,7 +1228,14 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
         return "配置错误: TAVILY_API_KEY 未配置，请设置环境变量 TAVILY_API_KEY"
     endpoint = f"{api_url.rstrip('/')}/map"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"url": url, "max_depth": max_depth, "max_breadth": max_breadth, "limit": limit, "timeout": timeout}
+    provider_timeout_ms = timeout * 1000
+    body = {
+        "url": url,
+        "max_depth": max_depth,
+        "max_breadth": max_breadth,
+        "limit": limit,
+        "timeout": provider_timeout_ms,
+    }
     if instructions:
         body["instructions"] = instructions
     try:

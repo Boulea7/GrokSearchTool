@@ -2198,6 +2198,37 @@ async def test_call_tavily_map_surfaces_timeout(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_tavily_map_converts_public_timeout_seconds_to_provider_milliseconds(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    captured = {}
+
+    class CapturingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["json"] = json
+            response = httpx.Response(200, json={"results": ["https://example.com/docs"]})
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", CapturingAsyncClient)
+
+    result = await server._call_tavily_map("https://example.com", timeout=12)
+
+    assert json.loads(result)["results"] == ["https://example.com/docs"]
+    assert captured["json"]["timeout"] == 12000
+    assert captured["kwargs"]["timeout"] == 22.0
+
+
+@pytest.mark.asyncio
 async def test_call_tavily_map_surfaces_http_error(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
