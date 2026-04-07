@@ -427,6 +427,7 @@ def _extract_firecrawl_search_payload(data: dict) -> list[dict]:
 
 _VALID_SEARCH_TOPICS = {"general", "news", "finance"}
 _VALID_TIME_RANGES = {"day", "week", "month", "year"}
+_TIME_RANGE_ALIASES = {"d": "day", "w": "week", "m": "month", "y": "year"}
 _DOMAIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".lan", ".home", ".corp")
 _LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
@@ -553,7 +554,8 @@ def _validate_search_inputs(
 ) -> tuple[dict, str | None]:
     normalized_query = query.strip()
     normalized_topic = (topic or "general").strip() or "general"
-    normalized_time_range = (time_range or "").strip() or None
+    raw_time_range = (time_range or "").strip()
+    normalized_time_range = _TIME_RANGE_ALIASES.get(raw_time_range, raw_time_range) or None
     normalized_include_domains = _normalize_domain_list(include_domains)
     normalized_exclude_domains = _normalize_domain_list(exclude_domains)
 
@@ -572,7 +574,7 @@ def _validate_search_inputs(
         return effective_params, "搜索失败: topic 仅支持 general、news 或 finance"
 
     if normalized_time_range and normalized_time_range not in _VALID_TIME_RANGES:
-        return effective_params, "搜索失败: time_range 仅支持 day、week、month、year"
+        return effective_params, "搜索失败: time_range 仅支持 day、week、month、year（或 d、w、m、y）"
 
     if isinstance(extra_sources, bool) or not isinstance(extra_sources, int):
         return effective_params, "搜索失败: extra_sources 仅支持整数"
@@ -616,8 +618,8 @@ async def web_search(
     platform: Annotated[str, "Target platform to focus on (e.g., 'Twitter', 'GitHub', 'Reddit'). Leave empty for general web search."] = "",
     model: Annotated[str, "Optional model ID for this request only. This value is used ONLY when user explicitly provided."] = "",
     extra_sources: Annotated[int, "Number of additional reference results from Tavily/Firecrawl. Set 0 to disable. Default 0."] = 0,
-    topic: Annotated[str, "Optional search topic: general | news."] = "general",
-    time_range: Annotated[str, "Optional freshness filter: day | week | month | year."] = "",
+    topic: Annotated[str, "Optional search topic: general | news | finance."] = "general",
+    time_range: Annotated[str, "Optional freshness filter: day | week | month | year (or d | w | m | y)."] = "",
     include_domains: Annotated[Optional[list[str]], "Optional domain allowlist for supplemental Tavily search."] = None,
     exclude_domains: Annotated[Optional[list[str]], "Optional domain denylist for supplemental Tavily search."] = None,
 ) -> dict:
@@ -937,7 +939,7 @@ async def _call_tavily_search(
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     body = {
         "query": query,
-        "max_results": max_results,
+        "max_results": min(max(int(max_results), 1), 20),
         "search_depth": "advanced",
         "include_raw_content": False,
         "include_answer": False,
