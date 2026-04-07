@@ -683,6 +683,8 @@ def test_httpx_client_kwargs_disable_env_proxies_for_full_loopback_range():
         ("http://192-168-1-20.sslip.io/", "目标 URL 不能指向本地或私有网络"),
         ("http://foo.localhost/", "目标 URL 不能指向本地或私有网络"),
         ("http://localhost.localdomain/", "目标 URL 不能指向本地或私有网络"),
+        ("http://app.localtest.me/", "目标 URL 不能指向本地或私有网络"),
+        ("http://docs.lvh.me/", "目标 URL 不能指向本地或私有网络"),
         ("http://224.0.0.1/", "目标 URL 不能指向本地或私有网络"),
         ("http://[ff02::1]/", "目标 URL 不能指向本地或私有网络"),
     ],
@@ -2350,6 +2352,57 @@ async def test_web_map_rejects_redirect_chain_to_private_target_before_provider_
 
     assert "不能指向本地或私有网络" in result
     assert calls == {"map": 0}
+
+
+@pytest.mark.asyncio
+async def test_preflight_redirect_targets_rejects_scheme_relative_private_redirect(monkeypatch):
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            response = httpx.Response(302, headers={"location": "//127.0.0.1/private"})
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+
+    result = await server._preflight_redirect_targets("https://public.example.com/start")
+
+    assert result == "目标 URL 不能指向本地或私有网络"
+
+
+@pytest.mark.asyncio
+async def test_preflight_redirect_targets_returns_too_many_redirects(monkeypatch):
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            response = httpx.Response(302, headers={"location": "/next"})
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+
+    result = await server._preflight_redirect_targets(
+        "https://public.example.com/start",
+        max_redirects=2,
+    )
+
+    assert result == "目标 URL 重定向次数过多"
 
 
 @pytest.mark.asyncio

@@ -482,6 +482,7 @@ _TIME_RANGE_ALIASES = {"d": "day", "w": "week", "m": "month", "y": "year"}
 _DOMAIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".lan", ".home", ".corp")
 _LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
+_LOOPBACK_HELPER_SUFFIXES = ("localtest.me", "lvh.me")
 _DNS_ALIAS_IP_SUFFIXES = ("nip.io", "xip.io", "sslip.io")
 _SENSITIVE_URL_PARAM_KEYS = {
     "api_key",
@@ -537,6 +538,8 @@ def _validate_public_target_url(url: str) -> str | None:
     if not host:
         return "仅支持 http/https URL"
     if host in _LOCAL_HOSTNAMES or any(host.endswith(f".{name}") for name in _LOCAL_HOSTNAMES):
+        return "目标 URL 不能指向本地或私有网络"
+    if host in _LOOPBACK_HELPER_SUFFIXES or any(host.endswith(f".{name}") for name in _LOOPBACK_HELPER_SUFFIXES):
         return "目标 URL 不能指向本地或私有网络"
     if _looks_like_ipv4_loopback_shorthand(host):
         return "目标 URL 不能指向本地或私有网络"
