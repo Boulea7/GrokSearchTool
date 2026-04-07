@@ -431,6 +431,7 @@ _TIME_RANGE_ALIASES = {"d": "day", "w": "week", "m": "month", "y": "year"}
 _DOMAIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".lan", ".home", ".corp")
 _LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
+_DNS_ALIAS_IP_SUFFIXES = ("nip.io", "xip.io", "sslip.io")
 
 
 def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
@@ -471,6 +472,16 @@ def _validate_public_target_url(url: str) -> str | None:
         return "目标 URL 不能指向本地或私有网络"
     if _looks_like_ipv4_loopback_shorthand(host):
         return "目标 URL 不能指向本地或私有网络"
+    alias_ip = _extract_dns_alias_ip(host)
+    if alias_ip and (
+        alias_ip.is_loopback
+        or alias_ip.is_private
+        or alias_ip.is_link_local
+        or alias_ip.is_reserved
+        or alias_ip.is_multicast
+        or alias_ip.is_unspecified
+    ):
+        return "目标 URL 不能指向本地或私有网络"
 
     try:
         ip = ip_address(host)
@@ -491,6 +502,31 @@ def _looks_like_ipv4_loopback_shorthand(host: str) -> bool:
         and labels[0] == "127"
         and all(label.isdigit() for label in labels)
     )
+
+
+def _extract_dns_alias_ip(host: str):
+    normalized_host = (host or "").lower().rstrip(".")
+    for suffix in _DNS_ALIAS_IP_SUFFIXES:
+        if normalized_host == suffix or not normalized_host.endswith(f".{suffix}"):
+            continue
+
+        alias_labels = normalized_host[: -(len(suffix) + 1)].split(".")
+        dotted_candidate = ".".join(alias_labels[-4:])
+        if len(alias_labels) >= 4 and all(label.isdigit() for label in alias_labels[-4:]):
+            try:
+                return ip_address(dotted_candidate)
+            except ValueError:
+                pass
+
+        dashed_label = alias_labels[-1] if alias_labels else ""
+        dashed_parts = dashed_label.split("-")
+        if len(dashed_parts) == 4 and all(part.isdigit() for part in dashed_parts):
+            try:
+                return ip_address(".".join(dashed_parts))
+            except ValueError:
+                pass
+
+    return None
 
 
 def _build_search_response(
