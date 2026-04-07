@@ -1991,6 +1991,69 @@ def test_planning_engine_rejects_invalid_execution_order_invariant():
     assert "dependency order violation" in invalid["error"].lower()
 
 
+def test_planning_engine_rejects_non_dict_execution_order_payload():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need full planning.",
+        session_id=session_id,
+        phase_data={
+            "level": 3,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 4,
+            "justification": "Need execution ordering.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="First sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Collect baseline facts.",
+            "expected_output": "Baseline summary.",
+            "boundary": "Exclude downstream synthesis.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="search_strategy",
+        thought="Search terms.",
+        session_id=session_id,
+        phase_data={
+            "approach": "targeted",
+            "search_terms": [
+                {"term": "provider baseline", "purpose": "sq1", "round": 1},
+            ],
+        },
+    )
+    planning.engine.process_phase(
+        phase="tool_selection",
+        thought="Tool mapping.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_search", "reason": "Need baseline facts."},
+    )
+
+    invalid = planning.engine.process_phase(
+        phase="execution_order",
+        thought="Non-dict payload should fail.",
+        session_id=session_id,
+        phase_data=[],
+    )
+
+    assert "expected" in invalid["error"].lower()
+    assert "dict" in invalid["error"].lower()
+
+
 @pytest.mark.asyncio
 async def test_plan_sub_query_revision_rejects_dependencies_on_removed_ids():
     intent = json.loads(

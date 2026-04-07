@@ -202,7 +202,7 @@ class PlanningSession:
 
 def _validate_execution_order(session: PlanningSession, phase_data: dict | None) -> str | None:
     if not isinstance(phase_data, dict):
-        return None
+        return "Invalid execution_order payload: expected dict"
 
     existing_ids = session.sub_query_ids()
     placement_stage: dict[str, int] = {}
