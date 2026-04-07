@@ -2133,7 +2133,7 @@ async def test_web_fetch_rejects_loopback_target_before_provider_calls(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_rejects_dns_resolved_private_target_before_provider_calls(monkeypatch):
+async def test_web_fetch_does_not_reject_public_hostname_only_from_local_dns_answers(monkeypatch):
     import socket
 
     calls = {"tavily": 0, "firecrawl": 0}
@@ -2161,8 +2161,8 @@ async def test_web_fetch_rejects_dns_resolved_private_target_before_provider_cal
 
     result = await server.web_fetch("https://public.example.com/path")
 
-    assert "不能指向本地或私有网络" in result
-    assert calls == {"tavily": 0, "firecrawl": 0}
+    assert result == "# Tavily"
+    assert calls == {"tavily": 1, "firecrawl": 0}
 
 
 @pytest.mark.asyncio
@@ -2418,7 +2418,7 @@ async def test_call_tavily_map_surfaces_timeout(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_call_tavily_map_converts_public_timeout_seconds_to_provider_milliseconds(monkeypatch):
+async def test_call_tavily_map_keeps_public_timeout_seconds_for_provider(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
     captured = {}
@@ -2444,7 +2444,7 @@ async def test_call_tavily_map_converts_public_timeout_seconds_to_provider_milli
     result = await server._call_tavily_map("https://example.com", timeout=12)
 
     assert json.loads(result)["results"] == ["https://example.com/docs"]
-    assert captured["json"]["timeout"] == 12000
+    assert captured["json"]["timeout"] == 12
     assert captured["kwargs"]["timeout"] == 22.0
 
 

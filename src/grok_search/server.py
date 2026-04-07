@@ -567,37 +567,6 @@ def _is_non_public_ip(ip) -> bool:
     return ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified
 
 
-def _default_port_for_scheme(scheme: str) -> int:
-    return 443 if scheme.lower() == "https" else 80
-
-
-def _resolve_hostname_ips(host: str, port: int) -> list:
-    import socket
-
-    resolved_ips = []
-    seen: set[str] = set()
-    try:
-        records = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except OSError:
-        return []
-
-    for record in records:
-        sockaddr = record[4] if len(record) >= 5 else None
-        if not sockaddr:
-            continue
-        candidate = sockaddr[0]
-        try:
-            resolved_ip = ip_address(candidate)
-        except ValueError:
-            continue
-        normalized = str(resolved_ip)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        resolved_ips.append(resolved_ip)
-    return resolved_ips
-
-
 def _resolve_and_validate_public_target(url: str) -> str | None:
     parsed = urlparse((url or "").strip())
     host = (parsed.hostname or "").lower().rstrip(".")
@@ -607,12 +576,8 @@ def _resolve_and_validate_public_target(url: str) -> str | None:
     try:
         host_ip = ip_address(host)
     except ValueError:
-        port = parsed.port or _default_port_for_scheme(parsed.scheme)
-        resolved_ips = _resolve_hostname_ips(host, port)
-        if not resolved_ips:
-            return None
-        if any(_is_non_public_ip(resolved_ip) for resolved_ip in resolved_ips):
-            return "目标 URL 不能指向本地或私有网络"
+        # Provider-backed fetch/map runs remotely, so local DNS answers are not
+        # authoritative enough to hard-block ordinary public hostnames here.
         return None
 
     if _is_non_public_ip(host_ip):
@@ -1318,13 +1283,12 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
         return "配置错误: TAVILY_API_KEY 未配置，请设置环境变量 TAVILY_API_KEY"
     endpoint = f"{api_url.rstrip('/')}/map"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    provider_timeout_ms = timeout * 1000
     body = {
         "url": url,
         "max_depth": max_depth,
         "max_breadth": max_breadth,
         "limit": limit,
-        "timeout": provider_timeout_ms,
+        "timeout": timeout,
     }
     if instructions:
         body["instructions"] = instructions
