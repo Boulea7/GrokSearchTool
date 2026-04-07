@@ -218,6 +218,8 @@ claude mcp add-json grok-search --scope user '{
 
 > 模型解析优先级为：`GROK_MODEL` 环境变量 > `~/.config/grok-search/config.json` 中由 `switch_model` 持久化的值 > 代码默认值 `grok-4.1-fast`。如使用 OpenRouter 兼容地址，运行时还会自动补齐 `:online` 后缀。
 
+> 环境变量优先级按“是否存在”判断：只要进程环境里显式设置了某个键，即使值为空字符串，也不会再回落到项目 `.env.local` / `.env`。
+
 > `GROK_TIME_CONTEXT_MODE` 默认是 `always`，保持当前“全量注入本地时间上下文”的行为；如需节省上下文，可改为 `auto` 或 `never`。
 
 ### 本地优先启动建议
@@ -278,7 +280,7 @@ claude mcp list
 | `platform` | string | 否 | `""` | 聚焦平台（如 `"Twitter"`, `"GitHub, Reddit"`） |
 | `model` | string | 否 | `null` | 按次指定 Grok 模型 ID |
 | `extra_sources` | int | 否 | `0` | 额外补充信源数量（Tavily/Firecrawl，可为 0 关闭） |
-| `topic` | string | 否 | `"general"` | 补充搜索主题，目前支持 `general` / `news` |
+| `topic` | string | 否 | `"general"` | 补充搜索主题，目前支持 `general` / `news` / `finance` |
 | `time_range` | string | 否 | `null` | 相对时间范围，目前支持 `day` / `week` / `month` / `year` |
 | `include_domains` | string[] | 否 | `[]` | Tavily 补充搜索白名单域名 |
 | `exclude_domains` | string[] | 否 | `[]` | Tavily 补充搜索黑名单域名 |
@@ -314,6 +316,7 @@ claude mcp list
 说明：
 - 当前 `web_fetch` / `web_map` / Tavily supplemental `web_search` 只暴露 provider 能力的一个受控子集，不等同于 Tavily / Firecrawl 全量原生参数面。
 - `web_fetch` 返回的是提取后的 Markdown 文本，不会透传 provider 的原始结构化响应字段。
+- 默认会拒绝非 `http/https`、loopback 与明显私有网络目标，避免把该工具误用成内网抓取入口。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -324,7 +327,8 @@ claude mcp list
 通过 Tavily Map API 遍历网站结构，发现 URL 并生成站点地图。
 
 说明：
-- Tavily Map 默认可能返回外部域名链接；若你需要更接近站内 sitemap 的结果，请结合 `instructions` 收紧范围，并按返回结果自行过滤。
+- Tavily Map 默认可能返回外部域名链接；若你需要更接近站内 sitemap 的结果，请结合 `instructions` 收紧范围，并按返回结果自行过滤。当前文档中的这条说明对应 Tavily 默认 `allow_external=true` 的行为。
+- 默认会拒绝非 `http/https`、loopback 与明显私有网络目标。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -348,7 +352,7 @@ claude mcp list
 - `feature_readiness.web_fetch.providers`：provider 级状态，`verified_path` 表示真实抓取探针实际打通的后端；未执行的 provider 可能附带 `skipped_reason`
 
 注意：
-- 输出中的 API Key 会脱敏，但诊断结果仍可能包含本机绝对路径、项目根目录、`request_id` 或上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
+- 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query 也会做遮罩。但诊断结果仍可能包含本机绝对路径、项目根目录、endpoint/主机名、`request_id` 或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
 
 ### `switch_model` — 模型切换
 

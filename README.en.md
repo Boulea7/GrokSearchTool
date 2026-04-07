@@ -155,6 +155,7 @@ Create a `STDIO` MCP server entry with the same core fields:
 Notes:
 
 - model resolution order is `GROK_MODEL` env -> persisted `~/.config/grok-search/config.json` value from `switch_model` -> code default `grok-4.1-fast`
+- process env presence wins over project `.env.local` / `.env`, even when the env value is explicitly empty
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` defaults to `always`, which preserves the current behavior of always injecting local time context
 - the recommended core path is `plan_* -> web_search`
@@ -163,10 +164,11 @@ Notes:
 - `web_fetch` still works with Firecrawl only.
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` injects local time context according to `GROK_TIME_CONTEXT_MODE` (`always` by default)
+- `web_fetch` and `web_map` reject non-HTTP(S), loopback, and obviously private-network targets by default
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` expose a curated subset of provider options rather than the providers' full native API surfaces.
 - `web_fetch` returns extracted Markdown text, not the provider's full structured raw response payload.
-- Tavily `web_map` may include external-domain URLs unless you further narrow the crawl and post-filter results.
+- Tavily `web_map` may include external-domain URLs unless you further narrow the crawl and post-filter results; this follows Tavily's default `allow_external=true` behavior.
 
 ### Minimal smoke check
 
@@ -190,7 +192,7 @@ For any local `stdio` host, start with this lightweight verification flow:
 Optional provider probes are read-only and run only when the corresponding configuration is already present.
 The `/models` connection test uses a 10-second timeout; additional real `web_search` / `web_fetch` probes may take longer.
 
-Even with API keys masked, the diagnostic payload may still include local absolute paths, project-root hints, `request_id` values, or upstream error summaries. Review before sharing it externally.
+Even with API keys masked, the diagnostic payload may still include local absolute paths, project-root hints, endpoint/hostname details, and `request_id` values. Sensitive query tokens, bearer values, and similar obvious secrets are masked, but you should still review the payload before sharing it externally.
 
 ### `web_search` response contract
 
@@ -203,7 +205,7 @@ Even with API keys masked, the diagnostic payload may still include local absolu
 
 Optional additive controls:
 
-- `topic`: `general` or `news`
+- `topic`: `general`, `news`, or `finance`
 - `time_range`: `day`, `week`, `month`, or `year`
 - `include_domains`: Tavily allowlist for supplemental search
 - `exclude_domains`: Tavily denylist for supplemental search
