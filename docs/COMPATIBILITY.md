@@ -52,6 +52,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` controls local time-context injection for `web_search`; the default is `always`
 - `web_search` depends on a working `/chat/completions` implementation
+- `TAVILY_API_KEY` is used by `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search`
+- `FIRECRAWL_API_KEY` is used by fetch fallback and optional supplemental `web_search`
 - `web_search.topic` currently supports `general`, `news`, and `finance`
 - `web_search.time_range` currently supports `day`, `week`, `month`, `year`, and normalizes aliases `d`, `w`, `m`, `y`
 - Tavily-backed supplemental search currently clamps `max_results` to the provider's documented limit of `20`
@@ -62,7 +64,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `get_config_info` is still not a full end-to-end compatibility guarantee
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` intentionally expose a curated subset of provider options rather than the providers' complete native API surfaces
 - Tavily `map` may include external-domain URLs unless callers further constrain and post-filter the crawl results; this reflects Tavily's default `allow_external=true` behavior
-- `web_fetch` / `web_map` now reject non-HTTP(S), loopback, and obviously private-network targets by default
+- loopback upstream endpoints are requested with `trust_env=False`, which also bypasses proxy and local-CA environment variables for that request
+- `web_fetch` / `web_map` now reject non-HTTP(S), loopback, obviously private-network targets, and common public DNS aliases that encode local/private IPs
 
 ## Feature Dependencies
 
@@ -74,6 +77,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 | `web_fetch` | `FIRECRAWL_API_KEY`, or `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `web_map` | `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `toggle_builtin_tools` | Claude Code project layout |
+
+Supplemental `web_search` controls such as `topic`, `time_range`, and domain filters only become effective when the corresponding Tavily / Firecrawl optional backends are configured.
 
 ## Minimum `stdio` smoke check
 

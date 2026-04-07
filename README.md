@@ -199,10 +199,10 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
 | `GROK_MODEL` | 否 | `grok-4.1-fast` | 默认模型（设置后优先于 `~/.config/grok-search/config.json`） |
 | `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
-| `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 web_fetch / web_map） |
+| `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
 | `TAVILY_ENABLED` | 否 | `true` | 是否启用 Tavily |
-| `FIRECRAWL_API_KEY` | 否 | - | Firecrawl API 密钥（Tavily 失败时托底） |
+| `FIRECRAWL_API_KEY` | 否 | - | Firecrawl API 密钥（用于 `web_fetch` 托底，也可用于 supplemental `web_search`） |
 | `FIRECRAWL_API_URL` | 否 | `https://api.firecrawl.dev/v2` | Firecrawl API 地址 |
 | `GROK_DEBUG` | 否 | `false` | 调试模式 |
 | `GROK_LOG_LEVEL` | 否 | `INFO` | 日志级别 |
@@ -236,6 +236,7 @@ uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
 - `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
 - 如需更省上下文，可将 `GROK_TIME_CONTEXT_MODE` 设为 `auto`（只在明显时效查询或显式时效控制下注入）或 `never`
 - 若 `content` 为空，先检查中转站是否真的返回了正文；若 `sources_count=0`，再检查是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
+- 若上游 endpoint 指向 `localhost` / `127.x` 等 loopback 地址，运行时会对该请求强制 `trust_env=False`，因此会一并绕过 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 以及 `SSL_CERT_FILE` / `SSL_CERT_DIR`
 
 
 ### 验证安装
@@ -325,7 +326,7 @@ claude mcp list
 说明：
 - 当前 `web_fetch` / `web_map` / Tavily supplemental `web_search` 只暴露 provider 能力的一个受控子集，不等同于 Tavily / Firecrawl 全量原生参数面。
 - `web_fetch` 返回的是提取后的 Markdown 文本，不会透传 provider 的原始结构化响应字段。
-- 默认会拒绝非 `http/https`、loopback 与明显私有网络目标，避免把该工具误用成内网抓取入口。
+- `web_fetch` / `web_map` 默认拒绝非 `http/https`、loopback、明显私网目标，以及常见把私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`）。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|

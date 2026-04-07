@@ -122,10 +122,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `GROK_API_KEY` | 是 | Grok API Key |
 | `GROK_MODEL` | 否 | 預設模型；優先級為 env > 持久化 config > 程式預設 |
 | `GROK_TIME_CONTEXT_MODE` | 否 | 時間上下文注入模式：`always` / `auto` / `never` |
-| `TAVILY_API_KEY` | 否 | `web_fetch` / `web_map` 用的 Tavily Key |
+| `TAVILY_API_KEY` | 否 | `web_fetch` / `web_map` 用的 Tavily Key，也用於 Tavily supplemental `web_search` |
 | `TAVILY_API_URL` | 否 | Tavily API 端點 |
 | `TAVILY_ENABLED` | 否 | 是否啟用 Tavily 路徑 |
-| `FIRECRAWL_API_KEY` | 否 | Firecrawl fallback Key |
+| `FIRECRAWL_API_KEY` | 否 | Firecrawl fallback Key，也可用於 supplemental `web_search` |
 | `FIRECRAWL_API_URL` | 否 | Firecrawl API 端點 |
 | `GROK_DEBUG` | 否 | 是否啟用除錯日誌 |
 | `GROK_LOG_LEVEL` | 否 | 日誌等級 |
@@ -138,7 +138,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 補充：
 
-- 模型解析優先級為 `GROK_MODEL` 環境變數 > `~/.config/grok-search/config.json` 持久化值 > 程式預設值 `grok-4.1-fast`；若使用 OpenRouter 相容位址，執行期會自動補上 `:online` 後綴。
+- 模型解析優先級為進程 `GROK_MODEL` 環境變數 > 專案 `.env.local` > 專案 `.env` > `~/.config/grok-search/config.json` 持久化值 > 程式預設值 `grok-4.1-fast`；若使用 OpenRouter 相容位址，執行期會自動補上 `:online` 後綴。
+- 環境變數優先權按「鍵是否存在」判定：只要進程環境裡顯式設了某個鍵，即使值是空字串，也不會回落到專案 `.env.local` / `.env`。
 - `switch_model` 只會更新 `~/.config/grok-search/config.json` 的持久化層；若同時設了 `GROK_MODEL`，仍以環境變數為準。
 - `GROK_TIME_CONTEXT_MODE` 預設為 `always`，保持目前一律注入本地時間上下文的行為。
 - 如需節省上下文，可將 `GROK_TIME_CONTEXT_MODE` 設為 `auto`（僅在明顯時效查詢或顯式時效控制下注入）或 `never`。
@@ -150,10 +151,12 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch` 在只配置 Firecrawl 時仍可使用。
 - `web_map` 需要 Tavily，且 `TAVILY_ENABLED=true`。
 - `web_search` 會依 `GROK_TIME_CONTEXT_MODE` 決定是否注入本地時間上下文（預設 `always`）。
+- 若上游 endpoint 指向 loopback 位址，該次請求會強制 `trust_env=False`，因此也會一併繞過 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 與 `SSL_CERT_FILE` / `SSL_CERT_DIR`。
 - `get_config_info` 會保留基礎設定快照與 `connection_test`，並由 server 層補充輕量 `doctor`、`feature_readiness` 與最小真實 `search/fetch` 探針；但仍不是完整的端到端保證。
 - `web_fetch`、`web_map` 與 Tavily 補充搜尋目前只暴露 provider 能力的受控子集，不等同於 Tavily / Firecrawl 的全量原生參數面。
 - `web_fetch` 回傳的是提取後的 Markdown 文字，不會透傳 provider 的完整原始結構化 payload。
 - Tavily `web_map` 可能包含外部網域連結；若需要更接近站內 sitemap 的結果，請搭配 `instructions` 收斂並自行過濾。
+- `web_fetch` / `web_map` 預設會拒絕非 `http/https`、loopback、明顯私網目標，以及常見把私網 IP 編進公開 DNS 名的 alias 形態（如 `nip.io` / `xip.io` / `sslip.io`）。
 
 ### 最小 smoke check
 

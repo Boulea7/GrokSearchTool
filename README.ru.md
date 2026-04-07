@@ -108,10 +108,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `GROK_API_KEY` | Да | Grok API key |
 | `GROK_MODEL` | Нет | Модель по умолчанию; приоритет: env > persisted config > кодовый default |
 | `GROK_TIME_CONTEXT_MODE` | Нет | Режим внедрения временного контекста: `always` / `auto` / `never` |
-| `TAVILY_API_KEY` | Нет | Tavily key для `web_fetch` / `web_map` |
+| `TAVILY_API_KEY` | Нет | Tavily key для `web_fetch` / `web_map`, а также для Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | Нет | Tavily API endpoint |
 | `TAVILY_ENABLED` | Нет | Включать ли Tavily-пути |
-| `FIRECRAWL_API_KEY` | Нет | Firecrawl fallback key |
+| `FIRECRAWL_API_KEY` | Нет | Firecrawl key для fallback fetch и optional supplemental `web_search` |
 | `FIRECRAWL_API_URL` | Нет | Firecrawl API endpoint |
 | `GROK_DEBUG` | Нет | Включить debug-логи |
 | `GROK_LOG_LEVEL` | Нет | Уровень логирования |
@@ -124,7 +124,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 Примечания:
 
-- Порядок разрешения модели: переменная окружения `GROK_MODEL` → сохранённое значение в `~/.config/grok-search/config.json` → кодовый default `grok-4.1-fast`. Для OpenRouter-совместимых URL при необходимости автоматически добавляется суффикс `:online`.
+- Порядок разрешения модели: переменная окружения процесса `GROK_MODEL` → проектный `.env.local` → проектный `.env` → сохранённое значение в `~/.config/grok-search/config.json` → кодовый default `grok-4.1-fast`. Для OpenRouter-совместимых URL при необходимости автоматически добавляется суффикс `:online`.
+- Приоритет env определяется по самому факту наличия ключа: если ключ явно присутствует в окружении процесса, даже пустое значение не даст откатиться к проектным `.env.local` / `.env`.
 - `switch_model` обновляет только сохранённое значение в `~/.config/grok-search/config.json`; если задан `GROK_MODEL`, приоритет остаётся у env.
 - `GROK_TIME_CONTEXT_MODE` по умолчанию равен `always`, то есть текущее поведение с постоянной инъекцией локального времени сохраняется.
 - Если нужно экономить контекст, можно переключить `GROK_TIME_CONTEXT_MODE` в `auto` (инъекция только для явно временных запросов) или `never`.
@@ -136,10 +137,12 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch` работает и только с Firecrawl.
 - `web_map` требует Tavily и `TAVILY_ENABLED=true`.
 - `web_search` добавляет локальный временной контекст в соответствии с `GROK_TIME_CONTEXT_MODE` (по умолчанию `always`).
+- Если upstream endpoint указывает на loopback, запрос принудительно выполняется с `trust_env=False`, а значит одновременно обходятся `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` и `SSL_CERT_FILE` / `SSL_CERT_DIR`.
 - `get_config_info` сохраняет базовый снимок конфигурации и `connection_test`, а сервер дополнительно добавляет лёгкие представления `doctor`, `feature_readiness` и минимальные реальные `search/fetch` пробы; это всё ещё не полная end-to-end гарантия.
 - `web_fetch`, `web_map` и Tavily-backed supplemental `web_search` публикуют только curated subset возможностей provider'ов, а не их полный нативный API surface.
 - `web_fetch` возвращает извлечённый Markdown-текст, а не полный raw structured payload provider'а.
 - Tavily `web_map` может включать URL внешних доменов; если нужен результат ближе к внутрисайтовой sitemap, сужайте обход через `instructions` и фильтруйте результат после получения.
+- `web_fetch` / `web_map` по умолчанию отклоняют не-`http/https`, loopback, очевидные private-network targets и распространённые публичные DNS-alias'ы, в которые закодирован локальный/приватный IP (`nip.io` / `xip.io` / `sslip.io`).
 
 ### Минимальный smoke check
 
