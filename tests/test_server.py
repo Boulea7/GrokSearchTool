@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -147,6 +148,7 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
     monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "auto")
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: Path("/tmp/demo-project"))
 
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
@@ -186,6 +188,8 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     assert payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["status"] == "ready"
     assert payload["feature_readiness"]["web_map"]["status"] == "ready"
     assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
+    assert "/tmp/demo-project" not in checks["claude_code_project"]["message"]
+    assert "项目根目录" not in checks["claude_code_project"]["message"]
 
 
 @pytest.mark.asyncio
@@ -229,6 +233,42 @@ async def test_probe_json_endpoint_masks_sensitive_http_error_text(monkeypatch):
     assert "abc123" not in result["message"]
     assert "Bearer ***" in result["message"]
     assert "token=***" in result["message"]
+
+
+def test_format_grok_error_omits_request_id_from_user_message():
+    request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+    response = httpx.Response(
+        307,
+        request=request,
+        headers={
+            "location": "https://login.example.com/callback",
+            "x-request-id": "req-123",
+        },
+    )
+
+    message = server._format_grok_error(httpx.HTTPStatusError("redirect", request=request, response=response))
+
+    assert "request_id" not in message
+    assert "req-123" not in message
+    assert "login.example.com" in message
+
+
+def test_format_fetch_error_omits_request_id_from_user_message():
+    request = httpx.Request("POST", "https://api.tavily.com/extract")
+    response = httpx.Response(
+        401,
+        request=request,
+        headers={"x-request-id": "req-456"},
+    )
+
+    message = server._format_fetch_error(
+        "Tavily",
+        httpx.HTTPStatusError("unauthorized", request=request, response=response),
+    )
+
+    assert "request_id" not in message
+    assert "req-456" not in message
+    assert "HTTP 401" in message
 
 
 @pytest.mark.asyncio
@@ -1894,6 +1934,41 @@ async def test_toggle_builtin_tools_returns_stable_error_for_invalid_settings_js
     assert payload["deny_list"] == []
     assert payload["error"] == "settings_file_invalid"
     assert "无法读取" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_toggle_builtin_tools_returns_stable_error_for_non_object_settings(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    settings_path = git_root / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+
+    payload = json.loads(await server.toggle_builtin_tools("status"))
+
+    assert payload["blocked"] is False
+    assert payload["deny_list"] == []
+    assert payload["error"] == "settings_file_invalid"
+    assert "顶层对象" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_toggle_builtin_tools_returns_stable_error_for_non_object_permissions(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    settings_path = git_root / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps({"permissions": []}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+
+    payload = json.loads(await server.toggle_builtin_tools("status"))
+
+    assert payload["blocked"] is False
+    assert payload["deny_list"] == []
+    assert payload["error"] == "settings_file_invalid"
+    assert "permissions 必须是对象" in payload["message"]
 
 
 @pytest.mark.asyncio
