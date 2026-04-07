@@ -928,6 +928,37 @@ async def test_web_search_accepts_finance_topic_for_tavily_search(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_normalizes_time_range_alias_for_tavily_search(monkeypatch):
+    captured = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        captured["time_range"] = kwargs["time_range"]
+        return [{"title": "Tavily", "url": "https://tavily.example.com", "content": "t"}]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search(
+        "test query",
+        topic="news",
+        time_range="w",
+        extra_sources=1,
+    )
+
+    assert result["status"] == "ok"
+    assert result["effective_params"]["time_range"] == "week"
+    assert captured["time_range"] == "week"
+
+
+@pytest.mark.asyncio
 async def test_web_search_sets_time_context_hint_for_auto_mode_when_controls_require_recency(monkeypatch):
     captured = {}
 
@@ -997,7 +1028,12 @@ async def test_web_search_rejects_overlapping_include_and_exclude_domains():
     ("query", "kwargs", "expected_substring", "expected_effective"),
     [
         ("   ", {}, "query 不能为空", {"topic": "general", "time_range": None}),
-        ("test query", {"time_range": "hour"}, "time_range 仅支持 day、week、month、year", {"time_range": "hour"}),
+        (
+            "test query",
+            {"time_range": "hour"},
+            "time_range 仅支持 day、week、month、year（或 d、w、m、y）",
+            {"time_range": "hour"},
+        ),
         (
             "test query",
             {"include_domains": ["openai.com", 123]},
@@ -2307,3 +2343,34 @@ async def test_call_firecrawl_search_clamps_limit_to_provider_max(monkeypatch):
 
     assert results == []
     assert captured["json"]["limit"] == 100
+
+
+@pytest.mark.asyncio
+async def test_call_tavily_search_clamps_max_results_to_provider_limit(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    captured = {}
+
+    class CapturingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["json"] = json
+            response = httpx.Response(200, json={"results": []})
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", CapturingAsyncClient)
+
+    results = await server._call_tavily_search("test query", max_results=25, topic="finance")
+
+    assert results == []
+    assert captured["json"]["max_results"] == 20
+    assert captured["json"]["topic"] == "finance"
