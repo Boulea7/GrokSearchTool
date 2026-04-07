@@ -1160,6 +1160,32 @@ async def test_web_search_rejects_unknown_explicit_model(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_normalizes_openrouter_explicit_model_before_validation(monkeypatch):
+    captured = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            captured["model"] = model
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_models(api_url, api_key):
+        return ["openai/gpt-4.1:online"]
+
+    monkeypatch.setenv("GROK_API_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query", model="openai/gpt-4.1")
+
+    assert result["status"] == "ok"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "openai/gpt-4.1:online"
+    assert captured["model"] == "openai/gpt-4.1:online"
+
+
+@pytest.mark.asyncio
 async def test_get_sources_returns_missing_session_error():
     result = await server.get_sources("missing-session")
 
