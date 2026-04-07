@@ -453,7 +453,13 @@ class GrokSearchProvider(BaseSearchProvider):
                     event_data_lines.clear()
                 continue
             if stripped.startswith("data:"):
-                event_data_lines.append(stripped[5:].lstrip())
+                event_payload = stripped[5:].lstrip()
+                if event_payload == "[DONE]":
+                    if event_data_lines:
+                        process_event("\n".join(event_data_lines))
+                        event_data_lines.clear()
+                    continue
+                event_data_lines.append(event_payload)
 
         if event_data_lines:
             process_event("\n".join(event_data_lines))
