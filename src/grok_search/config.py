@@ -1,6 +1,25 @@
 import os
 import json
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+_SENSITIVE_URL_PARAM_KEYS = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "code",
+    "token",
+    "signature",
+    "sig",
+    "x-amz-credential",
+    "x-amz-signature",
+    "x-amz-security-token",
+    "x-goog-credential",
+    "x-goog-signature",
+    "x-ms-signature",
+    "googleaccessid",
+}
 
 class Config:
     _instance = None
@@ -233,6 +252,50 @@ class Config:
             return "***"
         return f"{key[:4]}{'*' * (len(key) - 8)}{key[-4:]}"
 
+    @staticmethod
+    def _mask_url(url: str) -> str:
+        text = (url or "").strip()
+        if not text:
+            return text
+
+        try:
+            split = urlsplit(text)
+        except ValueError:
+            return text
+
+        if split.scheme.lower() not in {"http", "https"} or not split.netloc:
+            return text
+
+        hostname = split.hostname or ""
+        if not hostname:
+            return text
+
+        if ":" in hostname and not hostname.startswith("["):
+            host = f"[{hostname}]"
+        else:
+            host = hostname
+        netloc = f"{host}:{split.port}" if split.port is not None else host
+        query = urlencode(
+            [
+                (key, "***" if key.lower() in _SENSITIVE_URL_PARAM_KEYS else value)
+                for key, value in parse_qsl(split.query, keep_blank_values=True)
+            ],
+            doseq=True,
+            safe="*",
+        )
+        fragment = split.fragment
+        if fragment and any(token in fragment for token in ("=", "&")):
+            fragment = urlencode(
+                [
+                    (key, "***" if key.lower() in _SENSITIVE_URL_PARAM_KEYS else value)
+                    for key, value in parse_qsl(fragment, keep_blank_values=True)
+                ],
+                doseq=True,
+                safe="*",
+            )
+
+        return urlunsplit((split.scheme, netloc, split.path, query, fragment))
+
     def get_config_info(self) -> dict:
         """Return the base config snapshot only; server-side doctor fields are added elsewhere."""
         try:
@@ -246,7 +309,7 @@ class Config:
             config_status = f"配置错误: {str(e)}"
 
         return {
-            "GROK_API_URL": api_url,
+            "GROK_API_URL": self._mask_url(api_url) if api_url != "未配置" else api_url,
             "GROK_API_KEY": api_key_masked,
             "GROK_MODEL": self.grok_model,
             "GROK_DEBUG": self.debug_enabled,
@@ -254,10 +317,10 @@ class Config:
             "GROK_TIME_CONTEXT_MODE": self.time_context_mode,
             "GROK_LOG_LEVEL": self.log_level,
             "GROK_LOG_DIR": str(self.log_dir),
-            "TAVILY_API_URL": self.tavily_api_url,
+            "TAVILY_API_URL": self._mask_url(self.tavily_api_url),
             "TAVILY_ENABLED": self.tavily_enabled,
             "TAVILY_API_KEY": self._mask_api_key(self.tavily_api_key) if self.tavily_api_key else "未配置",
-            "FIRECRAWL_API_URL": self.firecrawl_api_url,
+            "FIRECRAWL_API_URL": self._mask_url(self.firecrawl_api_url),
             "FIRECRAWL_API_KEY": self._mask_api_key(self.firecrawl_api_key) if self.firecrawl_api_key else "未配置",
             "config_status": config_status
         }

@@ -104,6 +104,38 @@ async def test_web_search_surfaces_http_redirect(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_masks_sensitive_redirect_target_details(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+            response = httpx.Response(
+                307,
+                request=request,
+                headers={
+                    "location": (
+                        "https://user:pass@login.example.com/callback"
+                        "?code=one-time-code&access_token=abc123#auth_token=secret456"
+                    )
+                },
+            )
+            raise httpx.HTTPStatusError("redirect", request=request, response=response)
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+
+    assert "HTTP 307" in result["content"]
+    assert "login.example.com" in result["content"]
+    assert "user:pass" not in result["content"]
+    assert "one-time-code" not in result["content"]
+    assert "abc123" not in result["content"]
+    assert "secret456" not in result["content"]
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
@@ -623,6 +655,31 @@ def test_mask_sensitive_text_redacts_bearer_and_query_tokens(monkeypatch):
     assert "Bearer ***" in masked
     assert "token=***" in masked
     assert "sig=***" in masked
+
+
+def test_mask_sensitive_text_redacts_extended_auth_and_code_tokens():
+    masked = server._mask_sensitive_text(
+        "https://example.com/callback?access_token=abc123&auth_token=def456&code=ghi789#code=jkl012"
+    )
+
+    assert "abc123" not in masked
+    assert "def456" not in masked
+    assert "ghi789" not in masked
+    assert "jkl012" not in masked
+    assert "access_token=***" in masked
+    assert "auth_token=***" in masked
+    assert "code=***" in masked
+
+
+def test_build_doctor_check_masks_sensitive_endpoint_url():
+    check = server._build_doctor_check(
+        "demo",
+        "ok",
+        "ok",
+        endpoint="https://user:pass@example.com/v1/models?access_token=abc123#code=otp987",
+    )
+
+    assert check["endpoint"] == "https://example.com/v1/models?access_token=***#code=***"
 
 
 @pytest.mark.asyncio

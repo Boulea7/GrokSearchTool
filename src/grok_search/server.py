@@ -4,7 +4,7 @@ import sys
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Literal, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from fastmcp import FastMCP, Context
 from pydantic import Field, ValidationError
@@ -185,12 +185,57 @@ def _mask_sensitive_text(value: str) -> str:
         (r"\bsk-[A-Za-z0-9_\-]+\b", "sk-***"),
         (r"\bfc-[A-Za-z0-9_\-]+\b", "fc-***"),
         (r"\btvly-[A-Za-z0-9_\-]+\b", "tvly-***"),
-        (r"([?&](?:api[_-]?key|token|signature|sig)=)[^&\s]+", r"\1***"),
-        (r"((?:api[_-]?key|token|signature|sig)=)[^&\s\"'}]+", r"\1***"),
+        (r"([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|token|signature|sig|code)=)[^&\s]+", r"\1***"),
+        (r"((?:api[_-]?key|access[_-]?token|auth[_-]?token|token|signature|sig|code)=)[^&\s\"'}]+", r"\1***"),
     ]
     for pattern, replacement in patterns:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     return text
+
+
+def _mask_sensitive_url(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+
+    try:
+        split = urlsplit(text)
+    except ValueError:
+        return _mask_sensitive_text(text)
+
+    if split.scheme.lower() not in {"http", "https"} or not split.netloc:
+        return _mask_sensitive_text(text)
+
+    hostname = split.hostname or ""
+    if not hostname:
+        return _mask_sensitive_text(text)
+
+    if ":" in hostname and not hostname.startswith("["):
+        host = f"[{hostname}]"
+    else:
+        host = hostname
+    netloc = f"{host}:{split.port}" if split.port is not None else host
+
+    query = urlencode(
+        [
+            (key, "***" if key.lower() in _SENSITIVE_URL_PARAM_KEYS else value)
+            for key, value in parse_qsl(split.query, keep_blank_values=True)
+        ],
+        doseq=True,
+        safe="*",
+    )
+    fragment = split.fragment
+    if fragment and any(token in fragment for token in ("=", "&")):
+        fragment = urlencode(
+            [
+                (key, "***" if key.lower() in _SENSITIVE_URL_PARAM_KEYS else value)
+                for key, value in parse_qsl(fragment, keep_blank_values=True)
+            ],
+            doseq=True,
+            safe="*",
+        )
+
+    return urlunsplit((split.scheme, netloc, split.path, query, fragment))
 
 
 def _extract_error_summary(response) -> str:
@@ -232,7 +277,7 @@ def _format_grok_error(exc: Exception) -> str:
 
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
-        location = _mask_sensitive_text(exc.response.headers.get("location", "").strip())
+        location = _mask_sensitive_url(exc.response.headers.get("location", "").strip())
         request_id = _extract_request_id(exc.response.headers)
         summary = _extract_error_summary(exc.response)
         if status_code in {301, 302, 303, 307, 308} and location:
@@ -296,7 +341,7 @@ def _format_fetch_error(provider: str, exc: Exception) -> str:
 
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
-        location = _mask_sensitive_text(exc.response.headers.get("location", "").strip())
+        location = _mask_sensitive_url(exc.response.headers.get("location", "").strip())
         request_id = _extract_request_id(exc.response.headers)
         summary = _extract_error_summary(exc.response)
         if status_code in {301, 302, 303, 307, 308} and location:
@@ -432,6 +477,23 @@ _DOMAIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".lan", ".home", ".corp")
 _LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
 _DNS_ALIAS_IP_SUFFIXES = ("nip.io", "xip.io", "sslip.io")
+_SENSITIVE_URL_PARAM_KEYS = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "code",
+    "token",
+    "signature",
+    "sig",
+    "x-amz-credential",
+    "x-amz-signature",
+    "x-amz-security-token",
+    "x-goog-credential",
+    "x-goog-signature",
+    "x-ms-signature",
+    "googleaccessid",
+}
 
 
 def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
@@ -1232,7 +1294,7 @@ def _build_doctor_check(
         "message": message,
     }
     if endpoint:
-        check["endpoint"] = endpoint
+        check["endpoint"] = _mask_sensitive_url(endpoint)
     if response_time_ms is not None:
         check["response_time_ms"] = round(float(response_time_ms), 2)
     if skipped_reason:

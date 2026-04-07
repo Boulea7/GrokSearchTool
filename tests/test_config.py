@@ -122,3 +122,18 @@ def test_grok_model_keeps_existing_online_suffix_for_openrouter_urls(monkeypatch
     monkeypatch.setenv("GROK_MODEL", "openai/gpt-4.1:online")
 
     assert config.grok_model == "openai/gpt-4.1:online"
+
+
+def test_get_config_info_masks_sensitive_url_components(monkeypatch):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.setenv("GROK_API_URL", "https://user:pass@api.example.com/v1?token=abc123#sig=zzz")
+    monkeypatch.setenv("GROK_API_KEY", "sk-secret-value")
+    monkeypatch.setenv("TAVILY_API_URL", "https://user:pass@api.tavily.com?access_token=abc123")
+    monkeypatch.setenv("FIRECRAWL_API_URL", "https://user:pass@api.firecrawl.dev/v2#code=otp987")
+
+    info = config.get_config_info()
+
+    assert info["GROK_API_URL"] == "https://api.example.com/v1?token=***#sig=***"
+    assert info["TAVILY_API_URL"] == "https://api.tavily.com?access_token=***"
+    assert info["FIRECRAWL_API_URL"] == "https://api.firecrawl.dev/v2#code=***"
