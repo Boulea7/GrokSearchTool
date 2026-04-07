@@ -87,6 +87,14 @@ def doctor_checks(payload):
     return {check["check_id"]: check for check in payload["doctor"]["checks"]}
 
 
+class ProgressContext:
+    def __init__(self):
+        self.messages = []
+
+    async def info(self, message: str):
+        self.messages.append(message)
+
+
 @pytest.mark.asyncio
 async def test_web_search_surfaces_http_redirect(monkeypatch):
     class DummyProvider:
@@ -2228,6 +2236,57 @@ async def test_web_fetch_falls_back_when_tavily_reports_truncated_content(monkey
     result = await server.web_fetch("https://example.com")
 
     assert result == "# Restored full content"
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_skips_ctx_progress_when_debug_disabled(monkeypatch):
+    ctx = ProgressContext()
+
+    async def fake_tavily(url):
+        return None, "Tavily temporary failure"
+
+    async def fake_firecrawl(url, ctx):
+        return "# Restored full content", None
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_DEBUG", "false")
+    server.config.reset_runtime_state()
+
+    result = await server.web_fetch("https://example.com", ctx=ctx)
+
+    assert result == "# Restored full content"
+    assert ctx.messages == []
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_reports_ordered_ctx_progress_when_debug_enabled(monkeypatch):
+    ctx = ProgressContext()
+
+    async def fake_tavily(url):
+        return None, "Tavily temporary failure"
+
+    async def fake_firecrawl(url, ctx):
+        return "# Restored full content", None
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_DEBUG", "true")
+    server.config.reset_runtime_state()
+
+    result = await server.web_fetch("https://example.com", ctx=ctx)
+
+    assert result == "# Restored full content"
+    assert ctx.messages == [
+        "Begin Fetch request",
+        "Tavily extract failed: Tavily temporary failure",
+        "Tavily unavailable or failed, trying Firecrawl...",
+        "Fetch Finished (Firecrawl)!",
+    ]
 
 
 @pytest.mark.asyncio
