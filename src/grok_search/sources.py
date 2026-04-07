@@ -30,6 +30,9 @@ _GENERIC_LINK_LIST_HEADING_PATTERN = re.compile(
     r"(?i)^(?:useful|related|helpful|official|reference|references|docs?|documentation|links?|resources?|endpoints?)"
     r"(?:\s+[a-z0-9][\w/-]*)*$"
 )
+_REAL_SOURCE_LIST_HEADING_PATTERN = re.compile(
+    r"(?i)^(?:sources?(?:\s+i\s+used)?|references?|citations?|related\s+sources?|further\s+reading)\s*:?\s*$"
+)
 _THINK_BLOCK_PATTERN = re.compile(r"(?is)<think>.*?</think>")
 _SENSITIVE_URL_QUERY_KEYS = {
     "api_key",
@@ -405,7 +408,12 @@ def _split_tail_link_block(text: str) -> tuple[str, list[dict]] | None:
     if not sources:
         return None
 
-    answer = "\n".join(lines[:tail_start]).rstrip()
+    answer_end = tail_start
+    heading_index = tail_start - 1
+    if heading_index >= 0 and _REAL_SOURCE_LIST_HEADING_PATTERN.fullmatch(lines[heading_index].strip()):
+        answer_end = heading_index
+
+    answer = "\n".join(lines[:answer_end]).rstrip()
     if _looks_like_list_intro(answer):
         return None
     return answer, sources
@@ -454,6 +462,8 @@ def _looks_like_list_intro(text: str) -> bool:
     if not stripped:
         return False
     last_line = stripped.splitlines()[-1].strip()
+    if _REAL_SOURCE_LIST_HEADING_PATTERN.fullmatch(last_line):
+        return False
     return bool(last_line) and (
         last_line.endswith(":") or _GENERIC_LINK_LIST_HEADING_PATTERN.fullmatch(last_line) is not None
     )
