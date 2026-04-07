@@ -2172,12 +2172,10 @@ async def toggle_builtin_tools(
 
     root = _find_git_root()
     if root is None:
-        return json.dumps({
-            "blocked": False,
-            "deny_list": [],
-            "file": "",
-            "message": "未检测到项目级 Git 根目录，无法修改 Claude Code 项目设置"
-        }, ensure_ascii=False, indent=2)
+        return build_error(
+            "未检测到项目级 Git 根目录，无法修改 Claude Code 项目设置",
+            error_code="git_root_not_found",
+        )
 
     settings_path = root / ".claude" / "settings.json"
     tools = ["WebFetch", "WebSearch"]
@@ -2252,6 +2250,12 @@ async def toggle_builtin_tools(
             )
         msg = "官方工具已启用"
         blocked = False
+    elif action not in ["status"]:
+        return build_error(
+            "无效 action: 仅支持 on、off 或 status",
+            file_path=str(settings_path),
+            error_code="invalid_action",
+        )
     else:
         msg = f"官方工具当前{'已禁用' if blocked else '已启用'}"
 
