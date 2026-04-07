@@ -278,6 +278,33 @@ def test_standardize_sources_skips_invalid_or_missing_urls():
     ]
 
 
+def test_standardize_sources_skips_urls_with_invalid_port_after_sanitization():
+    sources = standardize_sources(
+        [
+            {"title": "Bad Port", "url": "https://example.com:99999/path?token=abc123"},
+            {"title": "Bad Cast", "url": "https://example.com:abc/path?token=abc123"},
+            {"title": "Valid", "url": "https://valid.example.com/"},
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Valid",
+            "url": "https://valid.example.com/",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "valid.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
 def test_standardize_sources_masks_sensitive_query_params_and_preserves_safe_fragment():
     sources = standardize_sources(
         [

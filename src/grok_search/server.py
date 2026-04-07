@@ -469,6 +469,8 @@ def _validate_public_target_url(url: str) -> str | None:
         return "仅支持 http/https URL"
     if host in _LOCAL_HOSTNAMES or any(host.endswith(f".{name}") for name in _LOCAL_HOSTNAMES):
         return "目标 URL 不能指向本地或私有网络"
+    if _looks_like_ipv4_loopback_shorthand(host):
+        return "目标 URL 不能指向本地或私有网络"
 
     try:
         ip = ip_address(host)
@@ -480,6 +482,15 @@ def _validate_public_target_url(url: str) -> str | None:
     if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
         return "目标 URL 不能指向本地或私有网络"
     return None
+
+
+def _looks_like_ipv4_loopback_shorthand(host: str) -> bool:
+    labels = host.split(".")
+    return (
+        2 <= len(labels) <= 4
+        and labels[0] == "127"
+        and all(label.isdigit() for label in labels)
+    )
 
 
 def _build_search_response(
