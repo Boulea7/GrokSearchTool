@@ -584,7 +584,10 @@ def _normalize_url(value: Any) -> str:
         return ""
     if not parsed.netloc:
         return ""
-    return _sanitize_url_for_output(url)
+    try:
+        return _sanitize_url_for_output(url)
+    except ValueError:
+        return ""
 
 
 def _normalize_text(value: Any) -> str:

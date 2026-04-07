@@ -578,6 +578,8 @@ def test_httpx_client_kwargs_disable_env_proxies_for_full_loopback_range():
     ("url", "expected_message"),
     [
         ("http://localhost./", "目标 URL 不能指向本地或私有网络"),
+        ("http://127.1/", "目标 URL 不能指向本地或私有网络"),
+        ("http://127.0.1/", "目标 URL 不能指向本地或私有网络"),
         ("http://foo.localhost/", "目标 URL 不能指向本地或私有网络"),
         ("http://localhost.localdomain/", "目标 URL 不能指向本地或私有网络"),
         ("http://224.0.0.1/", "目标 URL 不能指向本地或私有网络"),
