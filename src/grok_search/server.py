@@ -2048,6 +2048,15 @@ async def toggle_builtin_tools(
 ) -> str:
     import json
 
+    def build_error(message: str, *, file_path: str = "", error_code: str) -> str:
+        return json.dumps({
+            "blocked": False,
+            "deny_list": [],
+            "file": file_path,
+            "message": message,
+            "error": error_code,
+        }, ensure_ascii=False, indent=2)
+
     root = _find_git_root()
     if root is None:
         return json.dumps({
@@ -2062,12 +2071,41 @@ async def toggle_builtin_tools(
 
     # Load or initialize
     if settings_path.exists():
-        with open(settings_path, 'r', encoding='utf-8') as f:
-            settings = json.load(f)
+        try:
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            return build_error(
+                f"无法读取 Claude Code 项目设置: {str(exc)}",
+                file_path=str(settings_path),
+                error_code="settings_file_invalid",
+            )
     else:
         settings = {"permissions": {"deny": []}}
 
-    deny = settings.setdefault("permissions", {}).setdefault("deny", [])
+    if not isinstance(settings, dict):
+        return build_error(
+            "Claude Code 项目设置格式无效: 顶层对象必须是 JSON object",
+            file_path=str(settings_path),
+            error_code="settings_file_invalid",
+        )
+
+    permissions = settings.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        return build_error(
+            "Claude Code 项目设置格式无效: permissions 必须是对象",
+            file_path=str(settings_path),
+            error_code="settings_file_invalid",
+        )
+
+    deny = permissions.setdefault("deny", [])
+    if not isinstance(deny, list):
+        return build_error(
+            "Claude Code 项目设置格式无效: permissions.deny 必须是数组",
+            file_path=str(settings_path),
+            error_code="settings_file_invalid",
+        )
+
     blocked = all(t in deny for t in tools)
 
     # Execute action
@@ -2075,16 +2113,30 @@ async def toggle_builtin_tools(
         for t in tools:
             if t not in deny:
                 deny.append(t)
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(settings_path, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
+        try:
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(settings_path, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            return build_error(
+                f"写入 Claude Code 项目设置失败: {str(exc)}",
+                file_path=str(settings_path),
+                error_code="settings_write_failed",
+            )
         msg = "官方工具已禁用"
         blocked = True
     elif action in ["off", "disable"]:
         deny[:] = [t for t in deny if t not in tools]
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(settings_path, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
+        try:
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(settings_path, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            return build_error(
+                f"写入 Claude Code 项目设置失败: {str(exc)}",
+                file_path=str(settings_path),
+                error_code="settings_write_failed",
+            )
         msg = "官方工具已启用"
         blocked = False
     else:
@@ -2094,7 +2146,8 @@ async def toggle_builtin_tools(
         "blocked": blocked,
         "deny_list": deny,
         "file": str(settings_path),
-        "message": msg
+        "message": msg,
+        "error": None,
     }, ensure_ascii=False, indent=2)
 
 
