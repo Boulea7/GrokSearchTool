@@ -1026,7 +1026,7 @@ async def _call_firecrawl_scrape(
                 await log_info(ctx, f"Firecrawl: markdown为空, 重试 {attempt + 1}/{max_retries}", config.debug_enabled)
         except Exception as e:
             last_error = _format_fetch_error("Firecrawl", e)
-            await log_info(ctx, f"Firecrawl error: {e}", config.debug_enabled)
+            await log_info(ctx, f"Firecrawl scrape failed: {last_error}", config.debug_enabled)
             return None, last_error
     return None, last_error
 

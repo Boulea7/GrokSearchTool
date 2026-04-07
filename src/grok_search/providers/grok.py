@@ -189,7 +189,11 @@ class GrokSearchProvider(BaseSearchProvider):
             "stream": False,
         }
 
-        await log_info(ctx, f"platform_prompt: { query + platform_prompt}", config.debug_enabled)
+        await log_info(
+            ctx,
+            f"search request prepared (platform={platform or 'general'}, time_context={should_inject_time_context})",
+            config.debug_enabled,
+        )
 
         return await self._execute_completion_with_retry(headers, payload, ctx)
 
@@ -459,7 +463,7 @@ class GrokSearchProvider(BaseSearchProvider):
 
         content = self._finalize_content(content, collected_sources, render_sources=render_sources)
 
-        await log_info(ctx, f"content: {content}", config.debug_enabled)
+        await log_info(ctx, f"stream completion parsed ({len(content)} chars)", config.debug_enabled)
 
         return content
 
@@ -500,7 +504,7 @@ class GrokSearchProvider(BaseSearchProvider):
                 raise ValueError("API 代理返回了登录页面，请检查认证状态")
             raise ValueError("上游返回了无法解析的 completion 响应")
 
-        await log_info(ctx, f"content: {content}", config.debug_enabled)
+        await log_info(ctx, f"completion parsed ({len(content)} chars)", config.debug_enabled)
 
         return content
 

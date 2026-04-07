@@ -5,7 +5,7 @@ import re
 import uuid
 from collections import OrderedDict
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 import asyncio
 
@@ -26,7 +26,21 @@ _SOURCES_HEADING_PATTERN = re.compile(
 _SOURCES_FUNCTION_PATTERN = re.compile(
     r"(?im)(^|\n)\s*(sources|source|citations|citation|references|reference|citation_card|source_cards|source_card)\s*\("
 )
+_GENERIC_LINK_LIST_HEADING_PATTERN = re.compile(
+    r"(?i)^(?:useful|related|helpful|official|reference|references|docs?|documentation|links?|resources?|endpoints?)"
+    r"(?:\s+[a-z0-9][\w/-]*)*$"
+)
 _THINK_BLOCK_PATTERN = re.compile(r"(?is)<think>.*?</think>")
+_SENSITIVE_URL_QUERY_KEYS = {
+    "api_key",
+    "apikey",
+    "token",
+    "signature",
+    "sig",
+    "x-amz-signature",
+    "x-goog-signature",
+    "x-ms-signature",
+}
 _LEADING_POLICY_PATTERNS = [
     re.compile(r"(?is)^\s*\**\s*i cannot comply\b.*"),
     re.compile(r"(?is)^\s*\**\s*i do not accept\b.*"),
@@ -404,7 +418,28 @@ def _looks_like_list_intro(text: str) -> bool:
     if not stripped:
         return False
     last_line = stripped.splitlines()[-1].strip()
-    return bool(last_line) and last_line.endswith(":")
+    return bool(last_line) and (
+        last_line.endswith(":") or _GENERIC_LINK_LIST_HEADING_PATTERN.fullmatch(last_line) is not None
+    )
+
+
+def _sanitize_url_for_output(url: str) -> str:
+    split = urlsplit(url)
+    if not split.query and not split.fragment:
+        return url
+
+    sanitized_query = split.query
+    if split.query:
+        pairs = parse_qsl(split.query, keep_blank_values=True)
+        sanitized_query = urlencode(
+            [
+                (key, "REDACTED" if key.lower() in _SENSITIVE_URL_QUERY_KEYS else value)
+                for key, value in pairs
+            ],
+            doseq=True,
+        )
+
+    return urlunsplit((split.scheme, split.netloc, split.path, sanitized_query, ""))
 
 
 def _parse_sources_payload(payload: str) -> list[dict]:
@@ -518,7 +553,7 @@ def _normalize_url(value: Any) -> str:
         return ""
     if not parsed.netloc:
         return ""
-    return url
+    return _sanitize_url_for_output(url)
 
 
 def _normalize_text(value: Any) -> str:

@@ -128,6 +128,28 @@ async def test_search_never_mode_skips_time_context_even_for_temporal_query(monk
 
 
 @pytest.mark.asyncio
+async def test_search_debug_log_does_not_include_raw_query(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    messages = []
+    monkeypatch.setenv("GROK_DEBUG", "true")
+
+    async def fake_execute(headers, payload, ctx):
+        return "ok"
+
+    async def fake_log_info(ctx, message, is_debug=False):
+        messages.append(message)
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+    monkeypatch.setattr("grok_search.providers.grok.log_info", fake_log_info)
+
+    await provider.search("secret query with token=abc123")
+
+    assert messages
+    assert all("secret query" not in message for message in messages)
+    assert all("abc123" not in message for message in messages)
+
+
+@pytest.mark.asyncio
 async def test_execute_completion_disables_env_proxies_for_loopback_api_url(monkeypatch):
     provider = GrokSearchProvider("http://127.0.0.2:18080", "test-key", "test-model")
     captured = {}
@@ -172,6 +194,29 @@ async def test_parse_completion_response_reads_json_message():
     result = await provider._parse_completion_response(response)
 
     assert result == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_debug_log_does_not_include_raw_content(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    messages = []
+    monkeypatch.setenv("GROK_DEBUG", "true")
+
+    async def fake_log_info(ctx, message, is_debug=False):
+        messages.append(message)
+
+    monkeypatch.setattr("grok_search.providers.grok.log_info", fake_log_info)
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":"classified body token=abc123"}}]}',
+        json_data={"choices": [{"message": {"content": "classified body token=abc123"}}]},
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result == "classified body token=abc123"
+    assert messages
+    assert all("classified body" not in message for message in messages)
+    assert all("abc123" not in message for message in messages)
 
 
 @pytest.mark.asyncio
