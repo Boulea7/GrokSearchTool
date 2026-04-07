@@ -64,6 +64,21 @@ def test_grok_api_url_falls_back_to_project_env_local(monkeypatch, tmp_path):
     assert config.grok_api_url == "https://fallback.example.com/v1"
 
 
+def test_project_env_fallback_accepts_export_prefixed_entries(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_URL", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text(
+        "export GROK_API_KEY=project-key\nexport TAVILY_API_URL=https://mirror.example.com\n",
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    assert config.grok_api_key == "project-key"
+    assert config.tavily_api_url == "https://mirror.example.com"
+
+
 def test_process_env_takes_precedence_over_project_env_files(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.setenv("GROK_API_URL", "https://env.example.com/v1")
@@ -93,6 +108,25 @@ def test_project_env_local_takes_precedence_over_project_env(monkeypatch, tmp_pa
     config.reset_runtime_state()
 
     assert config.tavily_api_url == "http://localhost:18080/"
+
+
+def test_reset_runtime_state_refreshes_cached_project_env(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("TAVILY_API_URL", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    env_file = tmp_path / ".env.local"
+    env_file.write_text("TAVILY_API_URL=https://first.example.com\n", encoding="utf-8")
+    config.reset_runtime_state()
+
+    assert config.tavily_api_url == "https://first.example.com"
+
+    env_file.write_text("TAVILY_API_URL=https://second.example.com\n", encoding="utf-8")
+
+    assert config.tavily_api_url == "https://first.example.com"
+
+    config.reset_runtime_state()
+
+    assert config.tavily_api_url == "https://second.example.com"
 
 
 def test_grok_model_uses_project_env_fallback_before_persisted_config(monkeypatch, tmp_path):
