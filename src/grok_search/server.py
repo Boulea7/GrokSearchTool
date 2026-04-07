@@ -429,6 +429,7 @@ _VALID_SEARCH_TOPICS = {"general", "news", "finance"}
 _VALID_TIME_RANGES = {"day", "week", "month", "year"}
 _DOMAIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".lan", ".home", ".corp")
+_LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
 
 
 def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
@@ -462,10 +463,10 @@ def _validate_public_target_url(url: str) -> str | None:
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
         return "仅支持 http/https URL"
 
-    host = (parsed.hostname or "").lower()
+    host = (parsed.hostname or "").lower().rstrip(".")
     if not host:
         return "仅支持 http/https URL"
-    if host == "localhost" or host.startswith("127."):
+    if host in _LOCAL_HOSTNAMES or any(host.endswith(f".{name}") for name in _LOCAL_HOSTNAMES):
         return "目标 URL 不能指向本地或私有网络"
 
     try:
@@ -475,7 +476,7 @@ def _validate_public_target_url(url: str) -> str | None:
             return "目标 URL 不能指向本地或私有网络"
         return None
 
-    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
         return "目标 URL 不能指向本地或私有网络"
     return None
 

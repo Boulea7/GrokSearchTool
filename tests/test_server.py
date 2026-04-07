@@ -574,6 +574,32 @@ def test_httpx_client_kwargs_disable_env_proxies_for_full_loopback_range():
     assert "trust_env" not in remote
 
 
+@pytest.mark.parametrize(
+    ("url", "expected_message"),
+    [
+        ("http://localhost./", "目标 URL 不能指向本地或私有网络"),
+        ("http://foo.localhost/", "目标 URL 不能指向本地或私有网络"),
+        ("http://localhost.localdomain/", "目标 URL 不能指向本地或私有网络"),
+        ("http://224.0.0.1/", "目标 URL 不能指向本地或私有网络"),
+        ("http://[ff02::1]/", "目标 URL 不能指向本地或私有网络"),
+    ],
+)
+def test_validate_public_target_url_rejects_local_and_multicast_variants(url, expected_message):
+    assert server._validate_public_target_url(url) == expected_message
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://127.org",
+        "https://127.com",
+        "https://127.example.com",
+    ],
+)
+def test_validate_public_target_url_allows_public_domains_with_numeric_prefix(url):
+    assert server._validate_public_target_url(url) is None
+
+
 def test_mask_sensitive_text_redacts_bearer_and_query_tokens(monkeypatch):
     monkeypatch.setenv("GROK_API_KEY", "sk-secret-value")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-secret-value")
