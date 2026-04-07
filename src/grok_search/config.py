@@ -224,7 +224,7 @@ class Config:
             url = self.grok_api_url
         except ValueError:
             return model
-        if "openrouter" in url and ":online" not in model:
+        if "openrouter" in url.lower() and ":online" not in model:
             return f"{model}:online"
         return model
 

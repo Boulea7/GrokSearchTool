@@ -390,8 +390,17 @@ async def test_get_config_info_rejects_malformed_tavily_probe_shape(monkeypatch)
 
     assert checks["tavily_extract"]["status"] == "error"
     assert "响应结构异常" in checks["tavily_extract"]["message"]
+    assert checks["tavily_extract"]["error_kind"] == "invalid_response_shape"
     assert checks["tavily_map"]["status"] == "error"
     assert "响应结构异常" in checks["tavily_map"]["message"]
+    assert checks["tavily_map"]["error_kind"] == "invalid_response_shape"
+    assert {
+        (item["check_id"], item["feature"], item["severity"])
+        for item in payload["doctor"]["recommendations_detail"]
+    } >= {
+        ("tavily_extract", "web_fetch", "error"),
+        ("tavily_map", "web_map", "error"),
+    }
 
 
 @pytest.mark.asyncio
@@ -1252,6 +1261,32 @@ async def test_web_search_normalizes_openrouter_explicit_model_before_validation
 
 
 @pytest.mark.asyncio
+async def test_web_search_normalizes_openrouter_explicit_model_for_mixed_case_url(monkeypatch):
+    captured = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            captured["model"] = model
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_models(api_url, api_key):
+        return ["openai/gpt-4.1:online"]
+
+    monkeypatch.setenv("GROK_API_URL", "https://OpenRouter.ai/api/v1")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query", model="openai/gpt-4.1")
+
+    assert result["status"] == "ok"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "openai/gpt-4.1:online"
+    assert captured["model"] == "openai/gpt-4.1:online"
+
+
+@pytest.mark.asyncio
 async def test_get_sources_returns_missing_session_error():
     result = await server.get_sources("missing-session")
 
@@ -1881,6 +1916,21 @@ async def test_switch_model_tool_keeps_env_model_active_in_current_process(monke
 
 
 @pytest.mark.asyncio
+async def test_switch_model_applies_openrouter_suffix_for_mixed_case_runtime_url(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://OpenRouter.ai/api/v1")
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr(server.config, "_config_file", config_file, raising=False)
+    server.config.reset_runtime_state()
+
+    payload = json.loads(await server.switch_model("openai/gpt-4.1"))
+
+    assert payload["status"] == "成功"
+    assert payload["current_model"] == "openai/gpt-4.1:online"
+    assert json.loads(config_file.read_text(encoding="utf-8"))["model"] == "openai/gpt-4.1"
+
+
+@pytest.mark.asyncio
 async def test_switch_model_returns_stable_failure_when_save_fails(monkeypatch):
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.setattr(server.config, "_save_config_file", lambda data: (_ for _ in ()).throw(ValueError("disk full")))
@@ -1928,6 +1978,40 @@ async def test_toggle_builtin_tools_preserves_unrelated_deny_entries(monkeypatch
     assert disabled["deny_list"] == ["OtherTool"]
 
 
+@pytest.mark.asyncio
+async def test_toggle_builtin_tools_status_is_not_blocked_when_only_one_builtin_tool_is_denied(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    settings_path = git_root / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps({"permissions": {"deny": ["WebSearch"]}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+
+    payload = json.loads(await server.toggle_builtin_tools("status"))
+
+    assert payload["blocked"] is False
+    assert payload["deny_list"] == ["WebSearch"]
+
+
+@pytest.mark.asyncio
+async def test_toggle_builtin_tools_on_keeps_non_string_entries_without_duplication(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    settings_path = git_root / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps({"permissions": {"deny": ["WebSearch", 42, "WebFetch", "WebSearch"]}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+
+    payload = json.loads(await server.toggle_builtin_tools("on"))
+
+    assert payload["blocked"] is True
+    assert payload["deny_list"].count("WebSearch") == 2
+    assert payload["deny_list"].count("WebFetch") == 1
+    assert 42 in payload["deny_list"]
 @pytest.mark.asyncio
 async def test_toggle_builtin_tools_returns_stable_error_for_invalid_settings_json(monkeypatch, tmp_path):
     git_root = tmp_path / "repo"
