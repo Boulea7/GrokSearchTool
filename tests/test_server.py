@@ -729,6 +729,45 @@ async def test_get_available_models_cached_reuses_cached_results(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_available_models_cached_caches_empty_result_after_failure(monkeypatch):
+    calls = {"count": 0}
+
+    async def failing_fetch(api_url, api_key):
+        calls["count"] += 1
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(server, "_fetch_available_models", failing_fetch)
+
+    first = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+    second = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+
+    assert first == []
+    assert second == []
+    assert calls["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_cached_isolated_by_cache_key(monkeypatch):
+    calls = []
+
+    async def fake_fetch(api_url, api_key):
+        calls.append((api_url, api_key))
+        return [f"model-for-{api_key}"]
+
+    monkeypatch.setattr(server, "_fetch_available_models", fake_fetch)
+
+    first = await server._get_available_models_cached("https://api.example.com/v1", "key-a")
+    second = await server._get_available_models_cached("https://api.example.com/v1", "key-b")
+
+    assert first == ["model-for-key-a"]
+    assert second == ["model-for-key-b"]
+    assert calls == [
+        ("https://api.example.com/v1", "key-a"),
+        ("https://api.example.com/v1", "key-b"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_marks_web_fetch_as_degraded_when_real_probe_fails_after_provider_checks_pass(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
@@ -1609,6 +1648,33 @@ async def test_switch_model_persists_to_temp_config_file(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_switch_model_tool_keeps_env_model_active_in_current_process(monkeypatch, tmp_path):
+    monkeypatch.setenv("GROK_MODEL", "env-model")
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr(server.config, "_config_file", config_file, raising=False)
+    server.config.reset_runtime_state()
+
+    payload = json.loads(await server.switch_model("persisted-model"))
+
+    assert payload["status"] == "成功"
+    assert payload["previous_model"] == "env-model"
+    assert payload["current_model"] == "env-model"
+    assert json.loads(config_file.read_text(encoding="utf-8"))["model"] == "persisted-model"
+
+
+@pytest.mark.asyncio
+async def test_switch_model_returns_stable_failure_when_save_fails(monkeypatch):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_save_config_file", lambda data: (_ for _ in ()).throw(ValueError("disk full")))
+    server.config.reset_runtime_state()
+
+    payload = json.loads(await server.switch_model("grok-4.1-mini"))
+
+    assert payload["status"] == "失败"
+    assert "disk full" in payload["message"]
+
+
+@pytest.mark.asyncio
 async def test_toggle_builtin_tools_updates_project_settings_file(monkeypatch, tmp_path):
     git_root = tmp_path / "repo"
     git_root.mkdir()
@@ -1624,6 +1690,24 @@ async def test_toggle_builtin_tools_updates_project_settings_file(monkeypatch, t
     assert disabled["blocked"] is False
     assert disabled["deny_list"] == []
     assert (git_root / ".claude" / "settings.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_toggle_builtin_tools_preserves_unrelated_deny_entries(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    settings_path = git_root / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps({"permissions": {"deny": ["OtherTool"]}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+
+    enabled = json.loads(await server.toggle_builtin_tools("on"))
+    disabled = json.loads(await server.toggle_builtin_tools("off"))
+
+    assert sorted(enabled["deny_list"]) == ["OtherTool", "WebFetch", "WebSearch"]
+    assert disabled["deny_list"] == ["OtherTool"]
 
 
 @pytest.mark.asyncio
