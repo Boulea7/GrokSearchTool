@@ -94,6 +94,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 
 - `GROK_API_URL` 应尽量使用 OpenAI-compatible 根路径并显式带上 `/v1`
 - 配置读取当前应遵循：进程环境变量优先；若缺失，再回落到项目根目录的 `.env.local`，仍缺失时再看 `.env`。这里的“优先”按键是否存在判断：即使环境变量值为空字符串，也不会再回落到项目文件
+- 项目级环境变量回退当前同时支持普通 dotenv 形式的 `KEY=value` 与可选 `export KEY=value`
 - `get_config_info` 当前可用于配置与连通性初检，并默认执行最小真实 `search/fetch` 探针；但还不是完整的端到端兼容性诊断
 - `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`；其中 `topic` 当前支持 `general` / `news` / `finance`，`time_range` 当前支持 `day` / `week` / `month` / `year`，并兼容 `d` / `w` / `m` / `y`
 - `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`
@@ -108,10 +109,12 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `web_fetch` / `web_map` / Tavily 补充搜索当前只暴露 provider 能力的受控子集，不等同于 Tavily / Firecrawl 的全量原生 API
 - `web_map` 当前可能返回外部域名链接；若需要更接近站内 sitemap 的结果，应在调用方进一步收敛或过滤。这一表现当前对应 Tavily 默认 `allow_external=true`
 - 若上游 endpoint 指向 loopback，本地请求当前会强制 `trust_env=False`，因此也会绕过 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 与 `SSL_CERT_FILE` / `SSL_CERT_DIR`
-- `web_fetch` / `web_map` 当前会默认拒绝非 `http/https`、loopback、明显私有网络目标，以及常见把本地/私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`），避免工具被误用成内网抓取入口
+- `web_fetch` / `web_map` 当前会默认拒绝非 `http/https`、loopback、明显私有网络目标、单标签主机名、常见私网后缀主机（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`），以及常见把本地/私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`），避免工具被误用成内网抓取入口
+- 对通过静态 URL 边界检查的目标，`web_fetch` / `web_map` 当前还会在真正调用 provider 前继续复检可见的 redirect 目标
 - `split_answer_and_sources` / `standardize_sources` 当前会尽量避免把 generic 尾部链接列表误拆成真实信源，并会对明显敏感的 query 签名参数做最小遮罩
 - `standardize_sources` 当前会保留普通锚点（fragment）以避免不同页面段落引用被误合并；但 URL `userinfo` 与常见签名参数会被遮罩
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性
+- 对外 user-facing 错误当前不再附带 `request_id`；`get_config_info` 中的 Claude 项目上下文检查也不再回显绝对 Git 根路径
 - 根包 `grok_search` 当前对 `mcp` 采用 lazy export；非 server 模块导入不应再因为 `fastmcp` 缺失而提前失败
 - `split_answer_and_sources` 当前应避免把 fenced code 中的 `sources(...)` 示例，或正文语义上的普通尾部链接列表，误拆成真实信源
 - server 主进程当前应在非预期致命异常下以非零退出码结束，而不是统一伪装成成功退出

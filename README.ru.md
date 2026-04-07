@@ -29,7 +29,7 @@ GrokSearch — это независимо поддерживаемый MCP-се
 
 ### Уровни поддержки
 
-- `Officially tested`: Claude Code
+- `Officially tested`: Claude Code для проверенного в репозитории локального `stdio`-пути и проектного пути настроек, а не как полной host-level E2E матрицы
 - `Community-tested`: MCP-клиенты в стиле Codex, Cherry Studio
 - `Planned`: Dify, n8n, Coze
 
@@ -80,7 +80,7 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
-Если вы используете проектный `.codex/config.toml`, не коммитьте в репозиторий реальные ключи. Этот репозиторий по умолчанию игнорирует `.codex/`. Для локальной разработки безопаснее держать секреты в игнорируемом `.env.local` и загружать их перед запуском через `source ./.env.local`. Если вы вызываете `toggle_builtin_tools`, также не коммитьте проектный `.claude/settings.json`; `.claude/` тоже игнорируется по умолчанию.
+Если вы используете проектный `.codex/config.toml`, не коммитьте в репозиторий реальные ключи. Этот репозиторий по умолчанию игнорирует `.codex/`. Для локальной разработки безопаснее держать секреты в игнорируемом `.env.local` и загружать их перед запуском через `source ./.env.local`. Откат к проектным env-файлам сейчас поддерживает и строки `KEY=value`, и опциональный префикс `export KEY=value`. Если вы вызываете `toggle_builtin_tools`, также не коммитьте проектный `.claude/settings.json`; `.claude/` тоже игнорируется по умолчанию.
 
 #### Cherry Studio
 
@@ -106,7 +106,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | --- | --- | --- |
 | `GROK_API_URL` | Да | OpenAI-совместимый Grok endpoint, желательно с явным `/v1` |
 | `GROK_API_KEY` | Да | Grok API key |
-| `GROK_MODEL` | Нет | Модель по умолчанию; приоритет: env > persisted config > кодовый default |
+| `GROK_MODEL` | Нет | Модель по умолчанию; приоритет: process env > project `.env.local` > project `.env` > persisted config > кодовый default |
 | `GROK_TIME_CONTEXT_MODE` | Нет | Режим внедрения временного контекста: `always` / `auto` / `never` |
 | `TAVILY_API_KEY` | Нет | Tavily key для `web_fetch` / `web_map`, а также для Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | Нет | Tavily API endpoint |
@@ -142,7 +142,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch`, `web_map` и Tavily-backed supplemental `web_search` публикуют только curated subset возможностей provider'ов, а не их полный нативный API surface.
 - `web_fetch` возвращает извлечённый Markdown-текст, а не полный raw structured payload provider'а.
 - Tavily `web_map` может включать URL внешних доменов; если нужен результат ближе к внутрисайтовой sitemap, сужайте обход через `instructions` и фильтруйте результат после получения.
-- `web_fetch` / `web_map` по умолчанию отклоняют не-`http/https`, loopback, очевидные private-network targets и распространённые публичные DNS-alias'ы, в которые закодирован локальный/приватный IP (`nip.io` / `xip.io` / `sslip.io`).
+- `web_fetch` / `web_map` по умолчанию отклоняют не-`http/https`, loopback, очевидные private-network targets, одноярлыковые host'ы, типичные private-suffix host'ы (`.internal` / `.local` / `.lan` / `.home` / `.corp`) и распространённые публичные DNS-alias'ы, в которые закодирован локальный/приватный IP (`nip.io` / `xip.io` / `sslip.io`).
+- После статической проверки URL `web_fetch` / `web_map` также перепроверяют видимые redirect-цели до вызова provider.
 
 ### Минимальный smoke check
 

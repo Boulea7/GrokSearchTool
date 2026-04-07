@@ -80,7 +80,7 @@ Client / Assistant
 
 ### 支持级别
 
-- `Officially tested`：Claude Code
+- `Officially tested`：Claude Code（已按仓库内文档验证本地 `stdio` 路径与项目级设置路径，不代表完整宿主 E2E 矩阵）
 - `Community-tested`：Codex 风格 MCP 客户端、Cherry Studio
 - `Planned`：Dify、n8n、Coze
 
@@ -161,6 +161,8 @@ source ./.env.local
 set +a
 ```
 
+项目级环境变量回退当前同时支持普通 dotenv 形式的 `KEY=value` 与可选 `export KEY=value` 前缀。
+
 如果会调用 `toggle_builtin_tools`，还应避免提交项目级 `.claude/settings.json`；当前仓库默认忽略 `.claude/`。
 
 #### Cherry Studio
@@ -221,7 +223,7 @@ claude mcp add-json grok-search --scope user '{
 |------|------|--------|------|
 | `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式） |
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
-| `GROK_MODEL` | 否 | `grok-4.1-fast` | 默认模型（设置后优先于 `~/.config/grok-search/config.json`） |
+| `GROK_MODEL` | 否 | `grok-4.1-fast` | 默认模型；优先级见下方说明（进程 env > 项目 `.env.local` > 项目 `.env` > 持久化 config > 代码默认值） |
 | `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
@@ -350,7 +352,8 @@ claude mcp list
 说明：
 - 当前 `web_fetch` / `web_map` / Tavily supplemental `web_search` 只暴露 provider 能力的一个受控子集，不等同于 Tavily / Firecrawl 全量原生参数面。
 - `web_fetch` 返回的是提取后的 Markdown 文本，不会透传 provider 的原始结构化响应字段。
-- `web_fetch` / `web_map` 默认拒绝非 `http/https`、loopback、明显私网目标，以及常见把私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`）。
+- `web_fetch` / `web_map` 默认拒绝非 `http/https`、loopback、明显私网目标、单标签主机名、常见私网后缀主机（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`），以及常见把私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`）。
+- 对通过静态校验的目标，`web_fetch` / `web_map` 还会在真正调用 provider 前继续复检可见的 redirect 目标。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -362,7 +365,7 @@ claude mcp list
 
 说明：
 - Tavily Map 默认可能返回外部域名链接；若你需要更接近站内 sitemap 的结果，请结合 `instructions` 收紧范围，并按返回结果自行过滤。当前文档中的这条说明对应 Tavily 默认 `allow_external=true` 的行为。
-- 默认会拒绝非 `http/https`、loopback 与明显私有网络目标。
+- 默认会拒绝非 `http/https`、loopback、明显私有网络目标，并在调用 Tavily 前继续做可见 redirect 目标复检。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -386,7 +389,7 @@ claude mcp list
 - `feature_readiness.web_fetch.providers`：provider 级状态，`verified_path` 表示真实抓取探针实际打通的后端；未执行的 provider 可能附带 `skipped_reason`
 
 注意：
-- 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query 也会做遮罩。但诊断结果仍可能包含本机绝对路径、项目根目录、endpoint/主机名、`request_id` 或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
+- 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query 也会做遮罩。但诊断结果仍可能包含本机绝对路径、endpoint/主机名或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
 
 ### `switch_model` — 模型切换
 
