@@ -278,7 +278,7 @@ def test_standardize_sources_skips_invalid_or_missing_urls():
     ]
 
 
-def test_standardize_sources_masks_sensitive_query_params_and_drops_fragment():
+def test_standardize_sources_masks_sensitive_query_params_and_preserves_safe_fragment():
     sources = standardize_sources(
         [
             {
@@ -290,8 +290,51 @@ def test_standardize_sources_masks_sensitive_query_params_and_drops_fragment():
     )
 
     assert sources[0]["url"] == (
-        "https://signed.example.com/path?lang=en&token=REDACTED&signature=REDACTED"
+        "https://signed.example.com/path?lang=en&token=REDACTED&signature=REDACTED#frag"
     )
+
+
+def test_standardize_sources_masks_userinfo_and_extended_sensitive_params():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Signed URL",
+                "url": (
+                    "https://user:pass@signed.example.com/path"
+                    "?access_token=abc"
+                    "&X-Amz-Credential=cred"
+                    "&X-Amz-Security-Token=sec"
+                    "&GoogleAccessId=gid"
+                    "&keep=ok"
+                ),
+            }
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources[0]["url"] == (
+        "https://signed.example.com/path"
+        "?access_token=REDACTED"
+        "&X-Amz-Credential=REDACTED"
+        "&X-Amz-Security-Token=REDACTED"
+        "&GoogleAccessId=REDACTED"
+        "&keep=ok"
+    )
+
+
+def test_standardize_sources_preserves_distinct_safe_anchor_sources():
+    sources = standardize_sources(
+        [
+            {"title": "Alpha", "url": "https://docs.example.com/page#alpha"},
+            {"title": "Beta", "url": "https://docs.example.com/page#beta"},
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert [item["url"] for item in sources] == [
+        "https://docs.example.com/page#alpha",
+        "https://docs.example.com/page#beta",
+    ]
 
 
 def test_standardize_sources_applies_defaults_and_ranks():

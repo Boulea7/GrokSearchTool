@@ -34,12 +34,19 @@ _THINK_BLOCK_PATTERN = re.compile(r"(?is)<think>.*?</think>")
 _SENSITIVE_URL_QUERY_KEYS = {
     "api_key",
     "apikey",
+    "access_token",
+    "auth_token",
+    "code",
     "token",
     "signature",
     "sig",
+    "x-amz-credential",
     "x-amz-signature",
+    "x-amz-security-token",
+    "x-goog-credential",
     "x-goog-signature",
     "x-ms-signature",
+    "googleaccessid",
 }
 _LEADING_POLICY_PATTERNS = [
     re.compile(r"(?is)^\s*\**\s*i cannot comply\b.*"),
@@ -425,21 +432,45 @@ def _looks_like_list_intro(text: str) -> bool:
 
 def _sanitize_url_for_output(url: str) -> str:
     split = urlsplit(url)
-    if not split.query and not split.fragment:
+    if not split.username and not split.password and not split.query and not split.fragment:
         return url
 
-    sanitized_query = split.query
-    if split.query:
-        pairs = parse_qsl(split.query, keep_blank_values=True)
-        sanitized_query = urlencode(
-            [
-                (key, "REDACTED" if key.lower() in _SENSITIVE_URL_QUERY_KEYS else value)
-                for key, value in pairs
-            ],
-            doseq=True,
-        )
+    sanitized_query = _sanitize_url_params(split.query)
+    sanitized_fragment = split.fragment
+    if split.fragment and any(token in split.fragment for token in ("=", "&")):
+        sanitized_fragment = _sanitize_url_params(split.fragment)
 
-    return urlunsplit((split.scheme, split.netloc, split.path, sanitized_query, ""))
+    sanitized_netloc = _sanitize_netloc(split)
+    return urlunsplit((split.scheme, sanitized_netloc, split.path, sanitized_query, sanitized_fragment))
+
+
+def _sanitize_url_params(params: str) -> str:
+    if not params:
+        return params
+
+    pairs = parse_qsl(params, keep_blank_values=True)
+    return urlencode(
+        [
+            (key, "REDACTED" if key.lower() in _SENSITIVE_URL_QUERY_KEYS else value)
+            for key, value in pairs
+        ],
+        doseq=True,
+    )
+
+
+def _sanitize_netloc(split) -> str:
+    hostname = split.hostname or ""
+    if not hostname:
+        return split.netloc.rsplit("@", 1)[-1]
+
+    if ":" in hostname and not hostname.startswith("["):
+        host = f"[{hostname}]"
+    else:
+        host = hostname
+
+    if split.port is not None:
+        return f"{host}:{split.port}"
+    return host
 
 
 def _parse_sources_payload(payload: str) -> list[dict]:
