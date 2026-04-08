@@ -341,29 +341,37 @@ class PlanningEngine:
                     "complexity_level": session.complexity_level,
                 }
 
+        normalized_tool_mapping_id = (
+            phase_data.get("sub_query_id", "").strip()
+            if isinstance(phase_data, dict) and isinstance(phase_data.get("sub_query_id"), str)
+            else ""
+        )
         if (
             target == "tool_selection"
             and not is_revision
-            and isinstance(phase_data, dict)
-            and isinstance(phase_data.get("sub_query_id"), str)
-            and phase_data["sub_query_id"] in session.tool_mapping_ids()
+            and normalized_tool_mapping_id
+            and normalized_tool_mapping_id in session.tool_mapping_ids()
         ):
             return {
-                "error": f"Duplicate tool mapping for sub_query_id: {phase_data['sub_query_id']}",
+                "error": f"Duplicate tool mapping for sub_query_id: {normalized_tool_mapping_id}",
                 "session_id": session.session_id,
                 "completed_phases": session.completed_phases,
                 "complexity_level": session.complexity_level,
             }
 
+        normalized_sub_query_id = (
+            phase_data.get("id", "").strip()
+            if isinstance(phase_data, dict) and isinstance(phase_data.get("id"), str)
+            else ""
+        )
         if (
             target == "query_decomposition"
             and not is_revision
-            and isinstance(phase_data, dict)
-            and isinstance(phase_data.get("id"), str)
-            and phase_data["id"] in session.sub_query_ids()
+            and normalized_sub_query_id
+            and normalized_sub_query_id in session.sub_query_ids()
         ):
             return {
-                "error": f"Duplicate sub-query id: {phase_data['id']}",
+                "error": f"Duplicate sub-query id: {normalized_sub_query_id}",
                 "session_id": session.session_id,
                 "completed_phases": session.completed_phases,
                 "complexity_level": session.complexity_level,

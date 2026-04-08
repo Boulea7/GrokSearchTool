@@ -309,6 +309,26 @@ def test_standardize_sources_deduplicates_mixed_case_scheme_and_host_variants():
     ]
 
 
+def test_standardize_sources_keeps_explicit_default_ports_distinct():
+    sources = standardize_sources(
+        [
+            {"title": "Implicit HTTPS", "url": "https://example.com/guide"},
+            {"title": "Explicit HTTPS", "url": "https://example.com:443/guide"},
+            {"title": "Implicit HTTP", "url": "http://example.com/guide"},
+            {"title": "Explicit HTTP", "url": "http://example.com:80/guide"},
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert [item["url"] for item in sources] == [
+        "https://example.com/guide",
+        "https://example.com:443/guide",
+        "http://example.com/guide",
+        "http://example.com:80/guide",
+    ]
+    assert [item["rank"] for item in sources] == [1, 2, 3, 4]
+
+
 def test_standardize_sources_skips_invalid_or_missing_urls():
     sources = standardize_sources(
         [

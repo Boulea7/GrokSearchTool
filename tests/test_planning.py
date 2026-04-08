@@ -2138,6 +2138,69 @@ def test_planning_engine_rejects_duplicate_tool_mapping_invariant():
     assert session.tool_mapping_ids() == ["sq1"]
 
 
+def test_planning_engine_rejects_whitespace_padded_duplicate_tool_mapping_ids():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need level 2 coverage.",
+        session_id=session_id,
+        phase_data={
+            "level": 2,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 3,
+            "justification": "Need one mapped sub-query.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Single sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="search_strategy",
+        thought="Single search term.",
+        session_id=session_id,
+        phase_data={
+            "approach": "targeted",
+            "search_terms": [{"term": "provider comparison", "purpose": "sq1", "round": 1}],
+        },
+    )
+    planning.engine.process_phase(
+        phase="tool_selection",
+        thought="First mapping.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_search", "reason": "Need provider facts."},
+    )
+
+    duplicate = planning.engine.process_phase(
+        phase="tool_selection",
+        thought="Whitespace-padded duplicate should fail.",
+        session_id=session_id,
+        phase_data={"sub_query_id": " sq1 ", "tool": "web_fetch", "reason": "Should be rejected."},
+    )
+
+    assert "duplicate tool mapping" in duplicate["error"].lower()
+    session = planning.engine.get_session(session_id)
+    assert session is not None
+    assert session.tool_mapping_ids() == ["sq1"]
+
+
 def test_planning_engine_rejects_duplicate_sub_query_ids():
     intent = planning.engine.process_phase(
         phase="intent_analysis",
@@ -2179,6 +2242,56 @@ def test_planning_engine_rejects_duplicate_sub_query_ids():
         session_id=session_id,
         phase_data={
             "id": "sq1",
+            "goal": "Duplicate providers.",
+            "expected_output": "Should fail.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+
+    assert "duplicate sub-query id" in duplicate["error"].lower()
+
+
+def test_planning_engine_rejects_whitespace_padded_duplicate_sub_query_ids():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need decomposition.",
+        session_id=session_id,
+        phase_data={
+            "level": 1,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 2,
+            "justification": "One sub-query.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="First sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+
+    duplicate = planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Whitespace-padded duplicate should fail.",
+        session_id=session_id,
+        phase_data={
+            "id": " sq1 ",
             "goal": "Duplicate providers.",
             "expected_output": "Should fail.",
             "boundary": "Exclude implementation details.",

@@ -1874,6 +1874,11 @@ def _render_config_info_payload(config_info: dict, *, detail: str) -> dict:
         return config_info
 
     if detail == "summary":
+        base_snapshot = {
+            key: value
+            for key, value in config_info.items()
+            if key not in {"connection_test", "doctor", "feature_readiness"}
+        }
         doctor = config_info.get("doctor") or {}
         summarized_doctor = {
             "status": doctor.get("status"),
@@ -1883,25 +1888,7 @@ def _render_config_info_payload(config_info: dict, *, detail: str) -> dict:
         return {
             key: value
             for key, value in {
-                **{
-                    config_key: config_info.get(config_key)
-                    for config_key in (
-                        "GROK_API_URL",
-                        "GROK_API_KEY",
-                        "GROK_MODEL",
-                        "GROK_DEBUG",
-                        "GROK_OUTPUT_CLEANUP",
-                        "GROK_TIME_CONTEXT_MODE",
-                        "GROK_LOG_LEVEL",
-                        "GROK_LOG_DIR",
-                        "TAVILY_API_URL",
-                        "TAVILY_ENABLED",
-                        "TAVILY_API_KEY",
-                        "FIRECRAWL_API_URL",
-                        "FIRECRAWL_API_KEY",
-                        "config_status",
-                    )
-                },
+                **base_snapshot,
                 "connection_test": config_info.get("connection_test"),
                 "doctor": summarized_doctor,
                 "feature_readiness": config_info.get("feature_readiness"),
