@@ -175,7 +175,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 - `doctor.recommendations_detail` 會提供和 `check_id` / feature 關聯的結構化修復建議。
 - `get_config_info` 現在支援可選 `detail="full" | "summary"`；預設仍為 `full`，`summary` 只保留基礎設定快照、`connection_test`、`doctor.status/summary/recommendations` 與 `feature_readiness`。
+- `detail="summary"` 目前只是同一次診斷結果的緊湊欄位投影，不是額外的輕量執行路徑。
 - `feature_readiness.web_fetch.providers` 會附帶 provider 級狀態；`verified_path` 表示真實抓取探針實際打通的後端，未執行的 provider 可能帶有 `skipped_reason`。
+- `feature_readiness.get_sources` 只有在目前進程內至少存在一個非 error、可讀取的 source session 時才會顯示 `ready`；若快取裡只有失敗搜尋留下的 session，狀態會維持 `partial_ready`。
 - 即使 API Key 已脫敏，診斷結果仍可能包含本機絕對路徑、endpoint/hostname 與精簡後的上游錯誤摘要；對外分享前請先複核。
 - `get_sources` 使用目前進程內的記憶體型 LRU 快取（預設 TTL 約 1 小時、上限 256 個 session）；`session_id` 是 transient handle，不是 durable、caller-bound capability。進程重啟、TTL 到期或快取淘汰後，先前的 `session_id` 會失效。
 - `get_sources` 回傳的 `rank` 目前會優先保留 Grok 主引用，並保留安全 fragment、剝離 URL `userinfo`、遮罩常見簽名參數。

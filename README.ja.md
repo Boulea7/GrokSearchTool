@@ -161,7 +161,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 - `doctor.recommendations_detail` は `check_id` / feature に紐づく構造化された修復ヒントです。
 - `get_config_info` は任意の `detail="full" | "summary"` を受け付けます。既定値は引き続き `full` で、`summary` はベース設定スナップショット、`connection_test`、`doctor.status/summary/recommendations`、`feature_readiness` のみを返します。
+- `detail="summary"` は現時点では同じ診断実行結果のコンパクトな投影であり、別個の軽量実行パスではありません。
 - `feature_readiness.web_fetch.providers` には provider 単位の状態が含まれ、`verified_path` は実 fetch probe が通った backend を示します。skip された provider には `skipped_reason` が付く場合があります。
+- `feature_readiness.get_sources` が `ready` になるのは、現在のプロセス内に少なくとも 1 つの非 error で読み出し可能な source session がある場合だけです。失敗検索だけが残っている場合は `partial_ready` のままです。
 - API Key はマスクされますが、診断ペイロードにはローカル絶対パス、endpoint/hostname、短い upstream エラー要約が残る場合があります。外部共有前に確認してください。
 - `get_sources` は現在のサーバープロセス内にあるメモリ型 LRU キャッシュ（既定 TTL は約 1 時間、上限 256 session）を参照します。`session_id` は durable でも caller-bound でもない transient handle であり、プロセス再起動、TTL 切れ、eviction 後は無効になります。
 - `get_sources` の `rank` は現在 Grok 由来の引用を優先し、安全な fragment は保持しつつ、URL の `userinfo` と代表的な署名パラメータは除去・マスクします。
