@@ -90,6 +90,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 
 `feature_readiness.get_sources` reports `ready` only when the running process already holds at least one readable non-error source session; failed-search-only cache entries keep it at `partial_ready`. This is a `transient` readiness signal and does not lower the overall doctor status by itself.
 
+`get_sources.rank` currently follows `score`, source identity quality, and stable dedupe order without a Grok-specific boost. `standardize_sources` also canonicalizes scheme/host casing during dedupe, so mixed-case variants of the same page may collapse into one returned source.
+
 Supplemental `web_search` controls such as `topic`, `time_range`, and domain filters currently apply to Tavily-backed supplemental search only. If Tavily is unavailable or not used for the supplemental path, the request may still run with warnings, but those controls will not be fully enforced.
 
 ## Minimum `stdio` smoke check

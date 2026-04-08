@@ -183,7 +183,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `feature_readiness.get_sources` 只有在目前進程內至少存在一個非 error、可讀取的 source session 時才會顯示 `ready`；若快取裡只有失敗搜尋留下的 session，狀態會維持 `partial_ready`。
 - 即使 API Key 已脫敏，診斷結果仍可能包含本機絕對路徑、endpoint/hostname 與精簡後的上游錯誤摘要；對外分享前請先複核。
 - `get_sources` 使用目前進程內的記憶體型 LRU 快取（預設 TTL 約 1 小時、上限 256 個 session）；`session_id` 是 transient handle，不是 durable、caller-bound capability。進程重啟、TTL 到期或快取淘汰後，先前的 `session_id` 會失效。
-- `get_sources` 回傳的 `rank` 目前會依 `score`、來源身分清晰度與穩定去重順序生成，不再對 Grok 引用額外偏置；同時會保留安全 fragment、剝離 URL `userinfo`、遮罩常見簽名參數。
+- `get_sources` 回傳的 `rank` 目前會依 `score`、來源身分清晰度與穩定去重順序生成，不再對 Grok 引用額外偏置；`standardize_sources` 在去重時也會規範 URL 的 scheme/host 大小寫，因此同一頁面的 mixed-case 變體可能折疊為單一 source。同時仍會保留安全 fragment、剝離 URL `userinfo`、遮罩常見簽名參數。
 
 ## Companion Skill
 

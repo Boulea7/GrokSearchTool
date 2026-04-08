@@ -3,7 +3,11 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from grok_search.providers.grok import GrokSearchProvider, _WaitWithRetryAfter
+from grok_search.providers.grok import (
+    GrokSearchProvider,
+    _WaitWithRetryAfter,
+    _httpx_client_kwargs_for_url,
+)
 from grok_search.utils import fetch_prompt
 
 
@@ -18,6 +22,18 @@ class DummyResponse:
         if self._json_error is not None:
             raise self._json_error
         return self._json_data
+
+
+def test_provider_httpx_client_kwargs_disable_env_proxies_for_dotted_loopback():
+    local = _httpx_client_kwargs_for_url("http://localhost:18080/extract", timeout=httpx.Timeout(10.0))
+    dotted_local = _httpx_client_kwargs_for_url("http://localhost.:18080/extract", timeout=httpx.Timeout(10.0))
+    loopback = _httpx_client_kwargs_for_url("http://127.0.0.2:18080/extract", timeout=httpx.Timeout(10.0))
+    remote = _httpx_client_kwargs_for_url("https://api.example.com/v1", timeout=httpx.Timeout(10.0))
+
+    assert local["trust_env"] is False
+    assert dotted_local["trust_env"] is False
+    assert loopback["trust_env"] is False
+    assert "trust_env" not in remote
 
 
 @pytest.mark.asyncio

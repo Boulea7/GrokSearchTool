@@ -229,8 +229,8 @@ These controls currently apply to Tavily-backed supplemental search only; if Tav
 
 `get_sources` currently reads from an in-process memory-backed LRU cache on the running server. Session IDs are shared-daemon transient handles rather than durable, caller-bound capabilities or secret tokens, and `session_id_not_found_or_expired` covers restart, TTL expiry, eviction, and unreadable legacy-cache misses.
 
-`rank` currently keeps Grok-origin citations ahead of supplemental sources, then sorts by `score`, source identity quality, and stable dedupe order.
-`standardize_sources` preserves ordinary URL fragments so section-level citations do not collapse together, while still removing URL userinfo and masking common signature/token parameters.
+`rank` currently follows `score`, source identity quality, and stable dedupe order without giving Grok-origin citations extra priority.
+`standardize_sources` canonicalizes scheme/host casing for dedupe, so mixed-case variants of the same page may collapse into one source; it still preserves ordinary URL fragments, removes URL userinfo, and masks common signature/token parameters.
 
 ## Companion Skill
 

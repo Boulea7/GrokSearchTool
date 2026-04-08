@@ -169,7 +169,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `feature_readiness.get_sources` が `ready` になるのは、現在のプロセス内に少なくとも 1 つの非 error で読み出し可能な source session がある場合だけです。失敗検索だけが残っている場合は `partial_ready` のままです。
 - API Key はマスクされますが、診断ペイロードにはローカル絶対パス、endpoint/hostname、短い upstream エラー要約が残る場合があります。外部共有前に確認してください。
 - `get_sources` は現在のサーバープロセス内にあるメモリ型 LRU キャッシュ（既定 TTL は約 1 時間、上限 256 session）を参照します。`session_id` は shared-daemon transient handle であり、durable でも caller-bound でも secret token でもありません。`session_id_not_found_or_expired` はプロセス再起動、TTL 切れ、eviction、読み出せない旧キャッシュ miss をまとめて表します。
-- `get_sources` の `rank` は現在 Grok 由来の引用を優先し、安全な fragment は保持しつつ、URL の `userinfo` と代表的な署名パラメータは除去・マスクします。
+- `get_sources` の `rank` は現在 `score`、source identity の明確さ、安定した dedupe 順に従い、Grok 由来の引用へ追加の優先度は与えません。`standardize_sources` は dedupe の際に scheme/host の大文字小文字差を正規化するため、同じページの mixed-case variant は 1 件に畳み込まれる場合があります。その一方で安全な fragment は保持し、URL の `userinfo` と代表的な署名パラメータは引き続き除去・マスクします。
 
 ## Companion Skill
 
