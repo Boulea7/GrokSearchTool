@@ -95,7 +95,7 @@ def _is_retryable_exception(exc) -> bool:
 
 
 def _httpx_client_kwargs_for_url(url: str, *, timeout: httpx.Timeout) -> dict:
-    host = (urlparse(url).hostname or "").lower()
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
     kwargs = {"timeout": timeout, "follow_redirects": True}
     is_loopback = host == "localhost"
     if not is_loopback:

@@ -946,12 +946,14 @@ def test_build_connection_test_from_models_check_maps_error_kinds(error_kind, ex
 
 def test_httpx_client_kwargs_disable_env_proxies_for_full_loopback_range():
     local = server._httpx_client_kwargs_for_url("http://localhost:18080/extract", timeout=10.0)
+    dotted_local = server._httpx_client_kwargs_for_url("http://localhost.:18080/extract", timeout=10.0)
     loopback = server._httpx_client_kwargs_for_url("http://127.0.0.1:18080/map", timeout=10.0)
     loopback_alias = server._httpx_client_kwargs_for_url("http://127.0.0.2:18080/map", timeout=10.0)
     short_loopback = server._httpx_client_kwargs_for_url("http://127.1:18080/map", timeout=10.0)
     remote = server._httpx_client_kwargs_for_url("https://api.tavily.com/extract", timeout=10.0)
 
     assert local["trust_env"] is False
+    assert dotted_local["trust_env"] is False
     assert loopback["trust_env"] is False
     assert loopback_alias["trust_env"] is False
     assert short_loopback["trust_env"] is False
@@ -1999,7 +2001,7 @@ async def test_get_sources_standardizes_merged_provider_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_sources_keeps_grok_citations_ahead_of_supplemental_sources(monkeypatch):
+async def test_get_sources_prioritizes_higher_scored_sources_over_grok_bias(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
             pass
@@ -2025,10 +2027,10 @@ async def test_get_sources_keeps_grok_citations_ahead_of_supplemental_sources(mo
     cached = await server.get_sources(result["session_id"])
 
     assert [item["url"] for item in cached["sources"]] == [
-        "https://primary.example.com/",
         "https://openai.com/blog",
+        "https://primary.example.com/",
     ]
-    assert [item["provider"] for item in cached["sources"]] == ["grok", "tavily"]
+    assert [item["provider"] for item in cached["sources"]] == ["tavily", "grok"]
 
 
 @pytest.mark.asyncio
@@ -2732,6 +2734,51 @@ async def test_preflight_redirect_targets_returns_too_many_redirects(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_preflight_redirect_targets_surfaces_request_errors(monkeypatch):
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            request = httpx.Request("GET", url, headers=headers)
+            raise httpx.RequestError("boom", request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+
+    result = await server._preflight_redirect_targets("https://public.example.com/start")
+
+    assert result == "目标 URL 重定向预检失败"
+
+
+@pytest.mark.asyncio
+async def test_preflight_redirect_targets_surfaces_timeouts(monkeypatch):
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            raise httpx.TimeoutException("slow")
+
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+
+    result = await server._preflight_redirect_targets("https://public.example.com/start")
+
+    assert result == "目标 URL 重定向预检超时"
+
+
+@pytest.mark.asyncio
 async def test_preflight_redirect_targets_uses_get_for_visible_redirect_checks(monkeypatch):
     requested_urls = []
 
@@ -2763,6 +2810,79 @@ async def test_preflight_redirect_targets_uses_get_for_visible_redirect_checks(m
         "https://public.example.com/start",
         "https://public.example.com/next",
     ]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_fails_closed_when_redirect_preflight_errors(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    async def fake_tavily(url):
+        calls["tavily"] += 1
+        return "# Tavily", None
+
+    async def fake_firecrawl(url, ctx):
+        calls["firecrawl"] += 1
+        return "# Firecrawl", None
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            request = httpx.Request("GET", url, headers=headers)
+            raise httpx.RequestError("boom", request=request)
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_fetch("https://public.example.com/start")
+
+    assert result == "提取失败: 目标 URL 重定向预检失败"
+    assert calls == {"tavily": 0, "firecrawl": 0}
+
+
+@pytest.mark.asyncio
+async def test_web_map_fails_closed_when_redirect_preflight_errors(monkeypatch):
+    calls = {"map": 0}
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        calls["map"] += 1
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            request = httpx.Request("GET", url, headers=headers)
+            raise httpx.RequestError("boom", request=request)
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+
+    result = await server.web_map("https://public.example.com/start")
+
+    assert result == "映射失败: 目标 URL 重定向预检失败"
+    assert calls == {"map": 0}
 
 
 @pytest.mark.asyncio

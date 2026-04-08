@@ -165,6 +165,7 @@ Notes:
 - `web_fetch` and `web_map` reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, and common public DNS aliases that encode local/private IPs
 - after the static URL check passes, `web_fetch` and `web_map` also re-check visible redirect targets before dispatching the provider call
 - visible redirect re-checks currently use `GET` rather than `HEAD`, so presigned URLs, one-shot tokens, or read-side-effect links may incur an extra preflight read
+- if redirect preflight times out or hits a request-level error, the current implementation now fails closed instead of silently allowing the provider call
 - this boundary intentionally does not hard-block ordinary public-looking hostnames based only on local DNS answers, so it should not be treated as a strong guarantee against split-horizon or locally poisoned DNS resolution
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` expose a curated subset of provider options rather than the providers' full native API surfaces.
