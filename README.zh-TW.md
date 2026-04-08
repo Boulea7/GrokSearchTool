@@ -94,7 +94,9 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
-若使用專案級 `.codex/config.toml`，建議不要直接把真實 key 提交到倉庫；本倉庫預設忽略 `.codex/`。本地開發更推薦把敏感變數寫入已忽略的 `.env.local`，再於使用前 `source ./.env.local`。專案級環境變數回退目前同時支援 `KEY=value` 與可選 `export KEY=value`。若會呼叫 `toggle_builtin_tools`，也請避免提交專案級 `.claude/settings.json`；本倉庫同樣預設忽略 `.claude/`。
+若使用專案級 `.codex/config.toml`，建議不要直接把真實 key 提交到倉庫；本倉庫預設忽略 `.codex/`。本地開發更推薦把敏感變數寫入已忽略的 `.env.local`。
+
+`grok-search` 會依「進程環境 > 專案 `.env.local` > 專案 `.env` > 持久化設定 > 程式預設」自動讀取設定，因此通常不需要把 `.env.local` 當成 shell 腳本去 `source`。專案級環境變數回退目前同時支援 `KEY=value` 與可選 `export KEY=value`；如果你確實需要把變數導出到目前 shell，請只對 shell-safe 的 env 檔使用顯式導出流程。若會呼叫 `toggle_builtin_tools`，也請避免提交專案級 `.claude/settings.json`；本倉庫同樣預設忽略 `.claude/`。
 
 #### Cherry Studio
 
@@ -118,7 +120,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 | 變數 | 必填 | 說明 |
 | --- | --- | --- |
-| `GROK_API_URL` | 是 | OpenAI 相容 Grok 端點，建議顯式包含 `/v1` |
+| `GROK_API_URL` | 是 | OpenAI 相容 Grok 端點；值必須顯式包含 `/v1` 後綴 |
 | `GROK_API_KEY` | 是 | Grok API Key |
 | `GROK_MODEL` | 否 | 預設模型；優先級為進程 env > 專案 `.env.local` > 專案 `.env` > 持久化 config > 程式預設 |
 | `GROK_TIME_CONTEXT_MODE` | 否 | 時間上下文注入模式：`always` / `auto` / `never` |

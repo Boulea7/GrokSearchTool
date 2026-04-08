@@ -80,7 +80,9 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
-Если вы используете проектный `.codex/config.toml`, не коммитьте в репозиторий реальные ключи. Этот репозиторий по умолчанию игнорирует `.codex/`. Для локальной разработки безопаснее держать секреты в игнорируемом `.env.local` и загружать их перед запуском через `source ./.env.local`. Откат к проектным env-файлам сейчас поддерживает и строки `KEY=value`, и опциональный префикс `export KEY=value`. Если вы вызываете `toggle_builtin_tools`, также не коммитьте проектный `.claude/settings.json`; `.claude/` тоже игнорируется по умолчанию.
+Если вы используете проектный `.codex/config.toml`, не коммитьте в репозиторий реальные ключи. Этот репозиторий по умолчанию игнорирует `.codex/`. Для локальной разработки безопаснее держать секреты в игнорируемом `.env.local`.
+
+`grok-search` автоматически разрешает конфигурацию в порядке `process env -> project .env.local -> project .env -> persisted config -> code defaults`, поэтому обычно не нужно `source`-ить `.env.local` как shell-скрипт. Откат к проектным env-файлам сейчас поддерживает и строки `KEY=value`, и опциональный префикс `export KEY=value`; если вам действительно нужно экспортировать переменные в текущий shell, используйте явный shell-safe workflow, а не слепой `source`. Если вы вызываете `toggle_builtin_tools`, также не коммитьте проектный `.claude/settings.json`; `.claude/` тоже игнорируется по умолчанию.
 
 #### Cherry Studio
 
@@ -104,7 +106,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 | Переменная | Обязательна | Описание |
 | --- | --- | --- |
-| `GROK_API_URL` | Да | OpenAI-совместимый Grok endpoint, желательно с явным `/v1` |
+| `GROK_API_URL` | Да | OpenAI-совместимый Grok endpoint; значение должно явно оканчиваться на `/v1` |
 | `GROK_API_KEY` | Да | Grok API key |
 | `GROK_MODEL` | Нет | Модель по умолчанию; приоритет: process env > project `.env.local` > project `.env` > persisted config > кодовый default |
 | `GROK_TIME_CONTEXT_MODE` | Нет | Режим внедрения временного контекста: `always` / `auto` / `never` |
@@ -165,7 +167,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `feature_readiness.web_fetch.providers` содержит состояние по каждому provider; `verified_path` показывает backend, который прошёл реальный fetch-probe, а для пропущенных provider может присутствовать `skipped_reason`.
 - `feature_readiness.get_sources` показывает `ready` только тогда, когда в текущем процессе уже есть хотя бы один читаемый non-error source session; если в кэше остались только сессии от неуспешных поисков, статус остаётся `partial_ready`.
 - Даже при маскировании API key диагностический payload всё ещё может содержать локальные абсолютные пути, endpoint/hostname и короткие сводки upstream-ошибок; перед внешней публикацией его стоит перепроверить.
-- `get_sources` сейчас читает из in-process memory-backed LRU cache на запущенном сервере (по умолчанию TTL около 1 часа, лимит 256 session). `session_id` здесь является transient handle, а не durable или caller-bound capability; после перезапуска процесса, истечения TTL или вытеснения старых записей он перестанет работать.
+- `get_sources` сейчас читает из in-process memory-backed LRU cache на запущенном сервере (по умолчанию TTL около 1 часа, лимит 256 session). `session_id` здесь является shared-daemon transient handle, а не durable, caller-bound capability или secret token; `session_id_not_found_or_expired` покрывает рестарт процесса, истечение TTL, вытеснение и miss для нечитаемых legacy-cache записей.
 - `rank` в `get_sources` сейчас сохраняет приоритет за цитатами Grok, оставляет безопасные URL fragment и одновременно удаляет `userinfo` и маскирует типичные подписи/токены в URL.
 
 ## Companion Skill

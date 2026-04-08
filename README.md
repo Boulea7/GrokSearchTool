@@ -153,15 +153,9 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
-若使用项目级 `.codex/config.toml`，建议不要直接把真实 key 提交到仓库；当前仓库默认忽略 `.codex/`。本地开发更推荐把敏感变量写入已忽略的 `.env.local`，使用前执行：
+若使用项目级 `.codex/config.toml`，建议不要直接把真实 key 提交到仓库；当前仓库默认忽略 `.codex/`。本地开发更推荐把敏感变量写入已忽略的 `.env.local`。
 
-```bash
-set -a
-source ./.env.local
-set +a
-```
-
-项目级环境变量回退当前同时支持普通 dotenv 形式的 `KEY=value` 与可选 `export KEY=value` 前缀。
+`grok-search` 运行时会按“进程环境 > 项目 `.env.local` > 项目 `.env` > 持久化配置 > 代码默认值”自动读取配置，因此通常不需要再把 `.env.local` 当作 shell 脚本去 `source`。项目级环境变量回退当前同时支持普通 dotenv 形式的 `KEY=value` 与可选 `export KEY=value` 前缀；如果你确实需要把变量导出到当前 shell，请只对 shell-safe 的 env 文件使用显式导出方案。
 
 如果会调用 `toggle_builtin_tools`，还应避免提交项目级 `.claude/settings.json`；当前仓库默认忽略 `.claude/`。
 
@@ -221,7 +215,7 @@ claude mcp add-json grok-search --scope user '{
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式） |
+| `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式，值必须显式包含 `/v1` 后缀） |
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
 | `GROK_MODEL` | 否 | `grok-4.1-fast` | 默认模型；优先级见下方说明（进程 env > 项目 `.env.local` > 项目 `.env` > 持久化 config > 代码默认值） |
 | `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
@@ -335,7 +329,7 @@ claude mcp list
 
 当前 `get_sources` 使用的是当前服务器进程内的内存型 LRU 缓存：默认 TTL 约 1 小时、当前上限 256 个 session。进程重启、TTL 到期或缓存淘汰后，先前的 `session_id` 会失效。
 
-`session_id` 当前只是运行中 server 进程里的 transient handle，不是 durable、caller-bound capability；不要把它理解为可长期保存或可跨进程复用的访问令牌。
+`session_id` 当前只是运行中 server 进程里的 shared-daemon transient handle，不是 durable、caller-bound capability，也不是 secret token；只要在同一个运行中进程里持有该值，就能继续读取对应信源。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -351,8 +345,10 @@ claude mcp list
 - `error`: 仅在 `session_id` 缺失或过期时返回，例如 `session_id_not_found_or_expired`
 
 说明：
+- `session_id_not_found_or_expired` 当前统一覆盖进程重启、TTL 到期、LRU 淘汰，以及不可读的旧缓存条目等 miss 场景。
 - `rank` 当前会优先保留 Grok 主引用，再结合 `score`、来源身份清晰度与稳定去重顺序生成。
 - `standardize_sources` 会保留普通锚点（fragment），避免不同页面段落引用被误合并；同时会剥离 URL `userinfo`，并继续遮罩常见 query / fragment 签名参数。
+- `get_sources` 生命周期与共享 daemon 边界详见 [docs/GET_SOURCES_LIFECYCLE.md](./docs/GET_SOURCES_LIFECYCLE.md)。
 
 ### `web_fetch` — 网页内容抓取
 
@@ -409,6 +405,7 @@ claude mcp list
 - `detail="full"` 保留完整 `doctor.checks`、`doctor.recommendations_detail` 和 provider/probe 细节；`detail="summary"` 只保留基础配置快照、`connection_test`、`doctor.status/summary/recommendations` 与 `feature_readiness`
 - `detail="summary"` 当前只是同一次诊断结果的紧凑字段投影，不是额外的“轻执行路径”；底层仍会执行同一轮配置/探针逻辑。
 - `feature_readiness.get_sources` 只有在当前进程内至少存在一个非 error 的可读取 source session 时才会显示 `ready`；如果只有失败搜索留下的 session，状态会保持 `partial_ready`
+- `feature_readiness` / `doctor` 的状态语义当前可按以下方式理解：`ready`=当前能力已验证可用，`degraded`=能力存在但探针或局部依赖异常，`not_ready`=配置或前置条件不足，`partial_ready`=接口存在但仍缺少运行中瞬时条件；其中 `transient` 和 `client_specific` 项默认不拉低 overall doctor。
 - 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query 也会做遮罩。但诊断结果仍可能包含本机绝对路径、endpoint/主机名或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
 
 ### `switch_model` — 模型切换
