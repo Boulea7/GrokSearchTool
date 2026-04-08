@@ -57,17 +57,18 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `FIRECRAWL_API_KEY` is used by fetch fallback and optional supplemental `web_search`
 - `web_search.topic` currently supports `general`, `news`, and `finance`
 - `web_search.time_range` currently supports `day`, `week`, `month`, `year`, and normalizes aliases `d`, `w`, `m`, `y`
-- Tavily-backed supplemental search currently clamps `max_results` to the provider's documented limit of `20`
+- Tavily-backed supplemental search currently clamps `max_results` to Tavily's documented upper bound of `20`
 - `Config.get_config_info()` returns only the base config snapshot; the MCP tool `get_config_info` keeps that snapshot and adds `connection_test`, `doctor`, `feature_readiness`, and minimal real `search/fetch` probes
 - `connection_test` reflects `/models` reachability only; use `doctor` and `feature_readiness` to judge runtime readiness
 - `doctor.recommendations_detail` is an additive structured hint layer; clients that only read `recommendations` remain compatible
 - `feature_readiness.web_fetch.providers.verified_path` identifies the backend that passed the real fetch probe, and skipped providers may include `skipped_reason`
 - `get_config_info` is still not a full end-to-end compatibility guarantee
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` intentionally expose a curated subset of provider options rather than the providers' complete native API surfaces
-- Tavily `map` may include external-domain URLs unless callers further constrain and post-filter the crawl results; this reflects Tavily's default `allow_external=true` behavior
+- Tavily `map` may include external-domain URLs unless callers further constrain and post-filter the crawl results; this reflects Tavily's documented default `allow_external=true` behavior, and this wrapper does not currently expose that flag directly
 - loopback upstream endpoints are requested with `trust_env=False`, which also bypasses proxy and local-CA environment variables for that request
-- `web_fetch` / `web_map` now reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, and common public DNS aliases that encode local/private IPs
+- `web_fetch` / `web_map` now reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, common loopback helper domains such as `localtest.me` / `lvh.me`, and common public DNS aliases that encode local/private IPs
 - after static URL validation passes, `web_fetch` / `web_map` also re-check visible redirect targets before dispatching the provider call
+- this boundary does not provide a strong guarantee against split-horizon or locally poisoned DNS that resolves a public-looking hostname to a private target
 
 ## Feature Dependencies
 
@@ -75,12 +76,12 @@ These hosts remain planned targets until remote transport and host-specific veri
 | --- | --- |
 | `plan_*` | none beyond a working MCP host |
 | `web_search` | `GROK_API_URL`, `GROK_API_KEY` |
-| `get_sources` | any previous `web_search` session ID; richer status fields are returned when the original search failed or yielded no sources |
+| `get_sources` | any previous `web_search` session ID from the current running server process; source sessions are stored in an in-memory LRU cache and can disappear after restart, TTL expiry, or eviction |
 | `web_fetch` | `FIRECRAWL_API_KEY`, or `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `web_map` | `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `toggle_builtin_tools` | Claude Code project layout |
 
-Supplemental `web_search` controls such as `topic`, `time_range`, and domain filters only become effective when the corresponding Tavily / Firecrawl optional backends are configured.
+Supplemental `web_search` controls such as `topic`, `time_range`, and domain filters currently apply to Tavily-backed supplemental search only. If Tavily is unavailable or not used for the supplemental path, the request may still run with warnings, but those controls will not be fully enforced.
 
 ## Minimum `stdio` smoke check
 
@@ -99,6 +100,7 @@ If local `stdio` startup fails with certificate-chain errors in enterprise or se
 
 - endpoint compatibility still varies across Grok-compatible providers
 - source extraction is best-effort and may depend on how the upstream response encodes links or annotations
+- `get_sources` sessions are transient, in-process cache handles rather than durable, caller-bound capabilities
 - diagnostic payloads may still include local absolute paths, endpoint/hostname details, or short upstream error summaries even when API keys and obvious token/signature strings are masked
 - `toggle_builtin_tools` is intentionally client-specific and should not be treated as a universal MCP feature
 - `toggle_builtin_tools` readiness in `get_config_info` currently indicates local Git project context detection, not a full Claude Code host validation

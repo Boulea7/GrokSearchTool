@@ -158,6 +158,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - Tavily `web_map` 可能包含外部網域連結；若需要更接近站內 sitemap 的結果，請搭配 `instructions` 收斂並自行過濾。
 - `web_fetch` / `web_map` 預設會拒絕非 `http/https`、loopback、明顯私網目標、單標籤主機名、常見私網後綴主機（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`），以及常見把私網 IP 編進公開 DNS 名的 alias 形態（如 `nip.io` / `xip.io` / `sslip.io`）。
 - 對通過靜態檢查的目標，`web_fetch` / `web_map` 還會在真正呼叫 provider 前繼續複檢可見的 redirect 目標。
+- 這層邊界目前不會只因本機 DNS 將某個看似公開的 hostname 解析到私網就直接拒絕，因此不應被理解成對 split-horizon / 本地 DNS 私有解析的強保證。
 
 ### 最小 smoke check
 
@@ -172,6 +173,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 - `doctor.recommendations_detail` 會提供和 `check_id` / feature 關聯的結構化修復建議。
 - `feature_readiness.web_fetch.providers` 會附帶 provider 級狀態；`verified_path` 表示真實抓取探針實際打通的後端，未執行的 provider 可能帶有 `skipped_reason`。
+- 即使 API Key 已脫敏，診斷結果仍可能包含本機絕對路徑、endpoint/hostname 與精簡後的上游錯誤摘要；對外分享前請先複核。
+- `get_sources` 使用目前進程內的記憶體型 LRU 快取（預設 TTL 約 1 小時、上限 256 個 session）；進程重啟、TTL 到期或快取淘汰後，先前的 `session_id` 會失效。
+- `get_sources` 回傳的 `rank` 目前會優先保留 Grok 主引用，並保留安全 fragment、剝離 URL `userinfo`、遮罩常見簽名參數。
 
 ## Companion Skill
 

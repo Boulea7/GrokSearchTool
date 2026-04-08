@@ -144,6 +144,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - Tavily `web_map` может включать URL внешних доменов; если нужен результат ближе к внутрисайтовой sitemap, сужайте обход через `instructions` и фильтруйте результат после получения.
 - `web_fetch` / `web_map` по умолчанию отклоняют не-`http/https`, loopback, очевидные private-network targets, одноярлыковые host'ы, типичные private-suffix host'ы (`.internal` / `.local` / `.lan` / `.home` / `.corp`) и распространённые публичные DNS-alias'ы, в которые закодирован локальный/приватный IP (`nip.io` / `xip.io` / `sslip.io`).
 - После статической проверки URL `web_fetch` / `web_map` также перепроверяют видимые redirect-цели до вызова provider.
+- Эта граница сейчас не даёт жёсткой гарантии против split-horizon или локально отравленного DNS, который резолвит публично выглядящий hostname в приватную цель.
 
 ### Минимальный smoke check
 
@@ -158,6 +159,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 - `doctor.recommendations_detail` даёт структурированные подсказки по исправлению, связанные с `check_id` и feature.
 - `feature_readiness.web_fetch.providers` содержит состояние по каждому provider; `verified_path` показывает backend, который прошёл реальный fetch-probe, а для пропущенных provider может присутствовать `skipped_reason`.
+- Даже при маскировании API key диагностический payload всё ещё может содержать локальные абсолютные пути, endpoint/hostname и короткие сводки upstream-ошибок; перед внешней публикацией его стоит перепроверить.
+- `get_sources` сейчас читает из in-process memory-backed LRU cache на запущенном сервере (по умолчанию TTL около 1 часа, лимит 256 session). После перезапуска процесса, истечения TTL или вытеснения старых записей прежний `session_id` перестанет работать.
+- `rank` в `get_sources` сейчас сохраняет приоритет за цитатами Grok, оставляет безопасные URL fragment и одновременно удаляет `userinfo` и маскирует типичные подписи/токены в URL.
 
 ## Companion Skill
 
