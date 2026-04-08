@@ -724,6 +724,55 @@ async def test_parse_streaming_response_does_not_duplicate_existing_sources_head
 
 
 @pytest.mark.asyncio
+async def test_parse_streaming_response_accepts_single_json_line_without_sse_prefix():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    class LineResponse:
+        def __init__(self, lines):
+            self._lines = lines
+            self.headers = {}
+
+        async def aiter_lines(self):
+            for line in self._lines:
+                yield line
+
+    response = LineResponse(
+        ['{"choices":[{"delta":{"content":"hello world"}}]}']
+    )
+
+    result = await provider._parse_streaming_response(response)
+
+    assert result == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_parse_streaming_response_merges_sse_and_raw_json_lines():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    class LineResponse:
+        def __init__(self, lines):
+            self._lines = lines
+            self.headers = {}
+
+        async def aiter_lines(self):
+            for line in self._lines:
+                yield line
+
+    response = LineResponse(
+        [
+            'data: {"choices":[{"delta":{"content":"hello "}}]}',
+            "",
+            '{"choices":[{"delta":{"content":"world"}}]}',
+            "data: [DONE]",
+        ]
+    )
+
+    result = await provider._parse_streaming_response(response)
+
+    assert result == "hello world"
+
+
+@pytest.mark.asyncio
 async def test_describe_url_ignores_appended_sources_block(monkeypatch):
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
 
