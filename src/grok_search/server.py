@@ -1833,6 +1833,51 @@ def _build_doctor_payload(
     }
 
 
+def _render_config_info_payload(config_info: dict, *, detail: str) -> dict:
+    if detail == "full":
+        return config_info
+
+    if detail == "summary":
+        doctor = config_info.get("doctor") or {}
+        summarized_doctor = {
+            "status": doctor.get("status"),
+            "summary": doctor.get("summary"),
+            "recommendations": doctor.get("recommendations", []),
+        }
+        return {
+            key: value
+            for key, value in {
+                **{
+                    config_key: config_info.get(config_key)
+                    for config_key in (
+                        "GROK_API_URL",
+                        "GROK_API_KEY",
+                        "GROK_MODEL",
+                        "GROK_DEBUG",
+                        "GROK_OUTPUT_CLEANUP",
+                        "GROK_TIME_CONTEXT_MODE",
+                        "GROK_LOG_LEVEL",
+                        "GROK_LOG_DIR",
+                        "TAVILY_API_URL",
+                        "TAVILY_ENABLED",
+                        "TAVILY_API_KEY",
+                        "FIRECRAWL_API_URL",
+                        "FIRECRAWL_API_KEY",
+                        "config_status",
+                    )
+                },
+                "connection_test": config_info.get("connection_test"),
+                "doctor": summarized_doctor,
+                "feature_readiness": config_info.get("feature_readiness"),
+            }.items()
+        }
+
+    return {
+        "error": "invalid_detail",
+        "message": "Invalid detail value. Supported values are 'full' and 'summary'.",
+    }
+
+
 @mcp.tool(
     name="get_config_info",
     output_schema=None,
@@ -1853,8 +1898,21 @@ def _build_doctor_payload(
     """,
     meta={"version": "1.4.0", "author": "guda.studio"},
 )
-async def get_config_info() -> str:
+async def get_config_info(
+    detail: Annotated[str, "Response detail level: full | summary. Defaults to full."] = "full",
+) -> str:
     import json
+
+    normalized_detail = (detail or "full").strip().lower() or "full"
+    if normalized_detail not in {"full", "summary"}:
+        return json.dumps(
+            {
+                "error": "invalid_detail",
+                "message": "Invalid detail value. Supported values are 'full' and 'summary'.",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
     config_info = config.get_config_info()
     checks: list[dict] = []
@@ -2159,7 +2217,11 @@ async def get_config_info() -> str:
     config_info["doctor"] = doctor
     config_info["feature_readiness"] = feature_readiness
 
-    return json.dumps(config_info, ensure_ascii=False, indent=2)
+    return json.dumps(
+        _render_config_info_payload(config_info, detail=normalized_detail),
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @mcp.tool(
