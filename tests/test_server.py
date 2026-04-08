@@ -2614,10 +2614,26 @@ async def test_web_fetch_does_not_reject_public_hostname_only_from_local_dns_ans
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", port or 443)),
         ]
 
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            response = httpx.Response(200)
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
     monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
     monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
 
