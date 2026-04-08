@@ -23,7 +23,23 @@ def _run_python(code: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
+
+
+def test_run_python_sets_timeout(monkeypatch):
+    captured = {}
+
+    def fake_run(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = _run_python("print('ok')")
+
+    assert result.returncode == 0
+    assert captured["timeout"] == 30
 
 
 def test_non_server_modules_import_without_fastmcp():
