@@ -230,6 +230,7 @@ Useful endpoints
         "Sources I used:",
         "Further reading:",
         "Related sources:",
+        "## Further reading",
     ],
 )
 def test_split_answer_and_sources_extracts_real_trailing_source_lists(heading):

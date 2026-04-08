@@ -31,7 +31,7 @@ _GENERIC_LINK_LIST_HEADING_PATTERN = re.compile(
     r"(?:\s+[a-z0-9][\w/-]*)*$"
 )
 _REAL_SOURCE_LIST_HEADING_PATTERN = re.compile(
-    r"(?i)^(?:sources?(?:\s+i\s+used)?|references?|citations?|related\s+sources?|further\s+reading)\s*:?\s*$"
+    r"(?i)^(?:#{1,6}\s*)?(?:sources?(?:\s+i\s+used)?|references?|citations?|related\s+sources?|further\s+reading)\s*:?\s*$"
 )
 _THINK_BLOCK_PATTERN = re.compile(r"(?is)<think>.*?</think>")
 _SENSITIVE_URL_QUERY_KEYS = {

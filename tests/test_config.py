@@ -118,6 +118,19 @@ def test_project_env_fallback_strips_comments_after_quoted_values(monkeypatch, t
     assert config.grok_api_key == "project-key"
 
 
+def test_project_env_fallback_keeps_malformed_suffix_after_quoted_values(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text(
+        'GROK_API_KEY="project-key"oops\n',
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    assert config.grok_api_key == '"project-key"oops'
+
+
 def test_process_env_takes_precedence_over_project_env_files(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.setenv("GROK_API_URL", "https://env.example.com/v1")
