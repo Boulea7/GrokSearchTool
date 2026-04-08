@@ -887,6 +887,103 @@ async def test_plan_search_term_rejects_unknown_sub_query_reference():
 
 
 @pytest.mark.asyncio
+async def test_planning_normalizes_whitespace_padded_ids_across_later_phases():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers deeply.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need full planning.",
+        level=3,
+        estimated_sub_queries=2,
+        estimated_tool_calls=6,
+        justification="Need whitespace-normalized identifiers.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="First sub-query.",
+        id=" sq1 ",
+        goal="Collect baseline facts.",
+        expected_output="A baseline summary.",
+        boundary="Exclude downstream comparison synthesis.",
+        tool_hint="web_search",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Second sub-query depends on the first.",
+        id=" sq2 ",
+        goal="Compare findings against baseline.",
+        expected_output="A comparison summary.",
+        boundary="Exclude baseline collection.",
+        depends_on=" sq1 ",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="First search term.",
+        term="provider baseline",
+        purpose=" sq1 ",
+        round=1,
+        approach="targeted",
+    )
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Second search term.",
+        term="provider comparison",
+        purpose=" sq2 ",
+        round=2,
+    )
+
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map sq1.",
+        sub_query_id=" sq1 ",
+        tool="web_search",
+        reason="Need baseline facts.",
+    )
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map sq2.",
+        sub_query_id=" sq2 ",
+        tool="web_search",
+        reason="Need comparison facts.",
+    )
+
+    result = json.loads(
+        await server.plan_execution(
+            session_id=session_id,
+            thought="Schedule baseline first, comparison second.",
+            parallel_groups=" sq1 ",
+            sequential=" sq2 ",
+            estimated_rounds=2,
+        )
+    )
+
+    assert result["plan_complete"] is True
+    assert [item["id"] for item in result["executable_plan"]["query_decomposition"]] == ["sq1", "sq2"]
+    assert result["executable_plan"]["query_decomposition"][1]["depends_on"] == ["sq1"]
+    assert [item["purpose"] for item in result["executable_plan"]["search_strategy"]["search_terms"]] == [
+        "sq1",
+        "sq2",
+    ]
+    assert [item["sub_query_id"] for item in result["executable_plan"]["tool_selection"]] == ["sq1", "sq2"]
+    assert result["executable_plan"]["execution_order"] == {
+        "parallel": [["sq1"]],
+        "sequential": ["sq2"],
+        "estimated_rounds": 2,
+    }
+
+
+@pytest.mark.asyncio
 async def test_plan_tool_mapping_rejects_unknown_sub_query_reference():
     intent = json.loads(
         await server.plan_intent(
@@ -1503,7 +1600,8 @@ async def test_plan_search_term_rejects_mutation_after_execution_order_exists():
     )
 
     assert result["error"] == "validation_error"
-    assert "restart planning" in result["message"].lower()
+    assert "open a new session" in result["message"].lower()
+    assert "restart planning from search_strategy" not in result["message"].lower()
     assert result["details"][0]["field"] == "is_revision"
 
 
@@ -2171,4 +2269,5 @@ async def test_plan_tool_mapping_revision_rejects_existing_execution_order():
     )
 
     assert result["error"] == "validation_error"
-    assert "restart planning" in result["message"].lower()
+    assert "open a new session" in result["message"].lower()
+    assert "restart planning from tool_selection" not in result["message"].lower()

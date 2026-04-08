@@ -42,6 +42,21 @@ class SubQuery(BaseModel):
     boundary: str = Field(description="What this sub-query explicitly excludes — MUST state mutual exclusion with sibling sub-queries, not just the broader domain")
     depends_on: Optional[list[str]] = Field(default=None, description="IDs of prerequisite sub-queries")
 
+    @field_validator("id")
+    @classmethod
+    def normalize_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("id must not be empty")
+        return stripped
+
+    @field_validator("depends_on")
+    @classmethod
+    def normalize_dependencies(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return value
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
 
 class SearchTerm(BaseModel):
     term: str = Field(description="Search query string. MUST be ≤8 words. Drop redundant synonyms (e.g., use 'RAG' not 'RAG retrieval augmented generation').")
@@ -77,6 +92,14 @@ class ToolPlanItem(BaseModel):
     tool: Literal["web_search", "web_fetch", "web_map"]
     reason: str
     params: Optional[dict] = Field(default=None, description="Tool-specific parameters")
+
+    @field_validator("sub_query_id")
+    @classmethod
+    def normalize_sub_query_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("sub_query_id must not be empty")
+        return stripped
 
 
 class ExecutionOrderOutput(BaseModel):
@@ -140,7 +163,7 @@ class PlanningSession:
         if not record or not isinstance(record.data, list):
             return set()
         return {
-            item["id"]
+            item["id"].strip()
             for item in record.data
             if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
         }
@@ -161,7 +184,7 @@ class PlanningSession:
         if not record or not isinstance(record.data, list):
             return []
         return [
-            item["sub_query_id"]
+            item["sub_query_id"].strip()
             for item in record.data
             if isinstance(item, dict) and isinstance(item.get("sub_query_id"), str) and item["sub_query_id"].strip()
         ]
