@@ -148,7 +148,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch` / `web_map` по умолчанию отклоняют не-`http/https`, loopback, очевидные private-network targets, одноярлыковые host'ы, типичные private-suffix host'ы (`.internal` / `.local` / `.lan` / `.home` / `.corp`) и распространённые публичные DNS-alias'ы, в которые закодирован локальный/приватный IP (`nip.io` / `xip.io` / `sslip.io`).
 - После статической проверки URL `web_fetch` / `web_map` также перепроверяют видимые redirect-цели до вызова provider.
 - Сейчас эта видимая redirect-проверка использует `GET`, а не `HEAD`; для presigned URL, one-shot token или ссылок, где даже чтение может иметь побочный эффект, это означает возможный дополнительный preflight-read и должно рассматриваться как известная граница.
-- Если redirect-preflight завершается timeout'ом или request-level ошибкой, текущая реализация теперь fail-close и не продолжает вызов provider по умолчанию.
+- Если redirect-preflight завершается timeout'ом или request-level ошибкой, текущая реализация помечает этот шаг как `skipped_due_to_error`; `web_fetch` / `web_map` сейчас всё ещё продолжают downstream-вызов provider.
 - Эта граница сейчас не даёт жёсткой гарантии против split-horizon или локально отравленного DNS, который резолвит публично выглядящий hostname в приватную цель.
 
 ### Минимальный smoke check

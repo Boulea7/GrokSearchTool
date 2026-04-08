@@ -360,7 +360,7 @@ claude mcp list
 - `web_fetch` / `web_map` 默认拒绝非 `http/https`、loopback、明显私网目标、单标签主机名、常见私网后缀主机（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`）、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`）。
 - 对通过静态校验的目标，`web_fetch` / `web_map` 还会在真正调用 provider 前继续复检可见的 redirect 目标。
 - 当前可见 redirect 复检使用 `GET` 请求而不是 `HEAD`；对 presigned URL、one-shot token 或有副作用的读取型链接，这意味着可能存在额外一次预检读取，应视为已知边界。
-- 若 redirect 预检发生超时或请求级错误，当前实现会直接拒绝继续调用 provider，而不会默认放行。
+- 若 redirect 预检发生超时或请求级错误，当前实现会把该步骤标记为 `skipped_due_to_error`；`web_fetch` / `web_map` 目前仍会继续执行下游 provider 调用。
 - 当前实现为了避免误杀普通公网 hostname，不会因为本机 DNS 把某个公网域名解析到私网结果就直接拒绝请求；因此这层边界不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证。
 
 | 参数 | 类型 | 必填 | 说明 |

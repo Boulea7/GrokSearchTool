@@ -118,7 +118,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `web_fetch` / `web_map` 当前会默认拒绝非 `http/https`、loopback、明显私有网络目标、单标签主机名、常见私网后缀主机（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`）、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把本地/私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`），避免工具被误用成内网抓取入口
 - 对通过静态 URL 边界检查的目标，`web_fetch` / `web_map` 当前还会在真正调用 provider 前继续复检可见的 redirect 目标
 - 当前可见 redirect 复检使用 `GET` 而不是 `HEAD`；对 presigned URL、one-shot token 或读取本身可能有副作用的链接，可能存在额外一次预检读取，这属于当前已知边界
-- 若 redirect 预检发生超时或请求级错误，当前实现会直接 fail-close，而不会默认继续调用下游 provider
+- 若 redirect 预检发生超时或请求级错误，当前实现会将该步骤标记为 `skipped_due_to_error`；`web_fetch` / `web_map` 目前仍会继续调用下游 provider
 - 当前这层边界不会仅因为本机 DNS 把某个公网 hostname 解析到私网就直接拒绝请求，因此不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证
 - `split_answer_and_sources` / `standardize_sources` 当前会尽量避免把 generic 尾部链接列表误拆成真实信源，并会对明显敏感的 query 签名参数做最小遮罩
 - `standardize_sources` 当前会保留普通锚点（fragment）以避免不同页面段落引用被误合并；但 URL `userinfo` 与常见签名参数会被遮罩

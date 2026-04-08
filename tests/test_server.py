@@ -11,8 +11,8 @@ from grok_search.sources import SourcesCache
 ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL = server._preflight_public_target_url
 
 
-async def allow_public_target(url: str) -> None:
-    return None
+async def allow_public_target(url: str) -> server._TargetPreflightResult:
+    return server._allow_target_preflight()
 
 
 @pytest.fixture(autouse=True)
