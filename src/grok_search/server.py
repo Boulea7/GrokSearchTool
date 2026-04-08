@@ -2416,7 +2416,7 @@ def _get_planning_sub_queries(session) -> list[dict]:
 
 def _get_planning_sub_query_ids(session) -> set[str]:
     return {
-        item["id"]
+        item["id"].strip()
         for item in _get_planning_sub_queries(session)
         if isinstance(item.get("id"), str) and item["id"].strip()
     }
@@ -2431,12 +2431,12 @@ def _planning_validation_message(message: str, field: str | None = None) -> str:
 
 def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | None:
     existing_ids = _get_planning_sub_query_ids(session)
-    sub_query_id = item["id"]
+    sub_query_id = item["id"].strip()
     valid_dependency_ids = {sub_query_id} if is_revision else existing_ids
 
     if is_revision and any(phase in session.phases for phase in ("search_strategy", "tool_selection", "execution_order")):
         return _planning_validation_message(
-            "Sub-query revision would invalidate downstream phases. Restart planning from query_decomposition or open a new session.",
+            "Sub-query revision would invalidate downstream phases. Open a new session to restart planning from query_decomposition.",
             "id",
         )
 
@@ -2471,9 +2471,10 @@ def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | No
 
 def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -> str | None:
     existing_ids = _get_planning_sub_query_ids(session)
-    if sub_query_id not in existing_ids:
+    normalized_sub_query_id = sub_query_id.strip()
+    if normalized_sub_query_id not in existing_ids:
         return _planning_validation_message(
-            f"Unknown sub-query id: {sub_query_id}",
+            f"Unknown sub-query id: {normalized_sub_query_id}",
             field_name,
         )
     return None
@@ -2576,7 +2577,7 @@ def _validate_upstream_phase_revision(session, phase: str) -> str | None:
     downstream_phases = PHASE_NAMES[phase_index + 1 :]
     if any(name in session.phases for name in downstream_phases):
         return _planning_validation_message(
-            f"{phase} revision would invalidate downstream phases. Restart planning from {phase} or open a new session.",
+            f"{phase} revision would invalidate downstream phases. Open a new session to restart planning from {phase}.",
             "is_revision",
         )
     return None
@@ -2709,7 +2710,8 @@ async def plan_sub_query(
     import json
     if not planning_engine.get_session(session_id):
         return _planning_session_error(session_id)
-    item = {"id": id, "goal": goal, "expected_output": expected_output, "boundary": boundary}
+    normalized_id = id.strip()
+    item = {"id": normalized_id, "goal": goal, "expected_output": expected_output, "boundary": boundary}
     if depends_on:
         item["depends_on"] = _split_csv(depends_on)
     if tool_hint:
@@ -2749,7 +2751,7 @@ async def plan_search_term(
         return _planning_session_error(session_id)
     if any(phase in session.phases for phase in ("tool_selection", "execution_order")):
         return _planning_validation_message(
-            "Search strategy mutation would invalidate downstream phases. Restart planning from search_strategy or open a new session.",
+            "Search strategy mutation would invalidate downstream phases. Open a new session to rebuild search_strategy.",
             "is_revision",
         )
     if (is_revision or "search_strategy" not in session.phases) and not approach:
@@ -2757,7 +2759,8 @@ async def plan_search_term(
             "first_search_term_requires_approach",
             "The first search term must include approach=broad_first|narrow_first|targeted.",
         )
-    data = {"search_terms": [{"term": term, "purpose": purpose, "round": round}]}
+    normalized_purpose = purpose.strip()
+    data = {"search_terms": [{"term": term, "purpose": normalized_purpose, "round": round}]}
     if approach:
         data["approach"] = approach
     if fallback_plan:
@@ -2770,7 +2773,7 @@ async def plan_search_term(
         )
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid search strategy input.", _format_validation_details(exc))
-    validation_error = _validate_sub_query_reference(session, purpose, "purpose")
+    validation_error = _validate_sub_query_reference(session, normalized_purpose, "purpose")
     if validation_error:
         return validation_error
     return json.dumps(planning_engine.process_phase(
@@ -2800,10 +2803,11 @@ async def plan_tool_mapping(
         return _planning_session_error(session_id)
     if is_revision and "execution_order" in session.phases:
         return _planning_validation_message(
-            "Tool mapping revision would invalidate execution_order. Restart planning from tool_selection or open a new session.",
+            "Tool mapping revision would invalidate execution_order. Open a new session to rebuild tool_selection.",
             "sub_query_id",
         )
-    item = {"sub_query_id": sub_query_id, "tool": tool, "reason": reason}
+    normalized_sub_query_id = sub_query_id.strip()
+    item = {"sub_query_id": normalized_sub_query_id, "tool": tool, "reason": reason}
     if params_json:
         try:
             item["params"] = json.loads(params_json)
@@ -2819,10 +2823,10 @@ async def plan_tool_mapping(
         if any(detail["type"] == "literal_error" for detail in _format_validation_details(exc)):
             return _planning_validation_error("invalid_tool", "tool must be one of web_search, web_fetch, web_map.")
         return _planning_validation_error("validation_error", "Invalid tool mapping input.", _format_validation_details(exc))
-    validation_error = _validate_sub_query_reference(session, sub_query_id, "sub_query_id")
+    validation_error = _validate_sub_query_reference(session, normalized_sub_query_id, "sub_query_id")
     if validation_error:
         return validation_error
-    validation_error = _validate_tool_mapping_item(session, sub_query_id, is_revision=is_revision)
+    validation_error = _validate_tool_mapping_item(session, normalized_sub_query_id, is_revision=is_revision)
     if validation_error:
         return validation_error
     return json.dumps(planning_engine.process_phase(
