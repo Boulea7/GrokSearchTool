@@ -98,7 +98,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `get_config_info` 当前可用于配置与连通性初检，并默认执行最小真实 `search/fetch` 探针；但还不是完整的端到端兼容性诊断
 - `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`；其中 `topic` 当前支持 `general` / `news` / `finance`，`time_range` 当前支持 `day` / `week` / `month` / `year`，并兼容 `d` / `w` / `m` / `y`
 - `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`
-- `get_sources` 当前会统一返回标准化 metadata；`rank` 当前会优先保留 Grok 主引用，再结合 `score`、来源身份清晰度与稳定去重顺序生成
+- `get_sources` 当前会统一返回标准化 metadata；`rank` 当前会按 `score`、来源身份清晰度与稳定去重顺序生成，不再对 Grok 引用额外偏置
 - `get_sources` 当前依赖当前服务器进程内的内存型 LRU 缓存；默认 TTL 约 1 小时、当前上限 256 个 session。`session_id` 是 shared-daemon、transient、非 durable、非 caller-bound handle，也不应被理解为 secret token；`session_id_not_found_or_expired` 当前统一覆盖进程重启、TTL 到期、缓存淘汰与不可读旧缓存 miss
 - `Config.get_config_info()` 只返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并新增 `connection_test`、`doctor`、`feature_readiness` 与最小真实探针结果；当前还支持 additive `detail=full|summary` 分级输出，默认仍为 `full`
 - `detail=summary` 当前只是同一次诊断结果的紧凑字段投影，不是额外的轻执行路径
@@ -118,6 +118,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `web_fetch` / `web_map` 当前会默认拒绝非 `http/https`、loopback、明显私有网络目标、单标签主机名、常见私网后缀主机（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`）、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把本地/私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`），避免工具被误用成内网抓取入口
 - 对通过静态 URL 边界检查的目标，`web_fetch` / `web_map` 当前还会在真正调用 provider 前继续复检可见的 redirect 目标
 - 当前可见 redirect 复检使用 `GET` 而不是 `HEAD`；对 presigned URL、one-shot token 或读取本身可能有副作用的链接，可能存在额外一次预检读取，这属于当前已知边界
+- 若 redirect 预检发生超时或请求级错误，当前实现会直接 fail-close，而不会默认继续调用下游 provider
 - 当前这层边界不会仅因为本机 DNS 把某个公网 hostname 解析到私网就直接拒绝请求，因此不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证
 - `split_answer_and_sources` / `standardize_sources` 当前会尽量避免把 generic 尾部链接列表误拆成真实信源，并会对明显敏感的 query 签名参数做最小遮罩
 - `standardize_sources` 当前会保留普通锚点（fragment）以避免不同页面段落引用被误合并；但 URL `userinfo` 与常见签名参数会被遮罩

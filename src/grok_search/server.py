@@ -596,8 +596,10 @@ async def _preflight_redirect_targets(url: str, *, max_redirects: int = 5) -> st
         try:
             async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(current_url, timeout=5.0)) as client:
                 response = await client.get(current_url, headers={"Accept": "*/*"})
-        except Exception:
-            return None
+        except httpx.TimeoutException:
+            return "目标 URL 重定向预检超时"
+        except httpx.RequestError:
+            return "目标 URL 重定向预检失败"
 
         location = (response.headers.get("location") or "").strip()
         if response.status_code not in {301, 302, 303, 307, 308} or not location:
@@ -1429,7 +1431,7 @@ def _summarize_doctor_status(doctor_status: str) -> str:
 
 
 def _httpx_client_kwargs_for_url(url: str, *, timeout: float) -> dict:
-    host = (urlparse(url).hostname or "").lower()
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
     kwargs = {"timeout": timeout}
     is_loopback = host == "localhost"
     if not is_loopback:

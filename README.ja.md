@@ -148,6 +148,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch` / `web_map` は、非 `http/https`、loopback、明らかな private network target、単一ラベル host、`.internal` / `.local` / `.lan` / `.home` / `.corp` のような代表的な private suffix host、さらにローカル/私用 IP を公開 DNS 名に埋め込む alias（`nip.io` / `xip.io` / `sslip.io`）も既定で拒否します。
 - 静的な URL 検査を通過した後も、`web_fetch` / `web_map` は provider 呼び出し前に可視な redirect 先を再検査します。
 - 現在この可視 redirect 再検査は `HEAD` ではなく `GET` を使います。presigned URL、one-shot token、読み取り自体に副作用があるリンクでは、追加の事前取得が起き得る点を既知の境界として扱ってください。
+- redirect の事前検査で timeout または request-level error が起きた場合、現在の実装は provider 呼び出しを既定で通さず、その場で fail-close します。
 - この境界は、ローカル DNS が公開ホスト風の名前を私用アドレスへ解決した場合まで強制的には拒否しないため、split-horizon やローカル DNS 汚染に対する強保証とはみなせません。
 
 ### 最小 smoke check
