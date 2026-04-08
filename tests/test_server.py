@@ -253,11 +253,81 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_summary_and_full_run_the_same_probe_set(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    calls = []
+
+    async def fake_probe_json_endpoint(check_id, method, url, headers, *, json_body=None, timeout=10.0):
+        calls.append(("json", check_id, method, url))
+        if check_id == "grok_models":
+            return {
+                "check_id": check_id,
+                "status": "ok",
+                "message": "ok",
+                "data": {"data": [{"id": "grok-4.1-fast"}]},
+            }
+        if check_id == "tavily_extract":
+            return {
+                "check_id": check_id,
+                "status": "ok",
+                "message": "ok",
+                "data": {"results": [{"raw_content": "ok"}]},
+            }
+        if check_id == "tavily_map":
+            return {
+                "check_id": check_id,
+                "status": "ok",
+                "message": "ok",
+                "data": {"results": ["https://example.com"]},
+            }
+        if check_id == "firecrawl_scrape":
+            return {
+                "check_id": check_id,
+                "status": "ok",
+                "message": "ok",
+                "data": {"data": {"markdown": "# ok"}},
+            }
+        raise AssertionError(f"Unexpected check_id: {check_id}")
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        calls.append(("search_probe", model))
+        return {"check_id": "grok_search_probe", "status": "ok", "message": "ok"}
+
+    async def fake_probe_web_fetch():
+        calls.append(("fetch_probe",))
+        return {"check_id": "web_fetch_probe", "status": "ok", "message": "ok", "provider": "tavily"}
+
+    monkeypatch.setattr(server, "_probe_json_endpoint", fake_probe_json_endpoint)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+    monkeypatch.setattr(server, "_probe_web_fetch", fake_probe_web_fetch)
+
+    await server.get_config_info("summary")
+    summary_calls = list(calls)
+    calls.clear()
+
+    await server.get_config_info("full")
+    full_calls = list(calls)
+
+    assert summary_calls == full_calls
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_rejects_unknown_detail_mode():
     payload = json.loads(await server.get_config_info("verbose"))
 
     assert payload["error"] == "invalid_detail"
     assert "detail" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_tool_description_allows_clear_single_hop_direct_use():
+    tool = await server.mcp.get_tool("web_search")
+    description = (tool.description or "").lower()
+
+    assert "plan_intent tool" not in description
+    assert "single-hop" in description
+    assert "directly" in description
 
 
 @pytest.mark.asyncio
@@ -777,6 +847,39 @@ async def test_get_config_info_ignores_client_specific_toggle_in_overall_doctor_
 
     assert payload["feature_readiness"]["toggle_builtin_tools"]["status"] == "not_ready"
     assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
+    assert payload["doctor"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_ignores_transient_get_sources_partial_ready_in_overall_doctor_status(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setattr(server, "_SOURCES_CACHE", server.SourcesCache(max_size=32))
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
+    assert payload["feature_readiness"]["get_sources"]["transient"] is True
     assert payload["doctor"]["status"] == "ok"
 
 
