@@ -100,9 +100,12 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`
 - `get_sources` 当前会统一返回标准化 metadata；`rank` 当前会按 `score`、来源身份清晰度与稳定去重顺序生成，不再对 Grok 引用额外偏置
 - `standardize_sources` 当前会在去重时规范化 URL 的 scheme/host 大小写，因此同一页面的 mixed-case 变体可能折叠为单个 source；这会影响最终的 `sources_count` 与 `rank`
+- `standardize_sources` 当前不会把显式默认端口（如 `:443` / `:80`）与隐式默认端口 URL 自动折叠；如需调整该语义，应先视为明确 contract change 并补回归测试与文档
 - `get_sources` 当前依赖当前服务器进程内的内存型 LRU 缓存；默认 TTL 约 1 小时、当前上限 256 个 session。`session_id` 是 shared-daemon、transient、非 durable、非 caller-bound handle，也不应被理解为 secret token；`session_id_not_found_or_expired` 当前统一覆盖进程重启、TTL 到期、缓存淘汰与不可读旧缓存 miss
 - `Config.get_config_info()` 只返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并新增 `connection_test`、`doctor`、`feature_readiness` 与最小真实探针结果；当前还支持 additive `detail=full|summary` 分级输出，默认仍为 `full`
 - `detail=summary` 当前只是同一次诊断结果的紧凑字段投影，不是额外的轻执行路径
+- `detail=summary` 当前应保留 `Config.get_config_info()` 返回的全部基础配置快照键；新增基础字段时，不应只出现在 `full`
+- planning engine 当前会先规范化传入的 `id` / `sub_query_id` 再做 duplicate guard，避免空白包裹的重复 ID 绕过校验
 - `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
 - `feature_readiness.get_sources` 当前只有在运行中进程里至少存在一个非 error 的可读取 source session 时才会显示 `ready`；若缓存里只有失败搜索留下的 session，则应保持 `partial_ready`
 - `feature_readiness.get_sources` 属于 `transient` readiness 信号；当前不应仅因其为 `partial_ready` 就拉低 overall doctor

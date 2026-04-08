@@ -145,7 +145,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch`、`web_map`、および Tavily ベースの補助 `web_search` は、provider の全ネイティブ API ではなく、厳選した subset のみを公開します。
 - `web_fetch` が返すのは抽出後の Markdown テキストであり、provider の完全な構造化 raw payload ではありません。
 - Tavily `web_map` は外部ドメインの URL を含む場合があります。サイト内に近い map が必要な場合は、`instructions` と返却結果の後処理で絞り込んでください。
-- `web_fetch` / `web_map` は、非 `http/https`、loopback、明らかな private network target、単一ラベル host、`.internal` / `.local` / `.lan` / `.home` / `.corp` のような代表的な private suffix host、さらにローカル/私用 IP を公開 DNS 名に埋め込む alias（`nip.io` / `xip.io` / `sslip.io`）も既定で拒否します。
+- `web_fetch` / `web_map` は、非 `http/https`、loopback、明らかな private network target、単一ラベル host、`.internal` / `.local` / `.lan` / `.home` / `.corp` のような代表的な private suffix host、`localtest.me` / `lvh.me` のような loopback helper domain、さらにローカル/私用 IP を公開 DNS 名に埋め込む alias（`nip.io` / `xip.io` / `sslip.io`）も既定で拒否します。
 - 静的な URL 検査を通過した後も、`web_fetch` / `web_map` は provider 呼び出し前に可視な redirect 先を再検査します。
 - 現在この可視 redirect 再検査は `HEAD` ではなく `GET` を使います。presigned URL、one-shot token、読み取り自体に副作用があるリンクでは、追加の事前取得が起き得る点を既知の境界として扱ってください。
 - redirect の事前検査で timeout または request-level error が起きた場合、現在の実装はその段階を `skipped_due_to_error` として扱います。`web_fetch` / `web_map` は現状では下流 provider 呼び出しを継続します。
@@ -168,8 +168,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `feature_readiness.web_fetch.providers` には provider 単位の状態が含まれ、`verified_path` は実 fetch probe が通った backend を示します。skip された provider には `skipped_reason` が付く場合があります。
 - `feature_readiness.get_sources` が `ready` になるのは、現在のプロセス内に少なくとも 1 つの非 error で読み出し可能な source session がある場合だけです。失敗検索だけが残っている場合は `partial_ready` のままです。
 - API Key はマスクされますが、診断ペイロードにはローカル絶対パス、endpoint/hostname、短い upstream エラー要約が残る場合があります。外部共有前に確認してください。
+- `get_sources` が成功したときは、常に `session_id`、`sources`、`sources_count`、`search_status`、`search_error`、`source_state` を返します。`session_id` が欠落または期限切れのときだけ `error=session_id_not_found_or_expired` が追加されます。
 - `get_sources` は現在のサーバープロセス内にあるメモリ型 LRU キャッシュ（既定 TTL は約 1 時間、上限 256 session）を参照します。`session_id` は shared-daemon transient handle であり、durable でも caller-bound でも secret token でもありません。`session_id_not_found_or_expired` はプロセス再起動、TTL 切れ、eviction、読み出せない旧キャッシュ miss をまとめて表します。
-- `get_sources` の `rank` は現在 `score`、source identity の明確さ、安定した dedupe 順に従い、Grok 由来の引用へ追加の優先度は与えません。`standardize_sources` は dedupe の際に scheme/host の大文字小文字差を正規化するため、同じページの mixed-case variant は 1 件に畳み込まれる場合があります。その一方で安全な fragment は保持し、URL の `userinfo` と代表的な署名パラメータは引き続き除去・マスクします。
+- `sources_count` は現在、標準化・重複排除・フィルタ後に最終的にキャッシュへ書き込まれた source 数を表し、upstream の生 citation 件数そのものではありません。
+- `get_sources` の `rank` は現在 `score`、source identity の明確さ、安定した dedupe 順に従い、Grok 由来の引用へ追加の優先度は与えません。`standardize_sources` は dedupe の際に scheme/host の大文字小文字差を正規化するため、同じページの mixed-case variant は 1 件に畳み込まれる場合があります。その一方で安全な fragment は保持し、URL の `userinfo` と代表的な署名パラメータは引き続き除去・マスクします。明示的な既定ポート（`:443` / `:80`）は現時点では保持され、暗黙の既定ポート URL と自動では畳み込まれません。
 
 ## Companion Skill
 
