@@ -5,6 +5,7 @@ import json
 import re
 import secrets
 import time
+from collections.abc import Mapping
 from collections import OrderedDict
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
@@ -173,7 +174,7 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
     standardized_by_url: OrderedDict[str, dict] = OrderedDict()
 
     for index, item in enumerate(sources or []):
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             continue
 
         raw_item = dict(item)
