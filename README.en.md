@@ -169,6 +169,7 @@ Notes:
 - loopback upstream endpoints are requested with `trust_env=False`, which also bypasses `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` and `SSL_CERT_FILE` / `SSL_CERT_DIR` for that request
 - `web_fetch` and `web_map` reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, and common public DNS aliases that encode local/private IPs
 - after the static URL check passes, `web_fetch` and `web_map` also re-check visible redirect targets before dispatching the provider call
+- this boundary intentionally does not hard-block ordinary public-looking hostnames based only on local DNS answers, so it should not be treated as a strong guarantee against split-horizon or locally poisoned DNS resolution
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` expose a curated subset of provider options rather than the providers' full native API surfaces.
 - `web_fetch` returns extracted Markdown text, not the provider's full structured raw response payload.
@@ -215,6 +216,7 @@ Optional additive controls:
 - `exclude_domains`: Tavily denylist for supplemental search
 
 If supplemental search goes through Tavily, `max_results` is currently clamped to the provider's documented limit of `20`.
+These controls currently apply to Tavily-backed supplemental search only; if Tavily is unavailable or not selected for the supplemental path, the request may still succeed with warnings and the controls will not be fully enforced.
 
 `get_sources` returns standardized metadata including `provider`, `domain`, `score`, `retrieved_at`, and `rank`, and also returns:
 
@@ -222,6 +224,8 @@ If supplemental search goes through Tavily, `max_results` is currently clamped t
 - `search_error`
 - `source_state`
 - `error` when the `session_id` is missing or expired
+
+`get_sources` currently reads from an in-process memory-backed LRU cache on the running server. Session IDs are temporary and may expire after process restart, TTL expiry, or cache eviction.
 
 `rank` currently keeps Grok-origin citations ahead of supplemental sources, then sorts by `score`, source identity quality, and stable dedupe order.
 `standardize_sources` preserves ordinary URL fragments so section-level citations do not collapse together, while still removing URL userinfo and masking common signature/token parameters.

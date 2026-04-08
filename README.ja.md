@@ -144,6 +144,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - Tavily `web_map` は外部ドメインの URL を含む場合があります。サイト内に近い map が必要な場合は、`instructions` と返却結果の後処理で絞り込んでください。
 - `web_fetch` / `web_map` は、非 `http/https`、loopback、明らかな private network target、単一ラベル host、`.internal` / `.local` / `.lan` / `.home` / `.corp` のような代表的な private suffix host、さらにローカル/私用 IP を公開 DNS 名に埋め込む alias（`nip.io` / `xip.io` / `sslip.io`）も既定で拒否します。
 - 静的な URL 検査を通過した後も、`web_fetch` / `web_map` は provider 呼び出し前に可視な redirect 先を再検査します。
+- この境界は、ローカル DNS が公開ホスト風の名前を私用アドレスへ解決した場合まで強制的には拒否しないため、split-horizon やローカル DNS 汚染に対する強保証とはみなせません。
 
 ### 最小 smoke check
 
@@ -158,6 +159,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 - `doctor.recommendations_detail` は `check_id` / feature に紐づく構造化された修復ヒントです。
 - `feature_readiness.web_fetch.providers` には provider 単位の状態が含まれ、`verified_path` は実 fetch probe が通った backend を示します。skip された provider には `skipped_reason` が付く場合があります。
+- API Key はマスクされますが、診断ペイロードにはローカル絶対パス、endpoint/hostname、短い upstream エラー要約が残る場合があります。外部共有前に確認してください。
+- `get_sources` は現在のサーバープロセス内にあるメモリ型 LRU キャッシュ（既定 TTL は約 1 時間、上限 256 session）を参照します。プロセス再起動、TTL 切れ、eviction 後は `session_id` が無効になります。
+- `get_sources` の `rank` は現在 Grok 由来の引用を優先し、安全な fragment は保持しつつ、URL の `userinfo` と代表的な署名パラメータは除去・マスクします。
 
 ## Companion Skill
 

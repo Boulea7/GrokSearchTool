@@ -280,11 +280,12 @@ claude mcp list
 3. 若需要引用核对，再调用 `get_sources`
 4. 配置了 Tavily 或 Firecrawl 后再验证 `web_fetch`；仅在配置并启用 Tavily 后再验证 `web_map`
 
-显示连接成功后，我们**十分推荐**在 Claude 对话中输入
+若你使用的是 Claude Code，且希望优先使用本 MCP 的搜索实现，可额外调用：
+```text
+调用 grok-search toggle_builtin_tools，关闭 Claude Code 的 built-in WebSearch 和 WebFetch tools
 ```
-调用 grok-search toggle_builtin_tools，关闭Claude Code's built-in WebSearch and WebFetch tools
-```
-工具将自动修改**项目级** `.claude/settings.json` 的 `permissions.deny`，一键禁用 Claude Code 官方的 WebSearch 和 WebFetch，从而迫使claude code调用本项目实现搜索！
+
+该工具会修改**项目级** `.claude/settings.json` 的 `permissions.deny`，以项目级 deny 规则收敛 Claude Code 内建网页工具的可用性。它只对 Claude Code 项目设置生效，不应被理解为其他 host 的通用能力，也不保证所有搜索路径都会被强制改写。
 
 
 
@@ -297,7 +298,7 @@ claude mcp list
 
 通过 Grok API 执行 AI 驱动的网络搜索，默认仅返回 Grok 的回答正文，并返回 `session_id` 以便后续获取信源。
 
-`web_search` 输出不展开完整信源，仅返回 `sources_count` 与结构化状态字段；信源会按 `session_id` 缓存在服务端，可用 `get_sources` 拉取。
+`web_search` 输出不展开完整信源，仅返回 `sources_count` 与结构化状态字段；信源会按 `session_id` 暂存于当前服务器进程内的内存型 LRU 缓存中，可用 `get_sources` 拉取。
 
 默认推荐对非显而易见的单跳任务先走 `plan_* -> web_search`；如果查询本身已经足够明确、低歧义，且 planning 只会增加摩擦，则可直接调用 `web_search`。
 
@@ -313,7 +314,7 @@ claude mcp list
 | `exclude_domains` | string[] | 否 | `[]` | Tavily 补充搜索黑名单域名 |
 
 默认会注入本地时间上下文，以提升时效性搜索的准确度；可通过 `GROK_TIME_CONTEXT_MODE=always|auto|never` 调整。
-若补充搜索走 Tavily，`max_results` 当前会自动收敛到 provider 官方上限 `20`。
+若补充搜索走 Tavily，`max_results` 当前会自动收敛到 Tavily 文档给出的上限 `20`。
 
 返回值（结构化字典）：
 - `session_id`: 本次查询的会话 ID
@@ -324,9 +325,14 @@ claude mcp list
 - `warnings`: 非致命告警列表；例如 Tavily 不可用时，域名过滤和时间范围不会真正作用于补充搜索
 - `error`: 稳定的机器可读错误码；无错误时为 `null`
 
+说明：
+- `topic`、`time_range`、`include_domains`、`exclude_domains` 当前是 Tavily-backed supplemental search 的能力；如果本次请求没有实际走 Tavily 补充搜索，主请求仍可继续执行，但这些控制项不会真正生效，并会通过 `warnings` 或 `partial` 状态体现。
+
 ### `get_sources` — 获取信源
 
 通过 `session_id` 获取对应 `web_search` 的全部信源。
+
+当前 `get_sources` 使用的是当前服务器进程内的内存型 LRU 缓存：默认 TTL 约 1 小时、当前上限 256 个 session。进程重启、TTL 到期或缓存淘汰后，先前的 `session_id` 会失效。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -352,8 +358,9 @@ claude mcp list
 说明：
 - 当前 `web_fetch` / `web_map` / Tavily supplemental `web_search` 只暴露 provider 能力的一个受控子集，不等同于 Tavily / Firecrawl 全量原生参数面。
 - `web_fetch` 返回的是提取后的 Markdown 文本，不会透传 provider 的原始结构化响应字段。
-- `web_fetch` / `web_map` 默认拒绝非 `http/https`、loopback、明显私网目标、单标签主机名、常见私网后缀主机（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`），以及常见把私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`）。
+- `web_fetch` / `web_map` 默认拒绝非 `http/https`、loopback、明显私网目标、单标签主机名、常见私网后缀主机（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`）、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`）。
 - 对通过静态校验的目标，`web_fetch` / `web_map` 还会在真正调用 provider 前继续复检可见的 redirect 目标。
+- 当前实现为了避免误杀普通公网 hostname，不会因为本机 DNS 把某个公网域名解析到私网结果就直接拒绝请求；因此这层边界不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -364,7 +371,7 @@ claude mcp list
 通过 Tavily Map API 遍历网站结构，发现 URL 并生成站点地图。
 
 说明：
-- Tavily Map 默认可能返回外部域名链接；若你需要更接近站内 sitemap 的结果，请结合 `instructions` 收紧范围，并按返回结果自行过滤。当前文档中的这条说明对应 Tavily 默认 `allow_external=true` 的行为。
+- Tavily Map 默认可能返回外部域名链接；若你需要更接近站内 sitemap 的结果，请结合 `instructions` 收紧范围，并按返回结果自行过滤。当前文档中的这条说明对应 Tavily 文档中 `allow_external=true` 的默认行为，本封装暂未直接暴露该开关。
 - 默认会拒绝非 `http/https`、loopback、明显私有网络目标，并在调用 Tavily 前继续做可见 redirect 目标复检。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
@@ -406,7 +413,7 @@ claude mcp list
 |------|------|------|--------|------|
 | `action` | string | 否 | `"status"` | `"on"` 禁用官方工具 / `"off"` 启用官方工具 / `"status"` 查看状态 |
 
-修改项目级 `.claude/settings.json` 的 `permissions.deny`，一键禁用 Claude Code 官方的 WebSearch 和 WebFetch。
+通过修改项目级 `.claude/settings.json` 的 `permissions.deny`，为 Claude Code 添加或移除内建网页工具的 deny 规则。
 
 ### `plan_intent` / `plan_complexity` / `plan_sub_query` / `plan_search_term` / `plan_tool_mapping` / `plan_execution`
 
@@ -426,7 +433,7 @@ A: Grok（`GROK_API_URL` + `GROK_API_KEY`）为必填，提供核心搜索能力
 <summary>
 Q: Grok API 地址需要什么格式？
 </summary>
-A: 需要 OpenAI 兼容格式的 API 地址（支持 `/chat/completions` 和 `/models` 端点）。如使用官方 Grok，需通过兼容 OpenAI 格式的镜像站访问。
+A: 需要 OpenAI 兼容格式的 API 地址，并确保 `/chat/completions` 与 `/models` 端点可用。代码层并不要求它必须是“官方”还是“镜像/中转”。
 </details>
 
 <details>
