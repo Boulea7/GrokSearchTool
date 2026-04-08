@@ -460,6 +460,11 @@ class GrokSearchProvider(BaseSearchProvider):
                         event_data_lines.clear()
                     continue
                 event_data_lines.append(event_payload)
+                continue
+            if event_data_lines:
+                process_event("\n".join(event_data_lines))
+                event_data_lines.clear()
+            process_event(stripped)
 
         if event_data_lines:
             process_event("\n".join(event_data_lines))
