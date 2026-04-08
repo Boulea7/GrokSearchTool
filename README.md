@@ -336,12 +336,9 @@ claude mcp list
 | `session_id` | string | 是 | `web_search` 返回的 `session_id` |
 
 返回值（结构化字典）：
-- `session_id`
-- `sources_count`
-- `sources`: 信源列表；每项至少包含 `title`、`url`、`provider`、`source_type`、`snippet`、`domain`、`score`、`published_at`、`retrieved_at`、`rank`
-- `search_status`: 原始 `web_search` 的状态，便于区分成功但无信源、部分成功和失败
-- `search_error`: 原始 `web_search` 的机器可读错误码；无错误时为 `null`
-- `source_state`: `available` / `empty` / `unavailable_due_to_search_error`
+- 成功时返回 `session_id`、`sources_count`、`sources`；其中每个 source 至少包含 `title`、`url`、`provider`、`source_type`、`snippet`、`domain`、`score`、`published_at`、`retrieved_at`、`rank`
+- 成功时还会返回 `search_status`、`search_error`、`source_state`，用于区分成功但无信源、部分成功和失败
+- miss 时返回 `session_id`、`sources=[]`、`sources_count=0`
 - `error`: 仅在 `session_id` 缺失或过期时返回，例如 `session_id_not_found_or_expired`
 
 说明：

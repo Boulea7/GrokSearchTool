@@ -62,12 +62,8 @@ uv run --with pytest --with pytest-asyncio pytest -q
 
 返回 `dict`：
 
-- `session_id`
-- `sources`
-- `sources_count`
-- `search_status`
-- `search_error`
-- `source_state`
+- 成功时返回：`session_id`、`sources`、`sources_count`、`search_status`、`search_error`、`source_state`
+- miss 时返回：`session_id`、`sources=[]`、`sources_count=0`
 - `error`：仅在 `session_id` 缺失或过期时返回
 
 ## 文档政策
