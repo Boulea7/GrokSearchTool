@@ -253,3 +253,16 @@ def test_get_config_info_tolerates_invalid_port_in_masked_urls(monkeypatch):
     info = config.get_config_info()
 
     assert info["GROK_API_URL"] == "https://api.example.com:abc/v1?token=***"
+
+
+def test_config_get_config_info_excludes_server_only_diagnostic_fields(monkeypatch):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "sk-secret-value")
+
+    info = config.get_config_info()
+
+    assert "connection_test" not in info
+    assert "doctor" not in info
+    assert "feature_readiness" not in info

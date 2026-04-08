@@ -152,6 +152,11 @@ class SourcesCache:
             self._purge_expired_locked()
             return len(self._cache)
 
+    async def snapshot(self) -> list[object]:
+        async with self._lock:
+            self._purge_expired_locked()
+            return [value for _, value in self._cache.values()]
+
 
 def merge_sources(*source_lists: list[dict]) -> list[dict]:
     seen: set[str] = set()

@@ -1694,7 +1694,19 @@ def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> di
     return {"status": "degraded", "message": check["message"]}
 
 
-def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> dict:
+def _has_readable_source_session(cache_entries: list[object]) -> bool:
+    for entry in cache_entries:
+        normalized_entry = _normalize_sources_cache_entry(entry)
+        if normalized_entry and normalized_entry["search_status"] != "error":
+            return True
+    return False
+
+
+def _build_feature_readiness(
+    checks: list[dict],
+    *,
+    has_readable_source_session: bool = False,
+) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
     grok_models = checks_by_id["grok_models"]
@@ -1781,7 +1793,7 @@ def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> 
                 "message": "当前进程内已存在可读取的 source session 缓存。",
                 "transient": True,
             }
-            if source_cache_size > 0
+            if has_readable_source_session
             else {
                 "status": "partial_ready" if web_search_status != "not_ready" else "not_ready",
                 "message": "接口可用，但当前进程内尚无可读取的 source session；需先执行成功的 web_search。",
@@ -2212,7 +2224,11 @@ async def get_config_info(
         )
     )
 
-    feature_readiness = _build_feature_readiness(checks, source_cache_size=await _SOURCES_CACHE.size())
+    source_cache_entries = await _SOURCES_CACHE.snapshot()
+    feature_readiness = _build_feature_readiness(
+        checks,
+        has_readable_source_session=_has_readable_source_session(source_cache_entries),
+    )
     doctor = _build_doctor_payload(checks, feature_readiness, recommendations, recommendation_details)
     config_info["connection_test"] = _build_connection_test_from_models_check(grok_models)
     config_info["doctor"] = doctor
