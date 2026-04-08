@@ -96,6 +96,81 @@ class ProgressContext:
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_default_detail_keeps_full_payload(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = json.loads(await server.get_config_info())
+
+    assert "connection_test" in payload
+    assert "feature_readiness" in payload
+    assert "doctor" in payload
+    assert "checks" in payload["doctor"]
+    assert "recommendations_detail" in payload["doctor"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_summary_detail_returns_machine_readable_minimum(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = json.loads(await server.get_config_info("summary"))
+
+    assert "connection_test" in payload
+    assert "feature_readiness" in payload
+    assert payload["doctor"]["status"] == "ok"
+    assert "summary" in payload["doctor"]
+    assert "checks" not in payload["doctor"]
+    assert "recommendations_detail" not in payload["doctor"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_rejects_unknown_detail_mode():
+    payload = json.loads(await server.get_config_info("verbose"))
+
+    assert payload["error"] == "invalid_detail"
+    assert "detail" in payload["message"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_surfaces_http_redirect(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
