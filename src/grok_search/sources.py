@@ -203,9 +203,10 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
         raw_item["published_at"] = _normalize_optional_text(raw_item.get("published_at") or raw_item.get("published_date"))
         raw_item["retrieved_at"] = _normalize_optional_text(raw_item.get("retrieved_at")) or timestamp
         raw_item["_source_order"] = index
-        existing = standardized_by_url.get(url)
+        canonical_key = _canonicalize_source_dedupe_key(url)
+        existing = standardized_by_url.get(canonical_key)
         if existing is None or _should_replace_standardized_source(existing, raw_item):
-            standardized_by_url[url] = raw_item
+            standardized_by_url[canonical_key] = raw_item
 
     standardized = list(standardized_by_url.values())
     standardized.sort(key=_source_priority_key)
@@ -220,9 +221,7 @@ def _source_priority_key(item: dict) -> tuple:
     score = item.get("score")
     title = (item.get("title") or "").strip()
     description = (item.get("description") or "").strip()
-    provider = (item.get("provider") or "").strip().lower()
     return (
-        0 if provider == "grok" else 1,
         0 if score is not None else 1,
         -(score if isinstance(score, (int, float)) else 0.0),
         0 if title else 1,
@@ -633,6 +632,22 @@ def _normalize_url(value: Any) -> str:
         return _sanitize_url_for_output(url)
     except ValueError:
         return ""
+
+
+def _canonicalize_source_dedupe_key(url: str) -> str:
+    parsed = urlsplit(url)
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return url
+
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+
+    netloc = hostname
+    if parsed.port is not None:
+        netloc = f"{hostname}:{parsed.port}"
+
+    return urlunsplit((parsed.scheme.lower(), netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 def _normalize_text(value: Any) -> str:

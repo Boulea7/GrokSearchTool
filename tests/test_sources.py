@@ -278,6 +278,37 @@ def test_standardize_sources_accepts_mixed_case_http_scheme():
     ]
 
 
+def test_standardize_sources_deduplicates_mixed_case_scheme_and_host_variants():
+    sources = standardize_sources(
+        [
+            {"title": "Upper", "url": "HTTPS://Example.com/Guide"},
+            {
+                "title": "Richer Lower",
+                "url": "https://example.com/Guide",
+                "description": "More context",
+                "score": 0.9,
+            },
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Richer Lower",
+            "url": "https://example.com/Guide",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "More context",
+            "snippet": "More context",
+            "domain": "example.com",
+            "score": 0.9,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
 def test_standardize_sources_skips_invalid_or_missing_urls():
     sources = standardize_sources(
         [
@@ -428,19 +459,6 @@ def test_standardize_sources_applies_defaults_and_ranks():
 
     assert sources == [
         {
-            "title": "OpenAI",
-            "url": "https://openai.com/",
-            "provider": "grok",
-            "source_type": "web_page",
-            "description": "",
-            "snippet": "",
-            "domain": "openai.com",
-            "score": None,
-            "published_at": None,
-            "retrieved_at": "2026-04-05T12:34:56Z",
-            "rank": 1,
-        },
-        {
             "title": "Docs",
             "url": "https://docs.example.com/guide",
             "provider": "firecrawl",
@@ -448,6 +466,19 @@ def test_standardize_sources_applies_defaults_and_ranks():
             "description": "Guide content",
             "snippet": "Guide content",
             "domain": "docs.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        },
+        {
+            "title": "OpenAI",
+            "url": "https://openai.com/",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "openai.com",
             "score": None,
             "published_at": None,
             "retrieved_at": "2026-04-05T12:34:56Z",
@@ -523,6 +554,22 @@ def test_standardize_sources_prefers_higher_scores_and_clearer_identity():
         "https://example.com/untitled",
     ]
     assert [item["rank"] for item in sources] == [1, 2, 3, 4]
+
+
+def test_standardize_sources_does_not_prioritize_grok_over_higher_scored_sources():
+    sources = standardize_sources(
+        [
+            {"title": "Grok Citation", "url": "https://a.example.com", "provider": "grok"},
+            {"title": "Tavily Hit", "url": "https://b.example.com", "provider": "tavily", "score": 0.9},
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert [item["url"] for item in sources] == [
+        "https://b.example.com",
+        "https://a.example.com",
+    ]
+    assert [item["rank"] for item in sources] == [1, 2]
 
 
 def test_standardize_sources_maps_legacy_alias_fields():
