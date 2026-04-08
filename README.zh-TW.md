@@ -127,7 +127,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `TAVILY_ENABLED` | 否 | 是否啟用 Tavily 路徑 |
 | `FIRECRAWL_API_KEY` | 否 | Firecrawl fallback Key，也可用於 supplemental `web_search` |
 | `FIRECRAWL_API_URL` | 否 | Firecrawl API 端點 |
-| `GROK_DEBUG` | 否 | 是否啟用除錯日誌 |
+| `GROK_DEBUG` | 否 | 是否啟用除錯日誌；同時控制 debug-only progress 與 `ctx.info()` 中間進度轉發 |
 | `GROK_LOG_LEVEL` | 否 | 日誌等級 |
 | `GROK_LOG_DIR` | 否 | 日誌目錄；`get_config_info` 會回傳解析後的執行期路徑 |
 | `GROK_OUTPUT_CLEANUP` | 否 | 是否啟用 `web_search` 輸出清洗 |
@@ -142,6 +142,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - 環境變數優先權按「鍵是否存在」判定：只要進程環境裡顯式設了某個鍵，即使值是空字串，也不會回落到專案 `.env.local` / `.env`。
 - `switch_model` 只會更新 `~/.config/grok-search/config.json` 的持久化層；若同時設了 `GROK_MODEL`，仍以環境變數為準。
 - `GROK_TIME_CONTEXT_MODE` 預設為 `always`，保持目前一律注入本地時間上下文的行為。
+- `GROK_DEBUG=false` 時，這類 helper progress log 不會寫入 logger，也不會透過 `ctx.info()` 對外轉發；僅在 `GROK_DEBUG=true` 時才作為 debug-only progress/debug signal 暴露。
 - 如需節省上下文，可將 `GROK_TIME_CONTEXT_MODE` 設為 `auto`（僅在明顯時效查詢或顯式時效控制下注入）或 `never`。
 
 說明：
@@ -158,6 +159,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - Tavily `web_map` 可能包含外部網域連結；若需要更接近站內 sitemap 的結果，請搭配 `instructions` 收斂並自行過濾。
 - `web_fetch` / `web_map` 預設會拒絕非 `http/https`、loopback、明顯私網目標、單標籤主機名、常見私網後綴主機（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`），以及常見把私網 IP 編進公開 DNS 名的 alias 形態（如 `nip.io` / `xip.io` / `sslip.io`）。
 - 對通過靜態檢查的目標，`web_fetch` / `web_map` 還會在真正呼叫 provider 前繼續複檢可見的 redirect 目標。
+- 目前這層可見 redirect 複檢使用 `GET` 而非 `HEAD`；對 presigned URL、one-shot token 或具有副作用的讀取型連結，可能存在額外一次預檢讀取，應視為已知邊界。
 - 這層邊界目前不會只因本機 DNS 將某個看似公開的 hostname 解析到私網就直接拒絕，因此不應被理解成對 split-horizon / 本地 DNS 私有解析的強保證。
 
 ### 最小 smoke check
@@ -172,9 +174,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 補充：
 
 - `doctor.recommendations_detail` 會提供和 `check_id` / feature 關聯的結構化修復建議。
+- `get_config_info` 現在支援可選 `detail="full" | "summary"`；預設仍為 `full`，`summary` 只保留基礎設定快照、`connection_test`、`doctor.status/summary/recommendations` 與 `feature_readiness`。
 - `feature_readiness.web_fetch.providers` 會附帶 provider 級狀態；`verified_path` 表示真實抓取探針實際打通的後端，未執行的 provider 可能帶有 `skipped_reason`。
 - 即使 API Key 已脫敏，診斷結果仍可能包含本機絕對路徑、endpoint/hostname 與精簡後的上游錯誤摘要；對外分享前請先複核。
-- `get_sources` 使用目前進程內的記憶體型 LRU 快取（預設 TTL 約 1 小時、上限 256 個 session）；進程重啟、TTL 到期或快取淘汰後，先前的 `session_id` 會失效。
+- `get_sources` 使用目前進程內的記憶體型 LRU 快取（預設 TTL 約 1 小時、上限 256 個 session）；`session_id` 是 transient handle，不是 durable、caller-bound capability。進程重啟、TTL 到期或快取淘汰後，先前的 `session_id` 會失效。
 - `get_sources` 回傳的 `rank` 目前會優先保留 Grok 主引用，並保留安全 fragment、剝離 URL `userinfo`、遮罩常見簽名參數。
 
 ## Companion Skill

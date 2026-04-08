@@ -59,15 +59,18 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `web_search.time_range` currently supports `day`, `week`, `month`, `year`, and normalizes aliases `d`, `w`, `m`, `y`
 - Tavily-backed supplemental search currently clamps `max_results` to Tavily's documented upper bound of `20`
 - `Config.get_config_info()` returns only the base config snapshot; the MCP tool `get_config_info` keeps that snapshot and adds `connection_test`, `doctor`, `feature_readiness`, and minimal real `search/fetch` probes
+- `get_config_info` now also supports additive `detail=full|summary` output levels; `full` remains the default and preserves the current payload shape
 - `connection_test` reflects `/models` reachability only; use `doctor` and `feature_readiness` to judge runtime readiness
 - `doctor.recommendations_detail` is an additive structured hint layer; clients that only read `recommendations` remain compatible
 - `feature_readiness.web_fetch.providers.verified_path` identifies the backend that passed the real fetch probe, and skipped providers may include `skipped_reason`
 - `get_config_info` is still not a full end-to-end compatibility guarantee
+- `GROK_DEBUG=false` suppresses helper progress logs entirely, including `ctx.info()` forwarding; these signals are intentionally debug-only
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` intentionally expose a curated subset of provider options rather than the providers' complete native API surfaces
 - Tavily `map` may include external-domain URLs unless callers further constrain and post-filter the crawl results; this reflects Tavily's documented default `allow_external=true` behavior, and this wrapper does not currently expose that flag directly
 - loopback upstream endpoints are requested with `trust_env=False`, which also bypasses proxy and local-CA environment variables for that request
 - `web_fetch` / `web_map` now reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, common loopback helper domains such as `localtest.me` / `lvh.me`, and common public DNS aliases that encode local/private IPs
 - after static URL validation passes, `web_fetch` / `web_map` also re-check visible redirect targets before dispatching the provider call
+- visible redirect re-checks currently use `GET` rather than `HEAD`, so presigned URLs, one-shot tokens, or read-side-effect links may incur an extra preflight read
 - this boundary does not provide a strong guarantee against split-horizon or locally poisoned DNS that resolves a public-looking hostname to a private target
 
 ## Feature Dependencies
@@ -76,7 +79,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 | --- | --- |
 | `plan_*` | none beyond a working MCP host |
 | `web_search` | `GROK_API_URL`, `GROK_API_KEY` |
-| `get_sources` | any previous `web_search` session ID from the current running server process; source sessions are stored in an in-memory LRU cache and can disappear after restart, TTL expiry, or eviction |
+| `get_sources` | any previous `web_search` session ID from the current running server process; source sessions are stored in an in-memory LRU cache, act as transient non-caller-bound handles, and can disappear after restart, TTL expiry, or eviction |
 | `web_fetch` | `FIRECRAWL_API_KEY`, or `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `web_map` | `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `toggle_builtin_tools` | Claude Code project layout |

@@ -33,6 +33,32 @@ async def test_log_info_forwards_ctx_when_debug_enabled():
     assert ctx.messages == ["debug message"]
 
 
+@pytest.mark.asyncio
+async def test_log_info_skips_logger_and_ctx_when_debug_disabled(monkeypatch):
+    ctx = DummyContext()
+    messages = []
+
+    monkeypatch.setattr(logger_module.logger, "info", lambda message: messages.append(message))
+
+    await log_info(ctx, "hidden message", is_debug=False)
+
+    assert messages == []
+    assert ctx.messages == []
+
+
+@pytest.mark.asyncio
+async def test_log_info_writes_logger_and_ctx_when_debug_enabled(monkeypatch):
+    ctx = DummyContext()
+    messages = []
+
+    monkeypatch.setattr(logger_module.logger, "info", lambda message: messages.append(message))
+
+    await log_info(ctx, "visible message", is_debug=True)
+
+    assert messages == ["visible message"]
+    assert ctx.messages == ["visible message"]
+
+
 def test_logger_falls_back_to_null_handler_when_file_handler_fails(monkeypatch):
     base_logger = logging.getLogger("grok_search")
     original_handlers = list(base_logger.handlers)

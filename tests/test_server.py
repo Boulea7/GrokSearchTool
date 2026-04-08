@@ -2520,6 +2520,40 @@ async def test_preflight_redirect_targets_returns_too_many_redirects(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_preflight_redirect_targets_uses_get_for_visible_redirect_checks(monkeypatch):
+    requested_urls = []
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            requested_urls.append(url)
+            if url.endswith("/start"):
+                response = httpx.Response(302, headers={"location": "/next"})
+            else:
+                response = httpx.Response(200)
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+
+    result = await server._preflight_redirect_targets("https://public.example.com/start")
+
+    assert result is None
+    assert requested_urls == [
+        "https://public.example.com/start",
+        "https://public.example.com/next",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_web_fetch_falls_back_when_tavily_reports_truncated_content(monkeypatch):
     async def fake_tavily(url):
         return None, "Tavily 提取结果疑似被截断"

@@ -230,7 +230,7 @@ claude mcp add-json grok-search --scope user '{
 | `TAVILY_ENABLED` | 否 | `true` | 是否启用 Tavily |
 | `FIRECRAWL_API_KEY` | 否 | - | Firecrawl API 密钥（用于 `web_fetch` 托底，也可用于 supplemental `web_search`） |
 | `FIRECRAWL_API_URL` | 否 | `https://api.firecrawl.dev/v2` | Firecrawl API 地址 |
-| `GROK_DEBUG` | 否 | `false` | 调试模式 |
+| `GROK_DEBUG` | 否 | `false` | 调试模式；同时控制 debug-only 进度日志与 `ctx.info()` 中间进度转发 |
 | `GROK_LOG_LEVEL` | 否 | `INFO` | 日志级别 |
 | `GROK_LOG_DIR` | 否 | `logs` | 日志目录；`get_config_info` 中展示的是解析后的运行时绝对路径 |
 | `GROK_OUTPUT_CLEANUP` | 否 | `true` | 是否启用 `web_search` 输出清洗 |
@@ -261,6 +261,7 @@ uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
 - `GROK_API_URL` 尽量写成 OpenAI 兼容根路径并显式带上 `/v1`
 - `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
 - 如需更省上下文，可将 `GROK_TIME_CONTEXT_MODE` 设为 `auto`（只在明显时效查询或显式时效控制下注入）或 `never`
+- `GROK_DEBUG=false` 时，`log_info()` 不会写入这类 helper 日志，也不会通过 `ctx.info()` 暴露中间进度；仅在 `GROK_DEBUG=true` 时转发 debug-only progress
 - 若 `content` 为空，先检查中转站是否真的返回了正文；若 `sources_count=0`，再检查是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
 - 若上游 endpoint 指向 `localhost` / `127.x` 等 loopback 地址，运行时会对该请求强制 `trust_env=False`，因此会一并绕过 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 以及 `SSL_CERT_FILE` / `SSL_CERT_DIR`
 
@@ -334,6 +335,8 @@ claude mcp list
 
 当前 `get_sources` 使用的是当前服务器进程内的内存型 LRU 缓存：默认 TTL 约 1 小时、当前上限 256 个 session。进程重启、TTL 到期或缓存淘汰后，先前的 `session_id` 会失效。
 
+`session_id` 当前只是运行中 server 进程里的 transient handle，不是 durable、caller-bound capability；不要把它理解为可长期保存或可跨进程复用的访问令牌。
+
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `session_id` | string | 是 | `web_search` 返回的 `session_id` |
@@ -360,6 +363,7 @@ claude mcp list
 - `web_fetch` 返回的是提取后的 Markdown 文本，不会透传 provider 的原始结构化响应字段。
 - `web_fetch` / `web_map` 默认拒绝非 `http/https`、loopback、明显私网目标、单标签主机名、常见私网后缀主机（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`）、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`）。
 - 对通过静态校验的目标，`web_fetch` / `web_map` 还会在真正调用 provider 前继续复检可见的 redirect 目标。
+- 当前可见 redirect 复检使用 `GET` 请求而不是 `HEAD`；对 presigned URL、one-shot token 或有副作用的读取型链接，这意味着可能存在额外一次预检读取，应视为已知边界。
 - 当前实现为了避免误杀普通公网 hostname，不会因为本机 DNS 把某个公网域名解析到私网结果就直接拒绝请求；因此这层边界不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证。
 
 | 参数 | 类型 | 必填 | 说明 |
@@ -385,7 +389,13 @@ claude mcp list
 
 ### `get_config_info` — 配置诊断
 
-无需参数。`Config.get_config_info()` 只负责返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并由 server 层补充诊断结果，返回：
+支持可选参数：
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `detail` | string | 否 | `"full"` | 返回级别：`"full"` 保留完整 doctor/probe 细节，`"summary"` 仅保留高频机器可读摘要 |
+
+`Config.get_config_info()` 只负责返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并由 server 层补充诊断结果，返回：
 
 - Grok `/models` 连通性与可用模型
 - Tavily / Firecrawl 的只读探测结果（仅在已配置时执行）
@@ -396,6 +406,7 @@ claude mcp list
 - `feature_readiness.web_fetch.providers`：provider 级状态，`verified_path` 表示真实抓取探针实际打通的后端；未执行的 provider 可能附带 `skipped_reason`
 
 注意：
+- `detail="full"` 保留完整 `doctor.checks`、`doctor.recommendations_detail` 和 provider/probe 细节；`detail="summary"` 只保留基础配置快照、`connection_test`、`doctor.status/summary/recommendations` 与 `feature_readiness`
 - 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query 也会做遮罩。但诊断结果仍可能包含本机绝对路径、endpoint/主机名或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
 
 ### `switch_model` — 模型切换

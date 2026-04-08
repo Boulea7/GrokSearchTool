@@ -99,13 +99,14 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`；其中 `topic` 当前支持 `general` / `news` / `finance`，`time_range` 当前支持 `day` / `week` / `month` / `year`，并兼容 `d` / `w` / `m` / `y`
 - `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`
 - `get_sources` 当前会统一返回标准化 metadata；`rank` 当前会优先保留 Grok 主引用，再结合 `score`、来源身份清晰度与稳定去重顺序生成
-- `get_sources` 当前依赖当前服务器进程内的内存型 LRU 缓存；默认 TTL 约 1 小时、当前上限 256 个 session。进程重启、TTL 到期或缓存淘汰后，旧 `session_id` 会失效
-- `Config.get_config_info()` 只返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并新增 `connection_test`、`doctor`、`feature_readiness` 与最小真实探针结果
+- `get_sources` 当前依赖当前服务器进程内的内存型 LRU 缓存；默认 TTL 约 1 小时、当前上限 256 个 session。`session_id` 是 transient、非 durable、非 caller-bound handle；进程重启、TTL 到期或缓存淘汰后会失效
+- `Config.get_config_info()` 只返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并新增 `connection_test`、`doctor`、`feature_readiness` 与最小真实探针结果；当前还支持 additive `detail=full|summary` 分级输出，默认仍为 `full`
 - `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
 - `doctor` 当前会保留字符串版 `recommendations`，并额外提供结构化 `recommendations_detail`
 - 即使 API Key 已脱敏，`get_config_info` / `doctor` 输出当前仍可能包含本机绝对路径、endpoint/hostname 与精简后的上游错误摘要；对外分享前应先复核
 - `feature_readiness.web_fetch` 当前会附带 provider 级细节，并在 `verified_path` 中标注真实抓取探针实际打通的后端；未执行的 provider 可能带有 `skipped_reason`
 - `feature_readiness.web_fetch` 当前应优先尊重真实 `web_fetch_probe` 的结果；即使单点 provider 探测通过，真实抓取探针失败时也应保持 `degraded`
+- `GROK_DEBUG=false` 时，`log_info()` 当前不会写这类 helper progress log，也不会通过 `ctx.info()` 对外转发中间进度；这些信号当前是 debug-only progress/debug signal
 - `web_fetch` 目前优先使用 Tavily extract，失败时回退到 Firecrawl scrape
 - Tavily supplemental search 当前会把 `max_results` 限制在 Tavily 文档给出的上限 `20`
 - `web_fetch` / `web_map` / Tavily 补充搜索当前只暴露 provider 能力的受控子集，不等同于 Tavily / Firecrawl 的全量原生 API
@@ -113,6 +114,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - 若上游 endpoint 指向 loopback，本地请求当前会强制 `trust_env=False`，因此也会绕过 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 与 `SSL_CERT_FILE` / `SSL_CERT_DIR`
 - `web_fetch` / `web_map` 当前会默认拒绝非 `http/https`、loopback、明显私有网络目标、单标签主机名、常见私网后缀主机（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`）、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把本地/私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`），避免工具被误用成内网抓取入口
 - 对通过静态 URL 边界检查的目标，`web_fetch` / `web_map` 当前还会在真正调用 provider 前继续复检可见的 redirect 目标
+- 当前可见 redirect 复检使用 `GET` 而不是 `HEAD`；对 presigned URL、one-shot token 或读取本身可能有副作用的链接，可能存在额外一次预检读取，这属于当前已知边界
 - 当前这层边界不会仅因为本机 DNS 把某个公网 hostname 解析到私网就直接拒绝请求，因此不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证
 - `split_answer_and_sources` / `standardize_sources` 当前会尽量避免把 generic 尾部链接列表误拆成真实信源，并会对明显敏感的 query 签名参数做最小遮罩
 - `standardize_sources` 当前会保留普通锚点（fragment）以避免不同页面段落引用被误合并；但 URL `userinfo` 与常见签名参数会被遮罩
