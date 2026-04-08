@@ -1,4 +1,5 @@
 import json
+from collections import UserDict
 from pathlib import Path
 
 import httpx
@@ -1844,6 +1845,44 @@ async def test_get_sources_standardizes_legacy_cached_sources_on_read():
             "source_type": "web_page",
             "snippet": "Legacy description",
             "domain": "legacy.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_standardizes_mapping_like_legacy_cached_sources_on_read():
+    session_id = "legacy-mapping-session"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        [
+            UserDict(
+                {
+                    "title": "Legacy Mapping",
+                    "url": "https://mapping.example.com/page",
+                    "description": "Mapping-based source",
+                }
+            )
+        ],
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["search_status"] == "ok"
+    assert cached["search_error"] is None
+    assert cached["source_state"] == "available"
+    assert cached["sources"] == [
+        {
+            "title": "Legacy Mapping",
+            "url": "https://mapping.example.com/page",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "Mapping-based source",
+            "snippet": "Mapping-based source",
+            "domain": "mapping.example.com",
             "score": None,
             "published_at": None,
             "retrieved_at": cached["sources"][0]["retrieved_at"],

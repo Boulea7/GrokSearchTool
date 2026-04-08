@@ -1,3 +1,5 @@
+from collections import UserDict
+
 import pytest
 
 from grok_search.sources import SourcesCache, new_session_id, sanitize_answer_text, split_answer_and_sources, standardize_sources
@@ -575,6 +577,37 @@ def test_standardize_sources_skips_malformed_legacy_items():
             "description": "",
             "snippet": "",
             "domain": "valid.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
+def test_standardize_sources_accepts_mapping_like_legacy_items():
+    sources = standardize_sources(
+        [
+            UserDict(
+                {
+                    "title": "Legacy Mapping",
+                    "url": "https://mapping.example.com/page",
+                    "description": "Mapping-based source",
+                }
+            )
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Legacy Mapping",
+            "url": "https://mapping.example.com/page",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "Mapping-based source",
+            "snippet": "Mapping-based source",
+            "domain": "mapping.example.com",
             "score": None,
             "published_at": None,
             "retrieved_at": "2026-04-05T12:34:56Z",
