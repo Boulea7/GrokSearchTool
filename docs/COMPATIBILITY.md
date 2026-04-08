@@ -46,7 +46,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 
 ## Provider Requirements
 
-- `GROK_API_URL` must be OpenAI-compatible and should include `/v1`
+- `GROK_API_URL` must be OpenAI-compatible and must include an explicit `/v1` suffix
 - model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.1-fast`
 - process env presence overrides project `.env.local` / `.env` fallback, even when the env value is explicitly empty
 - project env fallback accepts both `KEY=value` and optional `export KEY=value` lines
@@ -81,11 +81,13 @@ These hosts remain planned targets until remote transport and host-specific veri
 | `plan_*` | none beyond a working MCP host |
 | `web_search` | `GROK_API_URL`, `GROK_API_KEY` |
 | `get_sources` | any previous `web_search` session ID from the current running server process; source sessions are stored in an in-memory LRU cache, act as transient non-caller-bound handles, and can disappear after restart, TTL expiry, or eviction |
-
-`feature_readiness.get_sources` reports `ready` only when the running process already holds at least one readable non-error source session; failed-search-only cache entries keep it at `partial_ready`.
 | `web_fetch` | `FIRECRAWL_API_KEY`, or `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `web_map` | `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `toggle_builtin_tools` | Claude Code project layout |
+
+`get_sources` currently uses a process-local, shared-daemon, non-secret handle model: any holder of a valid `session_id` inside the same running server process can read the cached sources, and `session_id_not_found_or_expired` covers restart, TTL expiry, eviction, and unreadable legacy-cache miss cases.
+
+`feature_readiness.get_sources` reports `ready` only when the running process already holds at least one readable non-error source session; failed-search-only cache entries keep it at `partial_ready`. This is a `transient` readiness signal and does not lower the overall doctor status by itself.
 
 Supplemental `web_search` controls such as `topic`, `time_range`, and domain filters currently apply to Tavily-backed supplemental search only. If Tavily is unavailable or not used for the supplemental path, the request may still run with warnings, but those controls will not be fully enforced.
 

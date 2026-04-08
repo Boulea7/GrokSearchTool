@@ -100,15 +100,9 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
-If you use a project-level `.codex/config.toml`, avoid committing real keys into the repository; this repo now ignores `.codex/` by default. For local development, prefer keeping secrets in an ignored `.env.local` and loading them before running commands:
+If you use a project-level `.codex/config.toml`, avoid committing real keys into the repository; this repo now ignores `.codex/` by default. For local development, prefer keeping secrets in an ignored `.env.local`.
 
-```bash
-set -a
-source ./.env.local
-set +a
-```
-
-Project env fallback currently accepts both plain dotenv lines like `KEY=value` and optional `export KEY=value` prefixes.
+`grok-search` automatically resolves configuration as `process env -> project .env.local -> project .env -> persisted config -> code defaults`, so you usually do not need to `source` `.env.local` as shell code. Project env fallback currently accepts both plain dotenv lines like `KEY=value` and optional `export KEY=value` prefixes; if you must export variables into the current shell, use an explicit shell-safe workflow instead of sourcing the file blindly.
 
 If you plan to call `toggle_builtin_tools`, also avoid committing project-level `.claude/settings.json`; this repo now ignores `.claude/` by default.
 
@@ -136,7 +130,7 @@ Create a `STDIO` MCP server entry with the same core fields:
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint, ideally with `/v1` |
+| `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint; the value must include an explicit `/v1` suffix |
 | `GROK_API_KEY` | Yes | Grok API key |
 | `GROK_MODEL` | No | Default model; see the precedence notes below |
 | `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |
@@ -202,6 +196,7 @@ The `/models` connection test uses a 10-second timeout; additional real `web_sea
 `detail="summary"` keeps the base config snapshot, `connection_test`, `doctor.status` / `doctor.summary` / `doctor.recommendations`, and `feature_readiness`, while omitting the large `doctor.checks` array and probe-detail fields.
 `detail="summary"` is currently a compact projection of the same diagnostic run, not a separate lightweight execution path.
 `feature_readiness.get_sources` only reports `ready` when the current process already holds at least one readable non-error source session; error-only cached sessions keep it at `partial_ready`.
+`ready` means the capability is verified, `degraded` means it exists but probes or partial dependencies are unhealthy, `not_ready` means prerequisites are missing, and `partial_ready` means the interface exists but still depends on transient runtime state; `transient` and `client_specific` items do not lower the overall doctor status on their own.
 
 Even with API keys masked, the diagnostic payload may still include local absolute paths, endpoint/hostname details, and short upstream error summaries. Sensitive query tokens, bearer values, and similar obvious secrets are masked, but you should still review the payload before sharing it externally.
 
@@ -231,7 +226,7 @@ These controls currently apply to Tavily-backed supplemental search only; if Tav
 - `source_state`
 - `error` when the `session_id` is missing or expired
 
-`get_sources` currently reads from an in-process memory-backed LRU cache on the running server. Session IDs are temporary handles rather than durable, caller-bound capabilities, and may expire after process restart, TTL expiry, or cache eviction.
+`get_sources` currently reads from an in-process memory-backed LRU cache on the running server. Session IDs are shared-daemon transient handles rather than durable, caller-bound capabilities or secret tokens, and `session_id_not_found_or_expired` covers restart, TTL expiry, eviction, and unreadable legacy-cache misses.
 
 `rank` currently keeps Grok-origin citations ahead of supplemental sources, then sorts by `score`, source identity quality, and stable dedupe order.
 `standardize_sources` preserves ordinary URL fragments so section-level citations do not collapse together, while still removing URL userinfo and masking common signature/token parameters.

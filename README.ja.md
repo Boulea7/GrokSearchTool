@@ -80,7 +80,9 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
-プロジェクトレベルの `.codex/config.toml` を使う場合は、実際のキーをリポジトリにコミットしないでください。このリポジトリは `.codex/` を既定で無視します。ローカル開発では、機密値を無視対象の `.env.local` に置き、実行前に `source ./.env.local` する運用を推奨します。プロジェクト環境変数のフォールバックは、`KEY=value` とオプションの `export KEY=value` の両方に対応します。`toggle_builtin_tools` を使う場合も、プロジェクトレベルの `.claude/settings.json` はコミットしないでください。このリポジトリは `.claude/` も既定で無視します。
+プロジェクトレベルの `.codex/config.toml` を使う場合は、実際のキーをリポジトリにコミットしないでください。このリポジトリは `.codex/` を既定で無視します。ローカル開発では、機密値を無視対象の `.env.local` に置く運用を推奨します。
+
+`grok-search` は `process env -> project .env.local -> project .env -> persisted config -> code defaults` の順で設定を自動解決するため、通常は `.env.local` を shell script として `source` する必要はありません。プロジェクト環境変数のフォールバックは `KEY=value` とオプションの `export KEY=value` の両方に対応します。現在の shell に変数を入れる必要がある場合は、blind に `source` せず shell-safe な明示的 export を使ってください。`toggle_builtin_tools` を使う場合も、プロジェクトレベルの `.claude/settings.json` はコミットしないでください。このリポジトリは `.claude/` も既定で無視します。
 
 #### Cherry Studio
 
@@ -104,7 +106,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 | 変数 | 必須 | 説明 |
 | --- | --- | --- |
-| `GROK_API_URL` | Yes | OpenAI 互換 Grok エンドポイント。`/v1` を明示推奨 |
+| `GROK_API_URL` | Yes | OpenAI 互換 Grok エンドポイント。値には明示的な `/v1` サフィックスが必須です |
 | `GROK_API_KEY` | Yes | Grok API Key |
 | `GROK_MODEL` | No | デフォルトモデル。優先順位は process env > project `.env.local` > project `.env` > 永続 config > コード既定値 |
 | `GROK_TIME_CONTEXT_MODE` | No | 時間コンテキスト注入モード：`always` / `auto` / `never` |
@@ -165,7 +167,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `feature_readiness.web_fetch.providers` には provider 単位の状態が含まれ、`verified_path` は実 fetch probe が通った backend を示します。skip された provider には `skipped_reason` が付く場合があります。
 - `feature_readiness.get_sources` が `ready` になるのは、現在のプロセス内に少なくとも 1 つの非 error で読み出し可能な source session がある場合だけです。失敗検索だけが残っている場合は `partial_ready` のままです。
 - API Key はマスクされますが、診断ペイロードにはローカル絶対パス、endpoint/hostname、短い upstream エラー要約が残る場合があります。外部共有前に確認してください。
-- `get_sources` は現在のサーバープロセス内にあるメモリ型 LRU キャッシュ（既定 TTL は約 1 時間、上限 256 session）を参照します。`session_id` は durable でも caller-bound でもない transient handle であり、プロセス再起動、TTL 切れ、eviction 後は無効になります。
+- `get_sources` は現在のサーバープロセス内にあるメモリ型 LRU キャッシュ（既定 TTL は約 1 時間、上限 256 session）を参照します。`session_id` は shared-daemon transient handle であり、durable でも caller-bound でも secret token でもありません。`session_id_not_found_or_expired` はプロセス再起動、TTL 切れ、eviction、読み出せない旧キャッシュ miss をまとめて表します。
 - `get_sources` の `rank` は現在 Grok 由来の引用を優先し、安全な fragment は保持しつつ、URL の `userinfo` と代表的な署名パラメータは除去・マスクします。
 
 ## Companion Skill
