@@ -1893,6 +1893,7 @@ def _render_config_info_payload(config_info: dict, *, detail: str) -> dict:
     **Edge Cases & Best Practices:**
         - Use this tool first when debugging connection, provider readiness, or installation issues.
         - API keys are automatically masked for security in the response.
+        - Use `detail=summary` for a compact machine-readable snapshot; keep the default `detail=full` for complete doctor/probe output.
         - Optional provider probes only run when their configuration is present.
         - The `/models` connection test timeout is 10 seconds; additional real `search/fetch` probes may take longer.
     """,

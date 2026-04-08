@@ -160,6 +160,7 @@ Notes:
 - process env presence wins over project `.env.local` / `.env`, even when the env value is explicitly empty
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` defaults to `always`, which preserves the current behavior of always injecting local time context
+- `GROK_DEBUG=false` suppresses these helper progress logs entirely, including `ctx.info()` forwarding; they are intentionally debug-only progress/debug signals
 - the recommended core path is `plan_* -> web_search`
 - direct `web_search` is still allowed for clear single-hop lookups when planning adds little value
 - interactive `deep research` workflows are planned CLI-first rather than as conversational MCP/skill interactions
@@ -169,6 +170,7 @@ Notes:
 - loopback upstream endpoints are requested with `trust_env=False`, which also bypasses `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` and `SSL_CERT_FILE` / `SSL_CERT_DIR` for that request
 - `web_fetch` and `web_map` reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, and common public DNS aliases that encode local/private IPs
 - after the static URL check passes, `web_fetch` and `web_map` also re-check visible redirect targets before dispatching the provider call
+- visible redirect re-checks currently use `GET` rather than `HEAD`, so presigned URLs, one-shot tokens, or read-side-effect links may incur an extra preflight read
 - this boundary intentionally does not hard-block ordinary public-looking hostnames based only on local DNS answers, so it should not be treated as a strong guarantee against split-horizon or locally poisoned DNS resolution
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` expose a curated subset of provider options rather than the providers' full native API surfaces.
@@ -188,6 +190,7 @@ For any local `stdio` host, start with this lightweight verification flow:
 
 `Config.get_config_info()` only returns the base config snapshot. The MCP tool `get_config_info` keeps that snapshot and also adds:
 
+- optional `detail="full" | "summary"` output levels; `full` remains the default and preserves the current payload shape
 - `doctor`: overall doctor status, structured checks, and repair recommendations
 - `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, and `toggle_builtin_tools`
 - `doctor.recommendations_detail`: additive structured repair hints linked to `check_id` and feature scope
@@ -196,6 +199,7 @@ For any local `stdio` host, start with this lightweight verification flow:
 
 Optional provider probes are read-only and run only when the corresponding configuration is already present.
 The `/models` connection test uses a 10-second timeout; additional real `web_search` / `web_fetch` probes may take longer.
+`detail="summary"` keeps the base config snapshot, `connection_test`, `doctor.status` / `doctor.summary` / `doctor.recommendations`, and `feature_readiness`, while omitting the large `doctor.checks` array and probe-detail fields.
 
 Even with API keys masked, the diagnostic payload may still include local absolute paths, endpoint/hostname details, and short upstream error summaries. Sensitive query tokens, bearer values, and similar obvious secrets are masked, but you should still review the payload before sharing it externally.
 
@@ -225,7 +229,7 @@ These controls currently apply to Tavily-backed supplemental search only; if Tav
 - `source_state`
 - `error` when the `session_id` is missing or expired
 
-`get_sources` currently reads from an in-process memory-backed LRU cache on the running server. Session IDs are temporary and may expire after process restart, TTL expiry, or cache eviction.
+`get_sources` currently reads from an in-process memory-backed LRU cache on the running server. Session IDs are temporary handles rather than durable, caller-bound capabilities, and may expire after process restart, TTL expiry, or cache eviction.
 
 `rank` currently keeps Grok-origin citations ahead of supplemental sources, then sorts by `score`, source identity quality, and stable dedupe order.
 `standardize_sources` preserves ordinary URL fragments so section-level citations do not collapse together, while still removing URL userinfo and masking common signature/token parameters.

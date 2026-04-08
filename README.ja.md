@@ -128,6 +128,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - 環境変数の優先は「キーが存在するか」で判定されます。プロセス環境に明示的にキーがある場合、値が空文字でもプロジェクト `.env.local` / `.env` にはフォールバックしません。
 - `switch_model` は `~/.config/grok-search/config.json` の永続値のみを更新します。`GROK_MODEL` が設定されている場合は env が優先されます。
 - `GROK_TIME_CONTEXT_MODE` の既定値は `always` で、現在の「常にローカル時間を注入する」動作を維持します。
+- `GROK_DEBUG=false` のとき、これらの helper progress log は logger にも `ctx.info()` にも流れません。`GROK_DEBUG=true` のときだけ debug-only progress/debug signal として転送されます。
 - コンテキストを節約したい場合は、`GROK_TIME_CONTEXT_MODE` を `auto`（明確に時系列依存の問い合わせ時のみ注入）または `never` に変更できます。
 
 補足:
@@ -144,6 +145,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - Tavily `web_map` は外部ドメインの URL を含む場合があります。サイト内に近い map が必要な場合は、`instructions` と返却結果の後処理で絞り込んでください。
 - `web_fetch` / `web_map` は、非 `http/https`、loopback、明らかな private network target、単一ラベル host、`.internal` / `.local` / `.lan` / `.home` / `.corp` のような代表的な private suffix host、さらにローカル/私用 IP を公開 DNS 名に埋め込む alias（`nip.io` / `xip.io` / `sslip.io`）も既定で拒否します。
 - 静的な URL 検査を通過した後も、`web_fetch` / `web_map` は provider 呼び出し前に可視な redirect 先を再検査します。
+- 現在この可視 redirect 再検査は `HEAD` ではなく `GET` を使います。presigned URL、one-shot token、読み取り自体に副作用があるリンクでは、追加の事前取得が起き得る点を既知の境界として扱ってください。
 - この境界は、ローカル DNS が公開ホスト風の名前を私用アドレスへ解決した場合まで強制的には拒否しないため、split-horizon やローカル DNS 汚染に対する強保証とはみなせません。
 
 ### 最小 smoke check
@@ -158,9 +160,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 補足:
 
 - `doctor.recommendations_detail` は `check_id` / feature に紐づく構造化された修復ヒントです。
+- `get_config_info` は任意の `detail="full" | "summary"` を受け付けます。既定値は引き続き `full` で、`summary` はベース設定スナップショット、`connection_test`、`doctor.status/summary/recommendations`、`feature_readiness` のみを返します。
 - `feature_readiness.web_fetch.providers` には provider 単位の状態が含まれ、`verified_path` は実 fetch probe が通った backend を示します。skip された provider には `skipped_reason` が付く場合があります。
 - API Key はマスクされますが、診断ペイロードにはローカル絶対パス、endpoint/hostname、短い upstream エラー要約が残る場合があります。外部共有前に確認してください。
-- `get_sources` は現在のサーバープロセス内にあるメモリ型 LRU キャッシュ（既定 TTL は約 1 時間、上限 256 session）を参照します。プロセス再起動、TTL 切れ、eviction 後は `session_id` が無効になります。
+- `get_sources` は現在のサーバープロセス内にあるメモリ型 LRU キャッシュ（既定 TTL は約 1 時間、上限 256 session）を参照します。`session_id` は durable でも caller-bound でもない transient handle であり、プロセス再起動、TTL 切れ、eviction 後は無効になります。
 - `get_sources` の `rank` は現在 Grok 由来の引用を優先し、安全な fragment は保持しつつ、URL の `userinfo` と代表的な署名パラメータは除去・マスクします。
 
 ## Companion Skill
