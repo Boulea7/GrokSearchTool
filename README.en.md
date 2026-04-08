@@ -200,6 +200,8 @@ For any local `stdio` host, start with this lightweight verification flow:
 Optional provider probes are read-only and run only when the corresponding configuration is already present.
 The `/models` connection test uses a 10-second timeout; additional real `web_search` / `web_fetch` probes may take longer.
 `detail="summary"` keeps the base config snapshot, `connection_test`, `doctor.status` / `doctor.summary` / `doctor.recommendations`, and `feature_readiness`, while omitting the large `doctor.checks` array and probe-detail fields.
+`detail="summary"` is currently a compact projection of the same diagnostic run, not a separate lightweight execution path.
+`feature_readiness.get_sources` only reports `ready` when the current process already holds at least one readable non-error source session; error-only cached sessions keep it at `partial_ready`.
 
 Even with API keys masked, the diagnostic payload may still include local absolute paths, endpoint/hostname details, and short upstream error summaries. Sensitive query tokens, bearer values, and similar obvious secrets are masked, but you should still review the payload before sharing it externally.
 

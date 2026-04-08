@@ -101,7 +101,9 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `get_sources` 当前会统一返回标准化 metadata；`rank` 当前会优先保留 Grok 主引用，再结合 `score`、来源身份清晰度与稳定去重顺序生成
 - `get_sources` 当前依赖当前服务器进程内的内存型 LRU 缓存；默认 TTL 约 1 小时、当前上限 256 个 session。`session_id` 是 transient、非 durable、非 caller-bound handle；进程重启、TTL 到期或缓存淘汰后会失效
 - `Config.get_config_info()` 只返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并新增 `connection_test`、`doctor`、`feature_readiness` 与最小真实探针结果；当前还支持 additive `detail=full|summary` 分级输出，默认仍为 `full`
+- `detail=summary` 当前只是同一次诊断结果的紧凑字段投影，不是额外的轻执行路径
 - `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
+- `feature_readiness.get_sources` 当前只有在运行中进程里至少存在一个非 error 的可读取 source session 时才会显示 `ready`；若缓存里只有失败搜索留下的 session，则应保持 `partial_ready`
 - `doctor` 当前会保留字符串版 `recommendations`，并额外提供结构化 `recommendations_detail`
 - 即使 API Key 已脱敏，`get_config_info` / `doctor` 输出当前仍可能包含本机绝对路径、endpoint/hostname 与精简后的上游错误摘要；对外分享前应先复核
 - `feature_readiness.web_fetch` 当前会附带 provider 级细节，并在 `verified_path` 中标注真实抓取探针实际打通的后端；未执行的 provider 可能带有 `skipped_reason`
