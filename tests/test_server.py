@@ -2719,7 +2719,8 @@ async def test_preflight_redirect_targets_rejects_scheme_relative_private_redire
 
     result = await server._preflight_redirect_targets("https://public.example.com/start")
 
-    assert result == "目标 URL 不能指向本地或私有网络"
+    assert result.status == "reject"
+    assert result.message == "目标 URL 不能指向本地或私有网络"
 
 
 @pytest.mark.asyncio
@@ -2746,11 +2747,12 @@ async def test_preflight_redirect_targets_returns_too_many_redirects(monkeypatch
         max_redirects=2,
     )
 
-    assert result == "目标 URL 重定向次数过多"
+    assert result.status == "reject"
+    assert result.message == "目标 URL 重定向次数过多"
 
 
 @pytest.mark.asyncio
-async def test_preflight_redirect_targets_surfaces_request_errors(monkeypatch):
+async def test_preflight_redirect_targets_marks_request_errors_as_skipped(monkeypatch):
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -2769,11 +2771,12 @@ async def test_preflight_redirect_targets_surfaces_request_errors(monkeypatch):
 
     result = await server._preflight_redirect_targets("https://public.example.com/start")
 
-    assert result == "目标 URL 重定向预检失败"
+    assert result.status == "skipped_due_to_error"
+    assert result.message == "目标 URL 重定向预检失败"
 
 
 @pytest.mark.asyncio
-async def test_preflight_redirect_targets_surfaces_timeouts(monkeypatch):
+async def test_preflight_redirect_targets_marks_timeouts_as_skipped(monkeypatch):
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -2791,7 +2794,8 @@ async def test_preflight_redirect_targets_surfaces_timeouts(monkeypatch):
 
     result = await server._preflight_redirect_targets("https://public.example.com/start")
 
-    assert result == "目标 URL 重定向预检超时"
+    assert result.status == "skipped_due_to_error"
+    assert result.message == "目标 URL 重定向预检超时"
 
 
 @pytest.mark.asyncio
@@ -2821,7 +2825,8 @@ async def test_preflight_redirect_targets_uses_get_for_visible_redirect_checks(m
 
     result = await server._preflight_redirect_targets("https://public.example.com/start")
 
-    assert result is None
+    assert result.status == "allow"
+    assert result.message is None
     assert requested_urls == [
         "https://public.example.com/start",
         "https://public.example.com/next",
@@ -2829,7 +2834,7 @@ async def test_preflight_redirect_targets_uses_get_for_visible_redirect_checks(m
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_fails_closed_when_redirect_preflight_errors(monkeypatch):
+async def test_web_fetch_continues_when_redirect_preflight_is_skipped(monkeypatch):
     calls = {"tavily": 0, "firecrawl": 0}
 
     async def fake_tavily(url):
@@ -2863,12 +2868,12 @@ async def test_web_fetch_fails_closed_when_redirect_preflight_errors(monkeypatch
 
     result = await server.web_fetch("https://public.example.com/start")
 
-    assert result == "提取失败: 目标 URL 重定向预检失败"
-    assert calls == {"tavily": 0, "firecrawl": 0}
+    assert result == "# Tavily"
+    assert calls == {"tavily": 1, "firecrawl": 0}
 
 
 @pytest.mark.asyncio
-async def test_web_map_fails_closed_when_redirect_preflight_errors(monkeypatch):
+async def test_web_map_continues_when_redirect_preflight_is_skipped(monkeypatch):
     calls = {"map": 0}
 
     async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
@@ -2897,8 +2902,8 @@ async def test_web_map_fails_closed_when_redirect_preflight_errors(monkeypatch):
 
     result = await server.web_map("https://public.example.com/start")
 
-    assert result == "映射失败: 目标 URL 重定向预检失败"
-    assert calls == {"map": 0}
+    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
+    assert calls == {"map": 1}
 
 
 @pytest.mark.asyncio
