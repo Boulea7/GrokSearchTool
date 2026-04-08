@@ -2666,6 +2666,18 @@ async def test_web_fetch_rejects_loopback_target_before_provider_calls(monkeypat
 
 @pytest.mark.asyncio
 async def test_web_fetch_rejects_invalid_scheme_before_provider_calls(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    async def fake_tavily(url):
+        calls["tavily"] += 1
+        return "# Tavily", None
+
+    async def fake_firecrawl(url, ctx):
+        calls["firecrawl"] += 1
+        return "# Firecrawl", None
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
@@ -2673,6 +2685,7 @@ async def test_web_fetch_rejects_invalid_scheme_before_provider_calls(monkeypatc
     result = await server.web_fetch("file:///tmp/secret.txt")
 
     assert "仅支持 http/https URL" in result
+    assert calls == {"tavily": 0, "firecrawl": 0}
 
 
 @pytest.mark.asyncio
