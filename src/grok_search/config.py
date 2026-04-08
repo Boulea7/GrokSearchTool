@@ -84,7 +84,10 @@ class Config:
             closing_index = 1
             while closing_index < len(text):
                 if text[closing_index] == quote and text[closing_index - 1] != "\\":
-                    return text[1:closing_index]
+                    remainder = text[closing_index + 1 :].strip()
+                    if not remainder or remainder.startswith("#"):
+                        return text[1:closing_index]
+                    return text
                 closing_index += 1
             return text
 
