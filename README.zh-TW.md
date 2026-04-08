@@ -159,7 +159,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch`、`web_map` 與 Tavily 補充搜尋目前只暴露 provider 能力的受控子集，不等同於 Tavily / Firecrawl 的全量原生參數面。
 - `web_fetch` 回傳的是提取後的 Markdown 文字，不會透傳 provider 的完整原始結構化 payload。
 - Tavily `web_map` 可能包含外部網域連結；若需要更接近站內 sitemap 的結果，請搭配 `instructions` 收斂並自行過濾。
-- `web_fetch` / `web_map` 預設會拒絕非 `http/https`、loopback、明顯私網目標、單標籤主機名、常見私網後綴主機（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`），以及常見把私網 IP 編進公開 DNS 名的 alias 形態（如 `nip.io` / `xip.io` / `sslip.io`）。
+- `web_fetch` / `web_map` 預設會拒絕非 `http/https`、loopback、明顯私網目標、單標籤主機名、常見私網後綴主機（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`）、常見 loopback helper 網域（如 `localtest.me` / `lvh.me`），以及常見把私網 IP 編進公開 DNS 名的 alias 形態（如 `nip.io` / `xip.io` / `sslip.io`）。
 - 對通過靜態檢查的目標，`web_fetch` / `web_map` 還會在真正呼叫 provider 前繼續複檢可見的 redirect 目標。
 - 目前這層可見 redirect 複檢使用 `GET` 而非 `HEAD`；對 presigned URL、one-shot token 或具有副作用的讀取型連結，可能存在額外一次預檢讀取，應視為已知邊界。
 - 若 redirect 預檢發生 timeout 或 request-level error，當前實作會將該步驟標記為 `skipped_due_to_error`；`web_fetch` / `web_map` 目前仍會繼續執行下游 provider 呼叫。
@@ -182,8 +182,10 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `feature_readiness.web_fetch.providers` 會附帶 provider 級狀態；`verified_path` 表示真實抓取探針實際打通的後端，未執行的 provider 可能帶有 `skipped_reason`。
 - `feature_readiness.get_sources` 只有在目前進程內至少存在一個非 error、可讀取的 source session 時才會顯示 `ready`；若快取裡只有失敗搜尋留下的 session，狀態會維持 `partial_ready`。
 - 即使 API Key 已脫敏，診斷結果仍可能包含本機絕對路徑、endpoint/hostname 與精簡後的上游錯誤摘要；對外分享前請先複核。
+- `get_sources` 成功返回時固定包含 `session_id`、`sources`、`sources_count`、`search_status`、`search_error` 與 `source_state`；只有 `session_id` 缺失或過期時才會額外回傳 `error=session_id_not_found_or_expired`。
 - `get_sources` 使用目前進程內的記憶體型 LRU 快取（預設 TTL 約 1 小時、上限 256 個 session）；`session_id` 是 transient handle，不是 durable、caller-bound capability。進程重啟、TTL 到期或快取淘汰後，先前的 `session_id` 會失效。
-- `get_sources` 回傳的 `rank` 目前會依 `score`、來源身分清晰度與穩定去重順序生成，不再對 Grok 引用額外偏置；`standardize_sources` 在去重時也會規範 URL 的 scheme/host 大小寫，因此同一頁面的 mixed-case 變體可能折疊為單一 source。同時仍會保留安全 fragment、剝離 URL `userinfo`、遮罩常見簽名參數。
+- `sources_count` 目前等於標準化、去重與過濾後最終寫入快取的信源數量，不等於上游原始 citations 條數。
+- `get_sources` 回傳的 `rank` 目前會依 `score`、來源身分清晰度與穩定去重順序生成，不再對 Grok 引用額外偏置；`standardize_sources` 在去重時也會規範 URL 的 scheme/host 大小寫，因此同一頁面的 mixed-case 變體可能折疊為單一 source。同時仍會保留安全 fragment、剝離 URL `userinfo`、遮罩常見簽名參數；顯式預設埠（如 `:443` / `:80`）目前仍會保留，不會和隱式預設埠 URL 自動折疊。
 
 ## Companion Skill
 

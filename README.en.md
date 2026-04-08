@@ -162,7 +162,7 @@ Notes:
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` injects local time context according to `GROK_TIME_CONTEXT_MODE` (`always` by default)
 - loopback upstream endpoints are requested with `trust_env=False`, which also bypasses `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` and `SSL_CERT_FILE` / `SSL_CERT_DIR` for that request
-- `web_fetch` and `web_map` reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, and common public DNS aliases that encode local/private IPs
+- `web_fetch` and `web_map` reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, common loopback helper domains such as `localtest.me` / `lvh.me`, and common public DNS aliases that encode local/private IPs
 - after the static URL check passes, `web_fetch` and `web_map` also re-check visible redirect targets before dispatching the provider call
 - visible redirect re-checks currently use `GET` rather than `HEAD`, so presigned URLs, one-shot tokens, or read-side-effect links may incur an extra preflight read
 - if redirect preflight times out or hits a request-level error, the current implementation marks that step as `skipped_due_to_error`; `web_fetch` / `web_map` currently still continue to the downstream provider call
@@ -220,7 +220,7 @@ Optional additive controls:
 If supplemental search goes through Tavily, `max_results` is currently clamped to the provider's documented limit of `20`.
 These controls currently apply to Tavily-backed supplemental search only; if Tavily is unavailable or not selected for the supplemental path, the request may still succeed with warnings and the controls will not be fully enforced.
 
-`get_sources` returns standardized metadata including `provider`, `domain`, `score`, `retrieved_at`, and `rank`, and also returns:
+Successful `get_sources` responses include `session_id`, `sources`, and `sources_count`, where each source is standardized with metadata such as `provider`, `domain`, `score`, `retrieved_at`, and `rank`. They also return:
 
 - `search_status`
 - `search_error`
@@ -229,8 +229,9 @@ These controls currently apply to Tavily-backed supplemental search only; if Tav
 
 `get_sources` currently reads from an in-process memory-backed LRU cache on the running server. Session IDs are shared-daemon transient handles rather than durable, caller-bound capabilities or secret tokens, and `session_id_not_found_or_expired` covers restart, TTL expiry, eviction, and unreadable legacy-cache misses.
 
+`sources_count` is the final post-standardization, post-dedupe source count written into the cache, not the upstream raw citation count.
 `rank` currently follows `score`, source identity quality, and stable dedupe order without giving Grok-origin citations extra priority.
-`standardize_sources` canonicalizes scheme/host casing for dedupe, so mixed-case variants of the same page may collapse into one source; it still preserves ordinary URL fragments, removes URL userinfo, and masks common signature/token parameters.
+`standardize_sources` canonicalizes scheme/host casing for dedupe, so mixed-case variants of the same page may collapse into one source; it still preserves ordinary URL fragments, removes URL userinfo, and masks common signature/token parameters. Explicit default ports such as `:443` and `:80` are still preserved and are not collapsed into implicit-default URLs.
 
 ## Companion Skill
 
