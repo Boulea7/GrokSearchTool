@@ -721,6 +721,124 @@ async def test_plan_tool_mapping_rejects_invalid_params_json():
 
 
 @pytest.mark.asyncio
+async def test_plan_tool_mapping_rejects_non_object_params_json_with_stable_field_name():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy and mapping.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Requires explicit tool selection.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A single comparison paragraph.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed search strategy.",
+        term="grok tavily provider",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Non-object params_json should fail.",
+            sub_query_id="sq1",
+            tool="web_search",
+            reason="Need valid params.",
+            params_json='["not-an-object"]',
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert result["details"][0]["field"] == "params_json"
+    assert result["details"][0]["type"] == "dict_type"
+    assert "json object" in result["details"][0]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_tool_mapping_treats_null_params_json_as_missing_params():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy and mapping.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Requires explicit tool selection.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A single comparison paragraph.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed search strategy.",
+        term="grok tavily provider",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Null params_json should be treated as missing.",
+            sub_query_id="sq1",
+            tool="web_search",
+            reason="Need valid params.",
+            params_json="null",
+        )
+    )
+
+    assert result.get("error") is None
+    assert result["executable_plan"]["tool_selection"] == [
+        {
+            "sub_query_id": "sq1",
+            "tool": "web_search",
+            "reason": "Need valid params.",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_plan_sub_query_rejects_duplicate_ids():
     intent = json.loads(
         await server.plan_intent(
@@ -1812,6 +1930,68 @@ async def test_plan_tool_mapping_invalid_params_json_uses_standard_details_shape
     assert result["error"] == "validation_error"
     assert result["details"][0]["field"] == "params_json"
     assert result["details"][0]["type"] == "json_invalid"
+
+
+@pytest.mark.asyncio
+async def test_plan_tool_mapping_preserves_valid_object_params_in_executable_plan():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need tool mapping.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Need mapping validation.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Only one sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Valid search term.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Valid object params should be preserved.",
+            sub_query_id="sq1",
+            tool="web_search",
+            reason="Need baseline facts.",
+            params_json='{"topic":"news","limit":3}',
+        )
+    )
+
+    assert result.get("error") is None
+    assert result["executable_plan"]["tool_selection"] == [
+        {
+            "sub_query_id": "sq1",
+            "tool": "web_search",
+            "reason": "Need baseline facts.",
+            "params": {"topic": "news", "limit": 3},
+        }
+    ]
 
 
 @pytest.mark.asyncio

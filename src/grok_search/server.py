@@ -782,7 +782,7 @@ def _validate_search_inputs(
     name="web_search",
     output_schema=None,
     description="""
-    Before using this tool, please use the plan_intent tool to plan the search carefully.
+    Prefer `plan_* -> web_search` for non-trivial or ambiguous research tasks, but clear single-hop lookups may directly use `web_search` when planning would add little value.
     Performs a deep web search based on the given query and returns Grok's answer directly.
 
     This tool extracts sources if provided by upstream, caches them, and returns:
@@ -2826,13 +2826,23 @@ async def plan_tool_mapping(
     item = {"sub_query_id": normalized_sub_query_id, "tool": tool, "reason": reason}
     if params_json:
         try:
-            item["params"] = json.loads(params_json)
+            parsed_params = json.loads(params_json)
         except json.JSONDecodeError:
             return _planning_validation_error(
                 "validation_error",
                 "Invalid tool mapping input.",
                 [{"field": "params_json", "message": "params_json must be valid JSON.", "type": "json_invalid"}],
             )
+        if parsed_params is None:
+            parsed_params = None
+        elif not isinstance(parsed_params, dict):
+            return _planning_validation_error(
+                "validation_error",
+                "Invalid tool mapping input.",
+                [{"field": "params_json", "message": "params_json must decode to a JSON object.", "type": "dict_type"}],
+            )
+        if parsed_params is not None:
+            item["params"] = parsed_params
     try:
         ToolPlanItem(**item)
     except ValidationError as exc:

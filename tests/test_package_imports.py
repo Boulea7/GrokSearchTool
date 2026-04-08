@@ -121,6 +121,43 @@ def test_mcp_export_still_works_when_fastmcp_is_available():
     assert result.stdout.strip() == "True"
 
 
+def test_from_import_mcp_fails_lazily_without_fastmcp():
+    code = textwrap.dedent(
+        """
+        import builtins
+        import json
+
+        original_import = builtins.__import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "fastmcp" or name.startswith("fastmcp."):
+                raise ModuleNotFoundError("No module named 'fastmcp'", name="fastmcp")
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = blocked_import
+
+        try:
+            from grok_search import mcp
+        except Exception as exc:
+            print(json.dumps({
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "name": getattr(exc, "name", ""),
+            }))
+        else:
+            print(json.dumps({"type": "ok", "has_tool": hasattr(mcp, "tool")}))
+        """
+    )
+
+    result = _run_python(code)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["type"] == "ModuleNotFoundError"
+    assert payload["name"] == "fastmcp"
+    assert "fastmcp" in payload["message"]
+
+
 def test_mcp_export_propagates_non_fastmcp_dependency_errors():
     code = textwrap.dedent(
         """
