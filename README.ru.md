@@ -113,7 +113,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `TAVILY_ENABLED` | Нет | Включать ли Tavily-пути |
 | `FIRECRAWL_API_KEY` | Нет | Firecrawl key для fallback fetch и optional supplemental `web_search` |
 | `FIRECRAWL_API_URL` | Нет | Firecrawl API endpoint |
-| `GROK_DEBUG` | Нет | Включить debug-логи |
+| `GROK_DEBUG` | Нет | Включить debug-логи и debug-only пересылку прогресса через `ctx.info()` |
 | `GROK_LOG_LEVEL` | Нет | Уровень логирования |
 | `GROK_LOG_DIR` | Нет | Каталог логов; `get_config_info` возвращает уже разрешённый runtime path |
 | `GROK_OUTPUT_CLEANUP` | Нет | Включать ли очистку вывода `web_search` |

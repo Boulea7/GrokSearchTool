@@ -113,7 +113,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `TAVILY_ENABLED` | No | Tavily ルートを有効化するか |
 | `FIRECRAWL_API_KEY` | No | Firecrawl fallback Key。supplemental `web_search` にも使用可能 |
 | `FIRECRAWL_API_URL` | No | Firecrawl API エンドポイント |
-| `GROK_DEBUG` | No | デバッグログを有効化するか |
+| `GROK_DEBUG` | No | デバッグログと debug-only `ctx.info()` 進捗転送を有効化するか |
 | `GROK_LOG_LEVEL` | No | ログレベル |
 | `GROK_LOG_DIR` | No | ログディレクトリ。`get_config_info` は解決後の実行時パスを返す |
 | `GROK_OUTPUT_CLEANUP` | No | `web_search` 出力クリーンアップを有効化するか |
