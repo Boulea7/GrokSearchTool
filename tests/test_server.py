@@ -88,6 +88,18 @@ def doctor_checks(payload):
     return {check["check_id"]: check for check in payload["doctor"]["checks"]}
 
 
+def strip_response_times(value):
+    if isinstance(value, dict):
+        return {
+            key: strip_response_times(inner)
+            for key, inner in value.items()
+            if key != "response_time_ms"
+        }
+    if isinstance(value, list):
+        return [strip_response_times(item) for item in value]
+    return value
+
+
 class ProgressContext:
     def __init__(self):
         self.messages = []
@@ -161,6 +173,83 @@ async def test_get_config_info_summary_detail_returns_machine_readable_minimum(m
     assert "summary" in payload["doctor"]
     assert "checks" not in payload["doctor"]
     assert "recommendations_detail" not in payload["doctor"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_explicit_full_matches_default_and_summary_is_exact_projection(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    default_payload = json.loads(await server.get_config_info())
+    patch_async_client(monkeypatch, responses)
+    explicit_full_payload = json.loads(await server.get_config_info(" Full "))
+    patch_async_client(monkeypatch, responses)
+    summary_payload = json.loads(await server.get_config_info(" Summary "))
+
+    assert set(default_payload) == set(explicit_full_payload)
+    assert strip_response_times(default_payload) == strip_response_times(explicit_full_payload)
+    assert set(summary_payload) == {
+        "GROK_API_URL",
+        "GROK_API_KEY",
+        "GROK_MODEL",
+        "GROK_DEBUG",
+        "GROK_OUTPUT_CLEANUP",
+        "GROK_TIME_CONTEXT_MODE",
+        "GROK_LOG_LEVEL",
+        "GROK_LOG_DIR",
+        "TAVILY_API_URL",
+        "TAVILY_ENABLED",
+        "TAVILY_API_KEY",
+        "FIRECRAWL_API_URL",
+        "FIRECRAWL_API_KEY",
+        "config_status",
+        "connection_test",
+        "doctor",
+        "feature_readiness",
+    }
+    assert set(summary_payload["doctor"]) == {"status", "summary", "recommendations"}
+    assert strip_response_times(summary_payload["connection_test"]) == strip_response_times(
+        default_payload["connection_test"]
+    )
+    assert strip_response_times(summary_payload["feature_readiness"]) == strip_response_times(
+        default_payload["feature_readiness"]
+    )
+    for key in (
+        "GROK_API_URL",
+        "GROK_API_KEY",
+        "GROK_MODEL",
+        "GROK_DEBUG",
+        "GROK_OUTPUT_CLEANUP",
+        "GROK_TIME_CONTEXT_MODE",
+        "GROK_LOG_LEVEL",
+        "GROK_LOG_DIR",
+        "TAVILY_API_URL",
+        "TAVILY_ENABLED",
+        "TAVILY_API_KEY",
+        "FIRECRAWL_API_URL",
+        "FIRECRAWL_API_KEY",
+        "config_status",
+    ):
+        assert summary_payload[key] == default_payload[key]
 
 
 @pytest.mark.asyncio
@@ -289,6 +378,26 @@ async def test_get_config_info_marks_missing_grok_config_as_not_ready(monkeypatc
     assert payload["feature_readiness"]["web_search"]["status"] == "not_ready"
     assert payload["feature_readiness"]["get_sources"]["status"] == "not_ready"
     assert payload["doctor"]["recommendations"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_get_sources_requires_readable_session_not_error_only_cache(monkeypatch):
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    await server._SOURCES_CACHE.set(
+        "failed-session",
+        server._build_sources_cache_entry([], search_status="error", search_error="validation_error"),
+    )
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
+    assert "尚无可读取的 source session" in payload["feature_readiness"]["get_sources"]["message"]
 
 
 @pytest.mark.asyncio
