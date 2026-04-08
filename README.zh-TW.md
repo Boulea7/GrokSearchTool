@@ -162,7 +162,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch` / `web_map` 預設會拒絕非 `http/https`、loopback、明顯私網目標、單標籤主機名、常見私網後綴主機（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`），以及常見把私網 IP 編進公開 DNS 名的 alias 形態（如 `nip.io` / `xip.io` / `sslip.io`）。
 - 對通過靜態檢查的目標，`web_fetch` / `web_map` 還會在真正呼叫 provider 前繼續複檢可見的 redirect 目標。
 - 目前這層可見 redirect 複檢使用 `GET` 而非 `HEAD`；對 presigned URL、one-shot token 或具有副作用的讀取型連結，可能存在額外一次預檢讀取，應視為已知邊界。
-- 若 redirect 預檢發生 timeout 或 request-level error，當前實作會直接 fail-close，不會再預設放行後續 provider 呼叫。
+- 若 redirect 預檢發生 timeout 或 request-level error，當前實作會將該步驟標記為 `skipped_due_to_error`；`web_fetch` / `web_map` 目前仍會繼續執行下游 provider 呼叫。
 - 這層邊界目前不會只因本機 DNS 將某個看似公開的 hostname 解析到私網就直接拒絕，因此不應被理解成對 split-horizon / 本地 DNS 私有解析的強保證。
 
 ### 最小 smoke check

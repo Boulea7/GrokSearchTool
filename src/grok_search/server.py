@@ -1,6 +1,7 @@
 import asyncio
 import re
 import sys
+from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Literal, Optional
@@ -484,6 +485,25 @@ _PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".lan", ".home", ".corp")
 _LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
 _LOOPBACK_HELPER_SUFFIXES = ("localtest.me", "lvh.me")
 _DNS_ALIAS_IP_SUFFIXES = ("nip.io", "xip.io", "sslip.io")
+
+
+@dataclass(frozen=True)
+class _TargetPreflightResult:
+    status: Literal["allow", "reject", "skipped_due_to_error"]
+    message: str | None = None
+
+
+def _allow_target_preflight() -> _TargetPreflightResult:
+    return _TargetPreflightResult("allow")
+
+
+def _reject_target_preflight(message: str) -> _TargetPreflightResult:
+    return _TargetPreflightResult("reject", message)
+
+
+def _skip_target_preflight(message: str) -> _TargetPreflightResult:
+    return _TargetPreflightResult("skipped_due_to_error", message)
+
 _SENSITIVE_URL_PARAM_KEYS = {
     "api_key",
     "apikey",
@@ -588,7 +608,7 @@ def _resolve_and_validate_public_target(url: str) -> str | None:
     return None
 
 
-async def _preflight_redirect_targets(url: str, *, max_redirects: int = 5) -> str | None:
+async def _preflight_redirect_targets(url: str, *, max_redirects: int = 5) -> _TargetPreflightResult:
     import httpx
 
     current_url = url
@@ -597,34 +617,34 @@ async def _preflight_redirect_targets(url: str, *, max_redirects: int = 5) -> st
             async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(current_url, timeout=5.0)) as client:
                 response = await client.get(current_url, headers={"Accept": "*/*"})
         except httpx.TimeoutException:
-            return "目标 URL 重定向预检超时"
+            return _skip_target_preflight("目标 URL 重定向预检超时")
         except httpx.RequestError:
-            return "目标 URL 重定向预检失败"
+            return _skip_target_preflight("目标 URL 重定向预检失败")
 
         location = (response.headers.get("location") or "").strip()
         if response.status_code not in {301, 302, 303, 307, 308} or not location:
-            return None
+            return _allow_target_preflight()
 
         next_url = urljoin(current_url, location)
         validation_error = _validate_public_target_url(next_url)
         if validation_error:
-            return validation_error
+            return _reject_target_preflight(validation_error)
         resolution_error = _resolve_and_validate_public_target(next_url)
         if resolution_error:
-            return resolution_error
+            return _reject_target_preflight(resolution_error)
         current_url = next_url
 
-    return "目标 URL 重定向次数过多"
+    return _reject_target_preflight("目标 URL 重定向次数过多")
 
 
-async def _preflight_public_target_url(url: str) -> str | None:
+async def _preflight_public_target_url(url: str) -> _TargetPreflightResult:
     validation_error = _validate_public_target_url(url)
     if validation_error:
-        return validation_error
+        return _reject_target_preflight(validation_error)
 
     resolution_error = _resolve_and_validate_public_target(url)
     if resolution_error:
-        return resolution_error
+        return _reject_target_preflight(resolution_error)
 
     return await _preflight_redirect_targets(url)
 
@@ -1241,9 +1261,11 @@ async def web_fetch(
     url: Annotated[str, "Valid HTTP/HTTPS web address pointing to the target page. Must be complete and accessible."],
     ctx: Context = None
 ) -> str:
-    validation_error = await _preflight_public_target_url(url)
-    if validation_error:
-        return f"提取失败: {validation_error}"
+    preflight = await _preflight_public_target_url(url)
+    if preflight.status == "reject":
+        return f"提取失败: {preflight.message}"
+    if preflight.status == "skipped_due_to_error":
+        await log_info(ctx, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     await log_info(ctx, "Begin Fetch request", config.debug_enabled)
 
@@ -1352,9 +1374,9 @@ async def web_map(
     limit: Annotated[int, Field(description="Total number of links to process before stopping.", ge=1, le=500)] = 50,
     timeout: Annotated[int, Field(description="Maximum time in seconds for the operation.", ge=10, le=150)] = 150
 ) -> str:
-    validation_error = await _preflight_public_target_url(url)
-    if validation_error:
-        return f"映射失败: {validation_error}"
+    preflight = await _preflight_public_target_url(url)
+    if preflight.status == "reject":
+        return f"映射失败: {preflight.message}"
 
     result = await _call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
     return result
