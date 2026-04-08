@@ -2644,6 +2644,53 @@ async def test_web_fetch_does_not_reject_public_hostname_only_from_local_dns_ans
 
 
 @pytest.mark.asyncio
+async def test_web_map_does_not_reject_public_hostname_only_from_local_dns_answers(monkeypatch):
+    import socket
+
+    calls = {"map": 0}
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        calls["map"] += 1
+        return json.dumps({"base_url": url, "results": ["https://public.example.com/path"]}, ensure_ascii=False)
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        assert host == "public.example.com"
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", port or 443)),
+        ]
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            response = httpx.Response(200)
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+
+    result = await server.web_map("https://public.example.com/path")
+
+    assert json.loads(result) == {
+        "base_url": "https://public.example.com/path",
+        "results": ["https://public.example.com/path"],
+    }
+    assert calls == {"map": 1}
+
+
+@pytest.mark.asyncio
 async def test_web_map_rejects_invalid_scheme_before_provider_calls(monkeypatch):
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")

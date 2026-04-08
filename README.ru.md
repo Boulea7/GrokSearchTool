@@ -169,7 +169,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `feature_readiness.get_sources` показывает `ready` только тогда, когда в текущем процессе уже есть хотя бы один читаемый non-error source session; если в кэше остались только сессии от неуспешных поисков, статус остаётся `partial_ready`.
 - Даже при маскировании API key диагностический payload всё ещё может содержать локальные абсолютные пути, endpoint/hostname и короткие сводки upstream-ошибок; перед внешней публикацией его стоит перепроверить.
 - `get_sources` сейчас читает из in-process memory-backed LRU cache на запущенном сервере (по умолчанию TTL около 1 часа, лимит 256 session). `session_id` здесь является shared-daemon transient handle, а не durable, caller-bound capability или secret token; `session_id_not_found_or_expired` покрывает рестарт процесса, истечение TTL, вытеснение и miss для нечитаемых legacy-cache записей.
-- `rank` в `get_sources` сейчас сохраняет приоритет за цитатами Grok, оставляет безопасные URL fragment и одновременно удаляет `userinfo` и маскирует типичные подписи/токены в URL.
+- `rank` в `get_sources` сейчас определяется по `score`, качеству идентичности источника и стабильному dedupe-порядку без дополнительного приоритета для цитат Grok. `standardize_sources` также canonicalize'ит регистр scheme/host при dedupe, поэтому mixed-case варианты одной и той же страницы могут схлопываться в один source; при этом безопасные URL fragment сохраняются, а `userinfo` и типичные подписи/токены по-прежнему удаляются или маскируются.
 
 ## Companion Skill
 

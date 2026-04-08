@@ -347,7 +347,7 @@ claude mcp list
 说明：
 - `session_id_not_found_or_expired` 当前统一覆盖进程重启、TTL 到期、LRU 淘汰，以及不可读的旧缓存条目等 miss 场景。
 - `rank` 当前会按 `score`、来源身份清晰度与稳定去重顺序生成，不再对 Grok 引用做额外优先级偏置。
-- `standardize_sources` 会保留普通锚点（fragment），避免不同页面段落引用被误合并；同时会剥离 URL `userinfo`，并继续遮罩常见 query / fragment 签名参数。
+- `standardize_sources` 当前会在去重时规范化 URL 的 scheme/host 大小写，因此同一页面的 mixed-case 变体可能折叠为一个 source；同时会保留普通锚点（fragment），避免不同页面段落引用被误合并，并继续剥离 URL `userinfo`、遮罩常见 query / fragment 签名参数。
 - `get_sources` 生命周期与共享 daemon 边界详见 [docs/GET_SOURCES_LIFECYCLE.md](./docs/GET_SOURCES_LIFECYCLE.md)。
 
 ### `web_fetch` — 网页内容抓取
