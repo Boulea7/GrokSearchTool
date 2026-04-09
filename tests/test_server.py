@@ -2863,6 +2863,25 @@ async def test_web_map_rejects_invalid_scheme_before_provider_calls(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_web_map_rejects_loopback_target_before_provider_calls(monkeypatch):
+    calls = {"map": 0}
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        calls["map"] += 1
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+
+    result = await server.web_map("http://127.0.0.1/private")
+
+    assert "不能指向本地或私有网络" in result
+    assert calls == {"map": 0}
+
+
+@pytest.mark.asyncio
 async def test_web_map_rejects_redirect_chain_to_private_target_before_provider_calls(monkeypatch):
     calls = {"map": 0}
 
@@ -3137,6 +3156,45 @@ async def test_web_map_continues_when_redirect_preflight_is_skipped(monkeypatch)
 
     assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
     assert calls == {"map": 1}
+
+
+@pytest.mark.asyncio
+async def test_web_map_reports_skipped_preflight_progress_when_debug_enabled(monkeypatch):
+    messages = []
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    async def fake_log_info(ctx, message, is_debug=False):
+        messages.append((ctx, message, is_debug))
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            request = httpx.Request("GET", url, headers=headers)
+            raise httpx.RequestError("boom", request=request)
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(server, "log_info", fake_log_info)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    monkeypatch.setenv("GROK_DEBUG", "true")
+    server.config.reset_runtime_state()
+
+    result = await server.web_map("https://public.example.com/start")
+
+    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
+    assert messages == [(None, "Redirect preflight skipped: 目标 URL 重定向预检失败", True)]
 
 
 @pytest.mark.asyncio
