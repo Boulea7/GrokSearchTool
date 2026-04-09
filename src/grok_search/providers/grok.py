@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from ipaddress import ip_address
 from typing import List, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
 from tenacity.wait import wait_base
 from .base import BaseSearchProvider, SearchResult
@@ -69,6 +69,82 @@ def _needs_time_context(query: str) -> bool:
             return True
 
     return False
+
+
+_SENSITIVE_CITATION_URL_PARAM_KEYS = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "client_secret",
+    "code",
+    "id_token",
+    "password",
+    "refresh_token",
+    "token",
+    "signature",
+    "sig",
+    "x-amz-credential",
+    "x-amz-signature",
+    "x-amz-security-token",
+    "x-goog-credential",
+    "x-goog-signature",
+    "x-ms-signature",
+    "googleaccessid",
+}
+
+
+def _sanitize_citation_url(value: str) -> str:
+    if not isinstance(value, str):
+        return ""
+
+    url = value.strip()
+    if not url:
+        return ""
+
+    split = urlsplit(url)
+    if split.scheme.lower() not in {"http", "https"} or not split.netloc:
+        return ""
+    if not split.username and not split.password and not split.query and not split.fragment:
+        return url
+
+    hostname = split.hostname or ""
+    if not hostname:
+        return ""
+
+    if ":" in hostname and not hostname.startswith("["):
+        host = f"[{hostname}]"
+    else:
+        host = hostname
+
+    raw_port = ""
+    hostinfo = split.netloc.rsplit("@", 1)[-1]
+    if hostinfo.startswith("["):
+        closing_idx = hostinfo.find("]")
+        if closing_idx != -1 and closing_idx + 1 < len(hostinfo) and hostinfo[closing_idx + 1] == ":":
+            raw_port = hostinfo[closing_idx + 2 :]
+    elif ":" in hostinfo:
+        raw_port = hostinfo.rsplit(":", 1)[-1]
+
+    netloc = f"{host}:{raw_port}" if raw_port else host
+    query = urlencode(
+        [
+            (key, "REDACTED" if key.lower() in _SENSITIVE_CITATION_URL_PARAM_KEYS else value)
+            for key, value in parse_qsl(split.query, keep_blank_values=True)
+        ],
+        doseq=True,
+    )
+    fragment = split.fragment
+    if fragment and any(token in fragment for token in ("=", "&")):
+        fragment = urlencode(
+            [
+                (key, "REDACTED" if key.lower() in _SENSITIVE_CITATION_URL_PARAM_KEYS else value)
+                for key, value in parse_qsl(fragment, keep_blank_values=True)
+            ],
+            doseq=True,
+        )
+
+    return urlunsplit((split.scheme, netloc, split.path, query, fragment))
 
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 _IGNORED_CONTENT_BLOCK_TYPES = {
@@ -242,24 +318,20 @@ class GrokSearchProvider(BaseSearchProvider):
 
         for item in items:
             if isinstance(item, str):
-                url = item.strip()
-                parsed = urlparse(url)
-                if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
-                    normalized.append({"url": url})
+                normalized_url = _sanitize_citation_url(item)
+                if normalized_url:
+                    normalized.append({"url": normalized_url})
                 continue
 
             if not isinstance(item, dict):
                 continue
 
             url = item.get("url") or item.get("href") or item.get("link")
-            if not isinstance(url, str):
-                continue
-            url = url.strip()
-            parsed = urlparse(url)
-            if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            normalized_url = _sanitize_citation_url(url)
+            if not normalized_url:
                 continue
 
-            source = {"url": url}
+            source = {"url": normalized_url}
             title = item.get("title") or item.get("name") or item.get("label")
             if isinstance(title, str) and title.strip():
                 source["title"] = title.strip()

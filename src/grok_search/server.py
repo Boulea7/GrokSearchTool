@@ -186,8 +186,14 @@ def _mask_sensitive_text(value: str) -> str:
         (r"\bsk-[A-Za-z0-9_\-]+\b", "sk-***"),
         (r"\bfc-[A-Za-z0-9_\-]+\b", "fc-***"),
         (r"\btvly-[A-Za-z0-9_\-]+\b", "tvly-***"),
-        (r"([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|token|signature|sig|code)=)[^&\s]+", r"\1***"),
-        (r"((?:api[_-]?key|access[_-]?token|auth[_-]?token|token|signature|sig|code)=)[^&\s\"'}]+", r"\1***"),
+        (
+            r"([?#&](?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|refresh[_-]?token|id[_-]?token|password|token|signature|sig|code)=)[^&#\s]+",
+            r"\1***",
+        ),
+        (
+            r"((?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|refresh[_-]?token|id[_-]?token|password|token|signature|sig|code)=)[^&#\s\"'}]+",
+            r"\1***",
+        ),
     ]
     for pattern, replacement in patterns:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
@@ -509,7 +515,11 @@ _SENSITIVE_URL_PARAM_KEYS = {
     "apikey",
     "access_token",
     "auth_token",
+    "client_secret",
     "code",
+    "id_token",
+    "password",
+    "refresh_token",
     "token",
     "signature",
     "sig",

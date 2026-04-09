@@ -396,6 +396,86 @@ async def test_parse_completion_response_accepts_mixed_case_structured_citations
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_sanitizes_structured_citation_urls_before_appending_sources():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text=(
+            '{"choices":[{"message":{"content":"hello world","citations":['
+            '{"title":"OpenAI","url":"https://user:pass@openai.com/docs'
+            '?client_secret=example-client-secret&access_token=abc123#password=example-value"}]}}]}'
+        ),
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": "hello world",
+                        "citations": [
+                            {
+                                "title": "OpenAI",
+                                "url": (
+                                    "https://user:pass@openai.com/docs"
+                                    "?client_secret=example-client-secret"
+                                    "&access_token=abc123"
+                                    "#password=example-value"
+                                ),
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "https://openai.com/docs?client_secret=REDACTED&access_token=REDACTED#password=REDACTED" in result
+    assert "user:pass@" not in result
+    assert "example-client-secret" not in result
+    assert "abc123" not in result
+    assert "example-value" not in result
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_response_preserves_invalid_port_citations_while_sanitizing():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text=(
+            '{"choices":[{"message":{"content":"hello world","citations":['
+            '{"title":"OpenAI","url":"https://user:pass@openai.com:abc/docs'
+            '?client_secret=example-client-secret#password=example-value"}]}}]}'
+        ),
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": "hello world",
+                        "citations": [
+                            {
+                                "title": "OpenAI",
+                                "url": (
+                                    "https://user:pass@openai.com:abc/docs"
+                                    "?client_secret=example-client-secret"
+                                    "#password=example-value"
+                                ),
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "https://openai.com:abc/docs?client_secret=REDACTED#password=REDACTED" in result
+    assert "user:pass@" not in result
+    assert "example-client-secret" not in result
+    assert "example-value" not in result
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_appends_annotation_sources():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(
