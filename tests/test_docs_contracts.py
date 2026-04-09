@@ -155,4 +155,65 @@ def test_security_policy_mentions_redirect_preflight_degraded_boundary():
 
     assert "redirect preflight" in text
     assert "skipped_due_to_error" in text
+    assert "timeout" in text
     assert "continue downstream provider calls" in text
+    assert "best-effort safety boundary" in text
+
+
+def test_docs_pin_release_repo_and_stdio_first_host_story():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "Boulea7/GrokSearchTool" in readme
+    assert "fork/upstream" in readme
+    assert "本地 `stdio` 路径" in readme
+    assert "Boulea7/GrokSearchTool" in compatibility
+    assert "local `stdio`" in compatibility
+    assert "fork/upstream" in agents
+
+
+def test_docs_keep_planning_first_and_cli_first_research_story():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "`plan_* -> web_search`" in readme
+    assert "`deep research`" in readme
+    assert "CLI" in readme
+    assert "`plan_* -> web_search`" in compatibility
+    assert "CLI-first" in compatibility
+    assert "`plan_* -> web_search`" in agents
+    assert "deep research" in agents
+
+
+def test_docs_lock_finance_topic_and_diagnostic_detail_contracts():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "目前支持 `general` / `news` / `finance`" in readme
+    assert '`"full"` 保留完整 doctor/probe 细节' in readme
+    assert "`web_search.topic` currently supports `general`, `news`, and `finance`" in compatibility
+    assert "`detail=full|summary`" in compatibility
+    assert "`general` / `news` / `finance`" in agents
+    assert "`detail=full|summary`" in agents
+
+
+def test_docs_explain_redirect_preflight_timeout_and_redirect_limit_contract():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    security = SECURITY.read_text(encoding="utf-8")
+
+    assert "redirect 预检发生超时或请求级错误" in readme
+    assert "重定向次数过多" in readme
+    assert "第 `5` 次预检时仍然看到新的可见重定向" in readme
+    assert "redirect preflight timeouts" in compatibility
+    assert "目标 URL 重定向次数过多" in compatibility
+    assert "fifth preflight still encounters a new redirect" in compatibility
+    assert "redirect 预检发生超时或请求级错误" in agents
+    assert "重定向次数过多" in agents
+    assert "第 `5` 次预检时仍然看到新的可见重定向" in agents
+    assert "timeout failures" in security
+    assert "fifth preflight still encounters a new redirect" in security
