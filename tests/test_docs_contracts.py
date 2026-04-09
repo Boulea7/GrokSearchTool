@@ -142,6 +142,26 @@ def test_docs_keep_masking_scope_narrow_for_ambiguous_keys():
     assert "裸 `auth` / `key`" in agents
 
 
+def test_docs_cover_high_confidence_cloud_signed_credential_keys():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "X-Amz-Credential" in readme
+    assert "X-Goog-Credential" in readme
+    assert "GoogleAccessId" in readme
+    assert "X-Amz-Credential" in readme_en
+    assert "X-Goog-Credential" in readme_en
+    assert "GoogleAccessId" in readme_en
+    assert "X-Amz-Credential" in compatibility
+    assert "X-Goog-Credential" in compatibility
+    assert "GoogleAccessId" in compatibility
+    assert "X-Amz-Credential" in agents
+    assert "X-Goog-Credential" in agents
+    assert "GoogleAccessId" in agents
+
+
 def test_readme_fastmcp_badge_matches_pyproject_minimum_dependency():
     readme = README.read_text(encoding="utf-8")
     pyproject = PYPROJECT.read_text(encoding="utf-8")

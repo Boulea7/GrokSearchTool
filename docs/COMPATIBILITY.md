@@ -116,7 +116,7 @@ If local `stdio` startup fails with certificate-chain errors in enterprise or se
 - endpoint compatibility still varies across Grok-compatible providers
 - source extraction is best-effort and may depend on how the upstream response encodes links or annotations
 - `get_sources` sessions are transient, in-process cache handles rather than durable, caller-bound capabilities
-- diagnostic payloads may still include local absolute paths, endpoint/hostname details, or short upstream error summaries even when API keys, obvious token/signature strings, and common OAuth/OIDC credential parameters are masked
+- diagnostic payloads may still include local absolute paths, endpoint/hostname details, or short upstream error summaries even when API keys, obvious token/signature strings, common OAuth/OIDC credential parameters, and high-confidence cloud-signed credential keys such as `X-Amz-Credential`, `X-Goog-Credential`, and `GoogleAccessId` are masked
 - bare `auth` / `key` keys are intentionally not masked by default; the current redaction scope stays focused on high-confidence credential and signature parameters to avoid over-redacting ordinary diagnostics and source URLs
 - `toggle_builtin_tools` is intentionally client-specific and should not be treated as a universal MCP feature
 - `toggle_builtin_tools` readiness in `get_config_info` currently indicates local Git project context detection, not a full Claude Code host validation

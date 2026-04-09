@@ -291,6 +291,39 @@ async def test_get_config_info_summary_includes_all_base_snapshot_keys(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_probe_json_endpoint_masks_cloud_signed_url_keys_in_http_error_text(monkeypatch):
+    presigned_url = (
+        "https://signed.example.com/path"
+        "?X-Amz-Credential=cred"
+        "&X-Goog-Credential=gcred"
+        "&GoogleAccessId=gid"
+        "&keep=ok"
+    )
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            403,
+            json={"error": {"message": presigned_url}},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    result = await server._probe_json_endpoint(
+        "connection_test",
+        "GET",
+        "https://api.example.com/v1/models",
+        {"Authorization": "Bearer test"},
+    )
+
+    assert result["status"] == "error"
+    assert "cred" not in result["message"]
+    assert "gcred" not in result["message"]
+    assert "gid" not in result["message"]
+    assert "X-Amz-Credential=***" in result["message"]
+    assert "X-Goog-Credential=***" in result["message"]
+    assert "GoogleAccessId=***" in result["message"]
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_summary_and_full_run_the_same_probe_set(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
@@ -1084,6 +1117,26 @@ def test_mask_sensitive_text_redacts_oauth_style_secret_params():
     assert "refresh_token=***" in masked
     assert "id_token=***" in masked
     assert "password=***" in masked
+
+
+def test_mask_sensitive_text_redacts_cloud_signed_credential_keys():
+    masked = server._mask_sensitive_text(
+        (
+            "https://signed.example.com/path"
+            "?X-Amz-Credential=cred"
+            "&X-Goog-Credential=gcred"
+            "&GoogleAccessId=gid"
+            "&keep=ok"
+        )
+    )
+
+    assert "cred" not in masked
+    assert "gcred" not in masked
+    assert "gid" not in masked
+    assert "X-Amz-Credential=***" in masked
+    assert "X-Goog-Credential=***" in masked
+    assert "GoogleAccessId=***" in masked
+    assert "keep=ok" in masked
 
 
 def test_build_doctor_check_masks_sensitive_endpoint_url():

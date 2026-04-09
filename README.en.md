@@ -204,7 +204,7 @@ The `/models` connection test uses a 10-second timeout; additional real `web_sea
 `feature_readiness.get_sources` only reports `ready` when the current process already holds at least one readable non-error source session; error-only cached sessions keep it at `partial_ready`.
 `ready` means the capability is verified, `degraded` means it exists but probes or partial dependencies are unhealthy, `not_ready` means prerequisites are missing, and `partial_ready` means the interface exists but still depends on transient runtime state; `transient` and `client_specific` items do not lower the overall doctor status on their own.
 
-Even with API keys masked, the diagnostic payload may still include local absolute paths, endpoint/hostname details, and short upstream error summaries. Sensitive query tokens, bearer values, and common OAuth/OIDC credential parameters are masked, but you should still review the payload before sharing it externally.
+Even with API keys masked, the diagnostic payload may still include local absolute paths, endpoint/hostname details, and short upstream error summaries. Sensitive query tokens, bearer values, common OAuth/OIDC credential parameters, and high-confidence cloud-signed credential keys such as `X-Amz-Credential`, `X-Goog-Credential`, and `GoogleAccessId` are masked, but you should still review the payload before sharing it externally.
 
 ### `web_search` response contract
 
@@ -236,7 +236,7 @@ Successful `get_sources` responses include `session_id`, `sources`, and `sources
 
 `sources_count` is the final post-standardization, post-dedupe source count written into the cache, not the upstream raw citation count.
 `rank` currently follows `score`, source identity quality, and stable dedupe order without giving Grok-origin citations extra priority.
-`standardize_sources` canonicalizes scheme/host casing for dedupe, so mixed-case variants of the same page may collapse into one source; it still preserves ordinary URL fragments, removes URL userinfo, and masks common signature/token parameters plus common OAuth/OIDC credential keys such as `client_secret`, `refresh_token`, `id_token`, and `password`. Explicit default ports such as `:443` and `:80` are still preserved and are not collapsed into implicit-default URLs.
+`standardize_sources` canonicalizes scheme/host casing for dedupe, so mixed-case variants of the same page may collapse into one source; it still preserves ordinary URL fragments, removes URL userinfo, and masks common signature/token parameters plus common OAuth/OIDC credential keys such as `client_secret`, `refresh_token`, `id_token`, and `password`. High-confidence cloud-signed credential keys such as `X-Amz-Credential`, `X-Goog-Credential`, and `GoogleAccessId` are also masked. Explicit default ports such as `:443` and `:80` are still preserved and are not collapsed into implicit-default URLs.
 
 ## Companion Skill
 
