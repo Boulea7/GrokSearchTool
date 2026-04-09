@@ -187,11 +187,11 @@ def _mask_sensitive_text(value: str) -> str:
         (r"\bfc-[A-Za-z0-9_\-]+\b", "fc-***"),
         (r"\btvly-[A-Za-z0-9_\-]+\b", "tvly-***"),
         (
-            r"([?#&](?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|refresh[_-]?token|id[_-]?token|password|token|signature|sig|code)=)[^&#\s]+",
+            rf"([?#&](?:{_SENSITIVE_TEXT_PARAM_NAME_PATTERN})=)[^&#\s]+",
             r"\1***",
         ),
         (
-            r"((?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|refresh[_-]?token|id[_-]?token|password|token|signature|sig|code)=)[^&#\s\"'}]+",
+            rf"((?:{_SENSITIVE_TEXT_PARAM_NAME_PATTERN})=)[^&#\s\"'}}]+",
             r"\1***",
         ),
     ]
@@ -531,6 +531,9 @@ _SENSITIVE_URL_PARAM_KEYS = {
     "x-ms-signature",
     "googleaccessid",
 }
+_SENSITIVE_TEXT_PARAM_NAME_PATTERN = "|".join(
+    sorted((re.escape(key) for key in _SENSITIVE_URL_PARAM_KEYS), key=len, reverse=True)
+)
 
 
 def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
