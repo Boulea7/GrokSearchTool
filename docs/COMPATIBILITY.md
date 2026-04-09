@@ -75,6 +75,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `web_fetch` / `web_map` now reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, common loopback helper domains such as `localtest.me` / `lvh.me`, and common public DNS aliases that encode local/private IPs
 - after static URL validation passes, `web_fetch` / `web_map` also re-check visible redirect targets before dispatching the provider call
 - visible redirect re-checks currently use `GET` rather than `HEAD`, so presigned URLs, one-shot tokens, or read-side-effect links may incur an extra preflight read
+- redirect preflight currently makes at most 5 visible preflight requests; if the fifth preflight still encounters a new redirect, it returns the current hard-reject contract (`目标 URL 重定向次数过多`) before any downstream provider call
 - redirect preflight timeouts and request-level failures are currently surfaced as `skipped_due_to_error`; `web_fetch` / `web_map` still continue to the downstream provider path in that case
 - this boundary does not provide a strong guarantee against split-horizon or locally poisoned DNS that resolves a public-looking hostname to a private target
 

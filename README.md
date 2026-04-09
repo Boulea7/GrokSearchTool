@@ -5,7 +5,7 @@
 
 [English](./README.en.md) | [繁體中文](./README.zh-TW.md) | 简体中文 | [日本語](./README.ja.md) | [Русский](./README.ru.md)
 
-**GrokSearch MCP，为 Claude Code 提供轻量、可核验来源的网络上下文能力**
+**GrokSearch MCP，为多种 MCP 客户端提供轻量、可核验来源的网络上下文能力**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![FastMCP](https://img.shields.io/badge/FastMCP-2.3.0+-green.svg)](https://github.com/jlowin/fastmcp)
 
@@ -69,7 +69,7 @@ Client / Assistant
 - 对模型生成内容做来源核验，而不是只看“像不像对”
 - 对某个网页做可靠正文抓取，而不是只拿搜索摘要
 - 先列清复杂研究任务，再逐步执行
-- 在 Claude Code 项目里收口官方 WebSearch/WebFetch 的调用入口
+- 在支持内建网页工具路由的宿主里收口统一的网页工具入口
 
 
 ## 二、安装
@@ -361,7 +361,8 @@ claude mcp list
 - `web_fetch` / `web_map` 默认拒绝非 `http/https`、loopback、明显私网目标、单标签主机名、常见私网后缀主机（如 `.internal` / `.local` / `.lan` / `.home` / `.corp`）、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把私网 IP 编进公网 DNS 名的 alias 形态（如 `nip.io` / `xip.io` / `sslip.io`）。
 - 对通过静态校验的目标，`web_fetch` / `web_map` 还会在真正调用 provider 前继续复检可见的 redirect 目标。
 - 当前可见 redirect 复检使用 `GET` 请求而不是 `HEAD`；对 presigned URL、one-shot token 或有副作用的读取型链接，这意味着可能存在额外一次预检读取，应视为已知边界。
-- 若 redirect 预检发生超时或请求级错误，当前实现会把该步骤标记为 `skipped_due_to_error`；`web_fetch` / `web_map` 目前仍会继续执行下游 provider 调用。
+- 当前可见 redirect 复检最多会发起 `5` 次预检请求；如果到第 `5` 次预检时仍然看到新的可见重定向，就会直接返回“目标 URL 重定向次数过多”并拒绝继续调用下游 provider。
+- 若 redirect 预检发生超时或请求级错误，当前实现会把该步骤标记为 `skipped_due_to_error`；`web_fetch` / `web_map` 目前仍会继续执行下游 provider 调用，因此这条边界当前应视为 best-effort safety boundary，而不是 hard-stop guarantee。
 - 当前实现为了避免误杀普通公网 hostname，不会因为本机 DNS 把某个公网域名解析到私网结果就直接拒绝请求；因此这层边界不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证。
 
 | 参数 | 类型 | 必填 | 说明 |
@@ -375,7 +376,7 @@ claude mcp list
 说明：
 - Tavily Map 默认可能返回外部域名链接；若你需要更接近站内 sitemap 的结果，请结合 `instructions` 收紧范围，并按返回结果自行过滤。当前文档中的这条说明对应 Tavily 文档中 `allow_external=true` 的默认行为，本封装暂未直接暴露该开关。
 - 默认会拒绝非 `http/https`、loopback、明显私有网络目标、单标签主机名、常见私网后缀主机、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把私网 IP 编进公网 DNS 名的 alias 形态，并在调用 Tavily 前继续做可见 redirect 目标复检。
-- 可见 redirect 复检当前使用 `GET` 而不是 `HEAD`；若预检超时或发生请求级错误，会标记为 `skipped_due_to_error`，并继续执行下游 provider。该边界不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证。
+- 可见 redirect 复检当前使用 `GET` 而不是 `HEAD`；最多会发起 `5` 次预检请求，如果到第 `5` 次预检时仍然看到新的可见重定向，就会返回“目标 URL 重定向次数过多”并拒绝继续执行下游 provider。若预检超时或发生请求级错误，则会标记为 `skipped_due_to_error`，并继续执行下游 provider；因此该边界当前应被理解为 best-effort safety boundary，而不是对 split-horizon / 本地 DNS 私有解析的强保证。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -432,6 +433,12 @@ claude mcp list
 
 结构化搜索规划脚手架（分阶段、多轮），用于在执行复杂搜索前先生成可执行的搜索计划。
 其中 `plan_search_term` 在首次建立 `search_strategy` 时设置 `approach` / `fallback_plan`；后续非 `is_revision` 调用只会追加 `search_terms`，不会隐式改写既有 strategy metadata。
+
+说明：
+- 推荐阶段顺序为 `plan_intent -> plan_complexity -> plan_sub_query -> plan_search_term -> plan_tool_mapping -> plan_execution`。
+- Level 1 planning 在 `query_decomposition` 后结束，Level 2 planning 在 `tool_selection` 后结束，Level 3 才会继续到 `execution_order`。
+- `plan_*` wrapper 当前采用标量输入形态，例如 `depends_on` 使用 CSV、`parallel_groups` 使用分号分组的 CSV；返回值会提供 `plan_complete`、`phases_remaining` 与 `executable_plan`，便于调用方直接承接下一步执行。
+- 当 session 缺失、阶段顺序错误，或 revision 会破坏下游阶段时，当前会返回结构化错误，并明确要求从新 session 重新开始相应 planning 流程。
 </details>
 
 ## 四、常见问题
@@ -454,7 +461,7 @@ A: 推荐使用带显式 `/v1` 后缀的 OpenAI 兼容根路径，并确保 `/ch
 <summary>
 Q: 如何验证配置？
 </summary>
-A: 在 Claude 对话中说"显示 grok-search 配置信息"，将自动测试 API 连接并显示结果。
+A: 直接调用 `get_config_info` 即可检查基础配置、`/models` 连通性、doctor 状态与 feature readiness；若宿主支持自然语言工具调用，也可让宿主触发同名工具。
 </details>
 
 <details>
