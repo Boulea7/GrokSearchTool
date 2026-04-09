@@ -1387,6 +1387,8 @@ async def web_map(
     preflight = await _preflight_public_target_url(url)
     if preflight.status == "reject":
         return f"映射失败: {preflight.message}"
+    if preflight.status == "skipped_due_to_error":
+        await log_info(None, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     result = await _call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
     return result
