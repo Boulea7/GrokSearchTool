@@ -67,7 +67,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `get_config_info` is still not a full end-to-end compatibility guarantee
 - `GROK_DEBUG=false` suppresses helper progress logs entirely, including `ctx.info()` forwarding; these signals are intentionally debug-only
 - `grok_search.mcp` is an access-time lazy export; importing the root package does not require `fastmcp` until that export is actually accessed
-- `grok_search.providers.GrokSearchProvider` is also an access-time lazy export; non-provider imports should not fail early because Grok-provider optional dependencies are missing
+- `grok_search.providers.GrokSearchProvider` is also an access-time lazy export; non-provider imports should not fail early because Grok-provider dependencies are missing
 - this lazy-export boundary only narrows import-time behavior and does not change the install-time dependency declaration; it should not be read as turning package dependencies into optional extras
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` intentionally expose a curated subset of provider options rather than the providers' complete native API surfaces
 - Tavily `map` may include external-domain URLs unless callers further constrain and post-filter the crawl results; this reflects Tavily's documented default `allow_external=true` behavior, and this wrapper does not currently expose that flag directly

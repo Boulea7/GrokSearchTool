@@ -17,7 +17,7 @@
 
 GrokSearch MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的轻量 MCP 服务器，面向 Claude Code、Codex CLI、Cherry Studio 等支持 MCP 的客户端，提供**最新、可核验、低摩擦**的网络上下文能力。
 
-公开 package import contract 当前分两层：`grok_search.mcp` 是 access-time lazy export，只有真正访问该导出时才需要 `fastmcp`；`grok_search.providers.GrokSearchProvider` 也是 access-time lazy export，普通非 provider 导入不应被其可选依赖连带拖死。这只是在导入时收口边界，不改变安装时依赖声明，也不应被理解为这些依赖已经变成 optional extras。
+公开 package import contract 当前分两层：`grok_search.mcp` 是 access-time lazy export，只有真正访问该导出时才需要 `fastmcp`；`grok_search.providers.GrokSearchProvider` 也是 access-time lazy export，普通非 provider 导入不应仅因 Grok provider 相关依赖缺失而被提前拖死。这只是在导入时收口边界，不改变安装时依赖声明，也不应被理解为这些依赖已经变成 optional extras。
 
 它不是一个以浏览器自动化为核心的重型系统，而是一层为研究型问答优化的搜索基础设施：
 
