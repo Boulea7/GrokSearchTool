@@ -428,6 +428,7 @@ claude mcp list
 ### `plan_intent` / `plan_complexity` / `plan_sub_query` / `plan_search_term` / `plan_tool_mapping` / `plan_execution`
 
 结构化搜索规划脚手架（分阶段、多轮），用于在执行复杂搜索前先生成可执行的搜索计划。
+其中 `plan_search_term` 在首次建立 `search_strategy` 时设置 `approach` / `fallback_plan`；后续非 `is_revision` 调用只会追加 `search_terms`，不会隐式改写既有 strategy metadata。
 </details>
 
 ## 四、常见问题

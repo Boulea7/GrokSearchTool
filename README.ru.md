@@ -19,6 +19,8 @@ GrokSearch — это независимо поддерживаемый MCP-се
 
 Сейчас опубликовано `13` MCP-инструментов.
 
+`plan_search_term` задаёт `approach` / `fallback_plan` при первом создании `search_strategy`; последующие вызовы без `is_revision` только добавляют `search_terms` и не переписывают существующие strategy metadata неявно.
+
 ## Установка
 
 ### Требования

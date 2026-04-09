@@ -667,6 +667,141 @@ async def test_plan_search_term_rejects_multiple_sub_query_purposes():
 
 
 @pytest.mark.asyncio
+async def test_plan_search_term_append_preserves_existing_strategy_metadata():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy.",
+        level=2,
+        estimated_sub_queries=2,
+        estimated_tool_calls=4,
+        justification="Requires multi-term search strategy.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="First sub-query.",
+        id="sq1",
+        goal="Compare pricing.",
+        expected_output="A pricing comparison.",
+        boundary="Exclude compatibility details.",
+        tool_hint="web_search",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Second sub-query.",
+        id="sq2",
+        goal="Compare compatibility.",
+        expected_output="A compatibility comparison.",
+        boundary="Exclude pricing details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed strategy metadata.",
+        term="provider pricing",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+        fallback_plan="check official docs",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Append another search term without rewriting metadata.",
+        term="provider compatibility",
+        purpose="sq2",
+        round=2,
+        approach="broad_first",
+        fallback_plan="search community forums",
+    )
+
+    session = planning.engine.get_session(session_id)
+
+    assert session is not None
+    assert session.phases["search_strategy"].data == {
+        "approach": "targeted",
+        "fallback_plan": "check official docs",
+        "search_terms": [
+            {"term": "provider pricing", "purpose": "sq1", "round": 1},
+            {"term": "provider compatibility", "purpose": "sq2", "round": 2},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_plan_search_term_revision_replaces_strategy_metadata():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Requires search strategy revision coverage.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed strategy metadata.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+        fallback_plan="check official docs",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Replace the strategy explicitly.",
+        term="provider alternatives",
+        purpose="sq1",
+        round=1,
+        approach="broad_first",
+        fallback_plan="search community forums",
+        is_revision=True,
+    )
+
+    session = planning.engine.get_session(session_id)
+
+    assert session is not None
+    assert session.phases["search_strategy"].data == {
+        "approach": "broad_first",
+        "fallback_plan": "search community forums",
+        "search_terms": [{"term": "provider alternatives", "purpose": "sq1", "round": 1}],
+    }
+
+
+@pytest.mark.asyncio
 async def test_plan_tool_mapping_rejects_invalid_params_json():
     intent = json.loads(
         await server.plan_intent(

@@ -102,6 +102,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `detail=summary` 当前只是同一次诊断结果的紧凑字段投影，不是额外的轻执行路径
 - `detail=summary` 当前应保留 `Config.get_config_info()` 返回的全部基础配置快照键；新增基础字段时，不应只出现在 `full`
 - planning engine 当前会先规范化传入的 `id` / `sub_query_id` 再做 duplicate guard，避免空白包裹的重复 ID 绕过校验
+- `plan_search_term` 当前在非 `is_revision` 追加时只会累积 `search_terms`，不会隐式改写既有 `approach` / `fallback_plan`；若要替换整组 search strategy，应显式使用 `is_revision=true`
 - `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
 - `feature_readiness.get_sources` 当前只有在运行中进程里至少存在一个非 error 的可读取 source session 时才会显示 `ready`；若缓存里只有失败搜索留下的 session，则应保持 `partial_ready`
 - `feature_readiness.get_sources` 属于 `transient` readiness 信号；当前不应仅因其为 `partial_ready` 就拉低 overall doctor

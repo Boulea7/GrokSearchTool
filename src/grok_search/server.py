@@ -2759,7 +2759,7 @@ async def plan_sub_query(
 @mcp.tool(
     name="plan_search_term",
     output_schema=None,
-    description="Phase 4: Add one search term. Call once per term; data accumulates. First call must set approach.",
+    description="Phase 4: Add one search term. Call once per term; data accumulates. First call must set approach. Later non-revision calls append search_terms only and do not overwrite existing approach/fallback_plan; use is_revision=true to replace the strategy.",
 )
 async def plan_search_term(
     session_id: Annotated[str, "Session ID from plan_intent"],
