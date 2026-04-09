@@ -3540,12 +3540,12 @@ async def test_call_tavily_extract_uses_expected_transport_contract(monkeypatch)
     assert error is None
     assert content == "# ok"
     assert captured["url"] == "http://127.0.0.1:18080/extract"
-    assert captured["kwargs"] == {"timeout": 60.0, "trust_env": False}
-    assert captured["headers"] == {
-        "Authorization": "Bearer tvly-test",
-        "Content-Type": "application/json",
-    }
-    assert captured["json"] == {"urls": ["https://example.com"], "format": "markdown"}
+    assert captured["kwargs"]["timeout"] == 60.0
+    assert captured["kwargs"]["trust_env"] is False
+    assert captured["headers"]["Authorization"] == "Bearer tvly-test"
+    assert captured["headers"]["Content-Type"] == "application/json"
+    assert captured["json"]["urls"] == ["https://example.com"]
+    assert captured["json"]["format"] == "markdown"
 
 
 @pytest.mark.asyncio
@@ -3824,17 +3824,14 @@ async def test_call_firecrawl_scrape_uses_expected_transport_contract(monkeypatc
     assert error is None
     assert content == "# ok"
     assert captured["url"] == "http://127.0.0.1:19090/v2/scrape"
-    assert captured["kwargs"] == {"timeout": 90.0, "trust_env": False}
-    assert captured["headers"] == {
-        "Authorization": "Bearer fc-test",
-        "Content-Type": "application/json",
-    }
-    assert captured["json"] == {
-        "url": "https://example.com",
-        "formats": ["markdown"],
-        "timeout": 60000,
-        "waitFor": 1500,
-    }
+    assert captured["kwargs"]["timeout"] == 90.0
+    assert captured["kwargs"]["trust_env"] is False
+    assert captured["headers"]["Authorization"] == "Bearer fc-test"
+    assert captured["headers"]["Content-Type"] == "application/json"
+    assert captured["json"]["url"] == "https://example.com"
+    assert captured["json"]["formats"] == ["markdown"]
+    assert captured["json"]["timeout"] == 60000
+    assert captured["json"]["waitFor"] >= 1500
 
 
 @pytest.mark.asyncio

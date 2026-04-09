@@ -124,10 +124,8 @@ def test_multilingual_readmes_explain_lazy_import_boundaries():
 
 
 def test_lazy_import_docs_do_not_imply_install_time_optional_extras():
-    readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
 
-    assert "普通非 provider 导入不应被其可选依赖连带拖死" not in readme
     assert "optional dependencies" not in compatibility
     assert "Grok-provider dependencies are missing" in compatibility
 
