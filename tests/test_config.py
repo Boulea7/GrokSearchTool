@@ -244,6 +244,32 @@ def test_get_config_info_masks_sensitive_url_components(monkeypatch):
     assert info["FIRECRAWL_API_URL"] == "https://api.firecrawl.dev/v2#code=***"
 
 
+def test_get_config_info_masks_oauth_style_secret_params(monkeypatch):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.setenv(
+        "GROK_API_URL",
+        (
+            "https://user:pass@api.example.com/v1"
+            "?client_secret=example-client-secret"
+            "&refresh_token=example-refresh-token"
+            "&id_token=example-id-token"
+            "#password=example-value"
+        ),
+    )
+    monkeypatch.setenv("GROK_API_KEY", "sk-secret-value")
+
+    info = config.get_config_info()
+
+    assert info["GROK_API_URL"] == (
+        "https://api.example.com/v1"
+        "?client_secret=***"
+        "&refresh_token=***"
+        "&id_token=***"
+        "#password=***"
+    )
+
+
 def test_get_config_info_tolerates_invalid_port_in_masked_urls(monkeypatch):
     config = Config()
     config.reset_runtime_state()

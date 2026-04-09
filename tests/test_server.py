@@ -1065,6 +1065,27 @@ def test_mask_sensitive_text_redacts_extended_auth_and_code_tokens():
     assert "code=***" in masked
 
 
+def test_mask_sensitive_text_redacts_oauth_style_secret_params():
+    masked = server._mask_sensitive_text(
+        (
+            "https://example.com/callback"
+            "?client_secret=example-client-secret"
+            "&refresh_token=example-refresh-token"
+            "&id_token=example-id-token"
+            "#password=example-value"
+        )
+    )
+
+    assert "example-client-secret" not in masked
+    assert "example-refresh-token" not in masked
+    assert "example-id-token" not in masked
+    assert "example-value" not in masked
+    assert "client_secret=***" in masked
+    assert "refresh_token=***" in masked
+    assert "id_token=***" in masked
+    assert "password=***" in masked
+
+
 def test_build_doctor_check_masks_sensitive_endpoint_url():
     check = server._build_doctor_check(
         "demo",
