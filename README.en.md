@@ -6,6 +6,8 @@ GrokSearch is an independently maintained MCP server for assistants and clients 
 
 It combines `Grok` search with `Tavily` and `Firecrawl` extraction, then exposes a stable MCP tool surface for lightweight lookups, source verification, focused page fetching, a recommended `plan_* -> web_search` workflow for complex searches, and a future `deep research` direction for heavier exploration tasks. For clear, low-ambiguity single-hop lookups where planning adds little value, direct `web_search` is still acceptable.
 
+The public package import contract currently has two boundaries: `grok_search.mcp` is an access-time lazy export, so `fastmcp` is only required when that export is actually accessed; `grok_search.providers.GrokSearchProvider` is also an access-time lazy export, so ordinary non-provider imports should not fail early just because Grok-provider dependencies are missing. This only narrows import-time behavior, does not change the install-time dependency declaration, and should not be read as turning package dependencies into optional extras.
+
 Public `stdio` installation snippets currently use the maintained release repo `Boulea7/GrokSearchTool`. Local worktrees, historical remote names, or legacy collaboration traces should not be read as an active `fork/upstream` PR workflow.
 
 ## Overview
@@ -35,6 +37,8 @@ The public MCP surface currently includes `13` tools:
 - `plan_tool_mapping`
 - `plan_execution`
 
+`plan_search_term` sets `approach` / `fallback_plan` when `search_strategy` is first created; later non-revision calls append `search_terms` only and do not implicitly rewrite existing strategy metadata.
+
 ## Installation
 
 ### Requirements
@@ -45,7 +49,7 @@ The public MCP surface currently includes `13` tools:
 
 ### Support levels
 
-- `Officially tested`: Claude Code
+- `Officially tested`: Claude Code for the documented local `stdio` flow and project-level settings path, not as a full host-level E2E matrix
 - `Community-tested`: Codex-style MCP clients, Cherry Studio
 - `Planned`: Dify, n8n, Coze
 
@@ -53,6 +57,7 @@ Notes:
 
 - Public installation guidance currently covers local `stdio` only.
 - `toggle_builtin_tools` is specific to Claude Code project settings.
+- `toggle_builtin_tools` readiness in `get_config_info` only means a local Git project context was detected; it is not a full Claude Code host verification.
 - The installation snippets below intentionally use the current maintained public install source `Boulea7/GrokSearchTool`.
 
 ### Add as an MCP server
@@ -99,6 +104,12 @@ TAVILY_API_URL = "https://api.tavily.com"
 FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 ```
 
+If you use a project-level `.codex/config.toml`, avoid committing real keys into the repository; this repo now ignores `.codex/` by default. For local development, prefer keeping secrets in an ignored `.env.local`.
+
+`grok-search` automatically resolves configuration as `process env -> project .env.local -> project .env -> persisted config -> code defaults`, so you usually do not need to `source` `.env.local` as shell code. Project env fallback currently accepts both plain dotenv lines like `KEY=value` and optional `export KEY=value` prefixes; if you must export variables into the current shell, use an explicit shell-safe workflow instead of sourcing the file blindly.
+
+If you plan to call `toggle_builtin_tools`, also avoid committing project-level `.claude/settings.json`; this repo now ignores `.claude/` by default.
+
 #### Cherry Studio
 
 Create a `STDIO` MCP server entry with the same core fields:
@@ -123,14 +134,14 @@ Create a `STDIO` MCP server entry with the same core fields:
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint, ideally with `/v1` |
+| `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint; using an explicit `/v1` suffix is recommended, the current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
 | `GROK_API_KEY` | Yes | Grok API key |
-| `GROK_MODEL` | No | Default model |
+| `GROK_MODEL` | No | Default model; see the precedence notes below |
 | `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |
-| `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map` |
+| `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
 | `TAVILY_ENABLED` | No | Enable or disable Tavily-backed fetch/map paths |
-| `FIRECRAWL_API_KEY` | No | Firecrawl fallback key |
+| `FIRECRAWL_API_KEY` | No | Firecrawl key for fetch fallback and optional supplemental `web_search` |
 | `FIRECRAWL_API_URL` | No | Firecrawl endpoint |
 | `GROK_DEBUG` | No | Enable debug logging |
 | `GROK_LOG_LEVEL` | No | Log level |
@@ -143,16 +154,27 @@ Create a `STDIO` MCP server entry with the same core fields:
 
 Notes:
 
-- model resolution order is `GROK_MODEL` env -> persisted `~/.config/grok-search/config.json` value from `switch_model` -> code default `grok-4.1-fast`
+- model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value from `switch_model` -> code default `grok-4.1-fast`
+- process env presence wins over project `.env.local` / `.env`, even when the env value is explicitly empty
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` defaults to `always`, which preserves the current behavior of always injecting local time context
+- `GROK_DEBUG=false` suppresses these helper progress logs entirely, including `ctx.info()` forwarding; they are intentionally debug-only progress/debug signals
 - the recommended core path is `plan_* -> web_search`
 - direct `web_search` is still allowed for clear single-hop lookups when planning adds little value
 - interactive `deep research` workflows are planned CLI-first rather than as conversational MCP/skill interactions
 - `web_fetch` still works with Firecrawl only.
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` injects local time context according to `GROK_TIME_CONTEXT_MODE` (`always` by default)
+- loopback upstream endpoints are requested with `trust_env=False`, which also bypasses `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` and `SSL_CERT_FILE` / `SSL_CERT_DIR` for that request
+- `web_fetch` and `web_map` reject non-HTTP(S), loopback, obviously private-network targets, single-label hosts, common private suffixes such as `.internal` / `.local` / `.lan` / `.home` / `.corp`, common loopback helper domains such as `localtest.me` / `lvh.me`, and common public DNS aliases that encode local/private IPs
+- after the static URL check passes, `web_fetch` and `web_map` also re-check visible redirect targets before dispatching the provider call
+- visible redirect re-checks currently use `GET` rather than `HEAD`, so presigned URLs, one-shot tokens, or read-side-effect links may incur an extra preflight read
+- if redirect preflight times out or hits a request-level error, the current implementation marks that step as `skipped_due_to_error`; `web_fetch` / `web_map` currently still continue to the downstream provider call
+- this boundary intentionally does not hard-block ordinary public-looking hostnames based only on local DNS answers, so it should not be treated as a strong guarantee against split-horizon or locally poisoned DNS resolution
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
+- `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` expose a curated subset of provider options rather than the providers' full native API surfaces.
+- `web_fetch` returns extracted Markdown text, not the provider's full structured raw response payload.
+- Tavily `web_map` may include external-domain URLs unless you further narrow the crawl and post-filter results; this follows Tavily's default `allow_external=true` behavior.
 
 ### Minimal smoke check
 
@@ -167,12 +189,21 @@ For any local `stdio` host, start with this lightweight verification flow:
 
 `Config.get_config_info()` only returns the base config snapshot. The MCP tool `get_config_info` keeps that snapshot and also adds:
 
+- optional `detail="full" | "summary"` output levels; `full` remains the default and preserves the current payload shape
 - `doctor`: overall doctor status, structured checks, and repair recommendations
 - `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, and `toggle_builtin_tools`
+- `doctor.recommendations_detail`: additive structured repair hints linked to `check_id` and feature scope
+- `feature_readiness.web_fetch.providers`: provider-level readiness details; `verified_path` shows which real fetch probe succeeded, and skipped providers may include `skipped_reason`
 - minimal real `web_search` / `web_fetch` probe results
 
 Optional provider probes are read-only and run only when the corresponding configuration is already present.
 The `/models` connection test uses a 10-second timeout; additional real `web_search` / `web_fetch` probes may take longer.
+`detail="summary"` keeps the base config snapshot, `connection_test`, `doctor.status` / `doctor.summary` / `doctor.recommendations`, and `feature_readiness`, while omitting the large `doctor.checks` array and probe-detail fields.
+`detail="summary"` is currently a compact projection of the same diagnostic run, not a separate lightweight execution path.
+`feature_readiness.get_sources` only reports `ready` when the current process already holds at least one readable non-error source session; error-only cached sessions keep it at `partial_ready`.
+`ready` means the capability is verified, `degraded` means it exists but probes or partial dependencies are unhealthy, `not_ready` means prerequisites are missing, and `partial_ready` means the interface exists but still depends on transient runtime state; `transient` and `client_specific` items do not lower the overall doctor status on their own.
+
+Even with API keys masked, the diagnostic payload may still include local absolute paths, endpoint/hostname details, and short upstream error summaries. Sensitive query tokens, bearer values, and common OAuth/OIDC credential parameters are masked, but you should still review the payload before sharing it externally.
 
 ### `web_search` response contract
 
@@ -185,12 +216,26 @@ The `/models` connection test uses a 10-second timeout; additional real `web_sea
 
 Optional additive controls:
 
-- `topic`: `general` or `news`
-- `time_range`: `day`, `week`, `month`, or `year`
+- `topic`: `general`, `news`, or `finance`
+- `time_range`: `day`, `week`, `month`, or `year` (aliases `d`, `w`, `m`, `y` are normalized)
 - `include_domains`: Tavily allowlist for supplemental search
 - `exclude_domains`: Tavily denylist for supplemental search
 
-`get_sources` returns standardized metadata including `provider`, `domain`, `score`, `retrieved_at`, and `rank`.
+If supplemental search goes through Tavily, `max_results` is currently clamped to the provider's documented limit of `20`.
+These controls currently apply to Tavily-backed supplemental search only; if Tavily is unavailable or not selected for the supplemental path, the request may still succeed with warnings and the controls will not be fully enforced.
+
+Successful `get_sources` responses include `session_id`, `sources`, and `sources_count`, where each source is standardized with metadata such as `provider`, `domain`, `score`, `retrieved_at`, and `rank`. They also return:
+
+- `search_status`
+- `search_error`
+- `source_state`
+- `error` when the `session_id` is missing or expired
+
+`get_sources` currently reads from an in-process memory-backed LRU cache on the running server. Session IDs are shared-daemon transient handles rather than durable, caller-bound capabilities or secret tokens, and `session_id_not_found_or_expired` covers restart, TTL expiry, eviction, and unreadable legacy-cache misses.
+
+`sources_count` is the final post-standardization, post-dedupe source count written into the cache, not the upstream raw citation count.
+`rank` currently follows `score`, source identity quality, and stable dedupe order without giving Grok-origin citations extra priority.
+`standardize_sources` canonicalizes scheme/host casing for dedupe, so mixed-case variants of the same page may collapse into one source; it still preserves ordinary URL fragments, removes URL userinfo, and masks common signature/token parameters plus common OAuth/OIDC credential keys such as `client_secret`, `refresh_token`, `id_token`, and `password`. Explicit default ports such as `:443` and `:80` are still preserved and are not collapsed into implicit-default URLs.
 
 ## Companion Skill
 

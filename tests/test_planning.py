@@ -242,6 +242,52 @@ async def test_plan_complexity_revision_rejects_existing_downstream_phases():
 
 
 @pytest.mark.asyncio
+async def test_plan_complexity_rejects_implicit_overwrite_when_downstream_phases_exist():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Initial complexity.",
+        level=3,
+        estimated_sub_queries=1,
+        estimated_tool_calls=4,
+        justification="Need execution order later.",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Original sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    result = json.loads(
+        await server.plan_complexity(
+            session_id=session_id,
+            thought="Implicit overwrite should fail.",
+            level=1,
+            estimated_sub_queries=1,
+            estimated_tool_calls=2,
+            justification="Should require explicit revision instead of mutating in place.",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "is_revision=true" in result["message"].lower()
+    assert result["details"][0]["field"] == "is_revision"
+
+
+@pytest.mark.asyncio
 async def test_level_1_blocks_later_phases():
     intent = json.loads(
         await server.plan_intent(
@@ -621,6 +667,141 @@ async def test_plan_search_term_rejects_multiple_sub_query_purposes():
 
 
 @pytest.mark.asyncio
+async def test_plan_search_term_append_preserves_existing_strategy_metadata():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy.",
+        level=2,
+        estimated_sub_queries=2,
+        estimated_tool_calls=4,
+        justification="Requires multi-term search strategy.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="First sub-query.",
+        id="sq1",
+        goal="Compare pricing.",
+        expected_output="A pricing comparison.",
+        boundary="Exclude compatibility details.",
+        tool_hint="web_search",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Second sub-query.",
+        id="sq2",
+        goal="Compare compatibility.",
+        expected_output="A compatibility comparison.",
+        boundary="Exclude pricing details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed strategy metadata.",
+        term="provider pricing",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+        fallback_plan="check official docs",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Append another search term without rewriting metadata.",
+        term="provider compatibility",
+        purpose="sq2",
+        round=2,
+        approach="broad_first",
+        fallback_plan="search community forums",
+    )
+
+    session = planning.engine.get_session(session_id)
+
+    assert session is not None
+    assert session.phases["search_strategy"].data == {
+        "approach": "targeted",
+        "fallback_plan": "check official docs",
+        "search_terms": [
+            {"term": "provider pricing", "purpose": "sq1", "round": 1},
+            {"term": "provider compatibility", "purpose": "sq2", "round": 2},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_plan_search_term_revision_replaces_strategy_metadata():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Requires search strategy revision coverage.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed strategy metadata.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+        fallback_plan="check official docs",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Replace the strategy explicitly.",
+        term="provider alternatives",
+        purpose="sq1",
+        round=1,
+        approach="broad_first",
+        fallback_plan="search community forums",
+        is_revision=True,
+    )
+
+    session = planning.engine.get_session(session_id)
+
+    assert session is not None
+    assert session.phases["search_strategy"].data == {
+        "approach": "broad_first",
+        "fallback_plan": "search community forums",
+        "search_terms": [{"term": "provider alternatives", "purpose": "sq1", "round": 1}],
+    }
+
+
+@pytest.mark.asyncio
 async def test_plan_tool_mapping_rejects_invalid_params_json():
     intent = json.loads(
         await server.plan_intent(
@@ -672,6 +853,124 @@ async def test_plan_tool_mapping_rejects_invalid_params_json():
     )
 
     assert result["error"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_plan_tool_mapping_rejects_non_object_params_json_with_stable_field_name():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy and mapping.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Requires explicit tool selection.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A single comparison paragraph.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed search strategy.",
+        term="grok tavily provider",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Non-object params_json should fail.",
+            sub_query_id="sq1",
+            tool="web_search",
+            reason="Need valid params.",
+            params_json='["not-an-object"]',
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert result["details"][0]["field"] == "params_json"
+    assert result["details"][0]["type"] == "dict_type"
+    assert "json object" in result["details"][0]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_tool_mapping_treats_null_params_json_as_missing_params():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Moderate lookup.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need strategy and mapping.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Requires explicit tool selection.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Single sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A single comparison paragraph.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed search strategy.",
+        term="grok tavily provider",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Null params_json should be treated as missing.",
+            sub_query_id="sq1",
+            tool="web_search",
+            reason="Need valid params.",
+            params_json="null",
+        )
+    )
+
+    assert result.get("error") is None
+    assert result["executable_plan"]["tool_selection"] == [
+        {
+            "sub_query_id": "sq1",
+            "tool": "web_search",
+            "reason": "Need valid params.",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -838,6 +1137,103 @@ async def test_plan_search_term_rejects_unknown_sub_query_reference():
 
     assert result["error"] == "validation_error"
     assert "unknown sub-query id" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_planning_normalizes_whitespace_padded_ids_across_later_phases():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers deeply.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need full planning.",
+        level=3,
+        estimated_sub_queries=2,
+        estimated_tool_calls=6,
+        justification="Need whitespace-normalized identifiers.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="First sub-query.",
+        id=" sq1 ",
+        goal="Collect baseline facts.",
+        expected_output="A baseline summary.",
+        boundary="Exclude downstream comparison synthesis.",
+        tool_hint="web_search",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Second sub-query depends on the first.",
+        id=" sq2 ",
+        goal="Compare findings against baseline.",
+        expected_output="A comparison summary.",
+        boundary="Exclude baseline collection.",
+        depends_on=" sq1 ",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="First search term.",
+        term="provider baseline",
+        purpose=" sq1 ",
+        round=1,
+        approach="targeted",
+    )
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Second search term.",
+        term="provider comparison",
+        purpose=" sq2 ",
+        round=2,
+    )
+
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map sq1.",
+        sub_query_id=" sq1 ",
+        tool="web_search",
+        reason="Need baseline facts.",
+    )
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map sq2.",
+        sub_query_id=" sq2 ",
+        tool="web_search",
+        reason="Need comparison facts.",
+    )
+
+    result = json.loads(
+        await server.plan_execution(
+            session_id=session_id,
+            thought="Schedule baseline first, comparison second.",
+            parallel_groups=" sq1 ",
+            sequential=" sq2 ",
+            estimated_rounds=2,
+        )
+    )
+
+    assert result["plan_complete"] is True
+    assert [item["id"] for item in result["executable_plan"]["query_decomposition"]] == ["sq1", "sq2"]
+    assert result["executable_plan"]["query_decomposition"][1]["depends_on"] == ["sq1"]
+    assert [item["purpose"] for item in result["executable_plan"]["search_strategy"]["search_terms"]] == [
+        "sq1",
+        "sq2",
+    ]
+    assert [item["sub_query_id"] for item in result["executable_plan"]["tool_selection"]] == ["sq1", "sq2"]
+    assert result["executable_plan"]["execution_order"] == {
+        "parallel": [["sq1"]],
+        "sequential": ["sq2"],
+        "estimated_rounds": 2,
+    }
 
 
 @pytest.mark.asyncio
@@ -1395,6 +1791,141 @@ async def test_plan_execution_rejects_incomplete_tool_mapping_coverage():
 
 
 @pytest.mark.asyncio
+async def test_plan_search_term_rejects_mutation_after_execution_order_exists():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers deeply.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need full planning.",
+        level=3,
+        estimated_sub_queries=1,
+        estimated_tool_calls=4,
+        justification="Need execution order first.",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Only sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed strategy.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map the only sub-query.",
+        sub_query_id="sq1",
+        tool="web_search",
+        reason="Need comparison facts.",
+    )
+    await server.plan_execution(
+        session_id=session_id,
+        thought="Complete execution ordering.",
+        parallel_groups="sq1",
+        sequential="",
+        estimated_rounds=1,
+    )
+
+    result = json.loads(
+        await server.plan_search_term(
+            session_id=session_id,
+            thought="Mutation after downstream planning should fail.",
+            term="provider pricing comparison",
+            purpose="sq1",
+            round=2,
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "open a new session" in result["message"].lower()
+    assert "restart planning from search_strategy" not in result["message"].lower()
+    assert result["details"][0]["field"] == "is_revision"
+
+
+@pytest.mark.asyncio
+async def test_plan_execution_rejects_implicit_overwrite_without_revision():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers deeply.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need full planning.",
+        level=3,
+        estimated_sub_queries=1,
+        estimated_tool_calls=4,
+        justification="Need execution order overwrite protection.",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Only sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed strategy.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map the only sub-query.",
+        sub_query_id="sq1",
+        tool="web_search",
+        reason="Need comparison facts.",
+    )
+    await server.plan_execution(
+        session_id=session_id,
+        thought="Complete execution ordering.",
+        parallel_groups="sq1",
+        sequential="",
+        estimated_rounds=1,
+    )
+
+    result = json.loads(
+        await server.plan_execution(
+            session_id=session_id,
+            thought="Implicit overwrite should fail.",
+            parallel_groups="",
+            sequential="sq1",
+            estimated_rounds=1,
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert "is_revision=true" in result["message"].lower()
+    assert result["details"][0]["field"] == "is_revision"
+
+
+@pytest.mark.asyncio
 async def test_plan_sub_query_rejects_self_dependency():
     intent = json.loads(
         await server.plan_intent(
@@ -1537,6 +2068,68 @@ async def test_plan_tool_mapping_invalid_params_json_uses_standard_details_shape
 
 
 @pytest.mark.asyncio
+async def test_plan_tool_mapping_preserves_valid_object_params_in_executable_plan():
+    intent = json.loads(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need tool mapping.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Need mapping validation.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Only one sub-query.",
+        id="sq1",
+        goal="Compare providers.",
+        expected_output="A concise comparison.",
+        boundary="Exclude implementation details.",
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Valid search term.",
+        term="provider comparison",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+
+    result = json.loads(
+        await server.plan_tool_mapping(
+            session_id=session_id,
+            thought="Valid object params should be preserved.",
+            sub_query_id="sq1",
+            tool="web_search",
+            reason="Need baseline facts.",
+            params_json='{"topic":"news","limit":3}',
+        )
+    )
+
+    assert result.get("error") is None
+    assert result["executable_plan"]["tool_selection"] == [
+        {
+            "sub_query_id": "sq1",
+            "tool": "web_search",
+            "reason": "Need baseline facts.",
+            "params": {"topic": "news", "limit": 3},
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_plan_tool_mapping_rejects_duplicate_mapping_for_same_sub_query():
     intent = json.loads(
         await server.plan_intent(
@@ -1596,6 +2189,395 @@ async def test_plan_tool_mapping_rejects_duplicate_mapping_for_same_sub_query():
 
     assert result["error"] == "validation_error"
     assert "duplicate tool mapping" in result["message"].lower()
+
+
+def test_planning_engine_rejects_unknown_nonempty_session_id():
+    result = planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Should not create a missing session implicitly.",
+        session_id="missing-session",
+        phase_data={
+            "level": 1,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 2,
+            "justification": "Need a real session first.",
+        },
+    )
+
+    assert result["error"] == "session_not_found"
+    assert result["session_id"] == "missing-session"
+    assert result["restart_from_intent_analysis"] is True
+    assert planning.engine.get_session("missing-session") is None
+
+
+def test_planning_engine_rejects_duplicate_tool_mapping_invariant():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need level 2 coverage.",
+        session_id=session_id,
+        phase_data={
+            "level": 2,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 3,
+            "justification": "Need one mapped sub-query.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Single sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="search_strategy",
+        thought="Single search term.",
+        session_id=session_id,
+        phase_data={
+            "approach": "targeted",
+            "search_terms": [{"term": "provider comparison", "purpose": "sq1", "round": 1}],
+        },
+    )
+    first = planning.engine.process_phase(
+        phase="tool_selection",
+        thought="First mapping.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_search", "reason": "Need provider facts."},
+    )
+    duplicate = planning.engine.process_phase(
+        phase="tool_selection",
+        thought="Duplicate mapping should fail.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_fetch", "reason": "Should be rejected."},
+    )
+
+    assert first["plan_complete"] is True
+    assert "duplicate tool mapping" in duplicate["error"].lower()
+    session = planning.engine.get_session(session_id)
+    assert session is not None
+    assert session.tool_mapping_ids() == ["sq1"]
+
+
+def test_planning_engine_rejects_whitespace_padded_duplicate_tool_mapping_ids():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need level 2 coverage.",
+        session_id=session_id,
+        phase_data={
+            "level": 2,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 3,
+            "justification": "Need one mapped sub-query.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Single sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="search_strategy",
+        thought="Single search term.",
+        session_id=session_id,
+        phase_data={
+            "approach": "targeted",
+            "search_terms": [{"term": "provider comparison", "purpose": "sq1", "round": 1}],
+        },
+    )
+    planning.engine.process_phase(
+        phase="tool_selection",
+        thought="First mapping.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_search", "reason": "Need provider facts."},
+    )
+
+    duplicate = planning.engine.process_phase(
+        phase="tool_selection",
+        thought="Whitespace-padded duplicate should fail.",
+        session_id=session_id,
+        phase_data={"sub_query_id": " sq1 ", "tool": "web_fetch", "reason": "Should be rejected."},
+    )
+
+    assert "duplicate tool mapping" in duplicate["error"].lower()
+    session = planning.engine.get_session(session_id)
+    assert session is not None
+    assert session.tool_mapping_ids() == ["sq1"]
+
+
+def test_planning_engine_rejects_duplicate_sub_query_ids():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need decomposition.",
+        session_id=session_id,
+        phase_data={
+            "level": 1,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 2,
+            "justification": "One sub-query.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="First sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+
+    duplicate = planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Duplicate sub-query id should fail.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Duplicate providers.",
+            "expected_output": "Should fail.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+
+    assert "duplicate sub-query id" in duplicate["error"].lower()
+
+
+def test_planning_engine_rejects_whitespace_padded_duplicate_sub_query_ids():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need decomposition.",
+        session_id=session_id,
+        phase_data={
+            "level": 1,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 2,
+            "justification": "One sub-query.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="First sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+
+    duplicate = planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Whitespace-padded duplicate should fail.",
+        session_id=session_id,
+        phase_data={
+            "id": " sq1 ",
+            "goal": "Duplicate providers.",
+            "expected_output": "Should fail.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+
+    assert "duplicate sub-query id" in duplicate["error"].lower()
+
+
+def test_planning_engine_rejects_invalid_execution_order_invariant():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need full planning.",
+        session_id=session_id,
+        phase_data={
+            "level": 3,
+            "estimated_sub_queries": 2,
+            "estimated_tool_calls": 6,
+            "justification": "Need execution ordering.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="First sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Collect baseline facts.",
+            "expected_output": "Baseline summary.",
+            "boundary": "Exclude downstream synthesis.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Second sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq2",
+            "goal": "Synthesize comparison.",
+            "expected_output": "Comparison summary.",
+            "boundary": "Exclude baseline fact gathering.",
+            "depends_on": ["sq1"],
+        },
+    )
+    planning.engine.process_phase(
+        phase="search_strategy",
+        thought="Search terms.",
+        session_id=session_id,
+        phase_data={
+            "approach": "targeted",
+            "search_terms": [
+                {"term": "provider baseline", "purpose": "sq1", "round": 1},
+                {"term": "provider comparison", "purpose": "sq2", "round": 1},
+            ],
+        },
+    )
+    planning.engine.process_phase(
+        phase="tool_selection",
+        thought="First mapping.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_search", "reason": "Need baseline facts."},
+    )
+    planning.engine.process_phase(
+        phase="tool_selection",
+        thought="Second mapping.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq2", "tool": "web_search", "reason": "Need comparison facts."},
+    )
+
+    invalid = planning.engine.process_phase(
+        phase="execution_order",
+        thought="Dependency order should fail.",
+        session_id=session_id,
+        phase_data={"parallel": [["sq2"]], "sequential": ["sq1"], "estimated_rounds": 2},
+    )
+
+    assert "dependency order violation" in invalid["error"].lower()
+
+
+def test_planning_engine_rejects_non_dict_execution_order_payload():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need full planning.",
+        session_id=session_id,
+        phase_data={
+            "level": 3,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 4,
+            "justification": "Need execution ordering.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="First sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Collect baseline facts.",
+            "expected_output": "Baseline summary.",
+            "boundary": "Exclude downstream synthesis.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="search_strategy",
+        thought="Search terms.",
+        session_id=session_id,
+        phase_data={
+            "approach": "targeted",
+            "search_terms": [
+                {"term": "provider baseline", "purpose": "sq1", "round": 1},
+            ],
+        },
+    )
+    planning.engine.process_phase(
+        phase="tool_selection",
+        thought="Tool mapping.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_search", "reason": "Need baseline facts."},
+    )
+
+    invalid = planning.engine.process_phase(
+        phase="execution_order",
+        thought="Non-dict payload should fail.",
+        session_id=session_id,
+        phase_data=[],
+    )
+
+    assert "expected" in invalid["error"].lower()
+    assert "dict" in invalid["error"].lower()
 
 
 @pytest.mark.asyncio
@@ -1715,4 +2697,5 @@ async def test_plan_tool_mapping_revision_rejects_existing_execution_order():
     )
 
     assert result["error"] == "validation_error"
-    assert "restart planning" in result["message"].lower()
+    assert "open a new session" in result["message"].lower()
+    assert "restart planning from tool_selection" not in result["message"].lower()
