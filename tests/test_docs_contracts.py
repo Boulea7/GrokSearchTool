@@ -84,6 +84,53 @@ def test_docs_explain_lazy_import_boundaries_for_optional_dependencies():
     assert "不应被理解为安装依赖已变成 optional extra" in agents
 
 
+def test_multilingual_readmes_explain_lazy_import_boundaries():
+    localized_expectations = {
+        README_EN: [
+            "`grok_search.mcp`",
+            "access-time lazy export",
+            "`fastmcp`",
+            "`grok_search.providers.GrokSearchProvider`",
+            "does not change the install-time dependency declaration",
+        ],
+        README_ZH_TW: [
+            "`grok_search.mcp`",
+            "access-time lazy export",
+            "`fastmcp`",
+            "`grok_search.providers.GrokSearchProvider`",
+            "不改變安裝時依賴宣告",
+        ],
+        README_JA: [
+            "`grok_search.mcp`",
+            "access-time lazy export",
+            "`fastmcp`",
+            "`grok_search.providers.GrokSearchProvider`",
+            "インストール時の依存宣言は変わりません",
+        ],
+        README_RU: [
+            "`grok_search.mcp`",
+            "access-time lazy export",
+            "`fastmcp`",
+            "`grok_search.providers.GrokSearchProvider`",
+            "не меняет декларацию зависимостей на этапе установки",
+        ],
+    }
+
+    for path, expected_fragments in localized_expectations.items():
+        text = path.read_text(encoding="utf-8")
+        for fragment in expected_fragments:
+            assert fragment in text
+
+
+def test_lazy_import_docs_do_not_imply_install_time_optional_extras():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+
+    assert "普通非 provider 导入不应被其可选依赖连带拖死" not in readme
+    assert "optional dependencies" not in compatibility
+    assert "Grok-provider dependencies are missing" in compatibility
+
+
 def test_docs_keep_masking_scope_narrow_for_ambiguous_keys():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")

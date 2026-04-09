@@ -6,6 +6,8 @@ GrokSearch is an independently maintained MCP server for assistants and clients 
 
 It combines `Grok` search with `Tavily` and `Firecrawl` extraction, then exposes a stable MCP tool surface for lightweight lookups, source verification, focused page fetching, a recommended `plan_* -> web_search` workflow for complex searches, and a future `deep research` direction for heavier exploration tasks. For clear, low-ambiguity single-hop lookups where planning adds little value, direct `web_search` is still acceptable.
 
+The public package import contract currently has two boundaries: `grok_search.mcp` is an access-time lazy export, so `fastmcp` is only required when that export is actually accessed; `grok_search.providers.GrokSearchProvider` is also an access-time lazy export, so ordinary non-provider imports should not fail early just because Grok-provider dependencies are missing. This only narrows import-time behavior, does not change the install-time dependency declaration, and should not be read as turning package dependencies into optional extras.
+
 Public `stdio` installation snippets currently use the maintained release repo `Boulea7/GrokSearchTool`. Local worktrees, historical remote names, or legacy collaboration traces should not be read as an active `fork/upstream` PR workflow.
 
 ## Overview
