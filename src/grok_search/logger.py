@@ -23,8 +23,11 @@ except OSError:
     logger.addHandler(logging.NullHandler())
 
 async def log_info(ctx, message: str, is_debug: bool = False):
-    if is_debug:
-        logger.info(message)
-        
+    """Emit debug-only progress signals to both local logs and optional MCP context."""
+    if not is_debug:
+        return
+
+    logger.info(message)
+
     if ctx:
         await ctx.info(message)

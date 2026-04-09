@@ -24,9 +24,16 @@ Examples include:
 - credential leakage
 - unsafe handling of external content
 - SSRF-style fetch or crawl abuse
+- redirect preflight behavior that weakens SSRF boundaries or changes how degraded checks are surfaced
 - improper logging of secrets
 - insecure default configuration
 - tool behavior that exposes private data unexpectedly
+
+Current runtime note:
+
+- `web_fetch` / `web_map` perform a redirect preflight before dispatching provider calls
+- private or loopback redirect targets are hard-rejected before provider dispatch
+- redirect preflight request-level failures currently degrade to `skipped_due_to_error` and continue downstream provider calls, so this path should be treated as a best-effort safety boundary rather than a hard-stop guarantee
 
 ## Response Goals
 

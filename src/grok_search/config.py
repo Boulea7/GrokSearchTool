@@ -1,6 +1,30 @@
 import os
 import json
+import re
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+_SENSITIVE_URL_PARAM_KEYS = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "client_secret",
+    "code",
+    "id_token",
+    "password",
+    "refresh_token",
+    "token",
+    "signature",
+    "sig",
+    "x-amz-credential",
+    "x-amz-signature",
+    "x-amz-security-token",
+    "x-goog-credential",
+    "x-goog-signature",
+    "x-ms-signature",
+    "googleaccessid",
+}
 
 class Config:
     _instance = None
@@ -17,7 +41,80 @@ class Config:
             cls._instance = super().__new__(cls)
             cls._instance._config_file = None
             cls._instance._cached_model = None
+            cls._instance._project_env_cache = None
         return cls._instance
+
+    def _project_root(self) -> Path:
+        root = Path.cwd().resolve()
+        while True:
+            if (root / ".git").exists() or (root / "pyproject.toml").exists() or (root / "AGENTS.md").exists():
+                return root
+            if root == root.parent:
+                return Path.cwd().resolve()
+            root = root.parent
+
+    def _parse_env_file(self, path: Path) -> dict[str, str]:
+        parsed: dict[str, str] = {}
+        if not path.exists():
+            return parsed
+        try:
+            for raw_line in path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export ") :].strip()
+                    if "=" not in line:
+                        continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                if not key:
+                    continue
+                value = self._normalize_env_value(value)
+                parsed[key] = value
+        except OSError:
+            return {}
+        return parsed
+
+    @staticmethod
+    def _normalize_env_value(value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            return ""
+
+        if text[0] in {'"', "'"}:
+            quote = text[0]
+            closing_index = 1
+            while closing_index < len(text):
+                if text[closing_index] == quote and text[closing_index - 1] != "\\":
+                    remainder = text[closing_index + 1 :].strip()
+                    if not remainder or remainder.startswith("#"):
+                        return text[1:closing_index]
+                    return text
+                closing_index += 1
+            return text
+
+        return re.sub(r"\s+#.*$", "", text).strip()
+
+    def _load_project_env(self) -> dict[str, str]:
+        if self._project_env_cache is not None:
+            return self._project_env_cache
+
+        project_root = self._project_root()
+        merged: dict[str, str] = {}
+        for name in (".env", ".env.local"):
+            merged.update(self._parse_env_file(project_root / name))
+        self._project_env_cache = merged
+        return merged
+
+    def _get_env_value(self, key: str, default: str | None = None) -> str | None:
+        if key in os.environ:
+            return os.environ[key]
+        project_env = self._load_project_env()
+        if key in project_env:
+            return project_env[key]
+        return default
 
     @property
     def config_file(self) -> Path:
@@ -49,35 +146,35 @@ class Config:
 
     @property
     def debug_enabled(self) -> bool:
-        return os.getenv("GROK_DEBUG", "false").lower() in ("true", "1", "yes")
+        return (self._get_env_value("GROK_DEBUG", "false") or "false").lower() in ("true", "1", "yes")
 
     @property
     def retry_max_attempts(self) -> int:
-        return int(os.getenv("GROK_RETRY_MAX_ATTEMPTS", "3"))
+        return int(self._get_env_value("GROK_RETRY_MAX_ATTEMPTS", "3") or "3")
 
     @property
     def retry_multiplier(self) -> float:
-        return float(os.getenv("GROK_RETRY_MULTIPLIER", "1"))
+        return float(self._get_env_value("GROK_RETRY_MULTIPLIER", "1") or "1")
 
     @property
     def retry_max_wait(self) -> int:
-        return int(os.getenv("GROK_RETRY_MAX_WAIT", "10"))
+        return int(self._get_env_value("GROK_RETRY_MAX_WAIT", "10") or "10")
 
     @property
     def output_cleanup_enabled(self) -> bool:
-        raw = os.getenv("GROK_OUTPUT_CLEANUP")
+        raw = self._get_env_value("GROK_OUTPUT_CLEANUP")
         if raw is None:
-            raw = os.getenv("GROK_FILTER_THINK_TAGS", "true")
+            raw = self._get_env_value("GROK_FILTER_THINK_TAGS", "true")
         return raw.lower() in ("true", "1", "yes")
 
     @property
     def time_context_mode(self) -> str:
-        raw = os.getenv("GROK_TIME_CONTEXT_MODE", "always").strip().lower()
+        raw = (self._get_env_value("GROK_TIME_CONTEXT_MODE", "always") or "always").strip().lower()
         return raw if raw in {"always", "auto", "never"} else "always"
 
     @property
     def grok_api_url(self) -> str:
-        url = os.getenv("GROK_API_URL")
+        url = self._get_env_value("GROK_API_URL")
         if not url:
             raise ValueError(
                 f"Grok API URL 未配置！\n"
@@ -87,7 +184,7 @@ class Config:
 
     @property
     def grok_api_key(self) -> str:
-        key = os.getenv("GROK_API_KEY")
+        key = self._get_env_value("GROK_API_KEY")
         if not key:
             raise ValueError(
                 f"Grok API Key 未配置！\n"
@@ -97,31 +194,31 @@ class Config:
 
     @property
     def tavily_enabled(self) -> bool:
-        return os.getenv("TAVILY_ENABLED", "true").lower() in ("true", "1", "yes")
+        return (self._get_env_value("TAVILY_ENABLED", "true") or "true").lower() in ("true", "1", "yes")
 
     @property
     def tavily_api_url(self) -> str:
-        return os.getenv("TAVILY_API_URL", "https://api.tavily.com")
+        return self._get_env_value("TAVILY_API_URL", "https://api.tavily.com") or "https://api.tavily.com"
 
     @property
     def tavily_api_key(self) -> str | None:
-        return os.getenv("TAVILY_API_KEY")
+        return self._get_env_value("TAVILY_API_KEY")
 
     @property
     def firecrawl_api_url(self) -> str:
-        return os.getenv("FIRECRAWL_API_URL", "https://api.firecrawl.dev/v2")
+        return self._get_env_value("FIRECRAWL_API_URL", "https://api.firecrawl.dev/v2") or "https://api.firecrawl.dev/v2"
 
     @property
     def firecrawl_api_key(self) -> str | None:
-        return os.getenv("FIRECRAWL_API_KEY")
+        return self._get_env_value("FIRECRAWL_API_KEY")
 
     @property
     def log_level(self) -> str:
-        return os.getenv("GROK_LOG_LEVEL", "INFO").upper()
+        return (self._get_env_value("GROK_LOG_LEVEL", "INFO") or "INFO").upper()
 
     @property
     def log_dir(self) -> Path:
-        log_dir_str = os.getenv("GROK_LOG_DIR", "logs")
+        log_dir_str = self._get_env_value("GROK_LOG_DIR", "logs") or "logs"
         log_dir = Path(log_dir_str)
         if log_dir.is_absolute():
             return log_dir
@@ -145,11 +242,13 @@ class Config:
         return tmp_log_dir
 
     def _apply_model_suffix(self, model: str) -> str:
+        if not model:
+            return model
         try:
             url = self.grok_api_url
         except ValueError:
             return model
-        if "openrouter" in url and ":online" not in model:
+        if "openrouter" in url.lower() and ":online" not in model:
             return f"{model}:online"
         return model
 
@@ -158,11 +257,11 @@ class Config:
         if self._cached_model is not None:
             return self._cached_model
 
-        model = (
-            os.getenv("GROK_MODEL")
-            or self._load_config_file().get("model")
-            or self._DEFAULT_MODEL
-        )
+        env_model = self._get_env_value("GROK_MODEL")
+        if env_model is not None:
+            model = env_model
+        else:
+            model = self._load_config_file().get("model") or self._DEFAULT_MODEL
         self._cached_model = self._apply_model_suffix(model)
         return self._cached_model
 
@@ -172,12 +271,72 @@ class Config:
         self._save_config_file(config_data)
         self._cached_model = None
 
+    def reset_runtime_state(self) -> None:
+        self._cached_model = None
+        self._project_env_cache = None
+
     @staticmethod
     def _mask_api_key(key: str) -> str:
         """脱敏显示 API Key，只显示前后各 4 个字符"""
         if not key or len(key) <= 8:
             return "***"
         return f"{key[:4]}{'*' * (len(key) - 8)}{key[-4:]}"
+
+    @staticmethod
+    def _mask_url(url: str) -> str:
+        text = (url or "").strip()
+        if not text:
+            return text
+
+        try:
+            split = urlsplit(text)
+        except ValueError:
+            return text
+
+        if split.scheme.lower() not in {"http", "https"} or not split.netloc:
+            return text
+
+        hostname = split.hostname or ""
+        if not hostname:
+            return text
+
+        if ":" in hostname and not hostname.startswith("["):
+            host = f"[{hostname}]"
+        else:
+            host = hostname
+        raw_port = ""
+        hostinfo = split.netloc.rsplit("@", 1)[-1]
+        if hostinfo.startswith("["):
+            closing_idx = hostinfo.find("]")
+            if closing_idx != -1 and closing_idx + 1 < len(hostinfo) and hostinfo[closing_idx + 1] == ":":
+                raw_port = hostinfo[closing_idx + 2 :]
+        else:
+            if ":" in hostinfo:
+                raw_port = hostinfo.rsplit(":", 1)[-1]
+        if raw_port:
+            netloc = f"{host}:{raw_port}"
+        else:
+            netloc = host
+        query = urlencode(
+            [
+                (key, "***" if key.lower() in _SENSITIVE_URL_PARAM_KEYS else value)
+                for key, value in parse_qsl(split.query, keep_blank_values=True)
+            ],
+            doseq=True,
+            safe="*",
+        )
+        fragment = split.fragment
+        if fragment and any(token in fragment for token in ("=", "&")):
+            fragment = urlencode(
+                [
+                    (key, "***" if key.lower() in _SENSITIVE_URL_PARAM_KEYS else value)
+                    for key, value in parse_qsl(fragment, keep_blank_values=True)
+                ],
+                doseq=True,
+                safe="*",
+            )
+
+        return urlunsplit((split.scheme, netloc, split.path, query, fragment))
 
     def get_config_info(self) -> dict:
         """Return the base config snapshot only; server-side doctor fields are added elsewhere."""
@@ -192,7 +351,7 @@ class Config:
             config_status = f"配置错误: {str(e)}"
 
         return {
-            "GROK_API_URL": api_url,
+            "GROK_API_URL": self._mask_url(api_url) if api_url != "未配置" else api_url,
             "GROK_API_KEY": api_key_masked,
             "GROK_MODEL": self.grok_model,
             "GROK_DEBUG": self.debug_enabled,
@@ -200,10 +359,10 @@ class Config:
             "GROK_TIME_CONTEXT_MODE": self.time_context_mode,
             "GROK_LOG_LEVEL": self.log_level,
             "GROK_LOG_DIR": str(self.log_dir),
-            "TAVILY_API_URL": self.tavily_api_url,
+            "TAVILY_API_URL": self._mask_url(self.tavily_api_url),
             "TAVILY_ENABLED": self.tavily_enabled,
             "TAVILY_API_KEY": self._mask_api_key(self.tavily_api_key) if self.tavily_api_key else "未配置",
-            "FIRECRAWL_API_URL": self.firecrawl_api_url,
+            "FIRECRAWL_API_URL": self._mask_url(self.firecrawl_api_url),
             "FIRECRAWL_API_KEY": self._mask_api_key(self.firecrawl_api_key) if self.firecrawl_api_key else "未配置",
             "config_status": config_status
         }

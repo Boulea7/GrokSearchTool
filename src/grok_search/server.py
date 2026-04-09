@@ -1,8 +1,11 @@
 import asyncio
 import re
 import sys
+from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Literal, Optional
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
 from fastmcp import FastMCP, Context
 from pydantic import Field, ValidationError
@@ -77,7 +80,7 @@ async def _fetch_available_models(api_url: str, api_key: str) -> list[str]:
     import httpx
 
     models_url = f"{api_url.rstrip('/')}/models"
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(models_url, timeout=10.0)) as client:
         response = await client.get(
             models_url,
             headers={
@@ -164,6 +167,96 @@ def _extract_request_id(headers) -> str:
     ).strip()
 
 
+def _mask_sensitive_text(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+
+    try:
+        configured_grok_key = config.grok_api_key
+    except ValueError:
+        configured_grok_key = None
+
+    for configured in (configured_grok_key, config.tavily_api_key, config.firecrawl_api_key):
+        if configured:
+            text = text.replace(configured, "***")
+
+    patterns = [
+        (r"Bearer\s+[A-Za-z0-9._\-]+", "Bearer ***"),
+        (r"\bsk-[A-Za-z0-9_\-]+\b", "sk-***"),
+        (r"\bfc-[A-Za-z0-9_\-]+\b", "fc-***"),
+        (r"\btvly-[A-Za-z0-9_\-]+\b", "tvly-***"),
+        (
+            r"([?#&](?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|refresh[_-]?token|id[_-]?token|password|token|signature|sig|code)=)[^&#\s]+",
+            r"\1***",
+        ),
+        (
+            r"((?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|refresh[_-]?token|id[_-]?token|password|token|signature|sig|code)=)[^&#\s\"'}]+",
+            r"\1***",
+        ),
+    ]
+    for pattern, replacement in patterns:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
+def _mask_sensitive_url(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+
+    try:
+        split = urlsplit(text)
+    except ValueError:
+        return _mask_sensitive_text(text)
+
+    if split.scheme.lower() not in {"http", "https"} or not split.netloc:
+        return _mask_sensitive_text(text)
+
+    hostname = split.hostname or ""
+    if not hostname:
+        return _mask_sensitive_text(text)
+
+    if ":" in hostname and not hostname.startswith("["):
+        host = f"[{hostname}]"
+    else:
+        host = hostname
+    raw_port = ""
+    hostinfo = split.netloc.rsplit("@", 1)[-1]
+    if hostinfo.startswith("["):
+        closing_idx = hostinfo.find("]")
+        if closing_idx != -1 and closing_idx + 1 < len(hostinfo) and hostinfo[closing_idx + 1] == ":":
+            raw_port = hostinfo[closing_idx + 2 :]
+    else:
+        if ":" in hostinfo:
+            raw_port = hostinfo.rsplit(":", 1)[-1]
+    if raw_port:
+        netloc = f"{host}:{raw_port}"
+    else:
+        netloc = host
+
+    query = urlencode(
+        [
+            (key, "***" if key.lower() in _SENSITIVE_URL_PARAM_KEYS else value)
+            for key, value in parse_qsl(split.query, keep_blank_values=True)
+        ],
+        doseq=True,
+        safe="*",
+    )
+    fragment = split.fragment
+    if fragment and any(token in fragment for token in ("=", "&")):
+        fragment = urlencode(
+            [
+                (key, "***" if key.lower() in _SENSITIVE_URL_PARAM_KEYS else value)
+                for key, value in parse_qsl(fragment, keep_blank_values=True)
+            ],
+            doseq=True,
+            safe="*",
+        )
+
+    return urlunsplit((split.scheme, netloc, split.path, query, fragment))
+
+
 def _extract_error_summary(response) -> str:
     if response is None:
         return ""
@@ -178,7 +271,7 @@ def _extract_error_summary(response) -> str:
         if isinstance(error, dict):
             message = (error.get("message") or "").strip()
             if message:
-                return message
+                return _mask_sensitive_text(message)
 
     body_text = (getattr(response, "text", "") or "").strip()
     if not body_text:
@@ -191,6 +284,7 @@ def _extract_error_summary(response) -> str:
         return "login_page"
 
     snippet = body_text[:180].replace("\n", " ").strip()
+    snippet = _mask_sensitive_text(snippet)
     return snippet
 
 
@@ -202,8 +296,7 @@ def _format_grok_error(exc: Exception) -> str:
 
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
-        location = exc.response.headers.get("location", "").strip()
-        request_id = _extract_request_id(exc.response.headers)
+        location = _mask_sensitive_url(exc.response.headers.get("location", "").strip())
         summary = _extract_error_summary(exc.response)
         if status_code in {301, 302, 303, 307, 308} and location:
             message = f"搜索失败: 上游返回 HTTP {status_code} 重定向到 {location}，请检查代理认证状态"
@@ -211,11 +304,9 @@ def _format_grok_error(exc: Exception) -> str:
             message = f"搜索失败: 上游返回 HTTP {status_code}"
         if summary:
             message += f"，摘要={summary}"
-        if request_id:
-            message += f"，request_id={request_id}"
         return message
 
-    message = str(exc).strip()
+    message = _mask_sensitive_text(str(exc).strip())
     if message:
         return f"搜索失败: {message}"
     return "搜索失败: 上游请求异常"
@@ -266,8 +357,7 @@ def _format_fetch_error(provider: str, exc: Exception) -> str:
 
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
-        location = exc.response.headers.get("location", "").strip()
-        request_id = _extract_request_id(exc.response.headers)
+        location = _mask_sensitive_url(exc.response.headers.get("location", "").strip())
         summary = _extract_error_summary(exc.response)
         if status_code in {301, 302, 303, 307, 308} and location:
             message = f"{provider} 返回 HTTP {status_code} 重定向到 {location}，请检查认证状态"
@@ -277,11 +367,9 @@ def _format_fetch_error(provider: str, exc: Exception) -> str:
             message = f"{provider} 返回 HTTP {status_code}"
         if summary:
             message += f"，摘要={summary}"
-        if request_id:
-            message += f"，request_id={request_id}"
         return message
 
-    message = str(exc).strip()
+    message = _mask_sensitive_text(str(exc).strip())
     if message:
         return f"{provider} 请求失败: {message}"
     return f"{provider} 请求失败"
@@ -395,9 +483,54 @@ def _extract_firecrawl_search_payload(data: dict) -> list[dict]:
     return empty_result or []
 
 
-_VALID_SEARCH_TOPICS = {"general", "news"}
+_VALID_SEARCH_TOPICS = {"general", "news", "finance"}
 _VALID_TIME_RANGES = {"day", "week", "month", "year"}
+_TIME_RANGE_ALIASES = {"d": "day", "w": "week", "m": "month", "y": "year"}
 _DOMAIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".lan", ".home", ".corp")
+_LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
+_LOOPBACK_HELPER_SUFFIXES = ("localtest.me", "lvh.me")
+_DNS_ALIAS_IP_SUFFIXES = ("nip.io", "xip.io", "sslip.io")
+
+
+@dataclass(frozen=True)
+class _TargetPreflightResult:
+    status: Literal["allow", "reject", "skipped_due_to_error"]
+    message: str | None = None
+
+
+def _allow_target_preflight() -> _TargetPreflightResult:
+    return _TargetPreflightResult("allow")
+
+
+def _reject_target_preflight(message: str) -> _TargetPreflightResult:
+    return _TargetPreflightResult("reject", message)
+
+
+def _skip_target_preflight(message: str) -> _TargetPreflightResult:
+    return _TargetPreflightResult("skipped_due_to_error", message)
+
+_SENSITIVE_URL_PARAM_KEYS = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "client_secret",
+    "code",
+    "id_token",
+    "password",
+    "refresh_token",
+    "token",
+    "signature",
+    "sig",
+    "x-amz-credential",
+    "x-amz-signature",
+    "x-amz-security-token",
+    "x-goog-credential",
+    "x-goog-signature",
+    "x-ms-signature",
+    "googleaccessid",
+}
 
 
 def _normalize_domain_list(domains: Optional[list[str]]) -> list[str]:
@@ -424,6 +557,140 @@ def _is_valid_domain_filter(domain: str) -> bool:
 
     labels = candidate.split(".")
     return all(_DOMAIN_LABEL_PATTERN.fullmatch(label) for label in labels)
+
+
+def _validate_public_target_url(url: str) -> str | None:
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return "仅支持 http/https URL"
+
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return "仅支持 http/https URL"
+    if host in _LOCAL_HOSTNAMES or any(host.endswith(f".{name}") for name in _LOCAL_HOSTNAMES):
+        return "目标 URL 不能指向本地或私有网络"
+    if host in _LOOPBACK_HELPER_SUFFIXES or any(host.endswith(f".{name}") for name in _LOOPBACK_HELPER_SUFFIXES):
+        return "目标 URL 不能指向本地或私有网络"
+    if _looks_like_ipv4_loopback_shorthand(host):
+        return "目标 URL 不能指向本地或私有网络"
+    alias_ip = _extract_dns_alias_ip(host)
+    if alias_ip and (
+        alias_ip.is_loopback
+        or alias_ip.is_private
+        or alias_ip.is_link_local
+        or alias_ip.is_reserved
+        or alias_ip.is_multicast
+        or alias_ip.is_unspecified
+    ):
+        return "目标 URL 不能指向本地或私有网络"
+
+    try:
+        ip = ip_address(host)
+    except ValueError:
+        if "." not in host or host.endswith(_PRIVATE_HOST_SUFFIXES):
+            return "目标 URL 不能指向本地或私有网络"
+        return None
+
+    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+        return "目标 URL 不能指向本地或私有网络"
+    return None
+
+
+def _is_non_public_ip(ip) -> bool:
+    return ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+
+
+def _resolve_and_validate_public_target(url: str) -> str | None:
+    parsed = urlparse((url or "").strip())
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return None
+
+    try:
+        host_ip = ip_address(host)
+    except ValueError:
+        # Provider-backed fetch/map runs remotely, so local DNS answers are not
+        # authoritative enough to hard-block ordinary public hostnames here.
+        return None
+
+    if _is_non_public_ip(host_ip):
+        return "目标 URL 不能指向本地或私有网络"
+    return None
+
+
+async def _preflight_redirect_targets(url: str, *, max_redirects: int = 5) -> _TargetPreflightResult:
+    import httpx
+
+    current_url = url
+    for _ in range(max_redirects):
+        try:
+            async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(current_url, timeout=5.0)) as client:
+                response = await client.get(current_url, headers={"Accept": "*/*"})
+        except httpx.TimeoutException:
+            return _skip_target_preflight("目标 URL 重定向预检超时")
+        except httpx.RequestError:
+            return _skip_target_preflight("目标 URL 重定向预检失败")
+
+        location = (response.headers.get("location") or "").strip()
+        if response.status_code not in {301, 302, 303, 307, 308} or not location:
+            return _allow_target_preflight()
+
+        next_url = urljoin(current_url, location)
+        validation_error = _validate_public_target_url(next_url)
+        if validation_error:
+            return _reject_target_preflight(validation_error)
+        resolution_error = _resolve_and_validate_public_target(next_url)
+        if resolution_error:
+            return _reject_target_preflight(resolution_error)
+        current_url = next_url
+
+    return _reject_target_preflight("目标 URL 重定向次数过多")
+
+
+async def _preflight_public_target_url(url: str) -> _TargetPreflightResult:
+    validation_error = _validate_public_target_url(url)
+    if validation_error:
+        return _reject_target_preflight(validation_error)
+
+    resolution_error = _resolve_and_validate_public_target(url)
+    if resolution_error:
+        return _reject_target_preflight(resolution_error)
+
+    return await _preflight_redirect_targets(url)
+
+
+def _looks_like_ipv4_loopback_shorthand(host: str) -> bool:
+    labels = host.split(".")
+    return (
+        2 <= len(labels) <= 4
+        and labels[0] == "127"
+        and all(label.isdigit() for label in labels)
+    )
+
+
+def _extract_dns_alias_ip(host: str):
+    normalized_host = (host or "").lower().rstrip(".")
+    for suffix in _DNS_ALIAS_IP_SUFFIXES:
+        if normalized_host == suffix or not normalized_host.endswith(f".{suffix}"):
+            continue
+
+        alias_labels = normalized_host[: -(len(suffix) + 1)].split(".")
+        dotted_candidate = ".".join(alias_labels[-4:])
+        if len(alias_labels) >= 4 and all(label.isdigit() for label in alias_labels[-4:]):
+            try:
+                return ip_address(dotted_candidate)
+            except ValueError:
+                pass
+
+        dashed_label = alias_labels[-1] if alias_labels else ""
+        dashed_parts = dashed_label.split("-")
+        if len(dashed_parts) == 4 and all(part.isdigit() for part in dashed_parts):
+            try:
+                return ip_address(".".join(dashed_parts))
+            except ValueError:
+                pass
+
+    return None
 
 
 def _build_search_response(
@@ -498,7 +765,8 @@ def _validate_search_inputs(
 ) -> tuple[dict, str | None]:
     normalized_query = query.strip()
     normalized_topic = (topic or "general").strip() or "general"
-    normalized_time_range = (time_range or "").strip() or None
+    raw_time_range = (time_range or "").strip()
+    normalized_time_range = _TIME_RANGE_ALIASES.get(raw_time_range, raw_time_range) or None
     normalized_include_domains = _normalize_domain_list(include_domains)
     normalized_exclude_domains = _normalize_domain_list(exclude_domains)
 
@@ -514,10 +782,10 @@ def _validate_search_inputs(
         return effective_params, "搜索失败: query 不能为空"
 
     if normalized_topic not in _VALID_SEARCH_TOPICS:
-        return effective_params, "搜索失败: topic 仅支持 general 或 news"
+        return effective_params, "搜索失败: topic 仅支持 general、news 或 finance"
 
     if normalized_time_range and normalized_time_range not in _VALID_TIME_RANGES:
-        return effective_params, "搜索失败: time_range 仅支持 day、week、month、year"
+        return effective_params, "搜索失败: time_range 仅支持 day、week、month、year（或 d、w、m、y）"
 
     if isinstance(extra_sources, bool) or not isinstance(extra_sources, int):
         return effective_params, "搜索失败: extra_sources 仅支持整数"
@@ -546,7 +814,7 @@ def _validate_search_inputs(
     name="web_search",
     output_schema=None,
     description="""
-    Before using this tool, please use the plan_intent tool to plan the search carefully.
+    Prefer `plan_* -> web_search` for non-trivial or ambiguous research tasks, but clear single-hop lookups may directly use `web_search` when planning would add little value.
     Performs a deep web search based on the given query and returns Grok's answer directly.
 
     This tool extracts sources if provided by upstream, caches them, and returns:
@@ -561,8 +829,8 @@ async def web_search(
     platform: Annotated[str, "Target platform to focus on (e.g., 'Twitter', 'GitHub', 'Reddit'). Leave empty for general web search."] = "",
     model: Annotated[str, "Optional model ID for this request only. This value is used ONLY when user explicitly provided."] = "",
     extra_sources: Annotated[int, "Number of additional reference results from Tavily/Firecrawl. Set 0 to disable. Default 0."] = 0,
-    topic: Annotated[str, "Optional search topic: general | news."] = "general",
-    time_range: Annotated[str, "Optional freshness filter: day | week | month | year."] = "",
+    topic: Annotated[str, "Optional search topic: general | news | finance."] = "general",
+    time_range: Annotated[str, "Optional freshness filter: day | week | month | year (or d | w | m | y)."] = "",
     include_domains: Annotated[Optional[list[str]], "Optional domain allowlist for supplemental Tavily search."] = None,
     exclude_domains: Annotated[Optional[list[str]], "Optional domain denylist for supplemental Tavily search."] = None,
 ) -> dict:
@@ -618,8 +886,9 @@ async def web_search(
 
     effective_model = config.grok_model
     if model:
+        normalized_explicit_model = config._apply_model_suffix(model)
         available = await _get_available_models_cached(api_url, api_key)
-        if available and model not in available:
+        if available and model not in available and normalized_explicit_model not in available:
             await _SOURCES_CACHE.set(
                 session_id,
                 _build_sources_cache_entry([], search_status="error", search_error="invalid_model"),
@@ -632,7 +901,10 @@ async def web_search(
                 effective_params=effective_params,
                 error="invalid_model",
             )
-        effective_model = model
+        effective_model = normalized_explicit_model
+        effective_params["model"] = effective_model
+    else:
+        effective_params["model"] = effective_model
 
     grok_provider = GrokSearchProvider(api_url, api_key, effective_model)
     grok_provider.time_context_required = bool(
@@ -849,7 +1121,7 @@ async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     body = {"urls": [url], "format": "markdown"}
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=60.0)) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             if _looks_like_login_page(response.text):
@@ -882,7 +1154,7 @@ async def _call_tavily_search(
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     body = {
         "query": query,
-        "max_results": max_results,
+        "max_results": min(max(int(max_results), 1), 20),
         "search_depth": "advanced",
         "include_raw_content": False,
         "include_answer": False,
@@ -895,7 +1167,7 @@ async def _call_tavily_search(
     if exclude_domains:
         body["exclude_domains"] = exclude_domains
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=90.0)) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             data = response.json()
@@ -915,9 +1187,9 @@ async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | No
         return None
     endpoint = f"{config.firecrawl_api_url.rstrip('/')}/search"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"query": query, "limit": limit}
+    body = {"query": query, "limit": min(max(int(limit), 1), 100)}
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=90.0)) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             data = response.json()
@@ -953,7 +1225,7 @@ async def _call_firecrawl_scrape(
             "waitFor": (attempt + 1) * 1500,
         }
         try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
+            async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=90.0)) as client:
                 response = await client.post(endpoint, headers=headers, json=body)
                 response.raise_for_status()
                 if _looks_like_login_page(response.text):
@@ -972,7 +1244,7 @@ async def _call_firecrawl_scrape(
                 await log_info(ctx, f"Firecrawl: markdown为空, 重试 {attempt + 1}/{max_retries}", config.debug_enabled)
         except Exception as e:
             last_error = _format_fetch_error("Firecrawl", e)
-            await log_info(ctx, f"Firecrawl error: {e}", config.debug_enabled)
+            await log_info(ctx, f"Firecrawl scrape failed: {last_error}", config.debug_enabled)
             return None, last_error
     return None, last_error
 
@@ -999,7 +1271,13 @@ async def web_fetch(
     url: Annotated[str, "Valid HTTP/HTTPS web address pointing to the target page. Must be complete and accessible."],
     ctx: Context = None
 ) -> str:
-    await log_info(ctx, f"Begin Fetch: {url}", config.debug_enabled)
+    preflight = await _preflight_public_target_url(url)
+    if preflight.status == "reject":
+        return f"提取失败: {preflight.message}"
+    if preflight.status == "skipped_due_to_error":
+        await log_info(ctx, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
+
+    await log_info(ctx, "Begin Fetch request", config.debug_enabled)
 
     tavily_error: str | None = None
     if config.tavily_enabled:
@@ -1042,11 +1320,17 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
         return "配置错误: TAVILY_API_KEY 未配置，请设置环境变量 TAVILY_API_KEY"
     endpoint = f"{api_url.rstrip('/')}/map"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"url": url, "max_depth": max_depth, "max_breadth": max_breadth, "limit": limit, "timeout": timeout}
+    body = {
+        "url": url,
+        "max_depth": max_depth,
+        "max_breadth": max_breadth,
+        "limit": limit,
+        "timeout": timeout,
+    }
     if instructions:
         body["instructions"] = instructions
     try:
-        async with httpx.AsyncClient(timeout=float(timeout + 10)) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=float(timeout + 10))) as client:
             response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
             if _looks_like_login_page(response.text):
@@ -1070,9 +1354,9 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
     except httpx.TimeoutException:
         return f"映射超时: 请求超过{timeout}秒"
     except httpx.HTTPStatusError as e:
-        return f"HTTP错误: {e.response.status_code} - {e.response.text[:200]}"
+        return f"HTTP错误: {e.response.status_code} - {_mask_sensitive_text(e.response.text)[:200]}"
     except Exception as e:
-        return f"映射错误: {str(e)}"
+        return f"映射错误: {_mask_sensitive_text(str(e))}"
 
 
 @mcp.tool(
@@ -1100,6 +1384,12 @@ async def web_map(
     limit: Annotated[int, Field(description="Total number of links to process before stopping.", ge=1, le=500)] = 50,
     timeout: Annotated[int, Field(description="Maximum time in seconds for the operation.", ge=10, le=150)] = 150
 ) -> str:
+    preflight = await _preflight_public_target_url(url)
+    if preflight.status == "reject":
+        return f"映射失败: {preflight.message}"
+    if preflight.status == "skipped_due_to_error":
+        await log_info(None, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
+
     result = await _call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
     return result
 
@@ -1120,7 +1410,7 @@ def _build_doctor_check(
         "message": message,
     }
     if endpoint:
-        check["endpoint"] = endpoint
+        check["endpoint"] = _mask_sensitive_url(endpoint)
     if response_time_ms is not None:
         check["response_time_ms"] = round(float(response_time_ms), 2)
     if skipped_reason:
@@ -1131,9 +1421,29 @@ def _build_doctor_check(
     return check
 
 
-def _append_recommendation(recommendations: list[str], message: str) -> None:
+def _append_recommendation(
+    recommendations: list[str],
+    message: str,
+    *,
+    recommendation_details: list[dict] | None = None,
+    check_id: str = "",
+    feature: str = "",
+    severity: str = "warning",
+) -> None:
     if message and message not in recommendations:
         recommendations.append(message)
+    if recommendation_details is None or not message:
+        return
+    detail = {
+        "message": message,
+        "severity": severity,
+    }
+    if check_id:
+        detail["check_id"] = check_id
+    if feature:
+        detail["feature"] = feature
+    if detail not in recommendation_details:
+        recommendation_details.append(detail)
 
 
 def _find_git_root(start: Path | None = None) -> Path | None:
@@ -1154,6 +1464,20 @@ def _summarize_doctor_status(doctor_status: str) -> str:
     return "核心 Grok 可用，但部分可选能力未配置、未生效或探测失败。"
 
 
+def _httpx_client_kwargs_for_url(url: str, *, timeout: float) -> dict:
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    kwargs = {"timeout": timeout}
+    is_loopback = host == "localhost"
+    if not is_loopback:
+        try:
+            is_loopback = ip_address(host).is_loopback
+        except ValueError:
+            is_loopback = host.startswith("127.")
+    if is_loopback:
+        kwargs["trust_env"] = False
+    return kwargs
+
+
 async def _probe_json_endpoint(
     check_id: str,
     method: str,
@@ -1169,14 +1493,14 @@ async def _probe_json_endpoint(
 
     start_time = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(url, timeout=timeout)) as client:
             if method == "GET":
                 response = await client.get(url, headers=headers)
             else:
                 response = await client.post(url, headers=headers, json=json_body)
 
         response_time_ms = (time.perf_counter() - start_time) * 1000
-        response_text = (response.text or "")[:120]
+        response_text = _mask_sensitive_text(response.text or "")[:120]
         if _looks_like_login_page(response.text or ""):
             return _build_doctor_check(
                 check_id,
@@ -1231,26 +1555,29 @@ async def _probe_json_endpoint(
             status_code=response.status_code,
         )
     except httpx.TimeoutException as exc:
+        masked_message = _mask_sensitive_text(str(exc) or "timeout")
         return _build_doctor_check(
             check_id,
             "error",
-            f"请求超时: {str(exc) or 'timeout'}",
+            f"请求超时: {masked_message}",
             endpoint=url,
             error_kind="timeout",
         )
     except httpx.RequestError as exc:
+        masked_message = _mask_sensitive_text(str(exc))
         return _build_doctor_check(
             check_id,
             "error",
-            f"网络错误: {str(exc)}",
+            f"网络错误: {masked_message}",
             endpoint=url,
             error_kind="request_error",
         )
     except Exception as exc:
+        masked_message = _mask_sensitive_text(str(exc))
         return _build_doctor_check(
             check_id,
             "error",
-            f"未知错误: {str(exc)}",
+            f"未知错误: {masked_message}",
             endpoint=url,
             error_kind="unexpected_error",
         )
@@ -1268,6 +1595,10 @@ def _validate_tavily_map_probe_payload(data: object) -> str | None:
     results = data.get("results")
     if not isinstance(results, list):
         return "响应结构异常：缺少 results 列表。"
+
+    for index, item in enumerate(results):
+        if not isinstance(item, str):
+            return f"响应结构异常：results[{index}] 必须是字符串。"
 
     return None
 
@@ -1287,6 +1618,7 @@ def _build_connection_test_from_models_check(models_check: dict) -> dict:
             "status": "连接成功",
             "message": models_check["message"],
             "response_time_ms": models_check.get("response_time_ms", 0),
+            "scope": "models_endpoint",
         }
         if models_check.get("available_models"):
             result["available_models"] = models_check["available_models"]
@@ -1296,6 +1628,7 @@ def _build_connection_test_from_models_check(models_check: dict) -> dict:
         "status": status_map.get(models_check.get("error_kind"), "测试失败"),
         "message": models_check["message"],
         "response_time_ms": models_check.get("response_time_ms", 0),
+        "scope": "models_endpoint",
     }
 
 
@@ -1386,7 +1719,30 @@ async def _probe_web_fetch() -> dict:
     )
 
 
-def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> dict:
+def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> dict:
+    if check["status"] == "ok":
+        return {"status": "ready", "message": check["message"]}
+    if check["status"] == "skipped":
+        item = {"status": "not_ready", "message": not_ready_message}
+        if check.get("skipped_reason"):
+            item["skipped_reason"] = check["skipped_reason"]
+        return item
+    return {"status": "degraded", "message": check["message"]}
+
+
+def _has_readable_source_session(cache_entries: list[object]) -> bool:
+    for entry in cache_entries:
+        normalized_entry = _normalize_sources_cache_entry(entry)
+        if normalized_entry and normalized_entry["search_status"] != "error":
+            return True
+    return False
+
+
+def _build_feature_readiness(
+    checks: list[dict],
+    *,
+    has_readable_source_session: bool = False,
+) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
     grok_models = checks_by_id["grok_models"]
@@ -1425,18 +1781,33 @@ def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> 
     if web_fetch_probe["status"] == "ok":
         web_fetch_status = "ready"
         web_fetch_message = web_fetch_probe["message"]
+    elif web_fetch_probe["status"] == "error":
+        web_fetch_status = "degraded"
+        web_fetch_message = web_fetch_probe["message"]
     elif tavily_extract["status"] == "ok" and firecrawl_scrape["status"] == "ok":
         web_fetch_status = "ready"
         web_fetch_message = "Tavily 与 Firecrawl 均可用。"
     elif tavily_extract["status"] == "ok" or firecrawl_scrape["status"] == "ok":
         web_fetch_status = "degraded"
-        web_fetch_message = web_fetch_probe["message"] if web_fetch_probe["status"] == "error" else "仅部分抓取后端已验证可用。"
+        web_fetch_message = "仅部分抓取后端已验证可用。"
     elif tavily_extract["status"] == "skipped" and firecrawl_scrape["status"] == "skipped":
         web_fetch_status = "not_ready"
         web_fetch_message = "Tavily / Firecrawl 均未配置。"
     else:
         web_fetch_status = "degraded"
         web_fetch_message = "抓取后端已配置，但当前探测未通过。"
+
+    web_fetch_providers = {
+        "verified_path": web_fetch_probe.get("provider") if web_fetch_probe["status"] == "ok" else None,
+        "tavily": _build_provider_readiness_item(
+            tavily_extract,
+            not_ready_message="Tavily 未配置或已禁用。",
+        ),
+        "firecrawl": _build_provider_readiness_item(
+            firecrawl_scrape,
+            not_ready_message="Firecrawl 未配置。",
+        ),
+    }
 
     if tavily_map["status"] == "ok":
         web_map_status = "ready"
@@ -1458,14 +1829,18 @@ def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> 
                 "message": "当前进程内已存在可读取的 source session 缓存。",
                 "transient": True,
             }
-            if source_cache_size > 0
+            if has_readable_source_session
             else {
                 "status": "partial_ready" if web_search_status != "not_ready" else "not_ready",
                 "message": "接口可用，但当前进程内尚无可读取的 source session；需先执行成功的 web_search。",
                 "transient": True,
             }
         ),
-        "web_fetch": {"status": web_fetch_status, "message": web_fetch_message},
+        "web_fetch": {
+            "status": web_fetch_status,
+            "message": web_fetch_message,
+            "providers": web_fetch_providers,
+        },
         "web_map": {"status": web_map_status, "message": web_map_message},
         "toggle_builtin_tools": {
             "status": toggle_status,
@@ -1479,7 +1854,12 @@ def _feature_affects_overall_doctor_status(item: dict) -> bool:
     return not item.get("client_specific", False) and not item.get("transient", False)
 
 
-def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommendations: list[str]) -> dict:
+def _build_doctor_payload(
+    checks: list[dict],
+    feature_readiness: dict,
+    recommendations: list[str],
+    recommendation_details: list[dict],
+) -> dict:
     web_search_status = feature_readiness["web_search"]["status"]
     if web_search_status == "not_ready":
         doctor_status = "error"
@@ -1497,6 +1877,39 @@ def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommend
         "summary": _summarize_doctor_status(doctor_status),
         "checks": checks,
         "recommendations": recommendations,
+        "recommendations_detail": recommendation_details,
+    }
+
+
+def _render_config_info_payload(config_info: dict, *, detail: str) -> dict:
+    if detail == "full":
+        return config_info
+
+    if detail == "summary":
+        base_snapshot = {
+            key: value
+            for key, value in config_info.items()
+            if key not in {"connection_test", "doctor", "feature_readiness"}
+        }
+        doctor = config_info.get("doctor") or {}
+        summarized_doctor = {
+            "status": doctor.get("status"),
+            "summary": doctor.get("summary"),
+            "recommendations": doctor.get("recommendations", []),
+        }
+        return {
+            key: value
+            for key, value in {
+                **base_snapshot,
+                "connection_test": config_info.get("connection_test"),
+                "doctor": summarized_doctor,
+                "feature_readiness": config_info.get("feature_readiness"),
+            }.items()
+        }
+
+    return {
+        "error": "invalid_detail",
+        "message": "Invalid detail value. Supported values are 'full' and 'summary'.",
     }
 
 
@@ -1515,17 +1928,32 @@ def _build_doctor_payload(checks: list[dict], feature_readiness: dict, recommend
     **Edge Cases & Best Practices:**
         - Use this tool first when debugging connection, provider readiness, or installation issues.
         - API keys are automatically masked for security in the response.
+        - Use `detail=summary` for a compact machine-readable snapshot; keep the default `detail=full` for complete doctor/probe output.
         - Optional provider probes only run when their configuration is present.
         - The `/models` connection test timeout is 10 seconds; additional real `search/fetch` probes may take longer.
     """,
     meta={"version": "1.4.0", "author": "guda.studio"},
 )
-async def get_config_info() -> str:
+async def get_config_info(
+    detail: Annotated[str, "Response detail level: full | summary. Defaults to full."] = "full",
+) -> str:
     import json
+
+    normalized_detail = (detail or "full").strip().lower() or "full"
+    if normalized_detail not in {"full", "summary"}:
+        return json.dumps(
+            {
+                "error": "invalid_detail",
+                "message": "Invalid detail value. Supported values are 'full' and 'summary'.",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
     config_info = config.get_config_info()
     checks: list[dict] = []
     recommendations: list[str] = []
+    recommendation_details: list[dict] = []
 
     try:
         api_url = config.grok_api_url
@@ -1535,14 +1963,27 @@ async def get_config_info() -> str:
         api_url = ""
         api_key = ""
         checks.append(_build_doctor_check("grok_config", "error", str(exc), error_kind="config_error"))
-        _append_recommendation(recommendations, "先配置 GROK_API_URL 与 GROK_API_KEY，再重新运行 get_config_info。")
+        _append_recommendation(
+            recommendations,
+            "先配置 GROK_API_URL 与 GROK_API_KEY，再重新运行 get_config_info。",
+            recommendation_details=recommendation_details,
+            check_id="grok_config",
+            feature="web_search",
+            severity="error",
+        )
 
     if api_url:
         if api_url.rstrip("/").endswith("/v1"):
             checks.append(_build_doctor_check("grok_api_url_format", "ok", "GROK_API_URL 已显式包含 /v1。"))
         else:
             checks.append(_build_doctor_check("grok_api_url_format", "warning", "GROK_API_URL 未显式包含 /v1。"))
-            _append_recommendation(recommendations, "将 GROK_API_URL 改为显式包含 /v1 的 OpenAI-compatible 根路径。")
+            _append_recommendation(
+                recommendations,
+                "将 GROK_API_URL 改为显式包含 /v1 的 OpenAI-compatible 根路径。",
+                recommendation_details=recommendation_details,
+                check_id="grok_api_url_format",
+                feature="web_search",
+            )
 
     if api_url and api_key:
         grok_models = await _probe_json_endpoint(
@@ -1565,7 +2006,14 @@ async def get_config_info() -> str:
             if model_names:
                 grok_models["available_models"] = model_names
         else:
-            _append_recommendation(recommendations, "检查 Grok 中转站是否支持 /models，并确认 API Key 与 URL 可达。")
+            _append_recommendation(
+                recommendations,
+                "检查 Grok 中转站是否支持 /models，并确认 API Key 与 URL 可达。",
+                recommendation_details=recommendation_details,
+                check_id="grok_models",
+                feature="web_search",
+                severity="error",
+            )
     else:
         grok_models = _build_doctor_check(
             "grok_models",
@@ -1592,11 +2040,21 @@ async def get_config_info() -> str:
             _append_recommendation(
                 recommendations,
                 f"将 GROK_MODEL 或本地持久化模型从 {configured_model} 切换到 /models 返回的可用模型，例如：{available_preview}。",
+                recommendation_details=recommendation_details,
+                check_id="grok_model_selection",
+                feature="web_search",
             )
     if api_url and api_key:
         grok_search_probe = await _probe_web_search(api_url, api_key, config.grok_model)
         if grok_search_probe["status"] != "ok":
-            _append_recommendation(recommendations, "检查 chat/completions 是否真实可用，并确认当前默认模型能返回可解析正文。")
+            _append_recommendation(
+                recommendations,
+                "检查 chat/completions 是否真实可用，并确认当前默认模型能返回可解析正文。",
+                recommendation_details=recommendation_details,
+                check_id="grok_search_probe",
+                feature="web_search",
+                severity="error",
+            )
     else:
         grok_search_probe = _build_doctor_check(
             "grok_search_probe",
@@ -1625,12 +2083,26 @@ async def get_config_info() -> str:
                 tavily_extract["status"] = "error"
                 tavily_extract["message"] = payload_error
                 tavily_extract["error_kind"] = "invalid_response_shape"
-                _append_recommendation(recommendations, "检查 Tavily extract 是否返回了登录页、HTML 页面或异常 JSON 结构。")
+                _append_recommendation(
+                    recommendations,
+                    "检查 Tavily extract 是否返回了登录页、HTML 页面或异常 JSON 结构。",
+                    recommendation_details=recommendation_details,
+                    check_id="tavily_extract",
+                    feature="web_fetch",
+                    severity="error",
+                )
             else:
                 result_count = len((tavily_extract_data or {}).get("results", []) or [])
                 tavily_extract["message"] = f"Tavily extract 探测成功，返回 {result_count} 条结果。"
         else:
-            _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily extract 端点可达。")
+            _append_recommendation(
+                recommendations,
+                "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily extract 端点可达。",
+                recommendation_details=recommendation_details,
+                check_id="tavily_extract",
+                feature="web_fetch",
+                severity="error",
+            )
 
         tavily_map = await _probe_json_endpoint(
             "tavily_map",
@@ -1650,12 +2122,26 @@ async def get_config_info() -> str:
                 tavily_map["status"] = "error"
                 tavily_map["message"] = payload_error
                 tavily_map["error_kind"] = "invalid_response_shape"
-                _append_recommendation(recommendations, "检查 Tavily map 是否返回了异常 JSON 结构。")
+                _append_recommendation(
+                    recommendations,
+                    "检查 Tavily map 是否返回了异常 JSON 结构。",
+                    recommendation_details=recommendation_details,
+                    check_id="tavily_map",
+                    feature="web_map",
+                    severity="error",
+                )
             else:
                 result_count = len((tavily_map_data or {}).get("results", []) or [])
                 tavily_map["message"] = f"Tavily map 探测成功，返回 {result_count} 条结果。"
         else:
-            _append_recommendation(recommendations, "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily map 端点可达。")
+            _append_recommendation(
+                recommendations,
+                "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily map 端点可达。",
+                recommendation_details=recommendation_details,
+                check_id="tavily_map",
+                feature="web_map",
+                severity="error",
+            )
     else:
         tavily_reason = "TAVILY_ENABLED=false" if not config.tavily_enabled else "TAVILY_API_KEY 未配置"
         tavily_extract = _build_doctor_check(
@@ -1670,7 +2156,20 @@ async def get_config_info() -> str:
             "未执行 Tavily map 探测。",
             skipped_reason=tavily_reason,
         )
-        _append_recommendation(recommendations, "若需要 web_map 或 Tavily-first web_fetch，请配置并启用 Tavily。")
+        _append_recommendation(
+            recommendations,
+            "若需要 web_map 或 Tavily-first web_fetch，请配置并启用 Tavily。",
+            recommendation_details=recommendation_details,
+            check_id="tavily_extract",
+            feature="web_fetch",
+        )
+        _append_recommendation(
+            recommendations,
+            "若需要 web_map，请配置并启用 Tavily。",
+            recommendation_details=recommendation_details,
+            check_id="tavily_map",
+            feature="web_map",
+        )
     checks.append(tavily_extract)
     checks.append(tavily_map)
 
@@ -1694,9 +2193,22 @@ async def get_config_info() -> str:
             else:
                 firecrawl_scrape["status"] = "warning"
                 firecrawl_scrape["message"] = "Firecrawl scrape 已响应，但 markdown 为空。"
-                _append_recommendation(recommendations, "检查 Firecrawl scrape 返回内容是否为空，避免 web_fetch 被误判为 fully ready。")
+                _append_recommendation(
+                    recommendations,
+                    "检查 Firecrawl scrape 返回内容是否为空，避免 web_fetch 被误判为 fully ready。",
+                    recommendation_details=recommendation_details,
+                    check_id="firecrawl_scrape",
+                    feature="web_fetch",
+                )
         else:
-            _append_recommendation(recommendations, "检查 FIRECRAWL_API_KEY / FIRECRAWL_API_URL，确认 Firecrawl scrape 端点可达。")
+            _append_recommendation(
+                recommendations,
+                "检查 FIRECRAWL_API_KEY / FIRECRAWL_API_URL，确认 Firecrawl scrape 端点可达。",
+                recommendation_details=recommendation_details,
+                check_id="firecrawl_scrape",
+                feature="web_fetch",
+                severity="error",
+            )
     else:
         firecrawl_scrape = _build_doctor_check(
             "firecrawl_scrape",
@@ -1704,11 +2216,24 @@ async def get_config_info() -> str:
             "未执行 Firecrawl scrape 探测。",
             skipped_reason="FIRECRAWL_API_KEY 未配置",
         )
-        _append_recommendation(recommendations, "若需要 Firecrawl fallback，请配置 FIRECRAWL_API_KEY。")
+        _append_recommendation(
+            recommendations,
+            "若需要 Firecrawl fallback，请配置 FIRECRAWL_API_KEY。",
+            recommendation_details=recommendation_details,
+            check_id="firecrawl_scrape",
+            feature="web_fetch",
+        )
     checks.append(firecrawl_scrape)
     web_fetch_probe = await _probe_web_fetch()
     if web_fetch_probe["status"] == "error":
-        _append_recommendation(recommendations, "检查真实 web_fetch 路径是否能抓到最小页面正文，并确认提取结果不是登录页、空内容或异常结构。")
+        _append_recommendation(
+            recommendations,
+            "检查真实 web_fetch 路径是否能抓到最小页面正文，并确认提取结果不是登录页、空内容或异常结构。",
+            recommendation_details=recommendation_details,
+            check_id="web_fetch_probe",
+            feature="web_fetch",
+            severity="error",
+        )
     checks.append(web_fetch_probe)
 
     claude_project_root = _find_git_root()
@@ -1717,18 +2242,26 @@ async def get_config_info() -> str:
         _build_doctor_check(
             "claude_code_project",
             claude_context_status,
-            f"已找到 Claude Code 项目根目录：{claude_project_root}" if claude_context_status == "ok" else "未检测到项目级 Git 上下文。",
+            "已检测到 Claude Code 项目级 Git 上下文。" if claude_context_status == "ok" else "未检测到项目级 Git 上下文。",
             skipped_reason="" if claude_context_status == "ok" else "missing_git_context",
         )
     )
 
-    feature_readiness = _build_feature_readiness(checks, source_cache_size=await _SOURCES_CACHE.size())
-    doctor = _build_doctor_payload(checks, feature_readiness, recommendations)
+    source_cache_entries = await _SOURCES_CACHE.snapshot()
+    feature_readiness = _build_feature_readiness(
+        checks,
+        has_readable_source_session=_has_readable_source_session(source_cache_entries),
+    )
+    doctor = _build_doctor_payload(checks, feature_readiness, recommendations, recommendation_details)
     config_info["connection_test"] = _build_connection_test_from_models_check(grok_models)
     config_info["doctor"] = doctor
     config_info["feature_readiness"] = feature_readiness
 
-    return json.dumps(config_info, ensure_ascii=False, indent=2)
+    return json.dumps(
+        _render_config_info_payload(config_info, detail=normalized_detail),
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @mcp.tool(
@@ -1806,26 +2339,62 @@ async def toggle_builtin_tools(
 ) -> str:
     import json
 
-    root = _find_git_root()
-    if root is None:
+    def build_error(message: str, *, file_path: str = "", error_code: str) -> str:
         return json.dumps({
             "blocked": False,
             "deny_list": [],
-            "file": "",
-            "message": "未检测到项目级 Git 根目录，无法修改 Claude Code 项目设置"
+            "file": file_path,
+            "message": message,
+            "error": error_code,
         }, ensure_ascii=False, indent=2)
+
+    root = _find_git_root()
+    if root is None:
+        return build_error(
+            "未检测到项目级 Git 根目录，无法修改 Claude Code 项目设置",
+            error_code="git_root_not_found",
+        )
 
     settings_path = root / ".claude" / "settings.json"
     tools = ["WebFetch", "WebSearch"]
 
     # Load or initialize
     if settings_path.exists():
-        with open(settings_path, 'r', encoding='utf-8') as f:
-            settings = json.load(f)
+        try:
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            return build_error(
+                f"无法读取 Claude Code 项目设置: {str(exc)}",
+                file_path=str(settings_path),
+                error_code="settings_file_invalid",
+            )
     else:
         settings = {"permissions": {"deny": []}}
 
-    deny = settings.setdefault("permissions", {}).setdefault("deny", [])
+    if not isinstance(settings, dict):
+        return build_error(
+            "Claude Code 项目设置格式无效: 顶层对象必须是 JSON object",
+            file_path=str(settings_path),
+            error_code="settings_file_invalid",
+        )
+
+    permissions = settings.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        return build_error(
+            "Claude Code 项目设置格式无效: permissions 必须是对象",
+            file_path=str(settings_path),
+            error_code="settings_file_invalid",
+        )
+
+    deny = permissions.setdefault("deny", [])
+    if not isinstance(deny, list):
+        return build_error(
+            "Claude Code 项目设置格式无效: permissions.deny 必须是数组",
+            file_path=str(settings_path),
+            error_code="settings_file_invalid",
+        )
+
     blocked = all(t in deny for t in tools)
 
     # Execute action
@@ -1833,18 +2402,38 @@ async def toggle_builtin_tools(
         for t in tools:
             if t not in deny:
                 deny.append(t)
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(settings_path, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
+        try:
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(settings_path, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            return build_error(
+                f"写入 Claude Code 项目设置失败: {str(exc)}",
+                file_path=str(settings_path),
+                error_code="settings_write_failed",
+            )
         msg = "官方工具已禁用"
         blocked = True
     elif action in ["off", "disable"]:
         deny[:] = [t for t in deny if t not in tools]
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(settings_path, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
+        try:
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(settings_path, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            return build_error(
+                f"写入 Claude Code 项目设置失败: {str(exc)}",
+                file_path=str(settings_path),
+                error_code="settings_write_failed",
+            )
         msg = "官方工具已启用"
         blocked = False
+    elif action not in ["status"]:
+        return build_error(
+            "无效 action: 仅支持 on、off 或 status",
+            file_path=str(settings_path),
+            error_code="invalid_action",
+        )
     else:
         msg = f"官方工具当前{'已禁用' if blocked else '已启用'}"
 
@@ -1852,7 +2441,8 @@ async def toggle_builtin_tools(
         "blocked": blocked,
         "deny_list": deny,
         "file": str(settings_path),
-        "message": msg
+        "message": msg,
+        "error": None,
     }, ensure_ascii=False, indent=2)
 
 
@@ -1865,7 +2455,7 @@ def _get_planning_sub_queries(session) -> list[dict]:
 
 def _get_planning_sub_query_ids(session) -> set[str]:
     return {
-        item["id"]
+        item["id"].strip()
         for item in _get_planning_sub_queries(session)
         if isinstance(item.get("id"), str) and item["id"].strip()
     }
@@ -1880,12 +2470,12 @@ def _planning_validation_message(message: str, field: str | None = None) -> str:
 
 def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | None:
     existing_ids = _get_planning_sub_query_ids(session)
-    sub_query_id = item["id"]
+    sub_query_id = item["id"].strip()
     valid_dependency_ids = {sub_query_id} if is_revision else existing_ids
 
     if is_revision and any(phase in session.phases for phase in ("search_strategy", "tool_selection", "execution_order")):
         return _planning_validation_message(
-            "Sub-query revision would invalidate downstream phases. Restart planning from query_decomposition or open a new session.",
+            "Sub-query revision would invalidate downstream phases. Open a new session to restart planning from query_decomposition.",
             "id",
         )
 
@@ -1920,9 +2510,10 @@ def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | No
 
 def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -> str | None:
     existing_ids = _get_planning_sub_query_ids(session)
-    if sub_query_id not in existing_ids:
+    normalized_sub_query_id = sub_query_id.strip()
+    if normalized_sub_query_id not in existing_ids:
         return _planning_validation_message(
-            f"Unknown sub-query id: {sub_query_id}",
+            f"Unknown sub-query id: {normalized_sub_query_id}",
             field_name,
         )
     return None
@@ -2025,10 +2616,19 @@ def _validate_upstream_phase_revision(session, phase: str) -> str | None:
     downstream_phases = PHASE_NAMES[phase_index + 1 :]
     if any(name in session.phases for name in downstream_phases):
         return _planning_validation_message(
-            f"{phase} revision would invalidate downstream phases. Restart planning from {phase} or open a new session.",
+            f"{phase} revision would invalidate downstream phases. Open a new session to restart planning from {phase}.",
             "is_revision",
         )
     return None
+
+
+def _validate_singleton_phase_overwrite(session, phase: str, is_revision: bool) -> str | None:
+    if is_revision or phase not in session.phases:
+        return None
+    return _planning_validation_message(
+        f"{phase} already exists for this session. Set is_revision=true to replace it explicitly.",
+        "is_revision",
+    )
 
 
 @mcp.tool(
@@ -2063,6 +2663,10 @@ async def plan_intent(
         revision_error = _validate_upstream_phase_revision(session, "intent_analysis")
         if revision_error:
             return revision_error
+    if session:
+        overwrite_error = _validate_singleton_phase_overwrite(session, "intent_analysis", is_revision)
+        if overwrite_error:
+            return overwrite_error
     data = {"core_question": core_question, "query_type": query_type, "time_sensitivity": time_sensitivity}
     if domain:
         data["domain"] = domain
@@ -2105,6 +2709,9 @@ async def plan_complexity(
         revision_error = _validate_upstream_phase_revision(session, "complexity_assessment")
         if revision_error:
             return revision_error
+    overwrite_error = _validate_singleton_phase_overwrite(session, "complexity_assessment", is_revision)
+    if overwrite_error:
+        return overwrite_error
     try:
         ComplexityOutput(
             level=level,
@@ -2142,7 +2749,8 @@ async def plan_sub_query(
     import json
     if not planning_engine.get_session(session_id):
         return _planning_session_error(session_id)
-    item = {"id": id, "goal": goal, "expected_output": expected_output, "boundary": boundary}
+    normalized_id = id.strip()
+    item = {"id": normalized_id, "goal": goal, "expected_output": expected_output, "boundary": boundary}
     if depends_on:
         item["depends_on"] = _split_csv(depends_on)
     if tool_hint:
@@ -2163,7 +2771,7 @@ async def plan_sub_query(
 @mcp.tool(
     name="plan_search_term",
     output_schema=None,
-    description="Phase 4: Add one search term. Call once per term; data accumulates. First call must set approach.",
+    description="Phase 4: Add one search term. Call once per term; data accumulates. First call must set approach. Later non-revision calls append search_terms only and do not overwrite existing approach/fallback_plan; use is_revision=true to replace the strategy.",
 )
 async def plan_search_term(
     session_id: Annotated[str, "Session ID from plan_intent"],
@@ -2180,12 +2788,18 @@ async def plan_search_term(
     session = planning_engine.get_session(session_id)
     if not session:
         return _planning_session_error(session_id)
+    if any(phase in session.phases for phase in ("tool_selection", "execution_order")):
+        return _planning_validation_message(
+            "Search strategy mutation would invalidate downstream phases. Open a new session to rebuild search_strategy.",
+            "is_revision",
+        )
     if (is_revision or "search_strategy" not in session.phases) and not approach:
         return _planning_validation_error(
             "first_search_term_requires_approach",
             "The first search term must include approach=broad_first|narrow_first|targeted.",
         )
-    data = {"search_terms": [{"term": term, "purpose": purpose, "round": round}]}
+    normalized_purpose = purpose.strip()
+    data = {"search_terms": [{"term": term, "purpose": normalized_purpose, "round": round}]}
     if approach:
         data["approach"] = approach
     if fallback_plan:
@@ -2198,7 +2812,7 @@ async def plan_search_term(
         )
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid search strategy input.", _format_validation_details(exc))
-    validation_error = _validate_sub_query_reference(session, purpose, "purpose")
+    validation_error = _validate_sub_query_reference(session, normalized_purpose, "purpose")
     if validation_error:
         return validation_error
     return json.dumps(planning_engine.process_phase(
@@ -2228,29 +2842,40 @@ async def plan_tool_mapping(
         return _planning_session_error(session_id)
     if is_revision and "execution_order" in session.phases:
         return _planning_validation_message(
-            "Tool mapping revision would invalidate execution_order. Restart planning from tool_selection or open a new session.",
+            "Tool mapping revision would invalidate execution_order. Open a new session to rebuild tool_selection.",
             "sub_query_id",
         )
-    item = {"sub_query_id": sub_query_id, "tool": tool, "reason": reason}
+    normalized_sub_query_id = sub_query_id.strip()
+    item = {"sub_query_id": normalized_sub_query_id, "tool": tool, "reason": reason}
     if params_json:
         try:
-            item["params"] = json.loads(params_json)
+            parsed_params = json.loads(params_json)
         except json.JSONDecodeError:
             return _planning_validation_error(
                 "validation_error",
                 "Invalid tool mapping input.",
                 [{"field": "params_json", "message": "params_json must be valid JSON.", "type": "json_invalid"}],
             )
+        if parsed_params is None:
+            parsed_params = None
+        elif not isinstance(parsed_params, dict):
+            return _planning_validation_error(
+                "validation_error",
+                "Invalid tool mapping input.",
+                [{"field": "params_json", "message": "params_json must decode to a JSON object.", "type": "dict_type"}],
+            )
+        if parsed_params is not None:
+            item["params"] = parsed_params
     try:
         ToolPlanItem(**item)
     except ValidationError as exc:
         if any(detail["type"] == "literal_error" for detail in _format_validation_details(exc)):
             return _planning_validation_error("invalid_tool", "tool must be one of web_search, web_fetch, web_map.")
         return _planning_validation_error("validation_error", "Invalid tool mapping input.", _format_validation_details(exc))
-    validation_error = _validate_sub_query_reference(session, sub_query_id, "sub_query_id")
+    validation_error = _validate_sub_query_reference(session, normalized_sub_query_id, "sub_query_id")
     if validation_error:
         return validation_error
-    validation_error = _validate_tool_mapping_item(session, sub_query_id, is_revision=is_revision)
+    validation_error = _validate_tool_mapping_item(session, normalized_sub_query_id, is_revision=is_revision)
     if validation_error:
         return validation_error
     return json.dumps(planning_engine.process_phase(
@@ -2279,6 +2904,9 @@ async def plan_execution(
     parallel = [_split_csv(g) for g in parallel_groups.split(";") if g.strip()] if parallel_groups else []
     seq = _split_csv(sequential)
     session = planning_engine.get_session(session_id)
+    overwrite_error = _validate_singleton_phase_overwrite(session, "execution_order", is_revision)
+    if overwrite_error:
+        return overwrite_error
     try:
         ExecutionOrderOutput(parallel=parallel, sequential=seq, estimated_rounds=estimated_rounds)
     except ValidationError as exc:
@@ -2353,12 +2981,15 @@ def main():
 
         threading.Thread(target=monitor_parent, daemon=True).start()
 
+    exit_code = 0
     try:
         mcp.run(transport="stdio", show_banner=False)
     except KeyboardInterrupt:
         pass
+    except Exception:
+        exit_code = 1
     finally:
-        os._exit(0)
+        os._exit(exit_code)
 
 
 if __name__ == "__main__":
