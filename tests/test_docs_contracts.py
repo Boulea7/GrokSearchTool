@@ -8,6 +8,7 @@ README_EN = ROOT_DIR / "README.en.md"
 README_ZH_TW = ROOT_DIR / "README.zh-TW.md"
 README_JA = ROOT_DIR / "README.ja.md"
 README_RU = ROOT_DIR / "README.ru.md"
+PYPROJECT = ROOT_DIR / "pyproject.toml"
 
 
 def test_readme_requires_explicit_v1_suffix_for_grok_api_url():
@@ -69,13 +70,18 @@ def test_docs_explain_lazy_import_boundaries_for_optional_dependencies():
 
     assert "`grok_search.mcp`" in readme
     assert "访问该导出时" in readme
+    assert "不改变安装时依赖声明" in readme
     assert "`fastmcp`" in readme
     assert "`grok_search.providers.GrokSearchProvider`" in readme
     assert "非 provider 导入不应" in readme
     assert "`grok_search.mcp`" in compatibility
     assert "until that export is actually accessed" in compatibility
+    assert "does not change the install-time dependency declaration" in compatibility
     assert "`grok_search.providers.GrokSearchProvider`" in compatibility
     assert "non-provider imports should not fail early" in compatibility
+
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    assert "不应被理解为安装依赖已变成 optional extra" in agents
 
 
 def test_docs_keep_masking_scope_narrow_for_ambiguous_keys():
@@ -88,3 +94,11 @@ def test_docs_keep_masking_scope_narrow_for_ambiguous_keys():
 
     agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
     assert "裸 `auth` / `key`" in agents
+
+
+def test_readme_fastmcp_badge_matches_pyproject_minimum_dependency():
+    readme = README.read_text(encoding="utf-8")
+    pyproject = PYPROJECT.read_text(encoding="utf-8")
+
+    assert "FastMCP-2.3.0+" in readme
+    assert 'fastmcp>=2.3.0' in pyproject
