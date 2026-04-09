@@ -126,6 +126,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性
 - 多数对外 user-facing 错误当前不再附带 `request_id`；但个别上游空占位 completion 异常当前仍可能携带 `request_id`。`get_config_info` 中的 Claude 项目上下文检查也不再回显绝对 Git 根路径
 - 根包 `grok_search` 当前对 `mcp` 采用 lazy export；非 server 模块导入不应再因为 `fastmcp` 缺失而提前失败
+- `grok_search.providers.GrokSearchProvider` 当前也采用 access-time lazy export；普通非 provider 导入不应因其可选依赖缺失而提前失败
 - `split_answer_and_sources` 当前应避免把 fenced code 中的 `sources(...)` 示例，或正文语义上的普通尾部链接列表，误拆成真实信源
 - server 主进程当前应在非预期致命异常下以非零退出码结束，而不是统一伪装成成功退出
 - 若本地 `stdio` 安装/启动在企业或自签证书环境中失败，优先在 `uvx` 启动命令中增加 `--native-tls`，不要草率记录成关闭 TLS 校验

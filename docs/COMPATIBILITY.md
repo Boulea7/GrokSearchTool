@@ -66,6 +66,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `feature_readiness.web_fetch.providers.verified_path` identifies the backend that passed the real fetch probe, and skipped providers may include `skipped_reason`
 - `get_config_info` is still not a full end-to-end compatibility guarantee
 - `GROK_DEBUG=false` suppresses helper progress logs entirely, including `ctx.info()` forwarding; these signals are intentionally debug-only
+- `grok_search.mcp` is an access-time lazy export; importing the root package does not require `fastmcp` until that export is actually accessed
+- `grok_search.providers.GrokSearchProvider` is also an access-time lazy export; non-provider imports should not fail early because Grok-provider optional dependencies are missing
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` intentionally expose a curated subset of provider options rather than the providers' complete native API surfaces
 - Tavily `map` may include external-domain URLs unless callers further constrain and post-filter the crawl results; this reflects Tavily's documented default `allow_external=true` behavior, and this wrapper does not currently expose that flag directly
 - loopback upstream endpoints are requested with `trust_env=False`, which also bypasses proxy and local-CA environment variables for that request
