@@ -122,7 +122,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 | 變數 | 必填 | 說明 |
 | --- | --- | --- |
-| `GROK_API_URL` | 是 | OpenAI 相容 Grok 端點；值必須顯式包含 `/v1` 後綴 |
+| `GROK_API_URL` | 是 | OpenAI 相容 Grok 端點；建議顯式包含 `/v1` 後綴，程式碼路徑不會僅因省略 `/v1` 就預先攔截，但多數 OpenAI 相容端點仍可能因此在執行期失敗，並通常伴隨相容性 warning |
 | `GROK_API_KEY` | 是 | Grok API Key |
 | `GROK_MODEL` | 否 | 預設模型；優先級為進程 env > 專案 `.env.local` > 專案 `.env` > 持久化 config > 程式預設 |
 | `GROK_TIME_CONTEXT_MODE` | 否 | 時間上下文注入模式：`always` / `auto` / `never` |
@@ -183,9 +183,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `detail="summary"` 目前只是同一次診斷結果的緊湊欄位投影，不是額外的輕量執行路徑。
 - `feature_readiness.web_fetch.providers` 會附帶 provider 級狀態；`verified_path` 表示真實抓取探針實際打通的後端，未執行的 provider 可能帶有 `skipped_reason`。
 - `feature_readiness.get_sources` 只有在目前進程內至少存在一個非 error、可讀取的 source session 時才會顯示 `ready`；若快取裡只有失敗搜尋留下的 session，狀態會維持 `partial_ready`。
-- 即使 API Key 已脫敏，診斷結果仍可能包含本機絕對路徑、endpoint/hostname 與精簡後的上游錯誤摘要；對外分享前請先複核。
+- 即使 API Key 已脫敏，診斷結果仍可能包含本機絕對路徑、endpoint/hostname 與精簡後的上游錯誤摘要；顯而易見的 bearer、token 與簽名 query / fragment 也會做遮罩，但對外分享前仍請先複核。
 - `get_sources` 成功返回時固定包含 `session_id`、`sources`、`sources_count`、`search_status`、`search_error` 與 `source_state`；只有 `session_id` 缺失或過期時才會額外回傳 `error=session_id_not_found_or_expired`。
-- `get_sources` 使用目前進程內的記憶體型 LRU 快取（預設 TTL 約 1 小時、上限 256 個 session）；`session_id` 是 transient handle，不是 durable、caller-bound capability。進程重啟、TTL 到期或快取淘汰後，先前的 `session_id` 會失效。
+- `get_sources` 使用目前進程內的記憶體型 LRU 快取（預設 TTL 約 1 小時、上限 256 個 session）；`session_id` 是 shared-daemon transient handle，不是 durable、caller-bound capability，也不是 secret token。進程重啟、TTL 到期或快取淘汰後，先前的 `session_id` 會失效。
 - `sources_count` 目前等於標準化、去重與過濾後最終寫入快取的信源數量，不等於上游原始 citations 條數。
 - `get_sources` 回傳的 `rank` 目前會依 `score`、來源身分清晰度與穩定去重順序生成，不再對 Grok 引用額外偏置；`standardize_sources` 在去重時也會規範 URL 的 scheme/host 大小寫，因此同一頁面的 mixed-case 變體可能折疊為單一 source。同時仍會保留安全 fragment、剝離 URL `userinfo`、遮罩常見簽名參數；顯式預設埠（如 `:443` / `:80`）目前仍會保留，不會和隱式預設埠 URL 自動折疊。
 

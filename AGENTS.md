@@ -88,7 +88,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 
 ## 稳定注意事项
 
-- `GROK_API_URL` 应尽量使用 OpenAI-compatible 根路径并显式带上 `/v1`
+- `GROK_API_URL` 应尽量使用 OpenAI-compatible 根路径并显式带上 `/v1`；代码层当前不会仅因缺少 `/v1` 就预先拦截请求，但多数 OpenAI-compatible 端点仍可能因此在运行时失败，并通常伴随兼容性 warning
 - 配置读取当前应遵循：进程环境变量优先；若缺失，再回落到项目根目录的 `.env.local`，仍缺失时再看 `.env`。这里的“优先”按键是否存在判断：即使环境变量值为空字符串，也不会再回落到项目文件
 - 项目级环境变量回退当前同时支持普通 dotenv 形式的 `KEY=value` 与可选 `export KEY=value`
 - `get_config_info` 当前可用于配置与连通性初检，并默认执行最小真实 `search/fetch` 探针；但还不是完整的端到端兼容性诊断

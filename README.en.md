@@ -132,7 +132,7 @@ Create a `STDIO` MCP server entry with the same core fields:
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint; the value must include an explicit `/v1` suffix |
+| `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint; using an explicit `/v1` suffix is recommended, the current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
 | `GROK_API_KEY` | Yes | Grok API key |
 | `GROK_MODEL` | No | Default model; see the precedence notes below |
 | `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |

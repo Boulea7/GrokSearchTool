@@ -108,7 +108,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 | Переменная | Обязательна | Описание |
 | --- | --- | --- |
-| `GROK_API_URL` | Да | OpenAI-совместимый Grok endpoint; значение должно явно оканчиваться на `/v1` |
+| `GROK_API_URL` | Да | OpenAI-совместимый Grok endpoint; рекомендуется явно указывать суффикс `/v1`, текущая кодовая ветка не блокирует запрос заранее только из-за его отсутствия, но многие OpenAI-совместимые endpoint'ы без него всё равно могут завершиться ошибкой во время выполнения и обычно сопровождаются compatibility warning |
 | `GROK_API_KEY` | Да | Grok API key |
 | `GROK_MODEL` | Нет | Модель по умолчанию; приоритет: process env > project `.env.local` > project `.env` > persisted config > кодовый default |
 | `GROK_TIME_CONTEXT_MODE` | Нет | Режим внедрения временного контекста: `always` / `auto` / `never` |

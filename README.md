@@ -217,7 +217,7 @@ claude mcp add-json grok-search --scope user '{
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式，推荐显式包含 `/v1` 后缀；省略时当前通常只会触发兼容性 warning） |
+| `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式，推荐显式包含 `/v1` 后缀；代码层不会仅因省略 `/v1` 就预先拦截，但多数 OpenAI 兼容端点仍可能因此在运行时失败，并通常伴随兼容性 warning） |
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
 | `GROK_MODEL` | 否 | `grok-4.1-fast` | 默认模型；优先级见下方说明（进程 env > 项目 `.env.local` > 项目 `.env` > 持久化 config > 代码默认值） |
 | `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
@@ -254,7 +254,7 @@ uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
 
 经验建议：
 
-- `GROK_API_URL` 推荐使用带显式 `/v1` 的 OpenAI 兼容根路径；未带 `/v1` 当前通常会触发兼容性 warning，而不是直接阻断运行
+- `GROK_API_URL` 推荐使用带显式 `/v1` 后缀的 OpenAI 兼容根路径；代码层不会仅因省略 `/v1` 就预先拦截，但多数 OpenAI 兼容端点仍可能因此在运行时失败，并通常伴随兼容性 warning
 - `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
 - 如需更省上下文，可将 `GROK_TIME_CONTEXT_MODE` 设为 `auto`（只在明显时效查询或显式时效控制下注入）或 `never`
 - `GROK_DEBUG=false` 时，`log_info()` 不会写入这类 helper 日志，也不会通过 `ctx.info()` 暴露中间进度；仅在 `GROK_DEBUG=true` 时转发 debug-only progress
@@ -446,7 +446,7 @@ A: Grok（`GROK_API_URL` + `GROK_API_KEY`）为必填，提供核心搜索能力
 <summary>
 Q: Grok API 地址需要什么格式？
 </summary>
-A: 需要 OpenAI 兼容根路径，并显式带上 `/v1` 后缀；同时确保 `/chat/completions` 与 `/models` 端点可用。代码层并不要求它必须是“官方”还是“镜像/中转”。
+A: 推荐使用带显式 `/v1` 后缀的 OpenAI 兼容根路径，并确保 `/chat/completions` 与 `/models` 端点可用；代码层不会仅因省略 `/v1` 就预先拦截，但多数 OpenAI 兼容端点仍可能因此在运行时失败，并通常伴随兼容性 warning。代码层并不要求它必须是“官方”还是“镜像/中转”。
 </details>
 
 <details>
