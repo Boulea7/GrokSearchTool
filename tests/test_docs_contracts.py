@@ -9,6 +9,7 @@ README_ZH_TW = ROOT_DIR / "README.zh-TW.md"
 README_JA = ROOT_DIR / "README.ja.md"
 README_RU = ROOT_DIR / "README.ru.md"
 PYPROJECT = ROOT_DIR / "pyproject.toml"
+SECURITY = ROOT_DIR / "SECURITY.md"
 
 
 def test_readme_requires_explicit_v1_suffix_for_grok_api_url():
@@ -149,3 +150,11 @@ def test_readme_fastmcp_badge_matches_pyproject_minimum_dependency():
 
     assert "FastMCP-2.3.0+" in readme
     assert 'fastmcp>=2.3.0' in pyproject
+
+
+def test_security_policy_mentions_redirect_preflight_degraded_boundary():
+    text = SECURITY.read_text(encoding="utf-8")
+
+    assert "redirect preflight" in text
+    assert "skipped_due_to_error" in text
+    assert "continue downstream provider calls" in text

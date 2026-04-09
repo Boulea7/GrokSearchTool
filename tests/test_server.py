@@ -2975,6 +2975,81 @@ async def test_preflight_redirect_targets_returns_too_many_redirects(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_rejects_too_many_redirects_before_provider_calls(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    async def fake_tavily(url):
+        calls["tavily"] += 1
+        return "# Tavily", None
+
+    async def fake_firecrawl(url, ctx):
+        calls["firecrawl"] += 1
+        return "# Firecrawl", None
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            response = httpx.Response(302, headers={"location": "/next"})
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_fetch("https://public.example.com/start")
+
+    assert "提取失败: 目标 URL 重定向次数过多" == result
+    assert calls == {"tavily": 0, "firecrawl": 0}
+
+
+@pytest.mark.asyncio
+async def test_web_map_rejects_too_many_redirects_before_provider_calls(monkeypatch):
+    calls = {"map": 0}
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        calls["map"] += 1
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            response = httpx.Response(302, headers={"location": "/next"})
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+
+    result = await server.web_map("https://public.example.com/start")
+
+    assert "映射失败: 目标 URL 重定向次数过多" == result
+    assert calls == {"map": 0}
+
+
+@pytest.mark.asyncio
 async def test_preflight_redirect_targets_marks_request_errors_as_skipped(monkeypatch):
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
@@ -3054,6 +3129,81 @@ async def test_preflight_redirect_targets_uses_get_for_visible_redirect_checks(m
         "https://public.example.com/start",
         "https://public.example.com/next",
     ]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_rejects_scheme_relative_private_redirect_before_provider_calls(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    async def fake_tavily(url):
+        calls["tavily"] += 1
+        return "# Tavily", None
+
+    async def fake_firecrawl(url, ctx):
+        calls["firecrawl"] += 1
+        return "# Firecrawl", None
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            response = httpx.Response(302, headers={"location": "//127.0.0.1/private"})
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_fetch("https://public.example.com/start")
+
+    assert "提取失败: 目标 URL 不能指向本地或私有网络" == result
+    assert calls == {"tavily": 0, "firecrawl": 0}
+
+
+@pytest.mark.asyncio
+async def test_web_map_rejects_scheme_relative_private_redirect_before_provider_calls(monkeypatch):
+    calls = {"map": 0}
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        calls["map"] += 1
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            response = httpx.Response(302, headers={"location": "//127.0.0.1/private"})
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+
+    result = await server.web_map("https://public.example.com/start")
+
+    assert "映射失败: 目标 URL 不能指向本地或私有网络" == result
+    assert calls == {"map": 0}
 
 
 @pytest.mark.asyncio
@@ -3359,6 +3509,46 @@ async def test_call_tavily_extract_reports_invalid_result_entry_shape(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_call_tavily_extract_uses_expected_transport_contract(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    monkeypatch.setenv("TAVILY_API_URL", "http://127.0.0.1:18080")
+    captured = {}
+
+    class CapturingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            response = httpx.Response(200, json={"results": [{"raw_content": "# ok"}]})
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", CapturingAsyncClient)
+
+    content, error = await server._call_tavily_extract("https://example.com")
+
+    assert error is None
+    assert content == "# ok"
+    assert captured["url"] == "http://127.0.0.1:18080/extract"
+    assert captured["kwargs"] == {"timeout": 60.0, "trust_env": False}
+    assert captured["headers"] == {
+        "Authorization": "Bearer tvly-test",
+        "Content-Type": "application/json",
+    }
+    assert captured["json"] == {"urls": ["https://example.com"], "format": "markdown"}
+
+
+@pytest.mark.asyncio
 async def test_call_tavily_map_returns_config_error_when_disabled(monkeypatch):
     monkeypatch.setenv("TAVILY_ENABLED", "false")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
@@ -3601,6 +3791,50 @@ async def test_call_firecrawl_scrape_returns_truncated_error_after_retry_budget_
 
     assert content is None
     assert "markdown 疑似被截断" in error
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_scrape_uses_expected_transport_contract(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("FIRECRAWL_API_URL", "http://127.0.0.1:19090/v2")
+    captured = {}
+
+    class CapturingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            response = httpx.Response(200, json={"data": {"markdown": "# ok"}})
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", CapturingAsyncClient)
+
+    content, error = await server._call_firecrawl_scrape("https://example.com")
+
+    assert error is None
+    assert content == "# ok"
+    assert captured["url"] == "http://127.0.0.1:19090/v2/scrape"
+    assert captured["kwargs"] == {"timeout": 90.0, "trust_env": False}
+    assert captured["headers"] == {
+        "Authorization": "Bearer fc-test",
+        "Content-Type": "application/json",
+    }
+    assert captured["json"] == {
+        "url": "https://example.com",
+        "formats": ["markdown"],
+        "timeout": 60000,
+        "waitFor": 1500,
+    }
 
 
 @pytest.mark.asyncio
