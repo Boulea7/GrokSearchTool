@@ -76,3 +76,15 @@ def test_docs_explain_lazy_import_boundaries_for_optional_dependencies():
     assert "until that export is actually accessed" in compatibility
     assert "`grok_search.providers.GrokSearchProvider`" in compatibility
     assert "non-provider imports should not fail early" in compatibility
+
+
+def test_docs_keep_masking_scope_narrow_for_ambiguous_keys():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+
+    assert "裸 `auth` / `key`" in readme
+    assert "默认不会把裸 `auth` / `key` 这类宽泛参数名一并视为敏感字段" in readme
+    assert "bare `auth` / `key` keys are intentionally not masked by default" in compatibility
+
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    assert "裸 `auth` / `key`" in agents

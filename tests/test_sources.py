@@ -474,6 +474,32 @@ def test_standardize_sources_masks_oauth_style_secret_params_and_drops_userinfo(
     )
 
 
+def test_standardize_sources_keeps_ambiguous_auth_and_key_params_unmasked():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Signed URL",
+                "url": (
+                    "https://signed.example.com/path"
+                    "?auth=oauth"
+                    "&key=sort"
+                    "&auth_token=secret-token"
+                    "&api_key=secret-key"
+                ),
+            }
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources[0]["url"] == (
+        "https://signed.example.com/path"
+        "?auth=oauth"
+        "&key=sort"
+        "&auth_token=REDACTED"
+        "&api_key=REDACTED"
+    )
+
+
 def test_standardize_sources_preserves_distinct_safe_anchor_sources():
     sources = standardize_sources(
         [

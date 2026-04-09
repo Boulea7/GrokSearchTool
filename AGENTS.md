@@ -123,6 +123,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - 当前这层边界不会仅因为本机 DNS 把某个公网 hostname 解析到私网就直接拒绝请求，因此不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证
 - `split_answer_and_sources` / `standardize_sources` 当前会尽量避免把 generic 尾部链接列表误拆成真实信源，并会对明显敏感的 query 签名参数与常见 OAuth/OIDC credential 参数做最小遮罩
 - `standardize_sources` 当前会保留普通锚点（fragment）以避免不同页面段落引用被误合并；但 URL `userinfo`、常见签名参数以及 `client_secret` / `refresh_token` / `id_token` / `password` 这类常见 credential 参数会被遮罩
+- 当前默认不会把裸 `auth` / `key` 这类宽泛参数名直接当作敏感字段；masking 仍优先针对高置信度 credential / signature 键，避免误伤普通诊断信息、示例 URL 与可核验 source 链接
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性
 - 多数对外 user-facing 错误当前不再附带 `request_id`；但个别上游空占位 completion 异常当前仍可能携带 `request_id`。`get_config_info` 中的 Claude 项目上下文检查也不再回显绝对 Git 根路径
 - 根包 `grok_search` 当前对 `mcp` 采用 lazy export；非 server 模块导入不应再因为 `fastmcp` 缺失而提前失败
