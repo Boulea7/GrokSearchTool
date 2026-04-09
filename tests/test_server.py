@@ -2756,7 +2756,7 @@ async def test_web_fetch_rejects_redirect_chain_to_private_target_before_provide
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_does_not_reject_public_hostname_only_from_local_dns_answers(monkeypatch):
+async def test_web_fetch_does_not_consult_local_dns_for_public_hostname_paths(monkeypatch):
     calls = {"tavily": 0, "firecrawl": 0}
 
     async def fake_tavily(url):
@@ -2801,7 +2801,7 @@ async def test_web_fetch_does_not_reject_public_hostname_only_from_local_dns_ans
 
 
 @pytest.mark.asyncio
-async def test_web_map_does_not_reject_public_hostname_only_from_local_dns_answers(monkeypatch):
+async def test_web_map_does_not_consult_local_dns_for_public_hostname_paths(monkeypatch):
     calls = {"map": 0}
 
     async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
@@ -2845,6 +2845,13 @@ async def test_web_map_does_not_reject_public_hostname_only_from_local_dns_answe
 
 @pytest.mark.asyncio
 async def test_web_map_rejects_invalid_scheme_before_provider_calls(monkeypatch):
+    calls = {"map": 0}
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        calls["map"] += 1
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
@@ -2852,6 +2859,7 @@ async def test_web_map_rejects_invalid_scheme_before_provider_calls(monkeypatch)
     result = await server.web_map("file:///tmp/secret.txt")
 
     assert "仅支持 http/https URL" in result
+    assert calls == {"map": 0}
 
 
 @pytest.mark.asyncio
@@ -3027,6 +3035,35 @@ async def test_preflight_redirect_targets_uses_get_for_visible_redirect_checks(m
         "https://public.example.com/start",
         "https://public.example.com/next",
     ]
+
+
+@pytest.mark.asyncio
+async def test_preflight_redirect_targets_passes_expected_transport_settings(monkeypatch):
+    captured = {"init_kwargs": [], "headers": []}
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            captured["init_kwargs"].append(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            captured["headers"].append(headers)
+            response = httpx.Response(200)
+            response.request = httpx.Request("GET", url, headers=headers)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+
+    result = await server._preflight_redirect_targets("https://public.example.com/start")
+
+    assert result.status == "allow"
+    assert captured["init_kwargs"] == [{"timeout": 5.0}]
+    assert captured["headers"] == [{"Accept": "*/*"}]
 
 
 @pytest.mark.asyncio
