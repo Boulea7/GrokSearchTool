@@ -17,6 +17,8 @@
 
 GrokSearch MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的轻量 MCP 服务器，面向 Claude Code、Codex CLI、Cherry Studio 等支持 MCP 的客户端，提供**最新、可核验、低摩擦**的网络上下文能力。
 
+公开 package import contract 当前分两层：`grok_search.mcp` 是 access-time lazy export，只有真正访问该导出时才需要 `fastmcp`；`grok_search.providers.GrokSearchProvider` 也是 access-time lazy export，普通非 provider 导入不应被其可选依赖连带拖死。
+
 它不是一个以浏览器自动化为核心的重型系统，而是一层为研究型问答优化的搜索基础设施：
 
 - `Grok` 负责主答案生成
@@ -252,7 +254,7 @@ uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"
 
 经验建议：
 
-- `GROK_API_URL` 尽量写成 OpenAI 兼容根路径并显式带上 `/v1`
+- `GROK_API_URL` 推荐使用带显式 `/v1` 的 OpenAI 兼容根路径；未带 `/v1` 当前通常会触发兼容性 warning，而不是直接阻断运行
 - `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
 - 如需更省上下文，可将 `GROK_TIME_CONTEXT_MODE` 设为 `auto`（只在明显时效查询或显式时效控制下注入）或 `never`
 - `GROK_DEBUG=false` 时，`log_info()` 不会写入这类 helper 日志，也不会通过 `ctx.info()` 暴露中间进度；仅在 `GROK_DEBUG=true` 时转发 debug-only progress
