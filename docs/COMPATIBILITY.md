@@ -46,7 +46,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 
 ## Provider Requirements
 
-- `GROK_API_URL` must be OpenAI-compatible and must include an explicit `/v1` suffix
+- `GROK_API_URL` should use an OpenAI-compatible root with an explicit `/v1` suffix; omitting `/v1` currently produces a compatibility warning rather than a hard failure
 - model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.1-fast`
 - process env presence overrides project `.env.local` / `.env` fallback, even when the env value is explicitly empty
 - project env fallback accepts both `KEY=value` and optional `export KEY=value` lines
