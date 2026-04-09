@@ -1,4 +1,5 @@
 import json
+import socket
 from collections import UserDict
 from pathlib import Path
 
@@ -2690,8 +2691,6 @@ async def test_web_fetch_rejects_invalid_scheme_before_provider_calls(monkeypatc
 
 @pytest.mark.asyncio
 async def test_web_fetch_rejects_redirect_chain_to_private_target_before_provider_calls(monkeypatch):
-    import socket
-
     calls = {"tavily": 0, "firecrawl": 0}
 
     async def fake_tavily(url):
@@ -2701,12 +2700,6 @@ async def test_web_fetch_rejects_redirect_chain_to_private_target_before_provide
     async def fake_firecrawl(url, ctx):
         calls["firecrawl"] += 1
         return "# Firecrawl", None
-
-    def fake_getaddrinfo(host, port, *args, **kwargs):
-        assert host == "public.example.com"
-        return [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 443)),
-        ]
 
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
@@ -2726,7 +2719,11 @@ async def test_web_fetch_rejects_redirect_chain_to_private_target_before_provide
     monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
     monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("redirect preflight should not consult local DNS")),
+    )
     monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
@@ -2739,8 +2736,6 @@ async def test_web_fetch_rejects_redirect_chain_to_private_target_before_provide
 
 @pytest.mark.asyncio
 async def test_web_fetch_does_not_reject_public_hostname_only_from_local_dns_answers(monkeypatch):
-    import socket
-
     calls = {"tavily": 0, "firecrawl": 0}
 
     async def fake_tavily(url):
@@ -2750,12 +2745,6 @@ async def test_web_fetch_does_not_reject_public_hostname_only_from_local_dns_ans
     async def fake_firecrawl(url, ctx):
         calls["firecrawl"] += 1
         return "# Firecrawl", None
-
-    def fake_getaddrinfo(host, port, *args, **kwargs):
-        assert host == "public.example.com"
-        return [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", port or 443)),
-        ]
 
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
@@ -2775,7 +2764,11 @@ async def test_web_fetch_does_not_reject_public_hostname_only_from_local_dns_ans
     monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
     monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("public hostname path should not consult local DNS")),
+    )
     monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
@@ -2788,19 +2781,11 @@ async def test_web_fetch_does_not_reject_public_hostname_only_from_local_dns_ans
 
 @pytest.mark.asyncio
 async def test_web_map_does_not_reject_public_hostname_only_from_local_dns_answers(monkeypatch):
-    import socket
-
     calls = {"map": 0}
 
     async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
         calls["map"] += 1
         return json.dumps({"base_url": url, "results": ["https://public.example.com/path"]}, ensure_ascii=False)
-
-    def fake_getaddrinfo(host, port, *args, **kwargs):
-        assert host == "public.example.com"
-        return [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", port or 443)),
-        ]
 
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
@@ -2819,7 +2804,11 @@ async def test_web_map_does_not_reject_public_hostname_only_from_local_dns_answe
 
     monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("web_map public hostname path should not consult local DNS")),
+    )
     monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
@@ -2846,19 +2835,11 @@ async def test_web_map_rejects_invalid_scheme_before_provider_calls(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_web_map_rejects_redirect_chain_to_private_target_before_provider_calls(monkeypatch):
-    import socket
-
     calls = {"map": 0}
 
     async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
         calls["map"] += 1
         return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
-
-    def fake_getaddrinfo(host, port, *args, **kwargs):
-        assert host == "public.example.com"
-        return [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 443)),
-        ]
 
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
@@ -2877,7 +2858,11 @@ async def test_web_map_rejects_redirect_chain_to_private_target_before_provider_
 
     monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("redirect preflight should not consult local DNS")),
+    )
     monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
