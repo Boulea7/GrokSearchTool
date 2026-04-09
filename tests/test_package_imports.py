@@ -5,6 +5,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT_DIR / "src"
@@ -254,3 +256,88 @@ def test_provider_lazy_export_propagates_dependency_errors_only_on_access():
     assert payload["package_import_ok"] is True
     assert payload["type"] == "ModuleNotFoundError"
     assert payload["name"] == "tenacity"
+
+
+def test_from_import_base_provider_does_not_trigger_grok_provider_dependencies():
+    code = textwrap.dedent(
+        """
+        import builtins
+        import json
+
+        original_import = builtins.__import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "tenacity" or name.startswith("tenacity."):
+                raise ModuleNotFoundError("No module named 'tenacity'", name="tenacity")
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = blocked_import
+
+        try:
+            from grok_search.providers import BaseSearchProvider
+        except Exception as exc:
+            payload = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "name": getattr(exc, "name", ""),
+            }
+        else:
+            payload = {"type": "ok", "name": BaseSearchProvider.__name__}
+
+        print(json.dumps(payload))
+        """
+    )
+
+    result = _run_python(code)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload == {"type": "ok", "name": "BaseSearchProvider"}
+
+
+def test_from_import_provider_lazy_export_matches_dependency_failure_contract():
+    code = textwrap.dedent(
+        """
+        import builtins
+        import json
+
+        original_import = builtins.__import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "tenacity" or name.startswith("tenacity."):
+                raise ModuleNotFoundError("No module named 'tenacity'", name="tenacity")
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = blocked_import
+
+        try:
+            from grok_search.providers import GrokSearchProvider
+        except Exception as exc:
+            payload = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "name": getattr(exc, "name", ""),
+            }
+        else:
+            payload = {"type": "ok", "name": GrokSearchProvider.__name__}
+
+        print(json.dumps(payload))
+        """
+    )
+
+    result = _run_python(code)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["type"] == "ModuleNotFoundError"
+    assert payload["name"] == "tenacity"
+
+
+def test_from_import_provider_lazy_export_works_when_dependencies_available():
+    pytest.importorskip("tenacity")
+
+    code = "from grok_search.providers import GrokSearchProvider; print(GrokSearchProvider.__name__)"
+    result = _run_python(code)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "GrokSearchProvider"
