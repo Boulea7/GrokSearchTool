@@ -410,10 +410,6 @@ class PlanningEngine:
                 )
             elif existing and isinstance(existing.data, dict) and isinstance(phase_data, dict):
                 existing.data.setdefault("search_terms", []).extend(phase_data.get("search_terms", []))
-                if phase_data.get("approach"):
-                    existing.data["approach"] = phase_data["approach"]
-                if phase_data.get("fallback_plan"):
-                    existing.data["fallback_plan"] = phase_data["fallback_plan"]
                 existing.thought = thought
                 existing.confidence = confidence
             else:

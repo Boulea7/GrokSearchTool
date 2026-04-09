@@ -35,6 +35,8 @@ The public MCP surface currently includes `13` tools:
 - `plan_tool_mapping`
 - `plan_execution`
 
+`plan_search_term` sets `approach` / `fallback_plan` when `search_strategy` is first created; later non-revision calls append `search_terms` only and do not implicitly rewrite existing strategy metadata.
+
 ## Installation
 
 ### Requirements
