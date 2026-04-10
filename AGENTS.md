@@ -114,6 +114,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `feature_readiness.web_fetch` 当前会附带 provider 级细节，并在 `verified_path` 中标注真实抓取探针实际打通的后端；未执行的 provider 可能带有 `skipped_reason`
 - `feature_readiness.web_fetch` 当前应优先尊重真实 `web_fetch_probe` 的结果；即使单点 provider 探测通过，真实抓取探针失败时也应保持 `degraded`
 - `GROK_DEBUG=false` 时，`log_info()` 当前不会写这类 helper progress log，也不会通过 `ctx.info()` 对外转发中间进度；这些信号当前是 debug-only progress/debug signal
+- redirect preflight 因 timeout 或请求级错误被标记为 `skipped_due_to_error` 时，当前还会通过 MCP context 发出 caller-visible warning，但不会改写成功返回体
 - `web_fetch` 目前优先使用 Tavily extract，失败时回退到 Firecrawl scrape
 - Tavily supplemental search 当前会把 `max_results` 限制在 Tavily 文档给出的上限 `20`
 - `web_fetch` / `web_map` / Tavily 补充搜索当前只暴露 provider 能力的受控子集，不等同于 Tavily / Firecrawl 的全量原生 API

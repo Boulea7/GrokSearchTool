@@ -296,6 +296,22 @@ def test_docs_explain_redirect_preflight_timeout_and_redirect_limit_contract():
     assert "fifth preflight still encounters a new redirect" in security
 
 
+def test_docs_explain_preflight_warning_side_channel_without_payload_shape_change():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "caller-visible warning" in readme
+    assert "不会改写成功返回体" in readme
+    assert "caller-visible warning" in readme_en
+    assert "does not rewrite successful return payloads" in readme_en
+    assert "caller-visible warning" in compatibility
+    assert "does not change successful tool payloads" in compatibility
+    assert "caller-visible warning" in agents
+    assert "不会改写成功返回体" in agents
+
+
 def test_localized_readmes_explain_redirect_preflight_contract():
     localized_expectations = {
         README_ZH_TW: ["第 `5` 次預檢", "skipped_due_to_error", "best-effort safety boundary"],

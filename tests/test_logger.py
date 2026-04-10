@@ -4,7 +4,7 @@ import logging
 import pytest
 
 import grok_search.logger as logger_module
-from grok_search.logger import log_info
+from grok_search.logger import log_info, log_warning
 
 
 class DummyContext:
@@ -57,6 +57,19 @@ async def test_log_info_writes_logger_and_ctx_when_debug_enabled(monkeypatch):
 
     assert messages == ["visible message"]
     assert ctx.messages == ["visible message"]
+
+
+@pytest.mark.asyncio
+async def test_log_warning_writes_logger_and_ctx_without_debug_gate(monkeypatch):
+    ctx = DummyContext()
+    messages = []
+
+    monkeypatch.setattr(logger_module.logger, "warning", lambda message: messages.append(message))
+
+    await log_warning(ctx, "warning message")
+
+    assert messages == ["warning message"]
+    assert ctx.messages == ["warning message"]
 
 
 def test_logger_falls_back_to_null_handler_when_file_handler_fails(monkeypatch):
