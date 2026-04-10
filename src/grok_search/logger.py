@@ -38,4 +38,7 @@ async def log_warning(ctx, message: str):
     logger.warning(message)
 
     if ctx:
-        await ctx.info(message)
+        try:
+            await ctx.info(message)
+        except Exception:
+            pass
