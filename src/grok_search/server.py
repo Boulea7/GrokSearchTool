@@ -79,6 +79,8 @@ _SEARCH_PROBE_QUERY = "Reply with the single word ready."
 _FETCH_PROBE_URL = "https://example.com"
 _PREFERRED_GROK_MODEL = "grok-4.20-0309"
 _MODEL_FALLBACK_WARNING = "model_fallback_applied"
+_BODY_MISSING_SOURCES_ONLY_WARNING = "body_missing_sources_only"
+_BODY_PROBABLY_TRUNCATED_WARNING = "body_probably_truncated"
 
 
 def _available_models_cache_now() -> float:
@@ -472,6 +474,23 @@ def _is_probably_truncated_content(content: str, min_length: int = 120) -> bool:
         return True
 
     return False
+
+
+def _assess_search_body_quality(answer: str, sources: list[dict]) -> str | None:
+    stripped_answer = (answer or "").strip()
+    if not stripped_answer and sources:
+        return _BODY_MISSING_SOURCES_ONLY_WARNING
+    if stripped_answer and _is_probably_truncated_content(stripped_answer, min_length=10):
+        return _BODY_PROBABLY_TRUNCATED_WARNING
+    return None
+
+
+def _search_probe_quality_message(warning_code: str) -> str:
+    if warning_code == _BODY_MISSING_SOURCES_ONLY_WARNING:
+        return "真实搜索探针返回成功，但上游只返回了信源列表，未返回正文。"
+    if warning_code == _BODY_PROBABLY_TRUNCATED_WARNING:
+        return "真实搜索探针返回成功，但正文疑似截断。"
+    return "真实搜索探针返回成功，但正文质量存在疑点。"
 
 
 def _format_fetch_error(provider: str, exc: Exception) -> str:
@@ -1179,6 +1198,9 @@ async def web_search(
     extra = _extra_results_to_sources(tavily_results, firecrawl_results)
     all_sources = merge_sources(grok_sources, extra)
     content = answer.strip()
+    body_quality_warning = _assess_search_body_quality(content, all_sources)
+    if body_quality_warning and body_quality_warning not in warnings:
+        warnings.append(body_quality_warning)
     if not content:
         if grok_error:
             content = grok_error
@@ -1828,6 +1850,20 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
             error_kind="probe_failed",
         )
 
+    answer, probe_sources = split_answer_and_sources(content)
+    if not probe_sources:
+        probe_sources = extract_sources_from_text(content)
+    body_quality_warning = _assess_search_body_quality(answer, probe_sources)
+    if body_quality_warning:
+        return _build_doctor_check(
+            "grok_search_probe",
+            "warning",
+            _search_probe_quality_message(body_quality_warning),
+            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            warning_code=body_quality_warning,
+        )
+
     if not sanitize_answer_text(content).strip():
         return _build_doctor_check(
             "grok_search_probe",
@@ -1973,6 +2009,9 @@ def _build_feature_readiness(
     elif grok_search_probe["status"] == "ok":
         web_search_status = "degraded"
         web_search_message = "真实搜索探针成功，但 /models 或模型可见性探测存在问题。"
+    elif grok_search_probe["status"] == "warning":
+        web_search_status = "degraded"
+        web_search_message = grok_search_probe["message"]
     elif grok_search_probe["status"] == "error":
         web_search_status = "degraded"
         web_search_message = grok_search_probe["message"]

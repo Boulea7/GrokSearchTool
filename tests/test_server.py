@@ -1340,6 +1340,66 @@ async def test_get_config_info_marks_real_search_probe_failure_as_degraded(monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("probe_content", "expected_fragment"),
+    [
+        (
+            """
+## Sources
+1. [OpenAI](https://openai.com/)
+2. [Wikipedia](https://en.wikipedia.org/wiki/OpenAI)
+""",
+            "只返回了信源列表",
+        ),
+        ("Partial answer [...]", "疑似截断"),
+    ],
+)
+async def test_get_config_info_marks_low_quality_probe_content_as_degraded(
+    monkeypatch,
+    probe_content,
+    expected_fragment,
+):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform=""):
+            return probe_content
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert checks["grok_search_probe"]["status"] == "warning"
+    assert expected_fragment in checks["grok_search_probe"]["message"]
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert expected_fragment in payload["feature_readiness"]["web_search"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_uses_fallback_grok_model_for_real_probe_when_compatible(monkeypatch):
     monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
@@ -2862,9 +2922,34 @@ async def test_web_search_surfaces_sources_only_response_without_empty_content(m
     monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
 
     result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
 
     assert "只返回了信源列表" in result["content"]
     assert result["sources_count"] == 2
+    assert result["status"] == "partial"
+    assert "body_missing_sources_only" in result["warnings"]
+    assert cached["search_status"] == "partial"
+    assert "warnings" not in cached
+
+
+@pytest.mark.asyncio
+async def test_web_search_marks_probably_truncated_body_as_partial(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Partial answer [...]"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["status"] == "partial"
+    assert "body_probably_truncated" in result["warnings"]
+    assert cached["search_status"] == "partial"
+    assert "warnings" not in cached
 
 
 def test_configure_windows_event_loop_policy(monkeypatch):
