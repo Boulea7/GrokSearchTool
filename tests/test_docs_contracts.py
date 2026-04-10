@@ -296,6 +296,27 @@ def test_docs_explain_runtime_model_source_and_env_override_boundary():
     assert "одного вызова `switch_model` недостаточно" in readme_ru
 
 
+def test_docs_explain_runtime_model_fallback_boundary():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "`grok_model_selection`" in readme
+    assert "`grok_model_runtime_fallback`" in readme
+    assert "best-effort 兼容路径" in readme
+    assert "上游错误摘要命中“模型不可用”类文案" in readme
+    assert "这两个 check 可能同时出现" in readme
+    assert "`grok_model_selection`" in compatibility
+    assert "`grok_model_runtime_fallback`" in compatibility
+    assert "best-effort compatibility path" in compatibility
+    assert "model unavailable" in compatibility
+    assert "both checks may appear" in compatibility
+    assert "`grok_model_selection`" in agents
+    assert "`grok_model_runtime_fallback`" in agents
+    assert "best-effort 兼容路径" in agents
+    assert "这两个 check 可能同时出现" in agents
+
+
 def test_docs_explain_planning_session_and_wrapper_contract():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
