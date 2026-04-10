@@ -147,8 +147,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 補充：
 
-- 模型解析優先級為進程 `GROK_MODEL` 環境變數 > 專案 `.env.local` > 專案 `.env` > `~/.config/grok-search/config.json` 持久化值 > 程式預設值 `grok-4.1-fast`；若使用 OpenRouter 相容位址，執行期會自動補上 `:online` 後綴。
+- 模型解析優先級為進程 `GROK_MODEL` 環境變數 > 專案 `.env.local` > 專案 `.env` > `~/.config/grok-search/config.json` 持久化值 > 程式預設值 `grok-4.20-0309`；若使用 OpenRouter 相容位址，執行期會自動補上 `:online` 後綴。
 - 環境變數優先權按「鍵是否存在」判定：只要進程環境裡顯式設了某個鍵，即使值是空字串，也不會回落到專案 `.env.local` / `.env`。
+- 目前內建預設首選模型是 `grok-4.20-0309`；對 Grok 4.1+ 族的執行期選型會保持彈性，若請求模型不在 `/models` 清單裡，但存在相容的 Grok 4.1+ 可用模型，系統會優先回退到更合適的可用模型，而不是只因後綴不同就直接失敗。
 - `switch_model` 只會更新 `~/.config/grok-search/config.json` 的持久化層；若同時設了 `GROK_MODEL`，仍以環境變數為準。
 - `get_config_info` 的基礎設定快照現在會額外回傳 `GROK_MODEL_SOURCE`，用來標示目前活動模型實際來自哪一層（如 `process_env`、`project_env_local`、`project_env`、`persisted_config`、`default`）。若這裡顯示的是 `process_env`、`project_env_local` 或 `project_env`，單獨呼叫 `switch_model` 不會改變目前進程。
 - `GROK_TIME_CONTEXT_MODE` 預設為 `always`，保持目前一律注入本地時間上下文的行為。

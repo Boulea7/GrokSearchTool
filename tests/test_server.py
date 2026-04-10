@@ -151,6 +151,7 @@ async def test_get_config_info_default_detail_keeps_full_payload(monkeypatch):
 async def test_get_config_info_summary_detail_returns_machine_readable_minimum(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
             200,
@@ -492,6 +493,7 @@ async def test_web_search_masks_sensitive_redirect_target_details(monkeypatch):
 async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
     monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "auto")
     monkeypatch.setattr(server, "_find_git_root", lambda start=None: Path("/tmp/demo-project"))
 
@@ -923,6 +925,7 @@ async def test_get_config_info_finds_claude_project_root_from_subdirectory(monke
 async def test_get_config_info_ignores_client_specific_toggle_in_overall_doctor_status(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
     monkeypatch.setattr(server, "_find_git_root", lambda start=None: None)
 
     responses = {
@@ -956,6 +959,7 @@ async def test_get_config_info_ignores_client_specific_toggle_in_overall_doctor_
 async def test_get_config_info_ignores_transient_get_sources_partial_ready_in_overall_doctor_status(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
     monkeypatch.setattr(server, "_SOURCES_CACHE", server.SourcesCache(max_size=32))
 
     responses = {
@@ -1324,6 +1328,47 @@ async def test_get_config_info_marks_real_search_probe_failure_as_degraded(monke
     assert checks["grok_search_probe"]["status"] == "error"
     assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
     assert "真实搜索探针" in payload["feature_readiness"]["web_search"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_uses_fallback_grok_model_for_real_probe_when_compatible(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    captured = {}
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        captured["model"] = model
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309-reasoning"}, {"id": "grok-4.20-0309"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert captured["model"] == "grok-4.20-0309"
+    assert checks["grok_model_selection"]["fallback_model"] == "grok-4.20-0309"
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "grok-4.20-0309" in payload["feature_readiness"]["web_search"]["message"]
 
 
 @pytest.mark.asyncio
@@ -1743,6 +1788,59 @@ async def test_web_search_rejects_unknown_explicit_model(monkeypatch):
     assert "无效模型" in result["content"]
     assert "missing-model" in result["content"]
     assert result["sources_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_web_search_falls_back_to_preferred_available_grok_model_for_compatible_explicit_model(monkeypatch):
+    captured = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            captured["model"] = model
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309-reasoning", "grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query", model="grok-4.20-beta")
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-0309"
+    assert "model_fallback_applied" in result["warnings"]
+    assert captured["model"] == "grok-4.20-0309"
+
+
+@pytest.mark.asyncio
+async def test_web_search_falls_back_to_preferred_available_grok_model_for_implicit_default(monkeypatch):
+    captured = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            captured["model"] = model
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309-reasoning", "grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query")
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-0309"
+    assert "model_fallback_applied" in result["warnings"]
+    assert captured["model"] == "grok-4.20-0309"
 
 
 @pytest.mark.asyncio

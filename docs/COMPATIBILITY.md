@@ -50,9 +50,10 @@ These hosts remain planned targets until remote transport and host-specific veri
 ## Provider Requirements
 
 - `GROK_API_URL` should use an OpenAI-compatible root with an explicit `/v1` suffix; the current code path does not pre-block the request on its own when `/v1` is omitted, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning
-- model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.1-fast`
+- model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.20-0309`
 - process env presence overrides project `.env.local` / `.env` fallback, even when the env value is explicitly empty
 - the base config snapshot now includes `GROK_MODEL_SOURCE`, so callers can see the active model source (`process_env`, `project_env_local`, `project_env`, `persisted_config`, or `default`)
+- the preferred built-in default is `grok-4.20-0309`; runtime model resolution stays flexible for Grok 4.1+ families and may fall back to a compatible available Grok model instead of failing just because a suffix differs
 - project env fallback accepts both `KEY=value` and optional `export KEY=value` lines
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` controls local time-context injection for `web_search`; the default is `always`

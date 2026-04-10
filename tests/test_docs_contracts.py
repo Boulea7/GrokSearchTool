@@ -246,6 +246,25 @@ def test_docs_lock_finance_topic_and_diagnostic_detail_contracts():
     assert "`detail=full|summary`" in agents
 
 
+def test_docs_explain_preferred_default_model_and_flexible_grok_selection():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "`grok-4.20-0309`" in readme
+    assert "Grok 4.1+" in readme
+    assert "后缀不匹配而直接失败" in readme
+    assert "`grok-4.20-0309`" in readme_en
+    assert "Grok 4.1+" in readme_en
+    assert "failing just because a suffix differs" in readme_en
+    assert "`grok-4.20-0309`" in compatibility
+    assert "Grok 4.1+" in compatibility
+    assert "suffix differs" in compatibility
+    assert "`grok-4.20-0309`" in agents
+    assert "Grok 4.1+" in agents
+
+
 def test_docs_explain_runtime_model_source_and_env_override_boundary():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
