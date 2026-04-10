@@ -1298,21 +1298,53 @@ async def test_get_available_models_cached_reuses_cached_results(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_available_models_cached_caches_empty_result_after_failure(monkeypatch):
+async def test_get_available_models_cached_retries_after_failure_ttl_expires(monkeypatch):
     calls = {"count": 0}
+    now = [1000.0]
 
     async def failing_fetch(api_url, api_key):
         calls["count"] += 1
         raise RuntimeError("boom")
 
     monkeypatch.setattr(server, "_fetch_available_models", failing_fetch)
+    monkeypatch.setattr(server, "_available_models_cache_now", lambda: now[0])
+    monkeypatch.setattr(server, "_AVAILABLE_MODELS_CACHE_FAILURE_TTL_SECONDS", 5.0)
+
+    first = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+    second = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+    now[0] += 6.0
+    third = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+
+    assert first == []
+    assert second == []
+    assert third == []
+    assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_cached_refetches_after_ttl_expiry(monkeypatch):
+    calls = {"count": 0}
+    now = [1000.0]
+
+    async def fake_fetch(api_url, api_key):
+        calls["count"] += 1
+        return [f"model-{calls['count']}"]
+
+    monkeypatch.setattr(server, "_fetch_available_models", fake_fetch)
+    monkeypatch.setattr(server, "_available_models_cache_now", lambda: now[0])
+    monkeypatch.setattr(server, "_AVAILABLE_MODELS_CACHE_TTL_SECONDS", 5.0)
 
     first = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
     second = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
 
-    assert first == []
-    assert second == []
-    assert calls["count"] == 1
+    now[0] += 6.0
+
+    third = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+
+    assert first == ["model-1"]
+    assert second == ["model-1"]
+    assert third == ["model-2"]
+    assert calls["count"] == 2
 
 
 @pytest.mark.asyncio
