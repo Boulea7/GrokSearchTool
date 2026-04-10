@@ -208,11 +208,13 @@ Optional provider probes are read-only and run only when the corresponding confi
 The `/models` connection test uses a 10-second timeout; additional real `web_search` / `web_fetch` probes may take longer.
 `detail="summary"` keeps the base config snapshot, `connection_test`, `doctor.status` / `doctor.summary` / `doctor.recommendations`, and `feature_readiness`, while omitting the large `doctor.checks` array and probe-detail fields.
 `detail="summary"` is currently a compact projection of the same diagnostic run, not a separate lightweight execution path.
-`connection_test` only reflects `/models` reachability; if `web_search` is degraded, combine `doctor`, `feature_readiness`, `GROK_MODEL_SOURCE`, and the `grok_model_selection` / `grok_search_probe` checks before concluding the root cause.
+`connection_test` only reflects `/models` reachability; if `web_search` is degraded, combine `doctor`, `feature_readiness`, `GROK_MODEL_SOURCE`, and the `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` checks before concluding the root cause.
+`grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage, while `grok_model_runtime_fallback` means the real `/chat/completions` path only succeeded after a runtime retry against another Grok candidate; both checks may appear in the same diagnostic run.
 `feature_readiness.get_sources` only reports `ready` when the current process already holds at least one readable non-error source session; error-only cached sessions keep it at `partial_ready`.
 `ready` means the capability is verified, `degraded` means it exists but probes or partial dependencies are unhealthy, `not_ready` means prerequisites are missing, and `partial_ready` means the interface exists but still depends on transient runtime state; `transient` and `client_specific` items do not lower the overall doctor status on their own.
 
 If `GROK_MODEL_SOURCE` comes back as `process_env`, `project_env_local`, or `project_env`, calling `switch_model` alone does not change the current process; update or remove that higher-priority override first.
+In that override case, `switch_model` still updates the persisted config, but the returned `current_model` remains the current runtime-effective model. Use `runtime_model_source` to see which higher-priority layer is still active.
 
 Even with API keys masked, the diagnostic payload may still include local absolute paths, endpoint/hostname details, and short upstream error summaries. Sensitive query tokens, bearer values, common OAuth/OIDC credential parameters, and high-confidence cloud-signed credential keys such as `X-Amz-Credential`, `X-Goog-Credential`, and `GoogleAccessId` are masked, but you should still review the payload before sharing it externally.
 

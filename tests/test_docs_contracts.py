@@ -296,6 +296,36 @@ def test_docs_explain_runtime_model_source_and_env_override_boundary():
     assert "одного вызова `switch_model` недостаточно" in readme_ru
 
 
+def test_localized_readmes_explain_switch_model_runtime_override_return_contract():
+    localized_expectations = {
+        README_EN: [
+            "`runtime_model_source`",
+            "`current_model`",
+            "current runtime-effective model",
+        ],
+        README_ZH_TW: [
+            "`runtime_model_source`",
+            "`current_model`",
+            "目前執行期實際生效的模型",
+        ],
+        README_JA: [
+            "`runtime_model_source`",
+            "`current_model`",
+            "現在のランタイムで実際に有効なモデル",
+        ],
+        README_RU: [
+            "`runtime_model_source`",
+            "`current_model`",
+            "runtime-эффективной моделью",
+        ],
+    }
+
+    for path, expected_fragments in localized_expectations.items():
+        text = path.read_text(encoding="utf-8")
+        for fragment in expected_fragments:
+            assert fragment in text
+
+
 def test_docs_explain_runtime_model_fallback_boundary():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
@@ -315,6 +345,36 @@ def test_docs_explain_runtime_model_fallback_boundary():
     assert "`grok_model_runtime_fallback`" in agents
     assert "best-effort 兼容路径" in agents
     assert "这两个 check 可能同时出现" in agents
+
+
+def test_localized_readmes_explain_runtime_model_fallback_boundary():
+    localized_expectations = {
+        README_EN: [
+            "`grok_model_runtime_fallback`",
+            "runtime retry",
+            "both checks may appear",
+        ],
+        README_ZH_TW: [
+            "`grok_model_runtime_fallback`",
+            "執行期二次回退",
+            "這兩個 check 可能同時出現",
+        ],
+        README_JA: [
+            "`grok_model_runtime_fallback`",
+            "実行時の再フォールバック",
+            "両方の check が同時に現れる場合があります",
+        ],
+        README_RU: [
+            "`grok_model_runtime_fallback`",
+            "повторного runtime-fallback",
+            "оба check могут появиться одновременно",
+        ],
+    }
+
+    for path, expected_fragments in localized_expectations.items():
+        text = path.read_text(encoding="utf-8")
+        for fragment in expected_fragments:
+            assert fragment in text
 
 
 def test_docs_explain_planning_session_and_wrapper_contract():
