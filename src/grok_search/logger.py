@@ -31,3 +31,11 @@ async def log_info(ctx, message: str, is_debug: bool = False):
 
     if ctx:
         await ctx.info(message)
+
+
+async def log_warning(ctx, message: str):
+    """Emit caller-visible warning signals without changing tool return payloads."""
+    logger.warning(message)
+
+    if ctx:
+        await ctx.info(message)

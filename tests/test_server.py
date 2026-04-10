@@ -402,6 +402,13 @@ async def test_web_search_tool_description_allows_clear_single_hop_direct_use():
 
 
 @pytest.mark.asyncio
+async def test_web_map_tool_schema_does_not_expose_ctx_parameter():
+    tool = await server.mcp.get_tool("web_map")
+
+    assert "ctx" not in tool.parameters["properties"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_surfaces_http_redirect(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
@@ -3547,6 +3554,75 @@ async def test_web_fetch_reports_skipped_preflight_progress_when_debug_enabled(m
         context is ctx and is_debug and message.startswith("Redirect preflight skipped: ")
         for context, message, is_debug in messages
     )
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_reports_skipped_preflight_warning_to_ctx_even_when_debug_disabled(monkeypatch):
+    ctx = ProgressContext()
+
+    async def fake_tavily(url):
+        return "# Tavily", None
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            request = httpx.Request("GET", url, headers=headers)
+            raise httpx.RequestError("boom", request=request)
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_DEBUG", "false")
+    server.config.reset_runtime_state()
+
+    result = await server.web_fetch("https://public.example.com/start", ctx=ctx)
+
+    assert result == "# Tavily"
+    assert any(message.startswith("Warning: Redirect preflight skipped: ") for message in ctx.messages)
+
+
+@pytest.mark.asyncio
+async def test_web_map_reports_skipped_preflight_warning_to_ctx_even_when_debug_disabled(monkeypatch):
+    ctx = ProgressContext()
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            raise httpx.TimeoutException("slow")
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    monkeypatch.setenv("GROK_DEBUG", "false")
+    server.config.reset_runtime_state()
+
+    result = await server.web_map("https://public.example.com/start", ctx=ctx)
+
+    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
+    assert any(message.startswith("Warning: Redirect preflight skipped: ") for message in ctx.messages)
 
 
 @pytest.mark.asyncio
