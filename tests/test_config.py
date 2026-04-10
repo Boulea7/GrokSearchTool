@@ -307,6 +307,41 @@ def test_get_config_info_tolerates_invalid_port_in_masked_urls(monkeypatch):
     assert info["GROK_API_URL"] == "https://api.example.com:abc/v1?token=***"
 
 
+def test_get_config_info_does_not_create_log_dir(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "sk-secret-value")
+    monkeypatch.setenv("GROK_LOG_DIR", "custom-logs")
+
+    expected_path = home_dir / ".config" / "grok-search" / "custom-logs"
+
+    info = config.get_config_info()
+
+    assert info["GROK_LOG_DIR"] == str(expected_path)
+    assert not expected_path.exists()
+
+
+def test_log_dir_still_creates_directory_when_explicitly_accessed(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("GROK_LOG_DIR", "custom-logs")
+
+    expected_path = home_dir / ".config" / "grok-search" / "custom-logs"
+
+    resolved = config.log_dir
+
+    assert resolved == expected_path
+    assert expected_path.exists()
+    assert expected_path.is_dir()
+
+
 def test_config_get_config_info_excludes_server_only_diagnostic_fields(monkeypatch):
     config = Config()
     config.reset_runtime_state()

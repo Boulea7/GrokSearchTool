@@ -218,28 +218,44 @@ class Config:
 
     @property
     def log_dir(self) -> Path:
+        log_dir = self._resolved_log_dir_path()
+        if Path(self._log_dir_setting()).is_absolute():
+            return log_dir
+
+        for candidate in self._log_dir_candidates():
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                return candidate
+            except OSError:
+                pass
+
+        fallback = Path("/tmp") / "grok-search" / ((self._get_env_value("GROK_LOG_DIR", "logs") or "logs"))
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+    def _log_dir_setting(self) -> str:
         log_dir_str = self._get_env_value("GROK_LOG_DIR", "logs") or "logs"
+        return log_dir_str
+
+    def _resolved_log_dir_path(self) -> Path:
+        log_dir_str = self._log_dir_setting()
         log_dir = Path(log_dir_str)
         if log_dir.is_absolute():
             return log_dir
 
-        home_log_dir = Path.home() / ".config" / "grok-search" / log_dir_str
-        try:
-            home_log_dir.mkdir(parents=True, exist_ok=True)
-            return home_log_dir
-        except OSError:
-            pass
+        return Path.home() / ".config" / "grok-search" / log_dir_str
 
-        cwd_log_dir = Path.cwd() / log_dir_str
-        try:
-            cwd_log_dir.mkdir(parents=True, exist_ok=True)
-            return cwd_log_dir
-        except OSError:
-            pass
+    def _log_dir_candidates(self) -> tuple[Path, ...]:
+        log_dir_str = self._log_dir_setting()
+        preferred = self._resolved_log_dir_path()
+        if Path(log_dir_str).is_absolute():
+            return (preferred,)
 
-        tmp_log_dir = Path("/tmp") / "grok-search" / log_dir_str
-        tmp_log_dir.mkdir(parents=True, exist_ok=True)
-        return tmp_log_dir
+        return (
+            preferred,
+            Path.cwd() / log_dir_str,
+            Path("/tmp") / "grok-search" / log_dir_str,
+        )
 
     def _apply_model_suffix(self, model: str) -> str:
         if not model:
@@ -358,7 +374,7 @@ class Config:
             "GROK_OUTPUT_CLEANUP": self.output_cleanup_enabled,
             "GROK_TIME_CONTEXT_MODE": self.time_context_mode,
             "GROK_LOG_LEVEL": self.log_level,
-            "GROK_LOG_DIR": str(self.log_dir),
+            "GROK_LOG_DIR": str(self._resolved_log_dir_path()),
             "TAVILY_API_URL": self._mask_url(self.tavily_api_url),
             "TAVILY_ENABLED": self.tavily_enabled,
             "TAVILY_API_KEY": self._mask_api_key(self.tavily_api_key) if self.tavily_api_key else "未配置",
