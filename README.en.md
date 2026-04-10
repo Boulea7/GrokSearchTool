@@ -160,6 +160,7 @@ Notes:
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` defaults to `always`, which preserves the current behavior of always injecting local time context
 - `GROK_DEBUG=false` suppresses these helper progress logs entirely, including `ctx.info()` forwarding; they are intentionally debug-only progress/debug signals
+- when redirect preflight falls back to `skipped_due_to_error`, the implementation now emits a caller-visible warning through MCP context, but does not rewrite successful return payloads
 - the recommended core path is `plan_* -> web_search`
 - direct `web_search` is still allowed for clear single-hop lookups when planning adds little value
 - interactive `deep research` workflows are planned CLI-first rather than as conversational MCP/skill interactions
@@ -172,6 +173,7 @@ Notes:
 - visible redirect re-checks currently use `GET` rather than `HEAD`, so presigned URLs, one-shot tokens, or read-side-effect links may incur an extra preflight read
 - redirect preflight currently makes at most 5 visible preflight requests; if the fifth preflight still encounters a new redirect, it returns the current hard-reject contract (`目标 URL 重定向次数过多`) before any downstream provider call
 - if redirect preflight times out or hits a request-level error, the current implementation marks that step as `skipped_due_to_error`; `web_fetch` / `web_map` currently still continue to the downstream provider call
+- that `skipped_due_to_error` path also emits a caller-visible warning through MCP context, but does not rewrite successful return payloads
 - this boundary intentionally does not hard-block ordinary public-looking hostnames based only on local DNS answers, so it should not be treated as a strong guarantee against split-horizon or locally poisoned DNS resolution
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` expose a curated subset of provider options rather than the providers' full native API surfaces.

@@ -414,6 +414,13 @@ async def test_switch_model_tool_description_does_not_claim_immediate_runtime_ef
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_tool_schema_does_not_expose_ctx_parameter():
+    tool = await server.mcp.get_tool("web_fetch")
+
+    assert "ctx" not in tool.parameters["properties"]
+
+
+@pytest.mark.asyncio
 async def test_web_map_tool_schema_does_not_expose_ctx_parameter():
     tool = await server.mcp.get_tool("web_map")
 

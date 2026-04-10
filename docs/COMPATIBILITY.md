@@ -68,6 +68,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `feature_readiness.web_fetch.providers.verified_path` identifies the backend that passed the real fetch probe, and skipped providers may include `skipped_reason`
 - `get_config_info` is still not a full end-to-end compatibility guarantee
 - `GROK_DEBUG=false` suppresses helper progress logs entirely, including `ctx.info()` forwarding; these signals are intentionally debug-only
+- redirect-preflight skips caused by timeouts or request-level errors now also emit a caller-visible warning through MCP context, but this does not change successful tool payloads
 - `grok_search.mcp` is an access-time lazy export; importing the root package does not require `fastmcp` until that export is actually accessed
 - `grok_search.providers.GrokSearchProvider` is also an access-time lazy export; non-provider imports should not fail early because Grok-provider dependencies are missing
 - this lazy-export boundary only narrows import-time behavior and does not change the install-time dependency declaration; it should not be read as turning package dependencies into optional extras
