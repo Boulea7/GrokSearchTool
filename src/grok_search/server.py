@@ -195,6 +195,13 @@ def _pick_flexible_grok_model(available_models: list[str]) -> str | None:
     return max(candidates, key=_grok_model_preference_key)
 
 
+def _ordered_flexible_grok_models(available_models: list[str]) -> list[str]:
+    candidates = [model for model in available_models if _is_flexible_grok_model(model)]
+    if not candidates:
+        return []
+    return sorted(candidates, key=_grok_model_preference_key, reverse=True)
+
+
 def _resolve_model_against_available_models(requested_model: str, available_models: list[str]) -> tuple[str | None, str | None]:
     normalized_model = (requested_model or "").strip()
     if not normalized_model:
@@ -208,6 +215,28 @@ def _resolve_model_against_available_models(requested_model: str, available_mode
         if fallback_model:
             return fallback_model, _MODEL_FALLBACK_WARNING
     return None, "invalid_model"
+
+
+def _fallback_candidates_for_model(requested_model: str, current_model: str, available_models: list[str]) -> list[str]:
+    if not _is_flexible_grok_model(requested_model):
+        return []
+    return [model for model in _ordered_flexible_grok_models(available_models) if model != current_model]
+
+
+def _is_grok_model_unavailable_message(message: str) -> bool:
+    normalized = (message or "").strip().lower()
+    if not normalized:
+        return False
+    markers = (
+        "no available channel for model",
+        "unsupported model",
+        "invalid model",
+        "model not found",
+        "model is not available",
+        "model unavailable",
+        "no model named",
+    )
+    return any(marker in normalized for marker in markers)
 
 
 def _planning_session_error(session_id: str) -> str:
@@ -984,10 +1013,12 @@ async def web_search(
         )
 
     available_models = await _get_available_models_cached(api_url, api_key)
-    effective_model = config.grok_model
+    requested_model = config.grok_model
+    effective_model = requested_model
     warnings: list[str] = []
     if model:
         normalized_explicit_model = config._apply_model_suffix(model)
+        requested_model = normalized_explicit_model
         resolved_model, resolution = _resolve_model_against_available_models(normalized_explicit_model, available_models)
         if resolution == "invalid_model":
             await _SOURCES_CACHE.set(
@@ -1013,11 +1044,6 @@ async def web_search(
         if resolved_model:
             effective_model = resolved_model
         effective_params["model"] = effective_model
-
-    grok_provider = GrokSearchProvider(api_url, api_key, effective_model)
-    grok_provider.time_context_required = bool(
-        effective_params["topic"] != "general" or effective_params["time_range"]
-    )
 
     # 计算额外信源配额
     has_tavily = config.tavily_enabled and bool(config.tavily_api_key)
@@ -1060,7 +1086,11 @@ async def web_search(
             if effective_params["time_range"]:
                 warnings.append("time_range_not_applied_without_tavily_search")
 
-    async def _safe_grok() -> tuple[str, str | None, str | None]:
+    async def _run_grok_with_model(current_model: str) -> tuple[str, str | None, str | None]:
+        grok_provider = GrokSearchProvider(api_url, api_key, current_model)
+        grok_provider.time_context_required = bool(
+            effective_params["topic"] != "general" or effective_params["time_range"]
+        )
         try:
             result = await grok_provider.search(validated_params["query"], platform)
         except Exception as exc:
@@ -1068,6 +1098,24 @@ async def web_search(
         if not result or not result.strip():
             return "", "搜索失败: 上游返回空响应，请检查模型或代理配置", "upstream_empty_response"
         return result, None, None
+
+    async def _safe_grok() -> tuple[str, str | None, str | None, str, bool]:
+        result, error_message, error_code = await _run_grok_with_model(effective_model)
+        if error_message is None:
+            return result, None, None, effective_model, False
+        if not _is_grok_model_unavailable_message(error_message):
+            return "", error_message, error_code, effective_model, False
+
+        for candidate in _fallback_candidates_for_model(requested_model, effective_model, available_models):
+            retry_result, retry_error_message, retry_error_code = await _run_grok_with_model(candidate)
+            if retry_error_message is None:
+                return retry_result, None, None, candidate, True
+            error_message = retry_error_message
+            error_code = retry_error_code
+            if not _is_grok_model_unavailable_message(retry_error_message):
+                break
+
+        return "", error_message, error_code, effective_model, False
 
     async def _safe_tavily() -> tuple[list[dict] | None, str | None]:
         try:
@@ -1106,7 +1154,12 @@ async def web_search(
 
     gathered = await asyncio.gather(*coros)
 
-    grok_result, grok_error, grok_error_code = gathered[0]
+    grok_result, grok_error, grok_error_code, actual_grok_model, runtime_fallback_applied = gathered[0]
+    if runtime_fallback_applied and actual_grok_model != effective_model:
+        effective_model = actual_grok_model
+        effective_params["model"] = actual_grok_model
+        if _MODEL_FALLBACK_WARNING not in warnings:
+            warnings.append(_MODEL_FALLBACK_WARNING)
     tavily_results: list[dict] | None = None
     firecrawl_results: list[dict] | None = None
     idx = 1
@@ -1794,6 +1847,36 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
     )
 
 
+async def _probe_web_search_with_fallback(
+    api_url: str,
+    api_key: str,
+    requested_model: str,
+    available_models: list[str],
+) -> dict:
+    resolved_model, resolution = _resolve_model_against_available_models(requested_model, available_models)
+    current_model = resolved_model or requested_model
+    probe_result = await _probe_web_search(api_url, api_key, current_model)
+    if probe_result["status"] == "ok":
+        if current_model != requested_model:
+            probe_result["fallback_model"] = current_model
+            probe_result["requested_model"] = requested_model
+            probe_result["message"] = f"真实搜索探针成功（已从 {requested_model} 回退到 {current_model}）。"
+        return probe_result
+
+    if not _is_grok_model_unavailable_message(probe_result.get("message", "")):
+        return probe_result
+
+    for candidate in _fallback_candidates_for_model(requested_model, current_model, available_models):
+        retry_result = await _probe_web_search(api_url, api_key, candidate)
+        if retry_result["status"] == "ok":
+            retry_result["fallback_model"] = candidate
+            retry_result["requested_model"] = requested_model
+            retry_result["message"] = f"真实搜索探针成功（已从 {current_model} 回退到 {candidate}）。"
+            return retry_result
+
+    return probe_result
+
+
 async def _probe_web_fetch() -> dict:
     import time
 
@@ -1873,6 +1956,7 @@ def _build_feature_readiness(
     grok_config = checks_by_id["grok_config"]
     grok_models = checks_by_id["grok_models"]
     grok_model_selection = checks_by_id.get("grok_model_selection")
+    grok_model_runtime_fallback = checks_by_id.get("grok_model_runtime_fallback")
     grok_search_probe = checks_by_id["grok_search_probe"]
     tavily_extract = checks_by_id["tavily_extract"]
     firecrawl_scrape = checks_by_id["firecrawl_scrape"]
@@ -1903,6 +1987,13 @@ def _build_feature_readiness(
     ):
         web_search_status = "degraded"
         web_search_message = grok_model_selection["message"]
+    if (
+        web_search_status != "not_ready"
+        and grok_model_runtime_fallback
+        and grok_model_runtime_fallback["status"] == "warning"
+    ):
+        web_search_status = "degraded"
+        web_search_message = grok_model_runtime_fallback["message"]
 
     if web_fetch_probe["status"] == "ok":
         web_fetch_status = "ready"
@@ -2149,6 +2240,7 @@ async def get_config_info(
         )
 
     checks.append(grok_models)
+    available_models: list[str] = []
     if grok_models["status"] == "ok":
         configured_model = config.grok_model
         runtime_model_source = config.grok_model_source
@@ -2216,7 +2308,45 @@ async def get_config_info(
     else:
         probe_model = config.grok_model
     if api_url and api_key:
-        grok_search_probe = await _probe_web_search(api_url, api_key, probe_model)
+        grok_search_probe = await _probe_web_search_with_fallback(api_url, api_key, probe_model, available_models)
+        if grok_search_probe.get("fallback_model"):
+            fallback_model = grok_search_probe["fallback_model"]
+            runtime_model_source = config.grok_model_source
+            runtime_model_source_label = _runtime_model_source_label(runtime_model_source)
+            checks.append(
+                _build_doctor_check(
+                    "grok_model_runtime_fallback",
+                    "warning",
+                    f"真实搜索探针已从 {probe_model} 回退到 {fallback_model}。",
+                    configured_model=probe_model,
+                    fallback_model=fallback_model,
+                    runtime_model_source=runtime_model_source,
+                    runtime_model_source_label=runtime_model_source_label,
+                )
+            )
+            if runtime_model_source in {"process_env", "project_env_local", "project_env"}:
+                recommendation = (
+                    f"当前真实搜索探针需要从 {probe_model} 回退到 {fallback_model} 才能成功；"
+                    f"当前活动模型来自{runtime_model_source_label}。请先修改或删除该覆盖。"
+                    f"单独调用 switch_model 只会写入持久化配置，不会改变当前进程。"
+                )
+            else:
+                recommendation = (
+                    f"当前真实搜索探针需要从 {probe_model} 回退到 {fallback_model} 才能成功；"
+                    f"建议尽快将 GROK_MODEL 或持久化模型更新到该可用模型，避免继续依赖运行时回退。"
+                )
+            _append_recommendation(
+                recommendations,
+                recommendation,
+                recommendation_details=recommendation_details,
+                check_id="grok_model_runtime_fallback",
+                feature="web_search",
+                extra_detail_fields={
+                    "runtime_model_source": runtime_model_source,
+                    "runtime_model_source_label": runtime_model_source_label,
+                    "fallback_model": fallback_model,
+                },
+            )
         if grok_search_probe["status"] != "ok":
             _append_recommendation(
                 recommendations,

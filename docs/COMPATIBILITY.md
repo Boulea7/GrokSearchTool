@@ -67,6 +67,9 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `get_config_info` now also supports additive `detail=full|summary` output levels; `full` remains the default and preserves the current payload shape
 - `detail=summary` is currently a compact projection of the same diagnostic run, not a separate lightweight execution path
 - `connection_test` reflects `/models` reachability only; use `doctor` and `feature_readiness` to judge runtime readiness
+- `grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage and runtime will preselect a better Grok candidate before the real request
+- `grok_model_runtime_fallback` means the current probe model still succeeded on the real `/chat/completions` path only after a runtime retry against another Grok candidate; both checks may appear in the same diagnostic run
+- runtime model fallback is currently a best-effort compatibility path: it depends on `/models` returning candidate models and on the upstream error text matching the current “model unavailable” heuristics
 - when diagnosing degraded `web_search`, treat `GROK_MODEL_SOURCE` as part of the root-cause contract: a model mismatch caused by process env or project `.env.local` / `.env` overrides is different from a persisted-config mismatch
 - `doctor.recommendations_detail` is an additive structured hint layer; clients that only read `recommendations` remain compatible
 - `feature_readiness.web_fetch.providers.verified_path` identifies the backend that passed the real fetch probe, and skipped providers may include `skipped_reason`

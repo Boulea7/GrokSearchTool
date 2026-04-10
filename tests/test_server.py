@@ -1372,6 +1372,154 @@ async def test_get_config_info_uses_fallback_grok_model_for_real_probe_when_comp
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_marks_runtime_probe_fallback_as_degraded(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    attempts = []
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        attempts.append(model)
+        if model == "grok-4.20-0309":
+            return server._build_doctor_check(
+                "grok_search_probe",
+                "error",
+                "真实搜索探针失败: 搜索失败: 上游返回 HTTP 503，摘要=No available channel for model grok-4.20-0309",
+                error_kind="probe_failed",
+            )
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309"}, {"id": "grok-4.20-0309-non-reasoning"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert attempts == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+    assert checks["grok_model_runtime_fallback"]["status"] == "warning"
+    assert checks["grok_model_runtime_fallback"]["fallback_model"] == "grok-4.20-0309-non-reasoning"
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "grok-4.20-0309-non-reasoning" in payload["feature_readiness"]["web_search"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_prefers_runtime_fallback_message_when_selection_and_runtime_fallback_both_apply(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    attempts = []
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        attempts.append(model)
+        if model == "grok-4.20-0309":
+            return server._build_doctor_check(
+                "grok_search_probe",
+                "error",
+                "真实搜索探针失败: 搜索失败: 上游返回 HTTP 503，摘要=No available channel for model grok-4.20-0309",
+                error_kind="probe_failed",
+            )
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309"}, {"id": "grok-4.20-0309-non-reasoning"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert attempts == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+    assert checks["grok_model_selection"]["fallback_model"] == "grok-4.20-0309"
+    assert checks["grok_model_runtime_fallback"]["fallback_model"] == "grok-4.20-0309-non-reasoning"
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "grok-4.20-0309-non-reasoning" in payload["feature_readiness"]["web_search"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_runtime_probe_fallback_recommendation_mentions_project_env_override(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+    (tmp_path / ".env.local").write_text("GROK_MODEL=grok-4.20-0309\n", encoding="utf-8")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        if model == "grok-4.20-0309":
+            return server._build_doctor_check(
+                "grok_search_probe",
+                "error",
+                "真实搜索探针失败: 搜索失败: 上游返回 HTTP 503，摘要=No available channel for model grok-4.20-0309",
+                error_kind="probe_failed",
+            )
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309"}, {"id": "grok-4.20-0309-non-reasoning"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+    detail = next(
+        item for item in payload["doctor"]["recommendations_detail"] if item.get("check_id") == "grok_model_runtime_fallback"
+    )
+
+    assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
+    assert any(".env.local" in item and "switch_model" in item for item in payload["doctor"]["recommendations"])
+    assert detail["runtime_model_source"] == "project_env_local"
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_marks_web_fetch_as_degraded_when_only_firecrawl_probe_warns(monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
@@ -1841,6 +1989,76 @@ async def test_web_search_falls_back_to_preferred_available_grok_model_for_impli
     assert result["effective_params"]["model"] == "grok-4.20-0309"
     assert "model_fallback_applied" in result["warnings"]
     assert captured["model"] == "grok-4.20-0309"
+
+
+@pytest.mark.asyncio
+async def test_web_search_retries_with_alternate_available_grok_model_after_runtime_model_unavailable(monkeypatch):
+    captured = {"models": []}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            self.model = model
+            captured["models"].append(model)
+
+        async def search(self, query, platform):
+            if self.model == "grok-4.20-0309":
+                request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+                response = httpx.Response(
+                    503,
+                    request=request,
+                    json={"error": {"message": "No available channel for model grok-4.20-0309"}},
+                )
+                raise httpx.HTTPStatusError("unavailable", request=request, response=response)
+            return "Search answer"
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query")
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-0309-non-reasoning"
+    assert "model_fallback_applied" in result["warnings"]
+    assert captured["models"] == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_does_not_report_model_fallback_when_all_runtime_candidates_fail(monkeypatch):
+    captured = {"models": []}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            self.model = model
+            captured["models"].append(model)
+
+        async def search(self, query, platform):
+            request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+            response = httpx.Response(
+                503,
+                request=request,
+                json={"error": {"message": f"No available channel for model {self.model}"}},
+            )
+            raise httpx.HTTPStatusError("unavailable", request=request, response=response)
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query")
+
+    assert result["status"] == "error"
+    assert result["error"] is not None
+    assert result["effective_params"]["model"] == "grok-4.20-0309"
+    assert "model_fallback_applied" not in result["warnings"]
+    assert captured["models"] == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
 
 
 @pytest.mark.asyncio

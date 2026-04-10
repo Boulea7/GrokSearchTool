@@ -416,6 +416,8 @@ claude mcp list
 - `detail="full"` 保留完整 `doctor.checks`、`doctor.recommendations_detail` 和 provider/probe 细节；`detail="summary"` 只保留基础配置快照、`connection_test`、`doctor.status/summary/recommendations` 与 `feature_readiness`
 - `detail="summary"` 当前只是同一次诊断结果的紧凑字段投影，不是额外的“轻执行路径”；底层仍会执行同一轮配置/探针逻辑。
 - `connection_test` 当前只反映 `/models` 连通性，不代表当前活动模型一定能通过真实 `chat/completions` 路径；判断 `web_search` 是否真可用时，应结合 `doctor`、`feature_readiness`、`GROK_MODEL_SOURCE` 与 `grok_model_selection` / `grok_search_probe` 结果一起看。
+- `grok_model_selection` 表示 `/models` 列表阶段就已发现当前模型不可直接使用，并会在运行前预选到更合适的 Grok 候选模型；`grok_model_runtime_fallback` 表示当前 probe model 在真实 `chat/completions` 路径上仍只能靠运行时二次回退才成功。这两个 check 可能同时出现。
+- 运行时模型回退当前属于 best-effort 兼容路径：它依赖 `/models` 能返回可选候选列表，且上游错误摘要命中“模型不可用”类文案；如果 `/models` 不可用，或错误类型不属于该类信号，就不保证会自动继续回退。
 - `feature_readiness.get_sources` 只有在当前进程内至少存在一个非 error 的可读取 source session 时才会显示 `ready`；如果只有失败搜索留下的 session，状态会保持 `partial_ready`
 - `feature_readiness` / `doctor` 的状态语义当前可按以下方式理解：`ready`=当前能力已验证可用，`degraded`=能力存在但探针或局部依赖异常，`not_ready`=配置或前置条件不足，`partial_ready`=接口存在但仍缺少运行中瞬时条件；其中 `transient` 和 `client_specific` 项默认不拉低 overall doctor。
 - 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query、常见 OAuth/OIDC credential 参数，以及高置信度 cloud-signed credential 键（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）也会做遮罩。但诊断结果仍可能包含本机绝对路径、endpoint/主机名或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
