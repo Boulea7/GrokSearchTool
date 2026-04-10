@@ -444,7 +444,9 @@ claude mcp list
 说明：
 - 推荐阶段顺序为 `plan_intent -> plan_complexity -> plan_sub_query -> plan_search_term -> plan_tool_mapping -> plan_execution`。
 - Level 1 planning 在 `query_decomposition` 后结束，Level 2 planning 在 `tool_selection` 后结束，Level 3 才会继续到 `execution_order`。
-- `plan_*` wrapper 当前采用标量输入形态，例如 `depends_on` 使用 CSV、`parallel_groups` 使用分号分组的 CSV；返回值会提供 `plan_complete`、`phases_remaining` 与 `executable_plan`，便于调用方直接承接下一步执行。
+- `plan_*` wrapper 当前采用标量输入形态，例如 `depends_on` 使用 CSV、`parallel_groups` 使用分号分组的 CSV、`params_json` 使用字符串化 JSON；返回值会提供 `plan_complete`、`phases_remaining` 与 `executable_plan`，便于调用方直接承接下一步执行。
+- planning `session_id` 当前是进程内的 transient handle，默认 TTL 约 1 小时、LRU 上限 256；进程重启、TTL 到期或缓存淘汰后，应从新的 `plan_intent` session 重新开始。
+- 首次建立 `search_strategy` 时必须提供 `approach`；只有在 strategy 已建立后，后续非 `is_revision` 调用才允许只追加 `search_terms`。
 - 当 session 缺失、阶段顺序错误，或 revision 会破坏下游阶段时，当前会返回结构化错误，并明确要求从新 session 重新开始相应 planning 流程。
 </details>
 

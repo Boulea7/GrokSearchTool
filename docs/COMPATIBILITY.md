@@ -43,6 +43,9 @@ These hosts remain planned targets until remote transport and host-specific veri
 - The recommended core interaction path remains `plan_* -> web_search`
 - Clear single-hop lookups may still call `web_search` directly when planning would add little value
 - Any interactive `deep research` experience should remain CLI-first; MCP and skill integrations should stay non-interactive
+- planning `session_id` values are in-process transient handles with about a 1-hour TTL and a 256-session LRU cap; restart, expiry, or eviction requires starting again from a fresh `plan_intent`
+- the planning wrappers intentionally keep scalar shim inputs such as CSV `depends_on`, semicolon-grouped `parallel_groups`, and string `params_json`; `executable_plan` returns normalized structured shapes
+- the first `plan_search_term` call must provide `approach`; later non-revision calls may append `search_terms` only after the strategy already exists
 
 ## Provider Requirements
 

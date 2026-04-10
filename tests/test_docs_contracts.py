@@ -277,6 +277,39 @@ def test_docs_explain_runtime_model_source_and_env_override_boundary():
     assert "одного вызова `switch_model` недостаточно" in readme_ru
 
 
+def test_docs_explain_planning_session_and_wrapper_contract():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    readme_zh_tw = README_ZH_TW.read_text(encoding="utf-8")
+    readme_ja = README_JA.read_text(encoding="utf-8")
+    readme_ru = README_RU.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "planning `session_id` 当前是进程内的 transient handle" in readme
+    assert "`params_json`" in readme
+    assert "首次建立 `search_strategy` 时必须提供 `approach`" in readme
+    assert "planning `session_id` values are in-process transient handles" in readme_en
+    assert "`params_json`" in readme_en
+    assert "first `plan_search_term` call must provide `approach`" in readme_en
+    assert "planning `session_id`" in compatibility
+    assert "in-process transient handles" in compatibility
+    assert "`params_json`" in compatibility
+    assert "must provide `approach`" in compatibility
+    assert "planning `session_id` 当前是进程内的 transient handle" in agents
+    assert "`params_json`" in agents
+    assert "首次建立 `search_strategy` 时必须提供 `approach`" in agents
+    assert "planning `session_id` 是目前進程內的 transient handle" in readme_zh_tw
+    assert "`params_json`" in readme_zh_tw
+    assert "首次建立 `search_strategy` 時必須提供 `approach`" in readme_zh_tw
+    assert "planning `session_id` は現在のプロセス内だけで有効な transient handle" in readme_ja
+    assert "`params_json`" in readme_ja
+    assert "最初の `plan_search_term` 呼び出しでは `approach` が必須" in readme_ja
+    assert "planning `session_id` — это in-process transient handle" in readme_ru
+    assert "`params_json`" in readme_ru
+    assert "Первый вызов `plan_search_term` обязан передавать `approach`" in readme_ru
+
+
 def test_docs_explain_redirect_preflight_timeout_and_redirect_limit_contract():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")

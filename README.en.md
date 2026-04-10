@@ -38,6 +38,8 @@ The public MCP surface currently includes `13` tools:
 - `plan_execution`
 
 `plan_search_term` sets `approach` / `fallback_plan` when `search_strategy` is first created; later non-revision calls append `search_terms` only and do not implicitly rewrite existing strategy metadata.
+planning `session_id` values are in-process transient handles with about a 1-hour TTL and a 256-session LRU cap, so restart / expiry / eviction requires starting again from a fresh `plan_intent`.
+The wrappers intentionally keep scalar shim inputs such as CSV `depends_on`, semicolon-grouped `parallel_groups`, and stringified `params_json`; the first `plan_search_term` call must provide `approach`.
 
 ## Installation
 
