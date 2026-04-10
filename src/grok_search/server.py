@@ -1,6 +1,7 @@
 import asyncio
 import re
 import sys
+import time
 from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
@@ -70,10 +71,28 @@ except ImportError:
 mcp = FastMCP("grok-search")
 
 _SOURCES_CACHE = SourcesCache(max_size=256)
-_AVAILABLE_MODELS_CACHE: dict[tuple[str, str], list[str]] = {}
+_AVAILABLE_MODELS_CACHE: dict[tuple[str, str], tuple[list[str], float | None]] = {}
 _AVAILABLE_MODELS_LOCK = asyncio.Lock()
+_AVAILABLE_MODELS_CACHE_TTL_SECONDS = 300.0
+_AVAILABLE_MODELS_CACHE_FAILURE_TTL_SECONDS = 5.0
 _SEARCH_PROBE_QUERY = "Reply with the single word ready."
 _FETCH_PROBE_URL = "https://example.com"
+
+
+def _available_models_cache_now() -> float:
+    return time.monotonic()
+
+
+def _available_models_cache_expires_at() -> float | None:
+    if _AVAILABLE_MODELS_CACHE_TTL_SECONDS <= 0:
+        return None
+    return _available_models_cache_now() + _AVAILABLE_MODELS_CACHE_TTL_SECONDS
+
+
+def _available_models_failure_cache_expires_at() -> float | None:
+    if _AVAILABLE_MODELS_CACHE_FAILURE_TTL_SECONDS <= 0:
+        return None
+    return _available_models_cache_now() + _AVAILABLE_MODELS_CACHE_FAILURE_TTL_SECONDS
 
 
 async def _fetch_available_models(api_url: str, api_key: str) -> list[str]:
@@ -101,16 +120,22 @@ async def _fetch_available_models(api_url: str, api_key: str) -> list[str]:
 async def _get_available_models_cached(api_url: str, api_key: str) -> list[str]:
     key = (api_url, api_key)
     async with _AVAILABLE_MODELS_LOCK:
-        if key in _AVAILABLE_MODELS_CACHE:
-            return _AVAILABLE_MODELS_CACHE[key]
+        cached = _AVAILABLE_MODELS_CACHE.get(key)
+        if cached is not None:
+            models, expires_at = cached
+            if expires_at is None or expires_at > _available_models_cache_now():
+                return models
+            _AVAILABLE_MODELS_CACHE.pop(key, None)
 
     try:
         models = await _fetch_available_models(api_url, api_key)
     except Exception:
-        models = []
+        async with _AVAILABLE_MODELS_LOCK:
+            _AVAILABLE_MODELS_CACHE[key] = ([], _available_models_failure_cache_expires_at())
+        return []
 
     async with _AVAILABLE_MODELS_LOCK:
-        _AVAILABLE_MODELS_CACHE[key] = models
+        _AVAILABLE_MODELS_CACHE[key] = (models, _available_models_cache_expires_at())
     return models
 
 
