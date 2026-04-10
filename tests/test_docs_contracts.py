@@ -162,6 +162,19 @@ def test_docs_cover_high_confidence_cloud_signed_credential_keys():
     assert "GoogleAccessId" in agents
 
 
+def test_localized_readmes_cover_cloud_signed_credential_keys():
+    localized_expectations = {
+        README_ZH_TW: ["X-Amz-Credential", "X-Goog-Credential", "GoogleAccessId"],
+        README_JA: ["X-Amz-Credential", "X-Goog-Credential", "GoogleAccessId"],
+        README_RU: ["X-Amz-Credential", "X-Goog-Credential", "GoogleAccessId"],
+    }
+
+    for path, expected_fragments in localized_expectations.items():
+        text = path.read_text(encoding="utf-8")
+        for fragment in expected_fragments:
+            assert fragment in text
+
+
 def test_readme_fastmcp_badge_matches_pyproject_minimum_dependency():
     readme = README.read_text(encoding="utf-8")
     pyproject = PYPROJECT.read_text(encoding="utf-8")
@@ -191,6 +204,19 @@ def test_docs_pin_release_repo_and_stdio_first_host_story():
     assert "Boulea7/GrokSearchTool" in compatibility
     assert "local `stdio`" in compatibility
     assert "fork/upstream" in agents
+
+
+def test_localized_readmes_pin_release_repo_and_fork_story():
+    localized_expectations = {
+        README_ZH_TW: ["Boulea7/GrokSearchTool", "fork/upstream"],
+        README_JA: ["Boulea7/GrokSearchTool", "fork/upstream"],
+        README_RU: ["Boulea7/GrokSearchTool", "fork/upstream"],
+    }
+
+    for path, expected_fragments in localized_expectations.items():
+        text = path.read_text(encoding="utf-8")
+        for fragment in expected_fragments:
+            assert fragment in text
 
 
 def test_docs_keep_planning_first_and_cli_first_research_story():
@@ -237,3 +263,26 @@ def test_docs_explain_redirect_preflight_timeout_and_redirect_limit_contract():
     assert "第 `5` 次预检时仍然看到新的可见重定向" in agents
     assert "timeout failures" in security
     assert "fifth preflight still encounters a new redirect" in security
+
+
+def test_localized_readmes_explain_redirect_preflight_contract():
+    localized_expectations = {
+        README_ZH_TW: ["第 `5` 次預檢", "skipped_due_to_error", "best-effort safety boundary"],
+        README_JA: ["`5` 回", "skipped_due_to_error", "best-effort safety boundary"],
+        README_RU: ["`5`", "skipped_due_to_error", "best-effort safety boundary"],
+    }
+
+    for path, expected_fragments in localized_expectations.items():
+        text = path.read_text(encoding="utf-8")
+        for fragment in expected_fragments:
+            assert fragment in text
+
+
+def test_ja_and_ru_readmes_enumerate_public_tool_surface():
+    ja = README_JA.read_text(encoding="utf-8")
+    ru = README_RU.read_text(encoding="utf-8")
+
+    for text in (ja, ru):
+        assert "- `plan_intent`" in text
+        assert "- `plan_execution`" in text
+        assert "- `web_search`" in text

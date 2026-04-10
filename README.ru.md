@@ -21,6 +21,20 @@ GrokSearch — это независимо поддерживаемый MCP-се
 
 Сейчас опубликовано `13` MCP-инструментов.
 
+- `web_search`
+- `get_sources`
+- `web_fetch`
+- `web_map`
+- `get_config_info`
+- `switch_model`
+- `toggle_builtin_tools`
+- `plan_intent`
+- `plan_complexity`
+- `plan_sub_query`
+- `plan_search_term`
+- `plan_tool_mapping`
+- `plan_execution`
+
 `plan_search_term` задаёт `approach` / `fallback_plan` при первом создании `search_strategy`; последующие вызовы без `is_revision` только добавляют `search_terms` и не переписывают существующие strategy metadata неявно.
 
 ## Установка
@@ -43,6 +57,7 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `toggle_builtin_tools` относится только к проектным настройкам Claude Code.
 - readiness для `toggle_builtin_tools` в `get_config_info` означает только то, что обнаружен локальный Git-контекст проекта; это не полная проверка хоста Claude Code.
 - Ниже используются актуальные публичные установочные ссылки из поддерживаемого репозитория `Boulea7/GrokSearchTool`.
+- Локальные worktree, исторические имена remote или старые следы совместной работы не следует трактовать как признак того, что проект всё ещё ведётся через `fork/upstream` PR-процесс.
 
 ### Добавление как MCP
 
@@ -152,8 +167,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch` / `web_map` по умолчанию отклоняют не-`http/https`, loopback, очевидные private-network targets, одноярлыковые host'ы, типичные private-suffix host'ы (`.internal` / `.local` / `.lan` / `.home` / `.corp`), loopback-helper домены вроде `localtest.me` / `lvh.me`, а также распространённые публичные DNS-alias'ы, в которые закодирован локальный/приватный IP (`nip.io` / `xip.io` / `sslip.io`).
 - После статической проверки URL `web_fetch` / `web_map` также перепроверяют видимые redirect-цели до вызова provider.
 - Сейчас эта видимая redirect-проверка использует `GET`, а не `HEAD`; для presigned URL, one-shot token или ссылок, где даже чтение может иметь побочный эффект, это означает возможный дополнительный preflight-read и должно рассматриваться как известная граница.
+- Сейчас видимая redirect-проверка выполняется не более `5` раз; если на `5`-й проверке всё ещё появляется новый видимый redirect, запрос жёстко отклоняется с текущим контрактом `目标 URL 重定向次数过多`, и до downstream provider дело не доходит.
 - Если redirect-preflight завершается timeout'ом или request-level ошибкой, текущая реализация помечает этот шаг как `skipped_due_to_error`; `web_fetch` / `web_map` сейчас всё ещё продолжают downstream-вызов provider.
-- Эта граница сейчас не даёт жёсткой гарантии против split-horizon или локально отравленного DNS, который резолвит публично выглядящий hostname в приватную цель.
+- Эту границу сейчас следует понимать как `best-effort safety boundary`, а не как hard-stop гарантию против split-horizon или локально отравленного DNS, который резолвит публично выглядящий hostname в приватную цель.
 
 ### Минимальный smoke check
 
@@ -171,11 +187,11 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `detail="summary"` сейчас является компактной проекцией того же диагностического запуска, а не отдельным облегчённым execution path.
 - `feature_readiness.web_fetch.providers` содержит состояние по каждому provider; `verified_path` показывает backend, который прошёл реальный fetch-probe, а для пропущенных provider может присутствовать `skipped_reason`.
 - `feature_readiness.get_sources` показывает `ready` только тогда, когда в текущем процессе уже есть хотя бы один читаемый non-error source session; если в кэше остались только сессии от неуспешных поисков, статус остаётся `partial_ready`.
-- Даже при маскировании API key диагностический payload всё ещё может содержать локальные абсолютные пути, endpoint/hostname и короткие сводки upstream-ошибок; перед внешней публикацией его стоит перепроверить.
+- Даже при маскировании API key диагностический payload всё ещё может содержать локальные абсолютные пути, endpoint/hostname и короткие сводки upstream-ошибок; при этом маскируются не только bearer/token/подписанные query, но и высокодостоверные cloud-signed credential key, такие как `X-Amz-Credential`, `X-Goog-Credential` и `GoogleAccessId`. Перед внешней публикацией payload всё равно стоит перепроверить.
 - При успешном `get_sources` ответ всегда содержит `session_id`, `sources`, `sources_count`, `search_status`, `search_error` и `source_state`; только при отсутствии или истечении `session_id` дополнительно возвращается `error=session_id_not_found_or_expired`.
 - `get_sources` сейчас читает из in-process memory-backed LRU cache на запущенном сервере (по умолчанию TTL около 1 часа, лимит 256 session). `session_id` здесь является shared-daemon transient handle, а не durable, caller-bound capability или secret token; `session_id_not_found_or_expired` покрывает рестарт процесса, истечение TTL, вытеснение и miss для нечитаемых legacy-cache записей.
 - `sources_count` сейчас означает итоговое количество источников после стандартизации, дедупликации и фильтрации, записанное в кэш, а не сырое число upstream-citation'ов.
-- `rank` в `get_sources` сейчас определяется по `score`, качеству идентичности источника и стабильному dedupe-порядку без дополнительного приоритета для цитат Grok. `standardize_sources` также canonicalize'ит регистр scheme/host при dedupe, поэтому mixed-case варианты одной и той же страницы могут схлопываться в один source; при этом безопасные URL fragment сохраняются, а `userinfo` и типичные подписи/токены по-прежнему удаляются или маскируются. Явные default-port значения вроде `:443` и `:80` сейчас сохраняются и не схлопываются автоматически с implicit-default URL.
+- `rank` в `get_sources` сейчас определяется по `score`, качеству идентичности источника и стабильному dedupe-порядку без дополнительного приоритета для цитат Grok. `standardize_sources` также canonicalize'ит регистр scheme/host при dedupe, поэтому mixed-case варианты одной и той же страницы могут схлопываться в один source; при этом безопасные URL fragment сохраняются, а `userinfo`, типичные подписи/токены и высокодостоверные cloud-signed credential key вроде `X-Amz-Credential`, `X-Goog-Credential` и `GoogleAccessId` по-прежнему удаляются или маскируются. Явные default-port значения вроде `:443` и `:80` сейчас сохраняются и не схлопываются автоматически с implicit-default URL.
 
 ## Companion Skill
 
