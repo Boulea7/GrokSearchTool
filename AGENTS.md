@@ -38,6 +38,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `GROK_API_URL`：Grok/OpenAI-compatible API 地址
 - `GROK_API_KEY`：Grok API 密钥
 - `GROK_MODEL`：默认模型；优先级为进程环境变量 > 项目 `.env.local` > 项目 `.env` > `~/.config/grok-search/config.json` 持久化值 > 代码默认值
+- `GROK_MODEL_SOURCE`：`get_config_info` 基础配置快照里的活动模型来源层；当前可能是 `process_env`、`project_env_local`、`project_env`、`persisted_config` 或 `default`
 - `GROK_TIME_CONTEXT_MODE`：时间上下文注入策略，支持 `always` / `auto` / `never`
 - `TAVILY_API_KEY` / `TAVILY_API_URL`：Tavily 配置；用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`
 - `FIRECRAWL_API_KEY` / `FIRECRAWL_API_URL`：Firecrawl 配置；用于 `web_fetch` 托底，也可用于 supplemental `web_search`
@@ -104,9 +105,11 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - planning engine 当前会先规范化传入的 `id` / `sub_query_id` 再做 duplicate guard，避免空白包裹的重复 ID 绕过校验
 - `plan_search_term` 当前在非 `is_revision` 追加时只会累积 `search_terms`，不会隐式改写既有 `approach` / `fallback_plan`；若要替换整组 search strategy，应显式使用 `is_revision=true`
 - `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
+- 当前诊断 `web_search degraded` 时，`GROK_MODEL_SOURCE` 应视为根因分析的一等信息；若活动模型来自进程 env 或项目 `.env.local` / `.env` 覆盖，则与持久化配置层造成的 mismatch 是不同问题
 - `feature_readiness.get_sources` 当前只有在运行中进程里至少存在一个非 error 的可读取 source session 时才会显示 `ready`；若缓存里只有失败搜索留下的 session，则应保持 `partial_ready`
 - `feature_readiness.get_sources` 属于 `transient` readiness 信号；当前不应仅因其为 `partial_ready` 就拉低 overall doctor
 - `doctor` 当前会保留字符串版 `recommendations`，并额外提供结构化 `recommendations_detail`
+- 若 `GROK_MODEL_SOURCE` 是 `process_env`、`project_env_local` 或 `project_env`，单独调用 `switch_model` 不会改变当前进程；应先修改或删除对应覆盖层
 - 即使 API Key 已脱敏，`get_config_info` / `doctor` 输出当前仍可能包含本机绝对路径、endpoint/hostname 与精简后的上游错误摘要；对外分享前应先复核
 - `feature_readiness.web_fetch` 当前会附带 provider 级细节，并在 `verified_path` 中标注真实抓取探针实际打通的后端；未执行的 provider 可能带有 `skipped_reason`
 - `feature_readiness.web_fetch` 当前应优先尊重真实 `web_fetch_probe` 的结果；即使单点 provider 探测通过，真实抓取探针失败时也应保持 `degraded`

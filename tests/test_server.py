@@ -212,6 +212,7 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_API_URL",
         "GROK_API_KEY",
         "GROK_MODEL",
+        "GROK_MODEL_SOURCE",
         "GROK_DEBUG",
         "GROK_OUTPUT_CLEANUP",
         "GROK_TIME_CONTEXT_MODE",
@@ -238,6 +239,7 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_API_URL",
         "GROK_API_KEY",
         "GROK_MODEL",
+        "GROK_MODEL_SOURCE",
         "GROK_DEBUG",
         "GROK_OUTPUT_CLEANUP",
         "GROK_TIME_CONTEXT_MODE",
@@ -399,6 +401,16 @@ async def test_web_search_tool_description_allows_clear_single_hop_direct_use():
     assert "plan_intent tool" not in description
     assert "single-hop" in description
     assert "directly" in description
+
+
+@pytest.mark.asyncio
+async def test_switch_model_tool_description_does_not_claim_immediate_runtime_effect():
+    tool = await server.mcp.get_tool("switch_model")
+    description = tool.description or ""
+
+    assert "Immediate Effect" not in description
+    assert "persisted" in description
+    assert "current process" in description
 
 
 @pytest.mark.asyncio
@@ -1234,6 +1246,50 @@ async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkey
     )
     assert grok_check["status"] == "warning"
     assert "persisted-model" in grok_check["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_reports_runtime_model_source_when_project_env_local_overrides_persisted(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "project-model"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["GROK_MODEL"] == "project-model"
+    assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_recommendation_mentions_env_local_override_when_model_missing_from_models(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
+    assert any(".env.local" in item and "switch_model" in item for item in payload["doctor"]["recommendations"])
+    detail = next(
+        item for item in payload["doctor"]["recommendations_detail"] if item.get("check_id") == "grok_model_selection"
+    )
+    assert detail["runtime_model_source"] == "project_env_local"
 
 
 @pytest.mark.asyncio
@@ -2474,6 +2530,26 @@ async def test_switch_model_tool_keeps_env_model_active_in_current_process(monke
     assert payload["status"] == "成功"
     assert payload["previous_model"] == "env-model"
     assert payload["current_model"] == "env-model"
+    assert json.loads(config_file.read_text(encoding="utf-8"))["model"] == "persisted-model"
+
+
+@pytest.mark.asyncio
+async def test_switch_model_reports_runtime_model_still_overridden_by_project_env_local(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr(server.config, "_config_file", config_file, raising=False)
+    server.config.reset_runtime_state()
+
+    payload = json.loads(await server.switch_model("persisted-model"))
+
+    assert payload["status"] == "成功"
+    assert payload["previous_model"] == "project-model"
+    assert payload["current_model"] == "project-model"
+    assert payload["runtime_model_source"] == "project_env_local"
+    assert ".env.local" in payload["message"]
+    assert "switch_model" in payload["message"]
     assert json.loads(config_file.read_text(encoding="utf-8"))["model"] == "persisted-model"
 
 

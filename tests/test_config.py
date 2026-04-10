@@ -190,6 +190,18 @@ def test_grok_model_uses_project_env_fallback_before_persisted_config(monkeypatc
     config.reset_runtime_state()
 
     assert config.grok_model == "project-model"
+    assert config.grok_model_source == "project_env_local"
+
+
+def test_grok_model_source_prefers_process_env_over_project_and_persisted(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("GROK_MODEL", "env-model")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {"model": "persisted-model"})
+    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    config.reset_runtime_state()
+
+    assert config.grok_model_source == "process_env"
 
 
 def test_empty_grok_model_env_blocks_persisted_fallback(monkeypatch):
@@ -312,6 +324,7 @@ def test_get_config_info_does_not_create_log_dir(monkeypatch, tmp_path):
     config.reset_runtime_state()
     home_dir = tmp_path / "home"
     home_dir.mkdir()
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
     monkeypatch.setenv("GROK_API_KEY", "sk-secret-value")
@@ -322,6 +335,7 @@ def test_get_config_info_does_not_create_log_dir(monkeypatch, tmp_path):
     info = config.get_config_info()
 
     assert info["GROK_LOG_DIR"] == str(expected_path)
+    assert info["GROK_MODEL_SOURCE"] == "default"
     assert not expected_path.exists()
 
 

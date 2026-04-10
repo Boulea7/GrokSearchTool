@@ -148,6 +148,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - 模型解析優先級為進程 `GROK_MODEL` 環境變數 > 專案 `.env.local` > 專案 `.env` > `~/.config/grok-search/config.json` 持久化值 > 程式預設值 `grok-4.1-fast`；若使用 OpenRouter 相容位址，執行期會自動補上 `:online` 後綴。
 - 環境變數優先權按「鍵是否存在」判定：只要進程環境裡顯式設了某個鍵，即使值是空字串，也不會回落到專案 `.env.local` / `.env`。
 - `switch_model` 只會更新 `~/.config/grok-search/config.json` 的持久化層；若同時設了 `GROK_MODEL`，仍以環境變數為準。
+- `get_config_info` 的基礎設定快照現在會額外回傳 `GROK_MODEL_SOURCE`，用來標示目前活動模型實際來自哪一層（如 `process_env`、`project_env_local`、`project_env`、`persisted_config`、`default`）。若這裡顯示的是 `process_env`、`project_env_local` 或 `project_env`，單獨呼叫 `switch_model` 不會改變目前進程。
 - `GROK_TIME_CONTEXT_MODE` 預設為 `always`，保持目前一律注入本地時間上下文的行為。
 - `GROK_DEBUG=false` 時，這類 helper progress log 不會寫入 logger，也不會透過 `ctx.info()` 對外轉發；僅在 `GROK_DEBUG=true` 時才作為 debug-only progress/debug signal 暴露。
 - 如需節省上下文，可將 `GROK_TIME_CONTEXT_MODE` 設為 `auto`（僅在明顯時效查詢或顯式時效控制下注入）或 `never`。
@@ -185,6 +186,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `doctor.recommendations_detail` 會提供和 `check_id` / feature 關聯的結構化修復建議。
 - `get_config_info` 現在支援可選 `detail="full" | "summary"`；預設仍為 `full`，`summary` 只保留基礎設定快照、`connection_test`、`doctor.status/summary/recommendations` 與 `feature_readiness`。
 - `detail="summary"` 目前只是同一次診斷結果的緊湊欄位投影，不是額外的輕量執行路徑。
+- `connection_test` 目前只反映 `/models` 的可達性，不代表目前活動模型一定能通過真實 `chat/completions` 路徑；若 `web_search` 顯示 `degraded`，應一併查看 `doctor`、`feature_readiness`、`GROK_MODEL_SOURCE` 與 `grok_model_selection` / `grok_search_probe`。
 - `feature_readiness.web_fetch.providers` 會附帶 provider 級狀態；`verified_path` 表示真實抓取探針實際打通的後端，未執行的 provider 可能帶有 `skipped_reason`。
 - `feature_readiness.get_sources` 只有在目前進程內至少存在一個非 error、可讀取的 source session 時才會顯示 `ready`；若快取裡只有失敗搜尋留下的 session，狀態會維持 `partial_ready`。
 - 即使 API Key 已脫敏，診斷結果仍可能包含本機絕對路徑、endpoint/hostname 與精簡後的上游錯誤摘要；顯而易見的 bearer、token、簽名 query / fragment，以及高置信度 cloud-signed credential 鍵（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）也會做遮罩，但對外分享前仍請先複核。

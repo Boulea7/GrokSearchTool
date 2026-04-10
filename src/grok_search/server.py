@@ -1460,6 +1460,7 @@ def _append_recommendation(
     check_id: str = "",
     feature: str = "",
     severity: str = "warning",
+    extra_detail_fields: dict | None = None,
 ) -> None:
     if message and message not in recommendations:
         recommendations.append(message)
@@ -1473,6 +1474,10 @@ def _append_recommendation(
         detail["check_id"] = check_id
     if feature:
         detail["feature"] = feature
+    if extra_detail_fields:
+        for key, value in extra_detail_fields.items():
+            if value is not None:
+                detail[key] = value
     if detail not in recommendation_details:
         recommendation_details.append(detail)
 
@@ -1493,6 +1498,17 @@ def _summarize_doctor_status(doctor_status: str) -> str:
     if doctor_status == "error":
         return "核心 Grok 配置或连通性存在阻塞问题。"
     return "核心 Grok 可用，但部分可选能力未配置、未生效或探测失败。"
+
+
+def _runtime_model_source_label(source: str) -> str:
+    labels = {
+        "process_env": "进程环境变量 GROK_MODEL",
+        "project_env_local": "项目 .env.local",
+        "project_env": "项目 .env",
+        "persisted_config": "持久化配置",
+        "default": "代码默认值",
+    }
+    return labels.get(source, source or "未知来源")
 
 
 def _httpx_client_kwargs_for_url(url: str, *, timeout: float) -> dict:
@@ -2056,6 +2072,8 @@ async def get_config_info(
     checks.append(grok_models)
     if grok_models["status"] == "ok":
         configured_model = config.grok_model
+        runtime_model_source = config.grok_model_source
+        runtime_model_source_label = _runtime_model_source_label(runtime_model_source)
         available_models = grok_models.get("available_models") or []
         if configured_model and available_models and configured_model not in available_models:
             checks.append(
@@ -2064,16 +2082,33 @@ async def get_config_info(
                     "warning",
                     f"当前配置模型 {configured_model} 不在 /models 返回列表中。",
                     configured_model=configured_model,
+                    runtime_model_source=runtime_model_source,
+                    runtime_model_source_label=runtime_model_source_label,
                     available_models=available_models,
                 )
             )
             available_preview = ", ".join(available_models[:5])
+            if runtime_model_source in {"process_env", "project_env_local", "project_env"}:
+                recommendation = (
+                    f"当前活动模型 {configured_model} 来自{runtime_model_source_label}，但它不在 /models 返回列表中；"
+                    f"请先修改或删除该覆盖。单独调用 switch_model 只会写入持久化配置，不会改变当前进程。"
+                    f"可切换到例如：{available_preview}。"
+                )
+            else:
+                recommendation = (
+                    f"将 GROK_MODEL 或本地持久化模型从 {configured_model} 切换到 /models 返回的可用模型，"
+                    f"例如：{available_preview}。"
+                )
             _append_recommendation(
                 recommendations,
-                f"将 GROK_MODEL 或本地持久化模型从 {configured_model} 切换到 /models 返回的可用模型，例如：{available_preview}。",
+                recommendation,
                 recommendation_details=recommendation_details,
                 check_id="grok_model_selection",
                 feature="web_search",
+                extra_detail_fields={
+                    "runtime_model_source": runtime_model_source,
+                    "runtime_model_source_label": runtime_model_source_label,
+                },
             )
     if api_url and api_key:
         grok_search_probe = await _probe_web_search(api_url, api_key, config.grok_model)
@@ -2304,10 +2339,11 @@ async def get_config_info(
     **Key Features:**
         - **Model Selection:** Change the AI model for web search and content fetching.
         - **Persistent Storage:** Model preference saved to ~/.config/grok-search/config.json.
-        - **Immediate Effect:** New model used for all subsequent operations.
+        - **Runtime Awareness:** Reports when higher-priority env or project overrides keep the current process on a different active model.
 
     **Edge Cases & Best Practices:**
         - Use get_config_info to verify available models before switching.
+        - If the active model currently comes from process env or project `.env.local` / `.env`, this tool updates persisted config only and does not change the current process immediately.
         - Invalid model IDs may cause API errors in subsequent requests.
         - Model changes persist across sessions until explicitly changed again.
     """,
@@ -2320,14 +2356,29 @@ async def switch_model(
 
     try:
         previous_model = config.grok_model
+        previous_model_source = config.grok_model_source
         config.set_model(model)
         current_model = config.grok_model
+        current_model_source = config.grok_model_source
+        current_model_source_label = _runtime_model_source_label(current_model_source)
+
+        if current_model_source in {"process_env", "project_env_local", "project_env"}:
+            message = (
+                f"模型已写入持久化配置，但当前活动模型仍为 {current_model}；"
+                f"它来自{current_model_source_label}。请先修改或删除该覆盖，"
+                f"单独调用 switch_model 不会改变当前进程。"
+            )
+        else:
+            message = f"模型已从 {previous_model} 切换到 {current_model}"
 
         result = {
             "status": "成功",
             "previous_model": previous_model,
+            "previous_model_source": previous_model_source,
             "current_model": current_model,
-            "message": f"模型已从 {previous_model} 切换到 {current_model}",
+            "runtime_model_source": current_model_source,
+            "runtime_model_source_label": current_model_source_label,
+            "message": message,
             "config_file": str(config.config_file)
         }
 

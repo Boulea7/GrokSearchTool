@@ -49,6 +49,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `GROK_API_URL` should use an OpenAI-compatible root with an explicit `/v1` suffix; the current code path does not pre-block the request on its own when `/v1` is omitted, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning
 - model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.1-fast`
 - process env presence overrides project `.env.local` / `.env` fallback, even when the env value is explicitly empty
+- the base config snapshot now includes `GROK_MODEL_SOURCE`, so callers can see the active model source (`process_env`, `project_env_local`, `project_env`, `persisted_config`, or `default`)
 - project env fallback accepts both `KEY=value` and optional `export KEY=value` lines
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` controls local time-context injection for `web_search`; the default is `always`
@@ -62,6 +63,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `get_config_info` now also supports additive `detail=full|summary` output levels; `full` remains the default and preserves the current payload shape
 - `detail=summary` is currently a compact projection of the same diagnostic run, not a separate lightweight execution path
 - `connection_test` reflects `/models` reachability only; use `doctor` and `feature_readiness` to judge runtime readiness
+- when diagnosing degraded `web_search`, treat `GROK_MODEL_SOURCE` as part of the root-cause contract: a model mismatch caused by process env or project `.env.local` / `.env` overrides is different from a persisted-config mismatch
 - `doctor.recommendations_detail` is an additive structured hint layer; clients that only read `recommendations` remain compatible
 - `feature_readiness.web_fetch.providers.verified_path` identifies the backend that passed the real fetch probe, and skipped providers may include `skipped_reason`
 - `get_config_info` is still not a full end-to-end compatibility guarantee
@@ -97,6 +99,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 `get_sources.rank` currently follows `score`, source identity quality, and stable dedupe order without a Grok-specific boost. `standardize_sources` also canonicalizes scheme/host casing during dedupe, so mixed-case variants of the same page may collapse into one returned source.
 
 Supplemental `web_search` controls such as `topic`, `time_range`, and domain filters currently apply to Tavily-backed supplemental search only. If Tavily is unavailable or not used for the supplemental path, the request may still run with warnings, but those controls will not be fully enforced.
+
+If `GROK_MODEL_SOURCE` is `process_env`, `project_env_local`, or `project_env`, calling `switch_model` alone does not change the current process; callers must update or remove that higher-priority override first.
 
 ## Minimum `stdio` smoke check
 
