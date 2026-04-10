@@ -15,6 +15,11 @@ class DummyContext:
         self.messages.append(message)
 
 
+class FailingContext:
+    async def info(self, message: str):
+        raise RuntimeError("ctx boom")
+
+
 @pytest.mark.asyncio
 async def test_log_info_skips_ctx_when_debug_disabled():
     ctx = DummyContext()
@@ -70,6 +75,18 @@ async def test_log_warning_writes_logger_and_ctx_without_debug_gate(monkeypatch)
 
     assert messages == ["warning message"]
     assert ctx.messages == ["warning message"]
+
+
+@pytest.mark.asyncio
+async def test_log_warning_swallows_ctx_failures(monkeypatch):
+    ctx = FailingContext()
+    messages = []
+
+    monkeypatch.setattr(logger_module.logger, "warning", lambda message: messages.append(message))
+
+    await log_warning(ctx, "warning message")
+
+    assert messages == ["warning message"]
 
 
 def test_logger_falls_back_to_null_handler_when_file_handler_fails(monkeypatch):
