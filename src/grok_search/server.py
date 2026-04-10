@@ -2569,10 +2569,10 @@ async def get_config_info(
     name="switch_model",
     output_schema=None,
     description="""
-    Switches the default Grok model used for search and fetch operations, persisting the setting.
+    Switches the default Grok model used for Grok-backed search and runtime model selection, persisting the setting.
 
     **Key Features:**
-        - **Model Selection:** Change the AI model for web search and content fetching.
+        - **Model Selection:** Change the AI model used for Grok-backed web search and related diagnostics.
         - **Persistent Storage:** Model preference saved to ~/.config/grok-search/config.json.
         - **Runtime Awareness:** Reports when higher-priority env or project overrides keep the current process on a different active model.
 

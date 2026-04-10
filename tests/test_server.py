@@ -420,6 +420,15 @@ async def test_switch_model_tool_description_does_not_claim_immediate_runtime_ef
 
 
 @pytest.mark.asyncio
+async def test_switch_model_tool_description_does_not_claim_fetch_side_effects():
+    tool = await server.mcp.get_tool("switch_model")
+    description = (tool.description or "").lower()
+
+    assert "fetch operations" not in description
+    assert "content fetching" not in description
+
+
+@pytest.mark.asyncio
 async def test_web_fetch_tool_schema_does_not_expose_ctx_parameter():
     tool = await server.mcp.get_tool("web_fetch")
 
