@@ -1,3 +1,5 @@
+from collections import OrderedDict
+import time
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Literal
 import uuid
@@ -272,11 +274,54 @@ def _validate_execution_order(session: PlanningSession, phase_data: dict | None)
 
 
 class PlanningEngine:
-    def __init__(self):
-        self._sessions: dict[str, PlanningSession] = {}
+    def __init__(
+        self,
+        max_sessions: int = 256,
+        ttl_seconds: float = 3600.0,
+        now_fn=None,
+    ):
+        self._max_sessions = max_sessions
+        self._ttl_seconds = ttl_seconds
+        self._now = now_fn or time.monotonic
+        self._sessions: OrderedDict[str, tuple[PlanningSession, float | None]] = OrderedDict()
+
+    def _expires_at(self) -> float | None:
+        if self._ttl_seconds <= 0:
+            return None
+        return self._now() + self._ttl_seconds
+
+    def _purge_expired(self) -> None:
+        if self._ttl_seconds <= 0:
+            return
+
+        now = self._now()
+        expired_ids = [
+            session_id
+            for session_id, (_, expires_at) in self._sessions.items()
+            if expires_at is not None and expires_at <= now
+        ]
+        for session_id in expired_ids:
+            self._sessions.pop(session_id, None)
+
+    def _store_session(self, session: PlanningSession) -> None:
+        self._sessions[session.session_id] = (session, self._expires_at())
+        self._sessions.move_to_end(session.session_id)
+        while self._max_sessions > 0 and len(self._sessions) > self._max_sessions:
+            self._sessions.popitem(last=False)
+
+    def _touch_session(self, session_id: str) -> PlanningSession | None:
+        cached = self._sessions.get(session_id)
+        if cached is None:
+            return None
+
+        session, _ = cached
+        self._sessions[session_id] = (session, self._expires_at())
+        self._sessions.move_to_end(session_id)
+        return session
 
     def get_session(self, session_id: str) -> PlanningSession | None:
-        return self._sessions.get(session_id)
+        self._purge_expired()
+        return self._touch_session(session_id)
 
     def reset(self) -> None:
         self._sessions.clear()
@@ -291,22 +336,54 @@ class PlanningEngine:
         confidence: float = 1.0,
         phase_data: dict | list | None = None,
     ) -> dict:
-        if session_id and session_id not in self._sessions:
+        self._purge_expired()
+
+        if is_revision and not session_id:
             return {
                 "error": "session_not_found",
-                "message": f"Session '{session_id}' not found. Restart from intent_analysis with an empty session_id.",
+                "message": "Revision requires an existing session. Restart from intent_analysis with an empty session_id only for new plans.",
                 "session_id": session_id,
                 "restart_from_intent_analysis": True,
                 "expected_phase_order": PHASE_NAMES,
             }
-        if session_id and session_id in self._sessions:
-            session = self._sessions[session_id]
-        else:
-            sid = session_id if session_id else uuid.uuid4().hex[:12]
-            session = PlanningSession(sid)
-            self._sessions[sid] = session
 
-        target = revises_phase if is_revision and revises_phase else phase
+        if is_revision and revises_phase and revises_phase != phase:
+            return {
+                "error": f"revises_phase must match phase when revision is enabled: {revises_phase} != {phase}",
+                "expected_phase_order": PHASE_NAMES,
+                "session_id": session_id,
+            }
+
+        if session_id:
+            session = self._touch_session(session_id)
+            if session is None:
+                return {
+                    "error": "session_not_found",
+                    "message": f"Session '{session_id}' not found. Restart from intent_analysis with an empty session_id.",
+                    "session_id": session_id,
+                    "restart_from_intent_analysis": True,
+                    "expected_phase_order": PHASE_NAMES,
+                }
+        else:
+            sid = uuid.uuid4().hex[:12]
+            session = PlanningSession(sid)
+
+        if is_revision:
+            try:
+                phase_index = PHASE_NAMES.index(phase)
+            except ValueError:
+                phase_index = -1
+            if phase_index >= 0:
+                downstream_phases = PHASE_NAMES[phase_index + 1 :]
+                if any(name in session.phases for name in downstream_phases):
+                    return {
+                        "error": f"{phase} revision would invalidate downstream phases. Open a new session to restart planning from {phase}.",
+                        "session_id": session.session_id,
+                        "completed_phases": session.completed_phases,
+                        "complexity_level": session.complexity_level,
+                    }
+
+        target = phase
         if target not in PHASE_NAMES:
             return {"error": f"Unknown phase: {target}. Valid: {', '.join(PHASE_NAMES)}"}
 
@@ -441,6 +518,7 @@ class PlanningEngine:
         if complete:
             result["executable_plan"] = session.build_executable_plan()
 
+        self._store_session(session)
         return result
 
 
