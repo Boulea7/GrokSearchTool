@@ -324,11 +324,12 @@ claude mcp list
 - `sources_count`: 已缓存的信源数量
 - `status`: `ok` / `partial` / `error`
 - `effective_params`: 最终生效的搜索参数回显
-- `warnings`: 非致命告警列表；例如 Tavily 不可用时，域名过滤和时间范围不会真正作用于补充搜索
+- `warnings`: 非致命告警列表；例如 Tavily 不可用时，域名过滤和时间范围不会真正作用于补充搜索，或上游只返回信源列表 / 正文疑似截断时返回 `body_missing_sources_only`、`body_probably_truncated`
 - `error`: 稳定的机器可读错误码；无错误时为 `null`
 
 说明：
 - `topic`、`time_range`、`include_domains`、`exclude_domains` 当前是 Tavily-backed supplemental search 的能力；如果本次请求没有实际走 Tavily 补充搜索，主请求仍可继续执行，但这些控制项不会真正生效，并会通过 `warnings` 或 `partial` 状态体现。
+- 若上游只返回信源列表而没有正文，或正文命中当前的截断启发式，`web_search` 当前也会返回 `partial`；其中 `get_sources.search_status` 会同步保留该降级状态，但 `get_sources` 本身仍不会回放原始 `warnings` 列表。
 
 ### `get_sources` — 获取信源
 
@@ -415,8 +416,9 @@ claude mcp list
 注意：
 - `detail="full"` 保留完整 `doctor.checks`、`doctor.recommendations_detail` 和 provider/probe 细节；`detail="summary"` 只保留基础配置快照、`connection_test`、`doctor.status/summary/recommendations` 与 `feature_readiness`
 - `detail="summary"` 当前只是同一次诊断结果的紧凑字段投影，不是额外的“轻执行路径”；底层仍会执行同一轮配置/探针逻辑。
-- `connection_test` 当前只反映 `/models` 连通性，不代表当前活动模型一定能通过真实 `chat/completions` 路径；判断 `web_search` 是否真可用时，应结合 `doctor`、`feature_readiness`、`GROK_MODEL_SOURCE` 与 `grok_model_selection` / `grok_search_probe` 结果一起看。
+- `connection_test` 当前只反映 `/models` 连通性，不代表当前活动模型一定能通过真实 `chat/completions` 路径；判断 `web_search` 是否真可用时，应结合 `doctor`、`feature_readiness`、`GROK_MODEL_SOURCE` 与 `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` 结果一起看。
 - `grok_model_selection` 表示 `/models` 列表阶段就已发现当前模型不可直接使用，并会在运行前预选到更合适的 Grok 候选模型；`grok_model_runtime_fallback` 表示当前 probe model 在真实 `chat/completions` 路径上仍只能靠运行时二次回退才成功。这两个 check 可能同时出现。
+- `grok_search_probe` 当前除了 `ok` / `error` 之外，也可能返回正文质量降级类 `warning`；例如探针只拿到信源列表、没有可用正文，或正文疑似截断时，`feature_readiness.web_search` 会相应显示为 `degraded`。
 - 运行时模型回退当前属于 best-effort 兼容路径：它依赖 `/models` 能返回可选候选列表，且上游错误摘要命中“模型不可用”类文案；如果 `/models` 不可用，或错误类型不属于该类信号，就不保证会自动继续回退。
 - `feature_readiness.get_sources` 只有在当前进程内至少存在一个非 error 的可读取 source session 时才会显示 `ready`；如果只有失败搜索留下的 session，状态会保持 `partial_ready`
 - `feature_readiness` / `doctor` 的状态语义当前可按以下方式理解：`ready`=当前能力已验证可用，`degraded`=能力存在但探针或局部依赖异常，`not_ready`=配置或前置条件不足，`partial_ready`=接口存在但仍缺少运行中瞬时条件；其中 `transient` 和 `client_specific` 项默认不拉低 overall doctor。

@@ -210,6 +210,7 @@ The `/models` connection test uses a 10-second timeout; additional real `web_sea
 `detail="summary"` is currently a compact projection of the same diagnostic run, not a separate lightweight execution path.
 `connection_test` only reflects `/models` reachability; if `web_search` is degraded, combine `doctor`, `feature_readiness`, `GROK_MODEL_SOURCE`, and the `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` checks before concluding the root cause.
 `grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage, while `grok_model_runtime_fallback` means the real `/chat/completions` path only succeeded after a runtime retry against another Grok candidate; both checks may appear in the same diagnostic run.
+`grok_search_probe` may now return a body-quality `warning` as well as `ok` or `error`; for example, a sources-only probe or a probably truncated probe body degrades `feature_readiness.web_search` even though the endpoint itself still responded successfully.
 `feature_readiness.get_sources` only reports `ready` when the current process already holds at least one readable non-error source session; error-only cached sessions keep it at `partial_ready`.
 `ready` means the capability is verified, `degraded` means it exists but probes or partial dependencies are unhealthy, `not_ready` means prerequisites are missing, and `partial_ready` means the interface exists but still depends on transient runtime state; `transient` and `client_specific` items do not lower the overall doctor status on their own.
 
@@ -224,7 +225,7 @@ Even with API keys masked, the diagnostic payload may still include local absolu
 
 - `status`: `ok`, `partial`, or `error`
 - `effective_params`: the final normalized search controls
-- `warnings`: non-fatal warnings, especially when Tavily-only filters cannot be applied
+- `warnings`: non-fatal warnings, especially when Tavily-only filters cannot be applied, or when the upstream returns sources without a usable body (`body_missing_sources_only`) or a body that looks truncated (`body_probably_truncated`)
 - `error`: a stable machine-readable error code, or `null`
 
 Optional additive controls:
@@ -236,6 +237,7 @@ Optional additive controls:
 
 If supplemental search goes through Tavily, `max_results` is currently clamped to the provider's documented limit of `20`.
 These controls currently apply to Tavily-backed supplemental search only; if Tavily is unavailable or not selected for the supplemental path, the request may still succeed with warnings and the controls will not be fully enforced.
+When the upstream returns only source links without a usable body, or when the answer matches the current truncation heuristics, `web_search` also returns `partial`. `get_sources.search_status` keeps that downgraded status, but `get_sources` still does not replay the original `warnings` array.
 
 Successful `get_sources` responses include `session_id`, `sources`, and `sources_count`, where each source is standardized with metadata such as `provider`, `domain`, `score`, `retrieved_at`, and `rank`. They also return:
 
