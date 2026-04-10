@@ -148,6 +148,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - モデル解決順はプロセス `GROK_MODEL` 環境変数 → プロジェクト `.env.local` → プロジェクト `.env` → `~/.config/grok-search/config.json` の永続値 → コード既定値 `grok-4.1-fast` です。OpenRouter 互換 URL を使う場合、必要に応じて `:online` が自動付与されます。
 - 環境変数の優先は「キーが存在するか」で判定されます。プロセス環境に明示的にキーがある場合、値が空文字でもプロジェクト `.env.local` / `.env` にはフォールバックしません。
 - `switch_model` は `~/.config/grok-search/config.json` の永続値のみを更新します。`GROK_MODEL` が設定されている場合は env が優先されます。
+- `get_config_info` のベース設定スナップショットには `GROK_MODEL_SOURCE` も含まれ、現在のアクティブモデルをどの層が供給しているか（`process_env`、`project_env_local`、`project_env`、`persisted_config`、`default`）を確認できます。ここが `process_env`、`project_env_local`、`project_env` の場合、`switch_model` を単独で呼んでも現在のプロセスは切り替わりません。
 - `GROK_TIME_CONTEXT_MODE` の既定値は `always` で、現在の「常にローカル時間を注入する」動作を維持します。
 - `GROK_DEBUG=false` のとき、これらの helper progress log は logger にも `ctx.info()` にも流れません。`GROK_DEBUG=true` のときだけ debug-only progress/debug signal として転送されます。
 - コンテキストを節約したい場合は、`GROK_TIME_CONTEXT_MODE` を `auto`（明確に時系列依存の問い合わせ時のみ注入）または `never` に変更できます。
@@ -185,6 +186,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `doctor.recommendations_detail` は `check_id` / feature に紐づく構造化された修復ヒントです。
 - `get_config_info` は任意の `detail="full" | "summary"` を受け付けます。既定値は引き続き `full` で、`summary` はベース設定スナップショット、`connection_test`、`doctor.status/summary/recommendations`、`feature_readiness` のみを返します。
 - `detail="summary"` は現時点では同じ診断実行結果のコンパクトな投影であり、別個の軽量実行パスではありません。
+- `connection_test` は現時点では `/models` 到達性しか表しません。`web_search` が `degraded` の場合は、`doctor`、`feature_readiness`、`GROK_MODEL_SOURCE`、`grok_model_selection` / `grok_search_probe` を合わせて原因を判断してください。
 - `feature_readiness.web_fetch.providers` には provider 単位の状態が含まれ、`verified_path` は実 fetch probe が通った backend を示します。skip された provider には `skipped_reason` が付く場合があります。
 - `feature_readiness.get_sources` が `ready` になるのは、現在のプロセス内に少なくとも 1 つの非 error で読み出し可能な source session がある場合だけです。失敗検索だけが残っている場合は `partial_ready` のままです。
 - API Key はマスクされますが、診断ペイロードにはローカル絶対パス、endpoint/hostname、短い upstream エラー要約が残る場合があります。明白な bearer/token/署名 query に加えて、`X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId` のような高信頼 cloud-signed credential key もマスクされますが、外部共有前に確認してください。

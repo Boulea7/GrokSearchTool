@@ -246,6 +246,37 @@ def test_docs_lock_finance_topic_and_diagnostic_detail_contracts():
     assert "`detail=full|summary`" in agents
 
 
+def test_docs_explain_runtime_model_source_and_env_override_boundary():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    readme_zh_tw = README_ZH_TW.read_text(encoding="utf-8")
+    readme_ja = README_JA.read_text(encoding="utf-8")
+    readme_ru = README_RU.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "`GROK_MODEL_SOURCE`" in readme
+    assert "当前活动模型来自哪一层" in readme
+    assert "单独调用 `switch_model` 不会改变当前进程" in readme
+    assert "`GROK_MODEL_SOURCE`" in readme_en
+    assert "which layer currently supplies the active model" in readme_en
+    assert "calling `switch_model` alone does not change the current process" in readme_en
+    assert "`GROK_MODEL_SOURCE`" in compatibility
+    assert "active model source" in compatibility
+    assert "project `.env.local`" in compatibility
+    assert "`GROK_MODEL_SOURCE`" in agents
+    assert "单独调用 `switch_model` 不会改变当前进程" in agents
+    assert "`GROK_MODEL_SOURCE`" in readme_zh_tw
+    assert "目前活動模型實際來自哪一層" in readme_zh_tw
+    assert "單獨呼叫 `switch_model` 不會改變目前進程" in readme_zh_tw
+    assert "`GROK_MODEL_SOURCE`" in readme_ja
+    assert "どの層が供給しているか" in readme_ja
+    assert "単独で呼んでも現在のプロセスは切り替わりません" in readme_ja
+    assert "`GROK_MODEL_SOURCE`" in readme_ru
+    assert "какой слой сейчас задаёт активную модель" in readme_ru
+    assert "одного вызова `switch_model` недостаточно" in readme_ru
+
+
 def test_docs_explain_redirect_preflight_timeout_and_redirect_limit_contract():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")

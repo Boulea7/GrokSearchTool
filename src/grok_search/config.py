@@ -42,6 +42,7 @@ class Config:
             cls._instance._config_file = None
             cls._instance._cached_model = None
             cls._instance._project_env_cache = None
+            cls._instance._project_env_source_cache = None
         return cls._instance
 
     def _project_root(self) -> Path:
@@ -97,15 +98,25 @@ class Config:
 
         return re.sub(r"\s+#.*$", "", text).strip()
 
-    def _load_project_env(self) -> dict[str, str]:
+    def _load_project_env_with_sources(self) -> tuple[dict[str, str], dict[str, str]]:
         if self._project_env_cache is not None:
-            return self._project_env_cache
+            return self._project_env_cache, self._project_env_source_cache or {}
 
         project_root = self._project_root()
         merged: dict[str, str] = {}
+        sources: dict[str, str] = {}
         for name in (".env", ".env.local"):
-            merged.update(self._parse_env_file(project_root / name))
+            current = self._parse_env_file(project_root / name)
+            merged.update(current)
+            source_name = "project_env_local" if name == ".env.local" else "project_env"
+            for key in current:
+                sources[key] = source_name
         self._project_env_cache = merged
+        self._project_env_source_cache = sources
+        return merged, sources
+
+    def _load_project_env(self) -> dict[str, str]:
+        merged, _ = self._load_project_env_with_sources()
         return merged
 
     def _get_env_value(self, key: str, default: str | None = None) -> str | None:
@@ -115,6 +126,12 @@ class Config:
         if key in project_env:
             return project_env[key]
         return default
+
+    def _get_env_value_source(self, key: str) -> str | None:
+        if key in os.environ:
+            return "process_env"
+        _, project_sources = self._load_project_env_with_sources()
+        return project_sources.get(key)
 
     @property
     def config_file(self) -> Path:
@@ -281,6 +298,15 @@ class Config:
         self._cached_model = self._apply_model_suffix(model)
         return self._cached_model
 
+    @property
+    def grok_model_source(self) -> str:
+        env_source = self._get_env_value_source("GROK_MODEL")
+        if env_source:
+            return env_source
+        if self._load_config_file().get("model"):
+            return "persisted_config"
+        return "default"
+
     def set_model(self, model: str) -> None:
         config_data = self._load_config_file()
         config_data["model"] = model
@@ -290,6 +316,7 @@ class Config:
     def reset_runtime_state(self) -> None:
         self._cached_model = None
         self._project_env_cache = None
+        self._project_env_source_cache = None
 
     @staticmethod
     def _mask_api_key(key: str) -> str:
@@ -370,6 +397,7 @@ class Config:
             "GROK_API_URL": self._mask_url(api_url) if api_url != "未配置" else api_url,
             "GROK_API_KEY": api_key_masked,
             "GROK_MODEL": self.grok_model,
+            "GROK_MODEL_SOURCE": self.grok_model_source,
             "GROK_DEBUG": self.debug_enabled,
             "GROK_OUTPUT_CLEANUP": self.output_cleanup_enabled,
             "GROK_TIME_CONTEXT_MODE": self.time_context_mode,
