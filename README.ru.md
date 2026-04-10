@@ -36,6 +36,8 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `plan_execution`
 
 `plan_search_term` задаёт `approach` / `fallback_plan` при первом создании `search_strategy`; последующие вызовы без `is_revision` только добавляют `search_terms` и не переписывают существующие strategy metadata неявно.
+planning `session_id` — это in-process transient handle с TTL около 1 часа и LRU-лимитом 256 сессий; после рестарта процесса, истечения TTL или eviction нужно начинать заново с нового `plan_intent`.
+wrapper'ы намеренно сохраняют scalar shim-входы: `depends_on` передаётся как CSV, `parallel_groups` — как CSV с разделением групп через `;`, а `params_json` — как строковый JSON. Первый вызов `plan_search_term` обязан передавать `approach`.
 
 ## Установка
 

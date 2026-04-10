@@ -102,8 +102,11 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `Config.get_config_info()` 只返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并新增 `connection_test`、`doctor`、`feature_readiness` 与最小真实探针结果；当前还支持 additive `detail=full|summary` 分级输出，默认仍为 `full`
 - `detail=summary` 当前只是同一次诊断结果的紧凑字段投影，不是额外的轻执行路径
 - `detail=summary` 当前应保留 `Config.get_config_info()` 返回的全部基础配置快照键；新增基础字段时，不应只出现在 `full`
+- planning `session_id` 当前是进程内的 transient handle，默认 TTL 约 1 小时、LRU 上限 256；若进程重启、TTL 到期或缓存淘汰，应从新的 `plan_intent` 重新开始
+- `plan_*` wrapper 当前刻意保持标量 shim 形态，例如 CSV `depends_on`、分号分组的 `parallel_groups`、字符串化 JSON 的 `params_json`；`executable_plan` 返回的是规范化后的结构化形状
 - planning engine 当前会先规范化传入的 `id` / `sub_query_id` 再做 duplicate guard，避免空白包裹的重复 ID 绕过校验
 - `plan_search_term` 当前在非 `is_revision` 追加时只会累积 `search_terms`，不会隐式改写既有 `approach` / `fallback_plan`；若要替换整组 search strategy，应显式使用 `is_revision=true`
+- 首次建立 `search_strategy` 时必须提供 `approach`；只有 strategy 已建立后，后续非 `is_revision` 调用才允许只追加 `search_terms`
 - `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
 - 当前诊断 `web_search degraded` 时，`GROK_MODEL_SOURCE` 应视为根因分析的一等信息；若活动模型来自进程 env 或项目 `.env.local` / `.env` 覆盖，则与持久化配置层造成的 mismatch 是不同问题
 - `feature_readiness.get_sources` 当前只有在运行中进程里至少存在一个非 error 的可读取 source session 时才会显示 `ready`；若缓存里只有失败搜索留下的 session，则应保持 `partial_ready`
