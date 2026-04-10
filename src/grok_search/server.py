@@ -19,7 +19,7 @@ if str(src_dir) not in sys.path:
 # 尝试使用绝对导入（支持 mcp run）
 try:
     from grok_search.providers.grok import GrokSearchProvider
-    from grok_search.logger import log_info
+    from grok_search.logger import log_info, log_warning
     from grok_search.config import config
     from grok_search.sources import (
         SourcesCache,
@@ -44,7 +44,7 @@ try:
     )
 except ImportError:
     from .providers.grok import GrokSearchProvider
-    from .logger import log_info
+    from .logger import log_info, log_warning
     from .config import config
     from .sources import (
         SourcesCache,
@@ -1303,6 +1303,7 @@ async def web_fetch(
     if preflight.status == "reject":
         return f"提取失败: {preflight.message}"
     if preflight.status == "skipped_due_to_error":
+        await log_warning(ctx, f"Warning: Redirect preflight skipped: {preflight.message}")
         await log_info(ctx, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     await log_info(ctx, "Begin Fetch request", config.debug_enabled)
@@ -1410,12 +1411,14 @@ async def web_map(
     max_depth: Annotated[int, Field(description="Maximum depth of mapping from the base URL.", ge=1, le=5)] = 1,
     max_breadth: Annotated[int, Field(description="Maximum number of links to follow per page.", ge=1, le=500)] = 20,
     limit: Annotated[int, Field(description="Total number of links to process before stopping.", ge=1, le=500)] = 50,
-    timeout: Annotated[int, Field(description="Maximum time in seconds for the operation.", ge=10, le=150)] = 150
+    timeout: Annotated[int, Field(description="Maximum time in seconds for the operation.", ge=10, le=150)] = 150,
+    ctx: Context = None,
 ) -> str:
     preflight = await _preflight_public_target_url(url)
     if preflight.status == "reject":
         return f"映射失败: {preflight.message}"
     if preflight.status == "skipped_due_to_error":
+        await log_warning(ctx, f"Warning: Redirect preflight skipped: {preflight.message}")
         await log_info(None, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     result = await _call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
