@@ -77,6 +77,8 @@ _AVAILABLE_MODELS_CACHE_TTL_SECONDS = 300.0
 _AVAILABLE_MODELS_CACHE_FAILURE_TTL_SECONDS = 5.0
 _SEARCH_PROBE_QUERY = "Reply with the single word ready."
 _FETCH_PROBE_URL = "https://example.com"
+_PREFERRED_GROK_MODEL = "grok-4.20-0309"
+_MODEL_FALLBACK_WARNING = "model_fallback_applied"
 
 
 def _available_models_cache_now() -> float:
@@ -137,6 +139,75 @@ async def _get_available_models_cached(api_url: str, api_key: str) -> list[str]:
     async with _AVAILABLE_MODELS_LOCK:
         _AVAILABLE_MODELS_CACHE[key] = (models, _available_models_cache_expires_at())
     return models
+
+
+def _parse_grok_model_parts(model: str) -> tuple[int, int, tuple[int, ...], str] | None:
+    text = (model or "").strip().lower()
+    match = re.match(r"^grok-(\d+)\.(\d+)(?:-(.*))?$", text)
+    if not match:
+        return None
+
+    major = int(match.group(1))
+    minor = int(match.group(2))
+    remainder = (match.group(3) or "").strip()
+    numeric_parts: list[int] = []
+    semantic_parts: list[str] = []
+
+    if remainder:
+        for part in remainder.split("-"):
+            if part.isdigit() and not semantic_parts:
+                numeric_parts.append(int(part))
+            elif part:
+                semantic_parts.append(part)
+
+    return major, minor, tuple(numeric_parts), "-".join(semantic_parts)
+
+
+def _is_flexible_grok_model(model: str) -> bool:
+    parts = _parse_grok_model_parts(model)
+    if not parts:
+        return False
+    major, minor, _, _ = parts
+    return (major, minor) >= (4, 1)
+
+
+def _grok_model_preference_key(model: str) -> tuple:
+    parts = _parse_grok_model_parts(model)
+    if not parts:
+        return (-1, -1, (), -1)
+
+    major, minor, numeric_parts, semantic_suffix = parts
+    padded_numeric = numeric_parts + (0, 0, 0)
+    semantic_preference = {
+        "": 3,
+        "non-reasoning": 2,
+        "reasoning": 1,
+    }.get(semantic_suffix, 0)
+    return (major, minor, padded_numeric[:3], semantic_preference)
+
+
+def _pick_flexible_grok_model(available_models: list[str]) -> str | None:
+    candidates = [model for model in available_models if _is_flexible_grok_model(model)]
+    if not candidates:
+        return None
+    if _PREFERRED_GROK_MODEL in candidates:
+        return _PREFERRED_GROK_MODEL
+    return max(candidates, key=_grok_model_preference_key)
+
+
+def _resolve_model_against_available_models(requested_model: str, available_models: list[str]) -> tuple[str | None, str | None]:
+    normalized_model = (requested_model or "").strip()
+    if not normalized_model:
+        return normalized_model, None
+    if not available_models:
+        return normalized_model, None
+    if normalized_model in available_models:
+        return normalized_model, None
+    if _is_flexible_grok_model(normalized_model):
+        fallback_model = _pick_flexible_grok_model(available_models)
+        if fallback_model:
+            return fallback_model, _MODEL_FALLBACK_WARNING
+    return None, "invalid_model"
 
 
 def _planning_session_error(session_id: str) -> str:
@@ -912,11 +983,13 @@ async def web_search(
             error="config_error",
         )
 
+    available_models = await _get_available_models_cached(api_url, api_key)
     effective_model = config.grok_model
+    warnings: list[str] = []
     if model:
         normalized_explicit_model = config._apply_model_suffix(model)
-        available = await _get_available_models_cached(api_url, api_key)
-        if available and model not in available and normalized_explicit_model not in available:
+        resolved_model, resolution = _resolve_model_against_available_models(normalized_explicit_model, available_models)
+        if resolution == "invalid_model":
             await _SOURCES_CACHE.set(
                 session_id,
                 _build_sources_cache_entry([], search_status="error", search_error="invalid_model"),
@@ -929,16 +1002,22 @@ async def web_search(
                 effective_params=effective_params,
                 error="invalid_model",
             )
-        effective_model = normalized_explicit_model
+        if resolution == _MODEL_FALLBACK_WARNING:
+            warnings.append(_MODEL_FALLBACK_WARNING)
+        effective_model = resolved_model or normalized_explicit_model
         effective_params["model"] = effective_model
     else:
+        resolved_model, resolution = _resolve_model_against_available_models(effective_model, available_models)
+        if resolution == _MODEL_FALLBACK_WARNING:
+            warnings.append(_MODEL_FALLBACK_WARNING)
+        if resolved_model:
+            effective_model = resolved_model
         effective_params["model"] = effective_model
 
     grok_provider = GrokSearchProvider(api_url, api_key, effective_model)
     grok_provider.time_context_required = bool(
         effective_params["topic"] != "general" or effective_params["time_range"]
     )
-    warnings: list[str] = []
 
     # 计算额外信源配额
     has_tavily = config.tavily_enabled and bool(config.tavily_api_key)
@@ -2075,30 +2154,52 @@ async def get_config_info(
         runtime_model_source = config.grok_model_source
         runtime_model_source_label = _runtime_model_source_label(runtime_model_source)
         available_models = grok_models.get("available_models") or []
+        resolved_model, resolution = _resolve_model_against_available_models(configured_model, available_models)
+        fallback_model = resolved_model if resolution == _MODEL_FALLBACK_WARNING else None
         if configured_model and available_models and configured_model not in available_models:
+            if fallback_model:
+                warning_message = (
+                    f"当前配置模型 {configured_model} 不在 /models 返回列表中；运行时将回退到 {fallback_model}。"
+                )
+            else:
+                warning_message = f"当前配置模型 {configured_model} 不在 /models 返回列表中。"
             checks.append(
                 _build_doctor_check(
                     "grok_model_selection",
                     "warning",
-                    f"当前配置模型 {configured_model} 不在 /models 返回列表中。",
+                    warning_message,
                     configured_model=configured_model,
                     runtime_model_source=runtime_model_source,
                     runtime_model_source_label=runtime_model_source_label,
+                    fallback_model=fallback_model,
                     available_models=available_models,
                 )
             )
             available_preview = ", ".join(available_models[:5])
             if runtime_model_source in {"process_env", "project_env_local", "project_env"}:
-                recommendation = (
-                    f"当前活动模型 {configured_model} 来自{runtime_model_source_label}，但它不在 /models 返回列表中；"
-                    f"请先修改或删除该覆盖。单独调用 switch_model 只会写入持久化配置，不会改变当前进程。"
-                    f"可切换到例如：{available_preview}。"
-                )
+                if fallback_model:
+                    recommendation = (
+                        f"当前活动模型 {configured_model} 来自{runtime_model_source_label}，它不在 /models 返回列表中；"
+                        f"运行时会先回退到 {fallback_model}。为避免长期漂移，请尽快修改或删除该覆盖。"
+                        f"单独调用 switch_model 只会写入持久化配置，不会改变当前进程。"
+                    )
+                else:
+                    recommendation = (
+                        f"当前活动模型 {configured_model} 来自{runtime_model_source_label}，但它不在 /models 返回列表中；"
+                        f"请先修改或删除该覆盖。单独调用 switch_model 只会写入持久化配置，不会改变当前进程。"
+                        f"可切换到例如：{available_preview}。"
+                    )
             else:
-                recommendation = (
-                    f"将 GROK_MODEL 或本地持久化模型从 {configured_model} 切换到 /models 返回的可用模型，"
-                    f"例如：{available_preview}。"
-                )
+                if fallback_model:
+                    recommendation = (
+                        f"当前配置模型 {configured_model} 不在 /models 返回列表中；运行时会先回退到 {fallback_model}。"
+                        f"建议将 GROK_MODEL 或持久化模型更新为该可用模型，避免继续依赖隐式回退。"
+                    )
+                else:
+                    recommendation = (
+                        f"将 GROK_MODEL 或本地持久化模型从 {configured_model} 切换到 /models 返回的可用模型，"
+                        f"例如：{available_preview}。"
+                    )
             _append_recommendation(
                 recommendations,
                 recommendation,
@@ -2108,10 +2209,14 @@ async def get_config_info(
                 extra_detail_fields={
                     "runtime_model_source": runtime_model_source,
                     "runtime_model_source_label": runtime_model_source_label,
+                    "fallback_model": fallback_model,
                 },
             )
+        probe_model = resolved_model or configured_model
+    else:
+        probe_model = config.grok_model
     if api_url and api_key:
-        grok_search_probe = await _probe_web_search(api_url, api_key, config.grok_model)
+        grok_search_probe = await _probe_web_search(api_url, api_key, probe_model)
         if grok_search_probe["status"] != "ok":
             _append_recommendation(
                 recommendations,

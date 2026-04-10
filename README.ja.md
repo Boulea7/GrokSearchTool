@@ -147,8 +147,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 補足:
 
-- モデル解決順はプロセス `GROK_MODEL` 環境変数 → プロジェクト `.env.local` → プロジェクト `.env` → `~/.config/grok-search/config.json` の永続値 → コード既定値 `grok-4.1-fast` です。OpenRouter 互換 URL を使う場合、必要に応じて `:online` が自動付与されます。
+- モデル解決順はプロセス `GROK_MODEL` 環境変数 → プロジェクト `.env.local` → プロジェクト `.env` → `~/.config/grok-search/config.json` の永続値 → コード既定値 `grok-4.20-0309` です。OpenRouter 互換 URL を使う場合、必要に応じて `:online` が自動付与されます。
 - 環境変数の優先は「キーが存在するか」で判定されます。プロセス環境に明示的にキーがある場合、値が空文字でもプロジェクト `.env.local` / `.env` にはフォールバックしません。
+- 現在の内蔵既定プリファレンスは `grok-4.20-0309` です。Grok 4.1+ 系では実行時選択をできるだけ柔軟に保ち、要求モデルが `/models` 一覧に存在しなくても、互換な Grok 4.1+ の利用可能モデルがあれば、サフィックス差だけで失敗する代わりにそちらへ回退します。
 - `switch_model` は `~/.config/grok-search/config.json` の永続値のみを更新します。`GROK_MODEL` が設定されている場合は env が優先されます。
 - `get_config_info` のベース設定スナップショットには `GROK_MODEL_SOURCE` も含まれ、現在のアクティブモデルをどの層が供給しているか（`process_env`、`project_env_local`、`project_env`、`persisted_config`、`default`）を確認できます。ここが `process_env`、`project_env_local`、`project_env` の場合、`switch_model` を単独で呼んでも現在のプロセスは切り替わりません。
 - `GROK_TIME_CONTEXT_MODE` の既定値は `always` で、現在の「常にローカル時間を注入する」動作を維持します。

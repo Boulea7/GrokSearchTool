@@ -8,6 +8,12 @@ def test_setup_command_uses_release_repo_and_v1_placeholder():
     assert '"GROK_API_URL":"https://your-api-endpoint.com/v1"' in config._SETUP_COMMAND
 
 
+def test_default_grok_model_prefers_grok_4_20_0309():
+    config = Config()
+
+    assert config._DEFAULT_MODEL == "grok-4.20-0309"
+
+
 def test_time_context_mode_defaults_to_always(monkeypatch):
     monkeypatch.delenv("GROK_TIME_CONTEXT_MODE", raising=False)
     config = Config()

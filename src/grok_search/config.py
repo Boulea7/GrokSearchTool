@@ -34,7 +34,7 @@ class Config:
         '"git+https://github.com/Boulea7/GrokSearchTool@main","grok-search"],'
         '"env":{"GROK_API_URL":"https://your-api-endpoint.com/v1","GROK_API_KEY":"your-api-key"}}\''
     )
-    _DEFAULT_MODEL = "grok-4.1-fast"
+    _DEFAULT_MODEL = "grok-4.20-0309"
 
     def __new__(cls):
         if cls._instance is None:
