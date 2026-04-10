@@ -163,19 +163,109 @@ class SourcesCache:
 
 
 def merge_sources(*source_lists: list[dict]) -> list[dict]:
-    seen: set[str] = set()
+    seen_entries: dict[str, tuple[int, int]] = {}
     merged: list[dict] = []
+    source_order = 0
     for sources in source_lists:
         for item in sources or []:
             url = (item or {}).get("url")
             if not isinstance(url, str) or not url.strip():
                 continue
             url = url.strip()
-            if url in seen:
-                continue
-            seen.add(url)
-            merged.append(item)
+            existing_entry = seen_entries.get(url)
+            if existing_entry is None:
+                seen_entries[url] = (len(merged), source_order)
+                merged.append(item)
+            else:
+                existing_item = merged[existing_entry[0]]
+                prefer_candidate = _should_replace_merged_source(
+                    existing_item,
+                    item,
+                    existing_order=existing_entry[1],
+                    candidate_order=source_order,
+                )
+                merged[existing_entry[0]] = _merge_duplicate_source_items(
+                    existing_item,
+                    item,
+                    prefer_candidate=prefer_candidate,
+                )
+            source_order += 1
     return merged
+
+
+def _merged_source_priority_key(item: Mapping[str, Any], order: int) -> tuple:
+    normalized_item = dict(item)
+    score = _normalize_score(normalized_item.get("score"))
+    title = _normalize_text(normalized_item.get("title"))
+    description = _normalize_text(normalized_item.get("description")) or _normalize_snippet(normalized_item)
+    return (
+        0 if score is not None else 1,
+        -(score if score is not None else 0.0),
+        0 if title else 1,
+        0 if description else 1,
+        order,
+    )
+
+
+def _should_replace_merged_source(
+    existing: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    *,
+    existing_order: int,
+    candidate_order: int,
+) -> bool:
+    return _merged_source_priority_key(candidate, candidate_order) < _merged_source_priority_key(existing, existing_order)
+
+
+def _merge_duplicate_source_items(
+    existing: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    *,
+    prefer_candidate: bool,
+) -> dict[str, Any]:
+    merged = dict(existing)
+
+    for key, candidate_value in dict(candidate).items():
+        if key == "url":
+            merged[key] = candidate_value
+            continue
+        if _should_take_merged_source_value(key, merged.get(key), candidate_value, prefer_candidate=prefer_candidate):
+            merged[key] = candidate_value
+
+    return merged
+
+
+def _should_take_merged_source_value(
+    key: str,
+    existing_value: Any,
+    candidate_value: Any,
+    *,
+    prefer_candidate: bool,
+) -> bool:
+    if key == "score":
+        candidate_score = _normalize_score(candidate_value)
+        if candidate_score is None:
+            return False
+        existing_score = _normalize_score(existing_value)
+        if existing_score is None:
+            return True
+        return candidate_score > existing_score or (prefer_candidate and candidate_score == existing_score)
+
+    if _is_empty_merged_source_value(candidate_value):
+        return False
+    if _is_empty_merged_source_value(existing_value):
+        return True
+    return prefer_candidate
+
+
+def _is_empty_merged_source_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    return False
 
 
 def standardize_sources(sources: list[dict], retrieved_at: str | None = None) -> list[dict]:
