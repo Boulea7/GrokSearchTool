@@ -152,6 +152,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - 目前內建預設首選模型是 `grok-4.20-0309`；對 Grok 4.1+ 族的執行期選型會保持彈性，若請求模型不在 `/models` 清單裡，但存在相容的 Grok 4.1+ 可用模型，系統會優先回退到更合適的可用模型，而不是只因後綴不同就直接失敗。
 - `switch_model` 只會更新 `~/.config/grok-search/config.json` 的持久化層；若同時設了 `GROK_MODEL`，仍以環境變數為準。
 - `get_config_info` 的基礎設定快照現在會額外回傳 `GROK_MODEL_SOURCE`，用來標示目前活動模型實際來自哪一層（如 `process_env`、`project_env_local`、`project_env`、`persisted_config`、`default`）。若這裡顯示的是 `process_env`、`project_env_local` 或 `project_env`，單獨呼叫 `switch_model` 不會改變目前進程。
+- 這種 override 情況下，`switch_model` 仍會更新持久化設定，但回傳中的 `current_model` 會維持目前執行期實際生效的模型；可用 `runtime_model_source` 判斷仍在生效的高優先層。
 - `GROK_TIME_CONTEXT_MODE` 預設為 `always`，保持目前一律注入本地時間上下文的行為。
 - `GROK_DEBUG=false` 時，這類 helper progress log 不會寫入 logger，也不會透過 `ctx.info()` 對外轉發；僅在 `GROK_DEBUG=true` 時才作為 debug-only progress/debug signal 暴露。
 - 如需節省上下文，可將 `GROK_TIME_CONTEXT_MODE` 設為 `auto`（僅在明顯時效查詢或顯式時效控制下注入）或 `never`。
@@ -189,7 +190,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `doctor.recommendations_detail` 會提供和 `check_id` / feature 關聯的結構化修復建議。
 - `get_config_info` 現在支援可選 `detail="full" | "summary"`；預設仍為 `full`，`summary` 只保留基礎設定快照、`connection_test`、`doctor.status/summary/recommendations` 與 `feature_readiness`。
 - `detail="summary"` 目前只是同一次診斷結果的緊湊欄位投影，不是額外的輕量執行路徑。
-- `connection_test` 目前只反映 `/models` 的可達性，不代表目前活動模型一定能通過真實 `chat/completions` 路徑；若 `web_search` 顯示 `degraded`，應一併查看 `doctor`、`feature_readiness`、`GROK_MODEL_SOURCE` 與 `grok_model_selection` / `grok_search_probe`。
+- `connection_test` 目前只反映 `/models` 的可達性，不代表目前活動模型一定能通過真實 `chat/completions` 路徑；若 `web_search` 顯示 `degraded`，應一併查看 `doctor`、`feature_readiness`、`GROK_MODEL_SOURCE` 與 `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe`。
+- `grok_model_selection` 表示在 `/models` 可見性階段就已發現目前模型不適合直接使用；`grok_model_runtime_fallback` 則表示真實 `/chat/completions` 路徑只能靠執行期二次回退到另一個 Grok 候選模型才成功。這兩個 check 可能同時出現。
 - `feature_readiness.web_fetch.providers` 會附帶 provider 級狀態；`verified_path` 表示真實抓取探針實際打通的後端，未執行的 provider 可能帶有 `skipped_reason`。
 - `feature_readiness.get_sources` 只有在目前進程內至少存在一個非 error、可讀取的 source session 時才會顯示 `ready`；若快取裡只有失敗搜尋留下的 session，狀態會維持 `partial_ready`。
 - 即使 API Key 已脫敏，診斷結果仍可能包含本機絕對路徑、endpoint/hostname 與精簡後的上游錯誤摘要；顯而易見的 bearer、token、簽名 query / fragment，以及高置信度 cloud-signed credential 鍵（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）也會做遮罩，但對外分享前仍請先複核。
