@@ -2578,6 +2578,92 @@ async def test_web_search_sources_count_matches_cached_deduped_sources(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_get_sources_keeps_richer_metadata_for_exact_duplicate_url_across_providers(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Primary citation: [OpenAI Blog](https://openai.com/blog)"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "title": "OpenAI Blog",
+                "url": "https://openai.com/blog",
+                "content": "Latest updates",
+                "score": 0.91,
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search("test query", extra_sources=1)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"] == [
+        {
+            "title": "OpenAI Blog",
+            "url": "https://openai.com/blog",
+            "provider": "tavily",
+            "source_type": "web_page",
+            "description": "Latest updates",
+            "snippet": "Latest updates",
+            "domain": "openai.com",
+            "score": 0.91,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_preserves_readable_title_when_exact_duplicate_provider_only_adds_score(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Primary citation: [Primary Source](https://primary.example.com/guide)"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "url": "https://primary.example.com/guide",
+                "score": 0.91,
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search("test query", extra_sources=1)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"] == [
+        {
+            "title": "Primary Source",
+            "url": "https://primary.example.com/guide",
+            "provider": "tavily",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "primary.example.com",
+            "score": 0.91,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_sources_prioritizes_higher_scored_sources_over_grok_bias(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):

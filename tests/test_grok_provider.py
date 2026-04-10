@@ -537,6 +537,44 @@ async def test_parse_completion_response_deduplicates_nested_structured_sources(
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_prefers_richer_exact_duplicate_structured_source():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":[{"type":"output_text","text":"hello world","annotations":[{"title":"Docs","url":"https://docs.example.com/guide"}],"references":[{"title":"Richer Docs","url":"https://docs.example.com/guide","snippet":"Guide content"}]}]}}]}',
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "hello world",
+                                "annotations": [
+                                    {"title": "Docs", "url": "https://docs.example.com/guide"},
+                                ],
+                                "references": [
+                                    {
+                                        "title": "Richer Docs",
+                                        "url": "https://docs.example.com/guide",
+                                        "snippet": "Guide content",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert result.count("https://docs.example.com/guide") == 1
+    assert "[Richer Docs](https://docs.example.com/guide)" in result
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_ignores_sources_inside_reasoning_blocks():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(

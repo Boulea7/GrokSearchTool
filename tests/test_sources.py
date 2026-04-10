@@ -2,7 +2,14 @@ from collections import UserDict
 
 import pytest
 
-from grok_search.sources import SourcesCache, new_session_id, sanitize_answer_text, split_answer_and_sources, standardize_sources
+from grok_search.sources import (
+    SourcesCache,
+    merge_sources,
+    new_session_id,
+    sanitize_answer_text,
+    split_answer_and_sources,
+    standardize_sources,
+)
 from grok_search.utils import extract_unique_urls
 
 
@@ -777,6 +784,65 @@ def test_standardize_sources_deduplicates_urls_and_keeps_richer_item():
             "retrieved_at": "2026-04-05T12:34:56Z",
             "rank": 2,
         },
+    ]
+
+
+def test_merge_sources_replaces_exact_duplicate_url_with_richer_item():
+    merged = merge_sources(
+        [
+            {"title": "Sparse", "url": "https://dup.example.com/page", "provider": "grok"},
+        ],
+        [
+            {
+                "title": "Richer",
+                "url": "https://dup.example.com/page",
+                "provider": "tavily",
+                "description": "More context",
+                "score": 0.9,
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "title": "Richer",
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "description": "More context",
+            "score": 0.9,
+        }
+    ]
+
+
+def test_merge_sources_preserves_readable_metadata_when_scored_duplicate_is_sparse():
+    merged = merge_sources(
+        [
+            {
+                "title": "Readable Title",
+                "url": "https://dup.example.com/page",
+                "provider": "grok",
+                "custom_field": "keep-me",
+            },
+        ],
+        [
+            {
+                "url": "https://dup.example.com/page",
+                "provider": "tavily",
+                "score": 0.91,
+                "published_at": "2026-04-05",
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "title": "Readable Title",
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "custom_field": "keep-me",
+            "score": 0.91,
+            "published_at": "2026-04-05",
+        }
     ]
 
 
