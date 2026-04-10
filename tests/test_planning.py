@@ -2580,6 +2580,262 @@ def test_planning_engine_rejects_non_dict_execution_order_payload():
     assert "dict" in invalid["error"].lower()
 
 
+def test_planning_engine_rejects_cross_phase_revises_phase():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need level 2 coverage.",
+        session_id=session_id,
+        phase_data={
+            "level": 2,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 3,
+            "justification": "Need one mapped sub-query.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Single sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="search_strategy",
+        thought="Single search term.",
+        session_id=session_id,
+        phase_data={
+            "approach": "targeted",
+            "search_terms": [{"term": "provider comparison", "purpose": "sq1", "round": 1}],
+        },
+    )
+    planning.engine.process_phase(
+        phase="tool_selection",
+        thought="First mapping.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_search", "reason": "Need provider facts."},
+    )
+
+    result = planning.engine.process_phase(
+        phase="execution_order",
+        thought="Cross-phase revision should fail.",
+        session_id=session_id,
+        is_revision=True,
+        revises_phase="intent_analysis",
+        phase_data={"parallel": [], "sequential": [], "estimated_rounds": 1},
+    )
+
+    assert "revises_phase" in result["error"].lower()
+
+
+def test_planning_engine_revision_rejects_existing_downstream_phases():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+    session_id = intent["session_id"]
+
+    planning.engine.process_phase(
+        phase="complexity_assessment",
+        thought="Need level 2 coverage.",
+        session_id=session_id,
+        phase_data={
+            "level": 2,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 3,
+            "justification": "Need one mapped sub-query.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Single sub-query.",
+        session_id=session_id,
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+    planning.engine.process_phase(
+        phase="search_strategy",
+        thought="Single search term.",
+        session_id=session_id,
+        phase_data={
+            "approach": "targeted",
+            "search_terms": [{"term": "provider comparison", "purpose": "sq1", "round": 1}],
+        },
+    )
+    planning.engine.process_phase(
+        phase="tool_selection",
+        thought="First mapping.",
+        session_id=session_id,
+        phase_data={"sub_query_id": "sq1", "tool": "web_search", "reason": "Need provider facts."},
+    )
+
+    result = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Upstream revision should fail once downstream exists.",
+        session_id=session_id,
+        is_revision=True,
+        phase_data={
+            "core_question": "Compare providers in detail.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+
+    assert "invalidate downstream phases" in result["error"].lower()
+    session = planning.engine.get_session(session_id)
+    assert session is not None
+    assert session.phases["intent_analysis"].data["core_question"] == "Compare providers."
+
+
+def test_planning_engine_expires_sessions_after_ttl():
+    now = [1000.0]
+
+    engine = planning.PlanningEngine(ttl_seconds=10.0, now_fn=lambda: now[0])
+    intent = engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "What is OpenAI?",
+            "query_type": "factual",
+            "time_sensitivity": "irrelevant",
+        },
+    )
+    session_id = intent["session_id"]
+
+    assert engine.get_session(session_id) is not None
+
+    now[0] += 11.0
+
+    assert engine.get_session(session_id) is None
+    result = engine.process_phase(
+        phase="complexity_assessment",
+        thought="Expired session should fail.",
+        session_id=session_id,
+        phase_data={
+            "level": 1,
+            "estimated_sub_queries": 1,
+            "estimated_tool_calls": 2,
+            "justification": "Need a live session.",
+        },
+    )
+    assert result["error"] == "session_not_found"
+
+
+def test_planning_engine_revision_requires_existing_session():
+    result = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Revision should not create a new session.",
+        session_id="",
+        is_revision=True,
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+
+    assert result["error"] == "session_not_found"
+    assert result["restart_from_intent_analysis"] is True
+
+
+def test_planning_engine_evicts_oldest_session_when_max_sessions_exceeded():
+    engine = planning.PlanningEngine(max_sessions=2)
+
+    first = engine.process_phase(
+        phase="intent_analysis",
+        thought="First session.",
+        phase_data={
+            "core_question": "First question",
+            "query_type": "factual",
+            "time_sensitivity": "irrelevant",
+        },
+    )
+    second = engine.process_phase(
+        phase="intent_analysis",
+        thought="Second session.",
+        phase_data={
+            "core_question": "Second question",
+            "query_type": "factual",
+            "time_sensitivity": "irrelevant",
+        },
+    )
+    third = engine.process_phase(
+        phase="intent_analysis",
+        thought="Third session.",
+        phase_data={
+            "core_question": "Third question",
+            "query_type": "factual",
+            "time_sensitivity": "irrelevant",
+        },
+    )
+
+    assert engine.get_session(first["session_id"]) is None
+    assert engine.get_session(second["session_id"]) is not None
+    assert engine.get_session(third["session_id"]) is not None
+
+
+def test_planning_engine_refreshes_lru_order_on_session_access():
+    engine = planning.PlanningEngine(max_sessions=2)
+
+    first = engine.process_phase(
+        phase="intent_analysis",
+        thought="First session.",
+        phase_data={
+            "core_question": "First question",
+            "query_type": "factual",
+            "time_sensitivity": "irrelevant",
+        },
+    )
+    second = engine.process_phase(
+        phase="intent_analysis",
+        thought="Second session.",
+        phase_data={
+            "core_question": "Second question",
+            "query_type": "factual",
+            "time_sensitivity": "irrelevant",
+        },
+    )
+
+    assert engine.get_session(first["session_id"]) is not None
+
+    third = engine.process_phase(
+        phase="intent_analysis",
+        thought="Third session.",
+        phase_data={
+            "core_question": "Third question",
+            "query_type": "factual",
+            "time_sensitivity": "irrelevant",
+        },
+    )
+
+    assert engine.get_session(first["session_id"]) is not None
+    assert engine.get_session(second["session_id"]) is None
+    assert engine.get_session(third["session_id"]) is not None
+
+
 @pytest.mark.asyncio
 async def test_plan_sub_query_revision_rejects_dependencies_on_removed_ids():
     intent = json.loads(
