@@ -555,6 +555,12 @@ def _extra_results_to_sources(
             score = r.get("score")
             if isinstance(score, (int, float)) and not isinstance(score, bool):
                 item["score"] = score
+            published_at = (r.get("published_at") or "").strip()
+            if published_at:
+                item["published_at"] = published_at
+            published_date = (r.get("published_date") or "").strip()
+            if published_date:
+                item["published_date"] = published_date
             tavily_sources.append(item)
 
     return merge_sources(firecrawl_sources, tavily_sources)
@@ -1135,7 +1141,7 @@ async def web_search(
                 structured_sources = []
         except Exception as exc:
             return "", [], _format_grok_error(exc), "upstream_request_failed"
-        if not result or not result.strip():
+        if (not result or not result.strip()) and not structured_sources:
             return "", structured_sources, "搜索失败: 上游返回空响应，请检查模型或代理配置", "upstream_empty_response"
         return result, structured_sources, None, None
 

@@ -391,7 +391,58 @@ async def test_parse_completion_response_result_allows_sources_only_json_when_re
     content, sources = await provider._parse_completion_response_result(response, render_sources=False)
 
     assert content == ""
-    assert sources == [{"title": "OpenAI", "url": "https://openai.com/"}]
+    assert sources == [{"title": "OpenAI", "url": "https://openai.com/", "origin_type": "citation"}]
+
+
+@pytest.mark.asyncio
+async def test_extract_structured_sources_preserves_richer_metadata_and_origin_type():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    sources = provider._extract_structured_sources(
+        {
+            "citations": [
+                {
+                    "title": "OpenAI",
+                    "url": "https://openai.com/",
+                    "snippet": "Structured snippet",
+                    "score": 0.91,
+                    "published_date": "2025-04-01",
+                    "source": "curated",
+                }
+            ]
+        }
+    )
+
+    assert sources == [
+        {
+            "title": "OpenAI",
+            "url": "https://openai.com/",
+            "description": "Structured snippet",
+            "snippet": "Structured snippet",
+            "score": 0.91,
+            "published_date": "2025-04-01",
+            "source": "curated",
+            "origin_type": "citation",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_with_sources_uses_execute_completion_with_retry_override(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    captured = {}
+
+    async def fake_execute(headers, payload, ctx, render_sources=True):
+        captured["render_sources"] = render_sources
+        return "Search answer"
+
+    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+
+    content, sources = await provider.search_with_sources("test query")
+
+    assert captured["render_sources"] is False
+    assert content == "Search answer"
+    assert sources == []
 
 
 @pytest.mark.asyncio
