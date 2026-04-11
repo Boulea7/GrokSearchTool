@@ -100,9 +100,9 @@ These hosts remain planned targets until remote transport and host-specific veri
 | `web_map` | `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `toggle_builtin_tools` | Claude Code project layout |
 
-`get_sources` currently uses a process-local, shared-daemon, non-secret handle model: any holder of a valid `session_id` inside the same running server process can read the cached sources, and `session_id_not_found_or_expired` covers restart, TTL expiry, eviction, and unreadable legacy-cache miss cases.
+`get_sources` currently uses a process-local, shared-daemon, non-secret handle model: any holder of a valid `session_id` inside the same running server process can read the cached sources, and `session_id_not_found_or_expired` covers restart, TTL expiry, eviction, and unreadable legacy-cache miss cases. Successful reads now also return additive `search_warnings`, defaulting to `[]` for older cache entries that never stored warning codes.
 
-`feature_readiness.get_sources` reports `ready` only when the running process already holds at least one readable non-error source session; failed-search-only cache entries keep it at `partial_ready`. This is a `transient` readiness signal and does not lower the overall doctor status by itself.
+`feature_readiness.get_sources` reports `ready` only when the running process already holds at least one readable non-error source session; failed-search-only cache entries keep it at `partial_ready`. It now also carries an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, and `partial_sessions`. This is still a `transient` readiness signal and does not lower the overall doctor status by itself.
 
 `get_sources.rank` currently follows `score`, source identity quality, and stable dedupe order without a Grok-specific boost. `standardize_sources` also canonicalizes scheme/host casing during dedupe, so mixed-case variants of the same page may collapse into one returned source.
 

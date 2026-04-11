@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 README = ROOT_DIR / "README.md"
 COMPATIBILITY = ROOT_DIR / "docs" / "COMPATIBILITY.md"
+GET_SOURCES_LIFECYCLE = ROOT_DIR / "docs" / "GET_SOURCES_LIFECYCLE.md"
 README_EN = ROOT_DIR / "README.en.md"
 README_ZH_TW = ROOT_DIR / "README.zh-TW.md"
 README_JA = ROOT_DIR / "README.ja.md"
@@ -204,6 +205,25 @@ def test_docs_pin_release_repo_and_stdio_first_host_story():
     assert "Boulea7/GrokSearchTool" in compatibility
     assert "local `stdio`" in compatibility
     assert "fork/upstream" in agents
+
+
+def test_docs_explain_get_sources_warning_round_trip_and_cache_summary_contract():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    lifecycle = GET_SOURCES_LIFECYCLE.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "`search_warnings`" in readme
+    assert "`cache_summary`" in readme
+    assert "`search_warnings`" in readme_en
+    assert "`cache_summary`" in readme_en
+    assert "`search_warnings`" in compatibility
+    assert "`cache_summary`" in compatibility
+    assert "`search_warnings`" in lifecycle
+    assert "`cache_summary`" in lifecycle
+    assert "`search_warnings`" in agents
+    assert "`cache_summary`" in agents
 
 
 def test_localized_readmes_pin_release_repo_and_fork_story():
