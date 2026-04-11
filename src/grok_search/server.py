@@ -241,6 +241,12 @@ def _is_grok_model_unavailable_message(message: str) -> bool:
     return any(marker in normalized for marker in markers)
 
 
+def _is_model_unavailable_check(check: dict) -> bool:
+    return check.get("reason_code") == "model_unavailable" or _is_grok_model_unavailable_message(
+        check.get("message", "")
+    )
+
+
 def _planning_session_error(session_id: str) -> str:
     import json
 
@@ -1643,6 +1649,29 @@ def _build_doctor_check(
     return check
 
 
+def _check_reason_code(check: dict) -> str | None:
+    for key in ("reason_code", "warning_code", "error_kind", "skipped_reason"):
+        value = check.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _readiness_cause_from_check(check: dict) -> dict:
+    cause = {
+        "check_id": check["check_id"],
+        "status": check["status"],
+    }
+    reason_code = _check_reason_code(check)
+    if reason_code:
+        cause["reason_code"] = reason_code
+    return cause
+
+
+def _runtime_override_active(runtime_model_source: str) -> bool:
+    return runtime_model_source in {"process_env", "project_env_local", "project_env"}
+
+
 def _append_recommendation(
     recommendations: list[str],
     message: str,
@@ -1878,7 +1907,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
     try:
         content = await provider.search(_SEARCH_PROBE_QUERY)
     except Exception as exc:
-        return _build_doctor_check(
+        check = _build_doctor_check(
             "grok_search_probe",
             "error",
             f"真实搜索探针失败: {_format_grok_error(exc)}",
@@ -1886,6 +1915,9 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
             response_time_ms=(time.perf_counter() - start_time) * 1000,
             error_kind="probe_failed",
         )
+        if _is_grok_model_unavailable_message(check["message"]):
+            check["reason_code"] = "model_unavailable"
+        return check
 
     answer, probe_sources = split_answer_and_sources(content)
     if not probe_sources:
@@ -1936,7 +1968,7 @@ async def _probe_web_search_with_fallback(
             probe_result["message"] = f"真实搜索探针成功（已从 {requested_model} 回退到 {current_model}）。"
         return probe_result
 
-    if not _is_grok_model_unavailable_message(probe_result.get("message", "")):
+    if not _is_model_unavailable_check(probe_result):
         return probe_result
 
     for candidate in _fallback_candidates_for_model(requested_model, current_model, available_models):
@@ -2010,6 +2042,34 @@ def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> di
             item["skipped_reason"] = check["skipped_reason"]
         return item
     return {"status": "degraded", "message": check["message"]}
+
+
+def _build_get_sources_readiness(
+    *,
+    web_search_status: str,
+    has_readable_source_session: bool,
+    source_cache_summary: Optional[dict[str, int]] = None,
+) -> dict:
+    degraded_by: list[dict] = []
+    if not has_readable_source_session:
+        degraded_by.append({"reason_code": "no_readable_source_session"})
+
+    if has_readable_source_session:
+        status = "ready"
+        message = "当前进程内已存在可读取的 source session 缓存。"
+    else:
+        status = "partial_ready" if web_search_status != "not_ready" else "not_ready"
+        message = "接口可用，但当前进程内尚无可读取的 source session；需先执行成功的 web_search。"
+
+    return {
+        "status": status,
+        "message": message,
+        "cache_summary": source_cache_summary or _summarize_source_cache_entries([]),
+        "transient": True,
+        "based_on_checks": [],
+        "probe_scope": "cache_state",
+        "degraded_by": degraded_by,
+    }
 
 
 def _has_readable_source_session(cache_entries: list[object]) -> bool:
@@ -2136,34 +2196,79 @@ def _build_feature_readiness(
         web_map_message = "Tavily 未配置或已禁用。"
 
     toggle_status = "ready" if claude_context["status"] == "ok" else "not_ready"
+    runtime_model_source = config.grok_model_source
+    web_search_check_ids = [
+        "grok_config",
+        "grok_models",
+        "grok_model_selection",
+        "grok_model_runtime_fallback",
+        "grok_search_probe",
+    ]
+    web_search_degraded_by = [
+        _readiness_cause_from_check(check)
+        for check in (
+            grok_config,
+            grok_models,
+            grok_model_selection,
+            grok_model_runtime_fallback,
+            grok_search_probe,
+        )
+        if check and check["status"] in {"warning", "error"}
+    ]
+    web_fetch_check_ids = ["tavily_extract", "firecrawl_scrape", "web_fetch_probe"]
+    web_fetch_degraded_by = [
+        _readiness_cause_from_check(check)
+        for check in (tavily_extract, firecrawl_scrape, web_fetch_probe)
+        if check["status"] in {"warning", "error", "skipped"} and web_fetch_status != "ready"
+    ]
+    web_map_degraded_by = (
+        [_readiness_cause_from_check(tavily_map)]
+        if web_map_status != "ready"
+        else []
+    )
+    toggle_degraded_by = (
+        [_readiness_cause_from_check(claude_context)]
+        if toggle_status != "ready"
+        else []
+    )
 
     return {
-        "web_search": {"status": web_search_status, "message": web_search_message},
-        "get_sources": (
-            {
-                "status": "ready",
-                "message": "当前进程内已存在可读取的 source session 缓存。",
-                "cache_summary": source_cache_summary or _summarize_source_cache_entries([]),
-                "transient": True,
-            }
-            if has_readable_source_session
-            else {
-                "status": "partial_ready" if web_search_status != "not_ready" else "not_ready",
-                "message": "接口可用，但当前进程内尚无可读取的 source session；需先执行成功的 web_search。",
-                "cache_summary": source_cache_summary or _summarize_source_cache_entries([]),
-                "transient": True,
-            }
+        "web_search": {
+            "status": web_search_status,
+            "message": web_search_message,
+            "based_on_checks": web_search_check_ids,
+            "probe_scope": "search_runtime",
+            "degraded_by": web_search_degraded_by,
+            "runtime_override_active": _runtime_override_active(runtime_model_source),
+            "runtime_model_source": runtime_model_source,
+        },
+        "get_sources": _build_get_sources_readiness(
+            web_search_status=web_search_status,
+            has_readable_source_session=has_readable_source_session,
+            source_cache_summary=source_cache_summary,
         ),
         "web_fetch": {
             "status": web_fetch_status,
             "message": web_fetch_message,
             "providers": web_fetch_providers,
+            "based_on_checks": web_fetch_check_ids,
+            "probe_scope": "fetch_runtime",
+            "degraded_by": web_fetch_degraded_by,
         },
-        "web_map": {"status": web_map_status, "message": web_map_message},
+        "web_map": {
+            "status": web_map_status,
+            "message": web_map_message,
+            "based_on_checks": ["tavily_map"],
+            "probe_scope": "map_runtime",
+            "degraded_by": web_map_degraded_by,
+        },
         "toggle_builtin_tools": {
             "status": toggle_status,
             "message": claude_context["message"],
             "client_specific": True,
+            "based_on_checks": ["claude_code_project"],
+            "probe_scope": "client_context",
+            "degraded_by": toggle_degraded_by,
         },
     }
 
@@ -2361,6 +2466,7 @@ async def get_config_info(
                     "grok_model_selection",
                     "warning",
                     warning_message,
+                    reason_code="configured_model_unavailable",
                     configured_model=configured_model,
                     runtime_model_source=runtime_model_source,
                     runtime_model_source_label=runtime_model_source_label,
@@ -2419,6 +2525,7 @@ async def get_config_info(
                     "grok_model_runtime_fallback",
                     "warning",
                     f"真实搜索探针已从 {probe_model} 回退到 {fallback_model}。",
+                    reason_code="runtime_model_fallback",
                     configured_model=probe_model,
                     fallback_model=fallback_model,
                     runtime_model_source=runtime_model_source,

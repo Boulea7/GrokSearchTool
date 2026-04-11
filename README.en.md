@@ -212,7 +212,8 @@ The `/models` connection test uses a 10-second timeout; additional real `web_sea
 `grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage, while `grok_model_runtime_fallback` means the real `/chat/completions` path only succeeded after a runtime retry against another Grok candidate; both checks may appear in the same diagnostic run.
 `grok_search_probe` may now return a body-quality `warning` as well as `ok` or `error`; for example, a sources-only probe or a probably truncated probe body degrades `feature_readiness.web_search` even though the endpoint itself still responded successfully.
 `feature_readiness.get_sources` only reports `ready` when the current process already holds at least one readable non-error source session; error-only cached sessions keep it at `partial_ready`.
-`feature_readiness.get_sources` now also includes an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, and `partial_sessions`.
+`feature_readiness.get_sources` now also includes an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, `partial_sessions`, and `unreadable_sessions`.
+`feature_readiness` now also carries summary-safe machine fields: `based_on_checks`, `probe_scope`, and `degraded_by`. For `web_search`, it additionally returns `runtime_override_active` and `runtime_model_source` so callers can tell when a higher-priority runtime override is still in effect.
 `ready` means the capability is verified, `degraded` means it exists but probes or partial dependencies are unhealthy, `not_ready` means prerequisites are missing, and `partial_ready` means the interface exists but still depends on transient runtime state; `transient` and `client_specific` items do not lower the overall doctor status on their own.
 
 If `GROK_MODEL_SOURCE` comes back as `process_env`, `project_env_local`, or `project_env`, calling `switch_model` alone does not change the current process; update or remove that higher-priority override first.
@@ -240,7 +241,7 @@ If supplemental search goes through Tavily, `max_results` is currently clamped t
 These controls currently apply to Tavily-backed supplemental search only; if Tavily is unavailable or not selected for the supplemental path, the request may still succeed with warnings and the controls will not be fully enforced.
 When the upstream returns only source links without a usable body, or when the answer matches the current truncation heuristics, `web_search` also returns `partial`. `get_sources.search_status` keeps that downgraded status and now also replays the cached `search_warnings` codes for the same session.
 
-Successful `get_sources` responses include `session_id`, `sources`, and `sources_count`, where each source is standardized with metadata such as `provider`, `domain`, `score`, `retrieved_at`, and `rank`. They also return:
+Successful `get_sources` responses include `session_id`, `sources`, and `sources_count`, where each source is standardized with metadata such as `provider`, `domain`, `score`, `retrieved_at`, and `rank`, and may add provenance fields such as `origin_type` when available. They also return:
 
 - `search_status`
 - `search_error`

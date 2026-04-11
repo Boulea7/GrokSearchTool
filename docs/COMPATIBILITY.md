@@ -100,9 +100,11 @@ These hosts remain planned targets until remote transport and host-specific veri
 | `web_map` | `TAVILY_API_KEY` with `TAVILY_ENABLED=true` |
 | `toggle_builtin_tools` | Claude Code project layout |
 
-`get_sources` currently uses a process-local, shared-daemon, non-secret handle model: any holder of a valid `session_id` inside the same running server process can read the cached sources, and `session_id_not_found_or_expired` covers restart, TTL expiry, eviction, and unreadable legacy-cache miss cases. Successful reads now also return additive `search_warnings`, defaulting to `[]` for older cache entries that never stored warning codes.
+`get_sources` currently uses a process-local, shared-daemon, non-secret handle model: any holder of a valid `session_id` inside the same running server process can read the cached sources, and `session_id_not_found_or_expired` covers restart, TTL expiry, eviction, and unreadable legacy-cache miss cases. Successful reads now also return additive `search_warnings`, defaulting to `[]` for older cache entries that never stored warning codes. Standardized source rows may also add provenance fields such as `origin_type` when that information survives the upstream/provider path.
 
-`feature_readiness.get_sources` reports `ready` only when the running process already holds at least one readable non-error source session; failed-search-only cache entries keep it at `partial_ready`. It now also carries an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, and `partial_sessions`. This is still a `transient` readiness signal and does not lower the overall doctor status by itself.
+`feature_readiness.get_sources` reports `ready` only when the running process already holds at least one readable non-error source session; failed-search-only cache entries keep it at `partial_ready`. It now also carries an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, `partial_sessions`, and `unreadable_sessions`. This is still a `transient` readiness signal and does not lower the overall doctor status by itself.
+
+`feature_readiness` now also exposes summary-safe machine fields: `based_on_checks`, `probe_scope`, and `degraded_by`. For `web_search`, the payload additionally includes `runtime_override_active` and `runtime_model_source`, so callers can tell whether the current runtime behavior is still pinned by a higher-priority env/file override.
 
 `get_sources.rank` currently follows `score`, source identity quality, and stable dedupe order without a Grok-specific boost. `standardize_sources` also canonicalizes scheme/host casing during dedupe, so mixed-case variants of the same page may collapse into one returned source.
 
