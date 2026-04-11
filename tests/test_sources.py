@@ -316,6 +316,40 @@ def test_standardize_sources_deduplicates_mixed_case_scheme_and_host_variants():
     ]
 
 
+def test_standardize_sources_merges_complementary_metadata_for_canonicalized_url_variants():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Readable Title",
+                "url": "HTTPS://Docs.example.com/Guide",
+                "description": "Guide content",
+            },
+            {
+                "url": "https://docs.example.com/Guide",
+                "provider": "tavily",
+                "score": 0.91,
+            },
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Readable Title",
+            "url": "https://docs.example.com/Guide",
+            "provider": "tavily",
+            "source_type": "web_page",
+            "description": "Guide content",
+            "snippet": "Guide content",
+            "domain": "docs.example.com",
+            "score": 0.91,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
 def test_standardize_sources_keeps_explicit_default_ports_distinct():
     sources = standardize_sources(
         [

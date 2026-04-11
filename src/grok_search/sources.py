@@ -227,7 +227,7 @@ def _merge_duplicate_source_items(
 
     for key, candidate_value in dict(candidate).items():
         if key == "url":
-            merged[key] = candidate_value
+            merged[key] = candidate_value if prefer_candidate else merged.get(key, candidate_value)
             continue
         if _should_take_merged_source_value(key, merged.get(key), candidate_value, prefer_candidate=prefer_candidate):
             merged[key] = candidate_value
@@ -299,8 +299,16 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
         raw_item["_source_order"] = index
         canonical_key = _canonicalize_source_dedupe_key(url)
         existing = standardized_by_url.get(canonical_key)
-        if existing is None or _should_replace_standardized_source(existing, raw_item):
+        if existing is None:
             standardized_by_url[canonical_key] = raw_item
+            continue
+
+        prefer_candidate = _should_replace_standardized_source(existing, raw_item)
+        standardized_by_url[canonical_key] = _merge_duplicate_source_items(
+            existing,
+            raw_item,
+            prefer_candidate=prefer_candidate,
+        )
 
     standardized = list(standardized_by_url.values())
     standardized.sort(key=_source_priority_key)

@@ -2711,6 +2711,59 @@ async def test_get_sources_merges_richer_supplemental_metadata_for_duplicate_url
 
 
 @pytest.mark.asyncio
+async def test_get_sources_merges_canonicalized_supplemental_duplicate_urls(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "url": "https://docs.example.com/Guide",
+                "score": 0.91,
+            }
+        ]
+
+    async def fake_firecrawl(query, limit):
+        return [
+            {
+                "title": "Readable Title",
+                "url": "HTTPS://Docs.example.com/Guide",
+                "description": "Guide content",
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_search", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_search("test query", extra_sources=2)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"] == [
+        {
+            "title": "Readable Title",
+            "url": "https://docs.example.com/Guide",
+            "provider": "tavily",
+            "source_type": "web_page",
+            "description": "Guide content",
+            "snippet": "Guide content",
+            "domain": "docs.example.com",
+            "score": 0.91,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_web_search_sources_count_matches_cached_deduped_sources(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
