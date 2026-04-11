@@ -21,7 +21,7 @@ Long-running `deep research` remains a separate advanced capability direction an
 
 ## Next
 
-- Align the companion skill, README, and compatibility docs around the existing rule: `plan_* -> web_search` is the recommended core path, while clear single-hop lookups may still call `web_search` directly
+- Finish aligning any remaining companion-skill guidance and host-facing examples around the existing rule: `plan_* -> web_search` is the recommended core path, while clear single-hop lookups may still call `web_search` directly
 - Improve structured observability and troubleshooting guidance without widening the default tool surface too aggressively
 - Add richer source metadata and more selective result packaging so calling models receive high-value context first and low-value output is suppressed
 - Clarify transport and host integration guidance for local `stdio` usage first, then remote MCP patterns where they are stable enough to document responsibly

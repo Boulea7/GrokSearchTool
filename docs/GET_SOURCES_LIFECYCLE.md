@@ -14,8 +14,8 @@
 
 ## Readiness semantics
 
-- `feature_readiness.get_sources = ready` means the current process already holds at least one readable non-error source session.
-- `feature_readiness.get_sources = partial_ready` means the interface exists, but the current process does not yet hold a readable session.
+- The `ready` state for `feature_readiness.get_sources` means the current process already holds at least one readable non-error source session.
+- The `partial_ready` state for `feature_readiness.get_sources` means the interface exists, but the current process does not yet hold a readable session.
 - `feature_readiness.get_sources` now includes additive `cache_summary` data with a lightweight cache snapshot: `total_sessions`, `readable_sessions`, `error_sessions`, and `partial_sessions`.
 - This readiness is marked `transient` and does not lower the overall doctor status by itself.
 
