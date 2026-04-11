@@ -2101,15 +2101,27 @@ def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> di
     return item
 
 
+def _build_cache_state_cause(reason_code: str, *, status: str = "degraded") -> dict:
+    return {
+        "check_id": "source_cache_state",
+        "status": status,
+        "reason_code": reason_code,
+    }
+
+
 def _build_get_sources_readiness(
     *,
     web_search_status: str,
     has_readable_source_session: bool,
     source_cache_summary: Optional[dict[str, int]] = None,
+    based_on_checks: Optional[list[str]] = None,
+    upstream_causes: Optional[list[dict]] = None,
 ) -> dict:
     degraded_by: list[dict] = []
     if not has_readable_source_session:
-        degraded_by.append({"reason_code": _get_sources_readiness_reason_code(source_cache_summary)})
+        degraded_by.append(_build_cache_state_cause(_get_sources_readiness_reason_code(source_cache_summary)))
+    if web_search_status == "not_ready":
+        degraded_by.extend(upstream_causes or [])
 
     if has_readable_source_session:
         status = "ready"
@@ -2123,7 +2135,7 @@ def _build_get_sources_readiness(
         "message": message,
         "cache_summary": source_cache_summary or _summarize_source_cache_entries([]),
         "transient": True,
-        "based_on_checks": [],
+        "based_on_checks": based_on_checks or [],
         "probe_scope": "cache_state",
         "degraded_by": degraded_by,
     }
@@ -2286,6 +2298,7 @@ def _build_feature_readiness(
         )
         if check and check["status"] in {"warning", "error"}
     ]
+    get_sources_upstream_causes = [_readiness_cause_from_check(grok_config)] if grok_config["status"] != "ok" else []
     web_fetch_check_ids = ["tavily_extract", "firecrawl_scrape", "web_fetch_probe"]
     web_fetch_degraded_by = [
         _readiness_cause_from_check(check)
@@ -2317,6 +2330,8 @@ def _build_feature_readiness(
             web_search_status=web_search_status,
             has_readable_source_session=has_readable_source_session,
             source_cache_summary=source_cache_summary,
+            based_on_checks=web_search_check_ids,
+            upstream_causes=get_sources_upstream_causes,
         ),
         "web_fetch": {
             "status": web_fetch_status,

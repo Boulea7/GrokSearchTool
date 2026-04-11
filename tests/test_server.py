@@ -571,6 +571,25 @@ async def test_get_config_info_marks_missing_grok_config_as_not_ready(monkeypatc
     assert payload["doctor"]["status"] == "error"
     assert payload["feature_readiness"]["web_search"]["status"] == "not_ready"
     assert payload["feature_readiness"]["get_sources"]["status"] == "not_ready"
+    assert payload["feature_readiness"]["get_sources"]["based_on_checks"] == [
+        "grok_config",
+        "grok_models",
+        "grok_model_selection",
+        "grok_model_runtime_fallback",
+        "grok_search_probe",
+    ]
+    assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
+        {
+            "check_id": "source_cache_state",
+            "status": "degraded",
+            "reason_code": "empty_source_cache",
+        },
+        {
+            "check_id": "grok_config",
+            "status": "error",
+            "reason_code": "config_error",
+        },
+    ]
     assert payload["doctor"]["recommendations"]
 
 
@@ -593,7 +612,11 @@ async def test_get_config_info_get_sources_requires_readable_session_not_error_o
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
     assert "尚无可读取的 source session" in payload["feature_readiness"]["get_sources"]["message"]
     assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
-        {"reason_code": "error_only_source_cache"}
+        {
+            "check_id": "source_cache_state",
+            "status": "degraded",
+            "reason_code": "error_only_source_cache",
+        }
     ]
     assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
         "total_sessions": 1,
@@ -670,7 +693,11 @@ async def test_get_config_info_excludes_invalid_cached_source_rows_from_readable
 
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
     assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
-        {"reason_code": "unreadable_only_source_cache"}
+        {
+            "check_id": "source_cache_state",
+            "status": "degraded",
+            "reason_code": "unreadable_only_source_cache",
+        }
     ]
     assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
         "total_sessions": 1,
