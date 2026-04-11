@@ -800,6 +800,38 @@ def test_standardize_sources_prefers_explicit_provider_over_source_alias():
     ]
 
 
+def test_standardize_sources_keeps_default_provider_when_legacy_source_alias_has_origin_type():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "source": "legacy-provider",
+                "origin_type": "citation",
+            }
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Legacy Source",
+            "url": "https://legacy.example.com/page",
+            "source": "legacy-provider",
+            "origin_type": "citation",
+            "provider": "grok",
+            "description": "",
+            "source_type": "web_page",
+            "snippet": "",
+            "domain": "legacy.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
 def test_standardize_sources_skips_malformed_legacy_items():
     sources = standardize_sources(
         [
@@ -957,6 +989,40 @@ def test_merge_sources_preserves_readable_metadata_when_scored_duplicate_is_spar
             "url": "https://dup.example.com/page",
             "provider": "tavily",
             "custom_field": "keep-me",
+            "score": 0.91,
+            "published_at": "2026-04-05",
+        }
+    ]
+
+
+def test_merge_sources_high_score_duplicate_keeps_existing_source_labels_when_provider_changes():
+    merged = merge_sources(
+        [
+            {
+                "title": "Primary Title",
+                "url": "https://dup.example.com/page",
+                "provider": "grok",
+                "source": "curated",
+                "origin_type": "citation",
+            },
+        ],
+        [
+            {
+                "url": "https://dup.example.com/page",
+                "provider": "tavily",
+                "score": 0.91,
+                "published_at": "2026-04-05",
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "title": "Primary Title",
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "source": "curated",
+            "origin_type": "citation",
             "score": 0.91,
             "published_at": "2026-04-05",
         }
