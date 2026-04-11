@@ -688,9 +688,26 @@ def _normalize_sources(data: Any) -> list[dict]:
             title = item.get("title") or item.get("name") or item.get("label")
             if isinstance(title, str) and title.strip():
                 out["title"] = title.strip()
-            desc = item.get("description") or item.get("snippet") or item.get("content")
-            if isinstance(desc, str) and desc.strip():
-                out["description"] = desc.strip()
+            description = item.get("description")
+            if isinstance(description, str) and description.strip():
+                out["description"] = description.strip()
+            else:
+                desc = item.get("snippet") or item.get("content")
+                if isinstance(desc, str) and desc.strip():
+                    out["description"] = desc.strip()
+
+            snippet = item.get("snippet")
+            if isinstance(snippet, str) and snippet.strip():
+                out["snippet"] = snippet.strip()
+
+            for key in ("origin_type", "published_at", "published_date", "provider", "source"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    out[key] = value.strip()
+
+            score = item.get("score")
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                out["score"] = score
             normalized.append(out)
             continue
 
