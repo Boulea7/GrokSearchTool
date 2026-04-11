@@ -97,6 +97,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`；其中 `topic` 当前支持 `general` / `news` / `finance`，`time_range` 当前支持 `day` / `week` / `month` / `year`，并兼容 `d` / `w` / `m` / `y`
 - `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`
 - `get_sources` 当前会统一返回标准化 metadata；`rank` 当前会按 `score`、来源身份清晰度与稳定去重顺序生成，不再对 Grok 引用额外偏置
+- `get_sources` 返回的单条 source 当前应理解为 normalized aggregate row；若同一 URL 来自多个输入路径，`provider` 表示该聚合结果最终保留的 winner provider，而 `source` / `origin_type` 等 provenance metadata 仍可能来自其他贡献行
 - `standardize_sources` 当前会在去重时规范化 URL 的 scheme/host 大小写，因此同一页面的 mixed-case 变体可能折叠为单个 source；这会影响最终的 `sources_count` 与 `rank`
 - `standardize_sources` 当前不会把显式默认端口（如 `:443` / `:80`）与隐式默认端口 URL 自动折叠；如需调整该语义，应先视为明确 contract change 并补回归测试与文档
 - `get_sources` 当前依赖当前服务器进程内的内存型 LRU 缓存；默认 TTL 约 1 小时、当前上限 256 个 session。`session_id` 是 shared-daemon、transient、非 durable、非 caller-bound handle，也不应被理解为 secret token；`session_id_not_found_or_expired` 当前统一覆盖进程重启、TTL 到期、缓存淘汰与不可读旧缓存 miss
@@ -117,7 +118,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `feature_readiness.get_sources` 当前只有在运行中进程里至少存在一个非 error 的可读取 source session 时才会显示 `ready`；若缓存里只有失败搜索留下的 session，则应保持 `partial_ready`
 - `feature_readiness.get_sources` 当前会附带 `cache_summary`，至少包含 `total_sessions`、`readable_sessions`、`error_sessions`、`partial_sessions`、`unreadable_sessions`，用于快速观察 source cache 的整体状态
 - `feature_readiness.get_sources` 属于 `transient` readiness 信号；当前不应仅因其为 `partial_ready` 就拉低 overall doctor
-- `feature_readiness` 当前会额外提供 summary-safe 机器字段 `based_on_checks`、`probe_scope`、`degraded_by`；其中 `feature_readiness.web_search` 还会补充 `runtime_override_active` 与 `runtime_model_source`，用于标记当前退化是否仍受高优先级运行时覆盖层影响
+- `feature_readiness` 当前会额外提供 summary-safe 机器字段 `based_on_checks`、`probe_scope`、`degraded_by`；其中 `feature_readiness.get_sources` 的 cache 侧退化当前会使用 synthetic cause `source_cache_state`，而 `feature_readiness.web_search` 还会补充 `runtime_override_active` 与 `runtime_model_source`，用于标记当前退化是否仍受高优先级运行时覆盖层影响
 - `doctor` 当前会保留字符串版 `recommendations`，并额外提供结构化 `recommendations_detail`
 - 若 `GROK_MODEL_SOURCE` 是 `process_env`、`project_env_local` 或 `project_env`，单独调用 `switch_model` 不会改变当前进程；应先修改或删除对应覆盖层
 - 即使 API Key 已脱敏，`get_config_info` / `doctor` 输出当前仍可能包含本机绝对路径、endpoint/hostname 与精简后的上游错误摘要；对外分享前应先复核
