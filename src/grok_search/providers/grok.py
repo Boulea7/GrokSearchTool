@@ -377,6 +377,8 @@ class GrokSearchProvider(BaseSearchProvider):
             provider = item.get("provider")
             if isinstance(provider, str) and provider.strip():
                 source["provider"] = provider.strip()
+            else:
+                source["provider"] = "grok"
 
             upstream_source = item.get("source")
             if isinstance(upstream_source, str) and upstream_source.strip():
