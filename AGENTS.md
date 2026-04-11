@@ -115,8 +115,9 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - 当前运行时模型回退属于 best-effort 兼容路径：依赖 `/models` 返回候选列表，且上游错误摘要命中“模型不可用”类文案；若 `/models` 本身不可用，或错误类型不匹配，则不保证自动继续回退
 - 当前诊断 `web_search degraded` 时，`GROK_MODEL_SOURCE` 应视为根因分析的一等信息；若活动模型来自进程 env 或项目 `.env.local` / `.env` 覆盖，则与持久化配置层造成的 mismatch 是不同问题
 - `feature_readiness.get_sources` 当前只有在运行中进程里至少存在一个非 error 的可读取 source session 时才会显示 `ready`；若缓存里只有失败搜索留下的 session，则应保持 `partial_ready`
-- `feature_readiness.get_sources` 当前会附带 `cache_summary`，至少包含 `total_sessions`、`readable_sessions`、`error_sessions`、`partial_sessions`，用于快速观察 source cache 的整体状态
+- `feature_readiness.get_sources` 当前会附带 `cache_summary`，至少包含 `total_sessions`、`readable_sessions`、`error_sessions`、`partial_sessions`、`unreadable_sessions`，用于快速观察 source cache 的整体状态
 - `feature_readiness.get_sources` 属于 `transient` readiness 信号；当前不应仅因其为 `partial_ready` 就拉低 overall doctor
+- `feature_readiness` 当前会额外提供 summary-safe 机器字段 `based_on_checks`、`probe_scope`、`degraded_by`；其中 `feature_readiness.web_search` 还会补充 `runtime_override_active` 与 `runtime_model_source`，用于标记当前退化是否仍受高优先级运行时覆盖层影响
 - `doctor` 当前会保留字符串版 `recommendations`，并额外提供结构化 `recommendations_detail`
 - 若 `GROK_MODEL_SOURCE` 是 `process_env`、`project_env_local` 或 `project_env`，单独调用 `switch_model` 不会改变当前进程；应先修改或删除对应覆盖层
 - 即使 API Key 已脱敏，`get_config_info` / `doctor` 输出当前仍可能包含本机绝对路径、endpoint/hostname 与精简后的上游错误摘要；对外分享前应先复核

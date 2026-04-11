@@ -180,6 +180,17 @@ async def test_get_config_info_summary_detail_returns_machine_readable_minimum(m
     assert "summary" in payload["doctor"]
     assert "checks" not in payload["doctor"]
     assert "recommendations_detail" not in payload["doctor"]
+    assert payload["feature_readiness"]["web_search"]["based_on_checks"] == [
+        "grok_config",
+        "grok_models",
+        "grok_model_selection",
+        "grok_model_runtime_fallback",
+        "grok_search_probe",
+    ]
+    assert payload["feature_readiness"]["web_search"]["probe_scope"] == "search_runtime"
+    assert payload["feature_readiness"]["web_search"]["degraded_by"] == []
+    assert payload["feature_readiness"]["web_search"]["runtime_override_active"] is True
+    assert payload["feature_readiness"]["web_search"]["runtime_model_source"] == "process_env"
 
 
 @pytest.mark.asyncio
@@ -1337,6 +1348,15 @@ async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkey
 
     assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
     assert "persisted-model" in payload["feature_readiness"]["web_search"]["message"]
+    assert payload["feature_readiness"]["web_search"]["probe_scope"] == "search_runtime"
+    assert payload["feature_readiness"]["web_search"]["runtime_override_active"] is False
+    assert payload["feature_readiness"]["web_search"]["degraded_by"] == [
+        {
+            "check_id": "grok_model_selection",
+            "status": "warning",
+            "reason_code": "configured_model_unavailable",
+        }
+    ]
     assert any("persisted-model" in item for item in payload["doctor"]["recommendations"])
     grok_check = next(
         check for check in payload["doctor"]["checks"] if check.get("check_id") == "grok_model_selection"
@@ -1363,6 +1383,43 @@ async def test_get_config_info_reports_runtime_model_source_when_project_env_loc
 
     assert payload["GROK_MODEL"] == "project-model"
     assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_summary_exposes_runtime_override_machine_fields(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = json.loads(await server.get_config_info("summary"))
+    web_search = payload["feature_readiness"]["web_search"]
+
+    assert web_search["status"] == "degraded"
+    assert web_search["runtime_override_active"] is True
+    assert web_search["runtime_model_source"] == "project_env_local"
+    assert web_search["probe_scope"] == "search_runtime"
+    assert web_search["based_on_checks"] == [
+        "grok_config",
+        "grok_models",
+        "grok_model_selection",
+        "grok_model_runtime_fallback",
+        "grok_search_probe",
+    ]
+    assert web_search["degraded_by"] == [
+        {
+            "check_id": "grok_model_selection",
+            "status": "warning",
+            "reason_code": "configured_model_unavailable",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -1658,6 +1715,37 @@ async def test_get_config_info_runtime_probe_fallback_recommendation_mentions_pr
     assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
     assert any(".env.local" in item and "switch_model" in item for item in payload["doctor"]["recommendations"])
     assert detail["runtime_model_source"] == "project_env_local"
+
+
+@pytest.mark.asyncio
+async def test_probe_web_search_with_fallback_accepts_reason_code_without_english_marker(monkeypatch):
+    attempts = []
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        attempts.append(model)
+        if model == "grok-4.20-0309":
+            return server._build_doctor_check(
+                "grok_search_probe",
+                "error",
+                "模型当前不可用",
+                error_kind="probe_failed",
+                reason_code="model_unavailable",
+            )
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    result = await server._probe_web_search_with_fallback(
+        "https://api.example.com/v1",
+        "test-key",
+        "grok-4.20-0309",
+        ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"],
+    )
+
+    assert attempts == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+    assert result["status"] == "ok"
+    assert result["fallback_model"] == "grok-4.20-0309-non-reasoning"
+    assert result["requested_model"] == "grok-4.20-0309"
 
 
 @pytest.mark.asyncio

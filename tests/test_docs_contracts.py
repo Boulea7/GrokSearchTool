@@ -361,6 +361,44 @@ def test_docs_explain_runtime_model_source_and_env_override_boundary():
     assert "どの層が供給しているか" in readme_ja
     assert "単独で呼んでも現在のプロセスは切り替わりません" in readme_ja
     assert "`GROK_MODEL_SOURCE`" in readme_ru
+
+
+def test_docs_cover_additive_source_provenance_and_machine_readiness_fields():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    readme_ru = README_RU.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    lifecycle = GET_SOURCES_LIFECYCLE.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "`origin_type`" in readme
+    assert "`origin_type`" in readme_en
+    assert "`origin_type`" in compatibility
+    assert "`unreadable_sessions`" in readme
+    assert "`unreadable_sessions`" in readme_en
+    assert "`unreadable_sessions`" in compatibility
+    assert "`unreadable_sessions`" in lifecycle
+    assert "`unreadable_sessions`" in agents
+    assert "`based_on_checks`" in readme
+    assert "`probe_scope`" in readme
+    assert "`degraded_by`" in readme
+    assert "`runtime_override_active`" in readme
+    assert "`runtime_model_source`" in readme
+    assert "`based_on_checks`" in readme_en
+    assert "`probe_scope`" in readme_en
+    assert "`degraded_by`" in readme_en
+    assert "`runtime_override_active`" in readme_en
+    assert "`runtime_model_source`" in readme_en
+    assert "`based_on_checks`" in compatibility
+    assert "`probe_scope`" in compatibility
+    assert "`degraded_by`" in compatibility
+    assert "`runtime_override_active`" in compatibility
+    assert "`runtime_model_source`" in compatibility
+    assert "`based_on_checks`" in agents
+    assert "`probe_scope`" in agents
+    assert "`degraded_by`" in agents
+    assert "`runtime_override_active`" in agents
+    assert "`runtime_model_source`" in agents
     assert "какой слой сейчас задаёт активную модель" in readme_ru
     assert "одного вызова `switch_model` недостаточно" in readme_ru
 
