@@ -883,35 +883,33 @@ def _build_sources_cache_entry(
     search_error: str | None,
     search_warnings: Optional[list[str]] = None,
 ) -> dict:
-    if sources:
-        source_state = "available"
-    elif search_status == "error":
-        source_state = "unavailable_due_to_search_error"
-    else:
-        source_state = "empty"
-
     return {
         "sources": sources,
         "search_status": search_status,
         "search_error": search_error,
         "search_warnings": _normalize_search_warnings(search_warnings),
-        "source_state": source_state,
+        "source_state": _derive_source_state(sources, search_status),
     }
+
+
+def _derive_source_state(sources: list[dict], search_status: str) -> str:
+    if sources:
+        return "available"
+    if search_status == "error":
+        return "unavailable_due_to_search_error"
+    return "empty"
 
 
 def _normalize_sources_cache_entry(entry: object) -> dict | None:
     if isinstance(entry, dict) and isinstance(entry.get("sources"), list):
         search_status = entry.get("search_status") or "ok"
+        sources = entry.get("sources", [])
         return {
-            "sources": entry.get("sources", []),
+            "sources": sources,
             "search_status": search_status,
             "search_error": entry.get("search_error"),
             "search_warnings": _normalize_search_warnings(entry.get("search_warnings")),
-            "source_state": entry.get("source_state") or (
-                "available"
-                if entry.get("sources")
-                else ("unavailable_due_to_search_error" if search_status == "error" else "empty")
-            ),
+            "source_state": entry.get("source_state") or _derive_source_state(sources, search_status),
         }
 
     if isinstance(entry, list):
@@ -923,6 +921,15 @@ def _normalize_sources_cache_entry(entry: object) -> dict | None:
         )
 
     return None
+
+
+def _classify_sources_cache_entry(entry: object) -> tuple[dict | None, str]:
+    normalized_entry = _normalize_sources_cache_entry(entry)
+    if normalized_entry is None:
+        return None, "unreadable"
+    if normalized_entry["search_status"] == "error":
+        return normalized_entry, "error"
+    return normalized_entry, "readable"
 
 
 def _validate_search_inputs(
@@ -2007,8 +2014,8 @@ def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> di
 
 def _has_readable_source_session(cache_entries: list[object]) -> bool:
     for entry in cache_entries:
-        normalized_entry = _normalize_sources_cache_entry(entry)
-        if normalized_entry and normalized_entry["search_status"] != "error":
+        _, classification = _classify_sources_cache_entry(entry)
+        if classification == "readable":
             return True
     return False
 
@@ -2019,12 +2026,14 @@ def _summarize_source_cache_entries(cache_entries: list[object]) -> dict[str, in
         "readable_sessions": 0,
         "error_sessions": 0,
         "partial_sessions": 0,
+        "unreadable_sessions": 0,
     }
     for entry in cache_entries:
-        normalized_entry = _normalize_sources_cache_entry(entry)
-        if normalized_entry is None:
+        normalized_entry, classification = _classify_sources_cache_entry(entry)
+        if classification == "unreadable":
+            summary["unreadable_sessions"] += 1
             continue
-        if normalized_entry["search_status"] == "error":
+        if classification == "error":
             summary["error_sessions"] += 1
             continue
         summary["readable_sessions"] += 1

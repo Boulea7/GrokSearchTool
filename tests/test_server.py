@@ -586,6 +586,7 @@ async def test_get_config_info_get_sources_requires_readable_session_not_error_o
         "readable_sessions": 0,
         "error_sessions": 1,
         "partial_sessions": 0,
+        "unreadable_sessions": 0,
     }
 
 
@@ -629,6 +630,28 @@ async def test_get_config_info_reports_get_sources_cache_summary(monkeypatch):
         "readable_sessions": 2,
         "error_sessions": 1,
         "partial_sessions": 1,
+        "unreadable_sessions": 0,
+    }
+
+
+def test_summarize_source_cache_entries_counts_unreadable_sessions():
+    summary = server._summarize_source_cache_entries(
+        [
+            server._build_sources_cache_entry(
+                [{"title": "OpenAI", "url": "https://openai.com/"}],
+                search_status="ok",
+                search_error=None,
+            ),
+            object(),
+        ]
+    )
+
+    assert summary == {
+        "total_sessions": 2,
+        "readable_sessions": 1,
+        "error_sessions": 0,
+        "partial_sessions": 0,
+        "unreadable_sessions": 1,
     }
 
 
@@ -2289,6 +2312,22 @@ async def test_get_sources_returns_missing_error_after_session_ttl_expires(monke
         "sources_count": 0,
         "error": "session_id_not_found_or_expired",
     }
+
+
+@pytest.mark.asyncio
+async def test_get_sources_treats_unreadable_cache_entry_as_missing():
+    session_id = "unreadable-session"
+    await server._SOURCES_CACHE.set(session_id, {"sources": "not-a-list"})
+
+    cached = await server.get_sources(session_id)
+
+    assert cached == {
+        "session_id": session_id,
+        "sources": [],
+        "sources_count": 0,
+        "error": "session_id_not_found_or_expired",
+    }
+
 
 @pytest.mark.asyncio
 async def test_get_sources_marks_failed_search_session_as_unavailable():
