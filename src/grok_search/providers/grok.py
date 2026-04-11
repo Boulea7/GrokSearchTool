@@ -1,4 +1,5 @@
 import httpx
+import inspect
 import json
 import re
 from datetime import datetime, timezone
@@ -226,6 +227,7 @@ class GrokSearchProvider(BaseSearchProvider):
     def __init__(self, api_url: str, api_key: str, model: str = "grok-4.20-0309"):
         super().__init__(api_url, api_key)
         self.model = model
+        self._last_completion_sources: list[dict] = []
 
     def get_provider_name(self) -> str:
         return "Grok"
@@ -288,7 +290,13 @@ class GrokSearchProvider(BaseSearchProvider):
             config.debug_enabled,
         )
 
-        return await self._execute_completion_with_retry_result(headers, payload, ctx, render_sources=False)
+        self._last_completion_sources = []
+        execute_completion = self._execute_completion_with_retry
+        if "render_sources" in inspect.signature(execute_completion).parameters:
+            content = await execute_completion(headers, payload, ctx, render_sources=False)
+        else:
+            content = await execute_completion(headers, payload, ctx)
+        return content, list(self._last_completion_sources)
 
     async def fetch(self, url: str, ctx=None) -> str:
         headers = self._build_api_headers()
@@ -329,7 +337,7 @@ class GrokSearchProvider(BaseSearchProvider):
 
         return ""
 
-    def _normalize_source_items(self, data) -> list[dict]:
+    def _normalize_source_items(self, data, *, origin_type: str | None = None) -> list[dict]:
         items = data if isinstance(data, list) else [data]
         normalized: list[dict] = []
 
@@ -362,21 +370,49 @@ class GrokSearchProvider(BaseSearchProvider):
             if isinstance(description, str) and description.strip():
                 source["description"] = description.strip()
 
+            snippet = item.get("snippet")
+            if isinstance(snippet, str) and snippet.strip():
+                source["snippet"] = snippet.strip()
+
+            provider = item.get("provider")
+            if isinstance(provider, str) and provider.strip():
+                source["provider"] = provider.strip()
+
+            upstream_source = item.get("source")
+            if isinstance(upstream_source, str) and upstream_source.strip():
+                source["source"] = upstream_source.strip()
+
+            published_at = item.get("published_at")
+            if isinstance(published_at, str) and published_at.strip():
+                source["published_at"] = published_at.strip()
+
+            published_date = item.get("published_date")
+            if isinstance(published_date, str) and published_date.strip():
+                source["published_date"] = published_date.strip()
+
+            normalized_origin_type = item.get("origin_type") or origin_type
+            if isinstance(normalized_origin_type, str) and normalized_origin_type.strip():
+                source["origin_type"] = normalized_origin_type.strip()
+
+            score = item.get("score")
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                source["score"] = score
+
             normalized.append(source)
 
         return normalized
 
     def _extract_structured_sources(self, data: dict) -> list[dict]:
         candidate_keys = (
-            "citations",
-            "references",
-            "sources",
-            "source_cards",
-            "source_card",
-            "annotations",
-            "search_results",
-            "searchResults",
-            "urls",
+            ("citations", "citation"),
+            ("references", "reference"),
+            ("sources", "source"),
+            ("source_cards", "source_card"),
+            ("source_card", "source_card"),
+            ("annotations", "annotation"),
+            ("search_results", "search_result"),
+            ("searchResults", "search_result"),
+            ("urls", "url_list"),
         )
         collected: list[dict] = []
 
@@ -398,9 +434,12 @@ class GrokSearchProvider(BaseSearchProvider):
             nonlocal collected
             if not isinstance(mapping, dict):
                 return
-            for key in candidate_keys:
+            for key, origin_type in candidate_keys:
                 if key in mapping:
-                    collected = merge_sources(collected, self._normalize_source_items(mapping[key]))
+                    collected = merge_sources(
+                        collected,
+                        self._normalize_source_items(mapping[key], origin_type=origin_type),
+                    )
 
         if not isinstance(data, dict):
             return []
@@ -665,12 +704,13 @@ class GrokSearchProvider(BaseSearchProvider):
                         return await self._parse_streaming_response(response, ctx, render_sources=render_sources)
 
     async def _execute_completion_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
-        content, _ = await self._execute_completion_with_retry_result(
+        content, sources = await self._execute_completion_with_retry_result(
             headers,
             payload,
             ctx,
             render_sources=render_sources,
         )
+        self._last_completion_sources = sources
         return content
 
     async def _execute_completion_with_retry_result(

@@ -2290,7 +2290,6 @@ async def test_get_sources_returns_missing_error_after_session_ttl_expires(monke
         "error": "session_id_not_found_or_expired",
     }
 
-
 @pytest.mark.asyncio
 async def test_get_sources_marks_failed_search_session_as_unavailable():
     result = await server.web_search("   ")
@@ -2552,6 +2551,103 @@ async def test_web_search_preserves_structured_provider_source_metadata_in_cache
     assert cached["sources"][0]["title"] == "Structured Guide"
     assert cached["sources"][0]["description"] == "Structured description"
     assert cached["sources"][0]["snippet"] == "Structured description"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_preserves_provider_origin_type_and_published_metadata(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+        async def search_with_sources(self, query, platform):
+            return (
+                "Search answer",
+                [
+                    {
+                        "title": "Structured Guide",
+                        "url": "https://docs.example.com/guide",
+                        "snippet": "Structured snippet",
+                        "published_date": "2025-04-01",
+                        "origin_type": "annotation",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"][0]["origin_type"] == "annotation"
+    assert cached["sources"][0]["snippet"] == "Structured snippet"
+    assert cached["sources"][0]["published_at"] == "2025-04-01"
+
+
+@pytest.mark.asyncio
+async def test_web_search_keeps_provider_sources_when_structured_path_returns_sources_only(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return ""
+
+        async def search_with_sources(self, query, platform):
+            return (
+                "",
+                [
+                    {
+                        "title": "Structured Guide",
+                        "url": "https://docs.example.com/guide",
+                        "description": "Structured description",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["status"] == "partial"
+    assert result["sources_count"] == 1
+    assert "body_missing_sources_only" in result["warnings"]
+    assert cached["sources"][0]["description"] == "Structured description"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_preserves_tavily_published_date_metadata(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "title": "OpenAI Blog",
+                "url": "https://openai.com/blog",
+                "content": "Latest updates",
+                "score": 0.91,
+                "published_date": "2025-04-01",
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search("test query", extra_sources=1)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"][0]["published_at"] == "2025-04-01"
 
 
 @pytest.mark.asyncio
