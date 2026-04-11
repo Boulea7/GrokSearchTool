@@ -2715,6 +2715,39 @@ async def test_get_sources_preserves_provider_origin_type_and_published_metadata
 
 
 @pytest.mark.asyncio
+async def test_get_sources_keeps_backend_provider_when_structured_source_includes_source_label(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+        async def search_with_sources(self, query, platform):
+            return (
+                "Search answer",
+                [
+                    {
+                        "title": "Structured Guide",
+                        "url": "https://docs.example.com/guide",
+                        "source": "curated",
+                        "origin_type": "citation",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"][0]["provider"] == "grok"
+    assert cached["sources"][0]["source"] == "curated"
+    assert cached["sources"][0]["origin_type"] == "citation"
+
+
+@pytest.mark.asyncio
 async def test_web_search_keeps_provider_sources_when_structured_path_returns_sources_only(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):

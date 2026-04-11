@@ -767,6 +767,39 @@ def test_standardize_sources_maps_legacy_alias_fields():
     ]
 
 
+def test_standardize_sources_prefers_explicit_provider_over_source_alias():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Structured Source",
+                "url": "https://docs.example.com/guide",
+                "provider": "grok",
+                "source": "curated",
+                "origin_type": "citation",
+            }
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Structured Source",
+            "url": "https://docs.example.com/guide",
+            "provider": "grok",
+            "source": "curated",
+            "origin_type": "citation",
+            "description": "",
+            "source_type": "web_page",
+            "snippet": "",
+            "domain": "docs.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
 def test_standardize_sources_skips_malformed_legacy_items():
     sources = standardize_sources(
         [

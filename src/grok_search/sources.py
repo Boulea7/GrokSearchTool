@@ -288,7 +288,10 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
 
         raw_item["title"] = _normalize_text(raw_item.get("title"))
         raw_item["url"] = url
-        raw_item["provider"] = _normalize_provider(raw_item.get("provider") or raw_item.get("source"))
+        provider_value = raw_item.get("provider")
+        if _is_empty_merged_source_value(provider_value) and _should_use_legacy_source_alias(raw_item):
+            provider_value = raw_item.get("source")
+        raw_item["provider"] = _normalize_provider(provider_value)
         raw_item["description"] = description
         raw_item["source_type"] = "web_page"
         raw_item["snippet"] = snippet
@@ -783,6 +786,10 @@ def _normalize_optional_text(value: Any) -> str | None:
 def _normalize_provider(value: Any) -> str:
     provider = _normalize_text(value)
     return provider or "grok"
+
+
+def _should_use_legacy_source_alias(item: Mapping[str, Any]) -> bool:
+    return _is_empty_merged_source_value(item.get("origin_type"))
 
 
 def _normalize_snippet(item: dict[str, Any]) -> str:

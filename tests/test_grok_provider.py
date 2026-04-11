@@ -391,7 +391,7 @@ async def test_parse_completion_response_result_allows_sources_only_json_when_re
     content, sources = await provider._parse_completion_response_result(response, render_sources=False)
 
     assert content == ""
-    assert sources == [{"title": "OpenAI", "url": "https://openai.com/", "origin_type": "citation"}]
+    assert sources == [{"title": "OpenAI", "url": "https://openai.com/", "provider": "grok", "origin_type": "citation"}]
 
 
 @pytest.mark.asyncio
@@ -417,6 +417,7 @@ async def test_extract_structured_sources_preserves_richer_metadata_and_origin_t
         {
             "title": "OpenAI",
             "url": "https://openai.com/",
+            "provider": "grok",
             "description": "Structured snippet",
             "snippet": "Structured snippet",
             "score": 0.91,
