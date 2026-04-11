@@ -66,6 +66,56 @@ sources([{"title": "OpenAI", "url": "https://openai.com/"}])
     assert sources == [{"title": "OpenAI", "url": "https://openai.com/"}]
 
 
+def test_split_answer_and_sources_preserves_richer_function_call_source_metadata():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+sources([{"title": "OpenAI", "url": "https://openai.com/", "description": "Official homepage", "snippet": "Latest company updates", "origin_type": "citation", "published_at": "2026-04-01", "score": 0.91, "provider": "grok", "source": "curated"}])
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert sources == [
+        {
+            "title": "OpenAI",
+            "url": "https://openai.com/",
+            "description": "Official homepage",
+            "snippet": "Latest company updates",
+            "origin_type": "citation",
+            "published_at": "2026-04-01",
+            "score": 0.91,
+            "provider": "grok",
+            "source": "curated",
+        }
+    ]
+
+
+def test_split_answer_and_sources_preserves_richer_legacy_wrapper_payload_metadata():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+sources({"citations": [{"title": "OpenAI", "url": "https://openai.com/", "description": "Official homepage", "snippet": "Latest company updates", "origin_type": "citation", "published_date": "2026-04-01", "score": 0.91, "provider": "grok", "source": "curated"}]})
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert sources == [
+        {
+            "title": "OpenAI",
+            "url": "https://openai.com/",
+            "description": "Official homepage",
+            "snippet": "Latest company updates",
+            "origin_type": "citation",
+            "published_date": "2026-04-01",
+            "score": 0.91,
+            "provider": "grok",
+            "source": "curated",
+        }
+    ]
+
+
 def test_split_answer_and_sources_extracts_details_block_sources():
     raw = """
 OpenAI is an AI research and deployment company.
