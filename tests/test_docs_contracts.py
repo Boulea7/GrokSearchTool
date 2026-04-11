@@ -317,6 +317,22 @@ def test_get_sources_lifecycle_state_matrix_locks_required_states_without_prose_
     assert empty["observable"]["sources_count"] == 0
 
 
+def test_docs_describe_aggregated_source_rows_and_cache_state_cause_contract():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "normalized aggregate row" in readme
+    assert "winner provider" in readme
+    assert "`source_cache_state`" in readme
+    assert "normalized aggregate row" in compatibility
+    assert "winner provider" in compatibility
+    assert "`source_cache_state`" in compatibility
+    assert "normalized aggregate row" in agents
+    assert "winner provider" in agents
+    assert "`source_cache_state`" in agents
+
+
 def test_docs_align_minimal_stdio_smoke_check_and_native_tls_guidance():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
