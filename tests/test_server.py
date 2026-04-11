@@ -1812,6 +1812,27 @@ async def test_probe_web_search_with_fallback_accepts_reason_code_without_englis
 
 
 @pytest.mark.asyncio
+async def test_probe_web_search_prefers_search_with_sources_when_available(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform=""):
+            return ""
+
+        async def search_with_sources(self, query, platform=""):
+            return "", [{"title": "Structured Guide", "url": "https://docs.example.com/guide"}]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server._probe_web_search("https://api.example.com/v1", "test-key", "grok-4.20-0309")
+
+    assert result["status"] == "warning"
+    assert result["warning_code"] == "body_missing_sources_only"
+    assert "信源列表" in result["message"]
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_marks_web_fetch_as_degraded_when_only_firecrawl_probe_warns(monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")

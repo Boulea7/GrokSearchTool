@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import re
 import sys
 import time
@@ -497,6 +498,34 @@ def _search_probe_quality_message(warning_code: str) -> str:
     if warning_code == _BODY_PROBABLY_TRUNCATED_WARNING:
         return "真实搜索探针返回成功，但正文疑似截断。"
     return "真实搜索探针返回成功，但正文质量存在疑点。"
+
+
+async def _provider_search_with_sources(
+    provider,
+    query: str,
+    *,
+    platform: str = "",
+    min_results: int = 3,
+    max_results: int = 10,
+    ctx=None,
+) -> tuple[str, list[dict]]:
+    async def _call_with_supported_kwargs(method):
+        kwargs = {
+            "platform": platform,
+            "min_results": min_results,
+            "max_results": max_results,
+            "ctx": ctx,
+        }
+        parameters = inspect.signature(method).parameters
+        supported_kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+        return await method(query, **supported_kwargs)
+
+    if hasattr(provider, "search_with_sources"):
+        content, structured_sources = await _call_with_supported_kwargs(provider.search_with_sources)
+        return content, structured_sources
+
+    content = await _call_with_supported_kwargs(provider.search)
+    return content, []
 
 
 def _format_fetch_error(provider: str, exc: Exception) -> str:
@@ -1149,11 +1178,11 @@ async def web_search(
             effective_params["topic"] != "general" or effective_params["time_range"]
         )
         try:
-            if hasattr(grok_provider, "search_with_sources"):
-                result, structured_sources = await grok_provider.search_with_sources(validated_params["query"], platform)
-            else:
-                result = await grok_provider.search(validated_params["query"], platform)
-                structured_sources = []
+            result, structured_sources = await _provider_search_with_sources(
+                grok_provider,
+                validated_params["query"],
+                platform=platform,
+            )
         except Exception as exc:
             return "", [], _format_grok_error(exc), "upstream_request_failed"
         if (not result or not result.strip()) and not structured_sources:
@@ -1921,7 +1950,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
     start_time = time.perf_counter()
     provider = GrokSearchProvider(api_url, api_key, model)
     try:
-        content = await provider.search(_SEARCH_PROBE_QUERY)
+        content, structured_sources = await _provider_search_with_sources(provider, _SEARCH_PROBE_QUERY)
     except Exception as exc:
         check = _build_doctor_check(
             "grok_search_probe",
@@ -1938,6 +1967,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
     answer, probe_sources = split_answer_and_sources(content)
     if not probe_sources:
         probe_sources = extract_sources_from_text(content)
+    probe_sources = merge_sources(structured_sources, probe_sources)
     body_quality_warning = _assess_search_body_quality(answer, probe_sources)
     if body_quality_warning:
         return _build_doctor_check(

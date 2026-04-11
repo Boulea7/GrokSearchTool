@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
+from grok_search.providers.base import BaseSearchProvider
 from grok_search.providers.grok import (
     GrokSearchProvider,
     _WaitWithRetryAfter,
@@ -24,6 +25,14 @@ class DummyResponse:
         return self._json_data
 
 
+class DummyBaseProvider(BaseSearchProvider):
+    async def search(self, query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx=None) -> str:
+        return f"answer:{query}:{platform}:{min_results}:{max_results}"
+
+    def get_provider_name(self) -> str:
+        return "dummy"
+
+
 def test_provider_httpx_client_kwargs_disable_env_proxies_for_dotted_loopback():
     local = _httpx_client_kwargs_for_url("http://localhost:18080/extract", timeout=httpx.Timeout(10.0))
     dotted_local = _httpx_client_kwargs_for_url("http://localhost.:18080/extract", timeout=httpx.Timeout(10.0))
@@ -34,6 +43,16 @@ def test_provider_httpx_client_kwargs_disable_env_proxies_for_dotted_loopback():
     assert dotted_local["trust_env"] is False
     assert loopback["trust_env"] is False
     assert "trust_env" not in remote
+
+
+@pytest.mark.asyncio
+async def test_base_provider_search_with_sources_bridges_to_search():
+    provider = DummyBaseProvider("https://api.example.com", "test-key")
+
+    content, sources = await provider.search_with_sources("probe", platform="GitHub", min_results=1, max_results=2)
+
+    assert content == "answer:probe:GitHub:1:2"
+    assert sources == []
 
 
 @pytest.mark.asyncio

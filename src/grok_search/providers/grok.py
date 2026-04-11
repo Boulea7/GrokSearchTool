@@ -5,11 +5,11 @@ import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from ipaddress import ip_address
-from typing import List, Optional
+from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
 from tenacity.wait import wait_base
-from .base import BaseSearchProvider, SearchResult
+from .base import BaseSearchProvider
 from ..sources import merge_sources, sanitize_answer_text, split_answer_and_sources
 from ..utils import search_prompt, fetch_prompt, url_describe_prompt, rank_sources_prompt
 from ..logger import log_info
@@ -240,7 +240,7 @@ class GrokSearchProvider(BaseSearchProvider):
             "User-Agent": "grok-search-mcp/0.1.0",
         }
 
-    async def search(self, query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx=None) -> List[SearchResult]:
+    async def search(self, query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx=None) -> str:
         body, sources = await self.search_with_sources(
             query,
             platform=platform,
