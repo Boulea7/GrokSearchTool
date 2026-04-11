@@ -239,6 +239,23 @@ class GrokSearchProvider(BaseSearchProvider):
         }
 
     async def search(self, query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx=None) -> List[SearchResult]:
+        body, sources = await self.search_with_sources(
+            query,
+            platform=platform,
+            min_results=min_results,
+            max_results=max_results,
+            ctx=ctx,
+        )
+        return self._finalize_content(body, sources, render_sources=True)
+
+    async def search_with_sources(
+        self,
+        query: str,
+        platform: str = "",
+        min_results: int = 3,
+        max_results: int = 10,
+        ctx=None,
+    ) -> tuple[str, list[dict]]:
         headers = self._build_api_headers()
         platform_prompt = ""
 
@@ -271,7 +288,7 @@ class GrokSearchProvider(BaseSearchProvider):
             config.debug_enabled,
         )
 
-        return await self._execute_completion_with_retry(headers, payload, ctx)
+        return await self._execute_completion_with_retry_result(headers, payload, ctx, render_sources=False)
 
     async def fetch(self, url: str, ctx=None) -> str:
         headers = self._build_api_headers()
@@ -444,6 +461,15 @@ class GrokSearchProvider(BaseSearchProvider):
             return body
         return self._append_sources_block(body, sources)
 
+    def _finalize_result(
+        self,
+        content: str,
+        sources: list[dict],
+        *,
+        render_sources: bool,
+    ) -> tuple[str, list[dict]]:
+        return self._finalize_content(content, sources, render_sources=render_sources), sources
+
     def _extract_content_from_choice(self, choice: dict) -> str:
         if not isinstance(choice, dict):
             return ""
@@ -491,6 +517,16 @@ class GrokSearchProvider(BaseSearchProvider):
         return ValueError(message)
 
     async def _parse_streaming_response(self, response, ctx=None, *, render_sources: bool = True) -> str:
+        content, _ = await self._parse_streaming_response_result(response, ctx, render_sources=render_sources)
+        return content
+
+    async def _parse_streaming_response_result(
+        self,
+        response,
+        ctx=None,
+        *,
+        render_sources: bool = True,
+    ) -> tuple[str, list[dict]]:
         content = ""
         empty_placeholder_detected = False
         response_headers = getattr(response, "headers", None)
@@ -544,14 +580,29 @@ class GrokSearchProvider(BaseSearchProvider):
         if not content and empty_placeholder_detected:
             raise self._build_placeholder_error(response_headers)
 
-        content = self._finalize_content(content, collected_sources, render_sources=render_sources)
+        content, collected_sources = self._finalize_result(
+            content,
+            collected_sources,
+            render_sources=render_sources,
+        )
 
         await log_info(ctx, f"stream completion parsed ({len(content)} chars)", config.debug_enabled)
 
-        return content
+        return content, collected_sources
 
     async def _parse_completion_response(self, response: httpx.Response, ctx=None, *, render_sources: bool = True) -> str:
+        content, _ = await self._parse_completion_response_result(response, ctx, render_sources=render_sources)
+        return content
+
+    async def _parse_completion_response_result(
+        self,
+        response: httpx.Response,
+        ctx=None,
+        *,
+        render_sources: bool = True,
+    ) -> tuple[str, list[dict]]:
         content = ""
+        sources: list[dict] = []
         body_text = response.text or ""
 
         try:
@@ -563,7 +614,7 @@ class GrokSearchProvider(BaseSearchProvider):
             content, sources, is_placeholder = self._extract_payload_content_and_sources(data)
             if is_placeholder:
                 raise self._build_placeholder_error(response.headers)
-            content = self._finalize_content(content, sources, render_sources=render_sources)
+            content, sources = self._finalize_result(content, sources, render_sources=render_sources)
 
         if not content and any(line.lstrip().startswith("data:") for line in body_text.splitlines()):
             class _LineResponse:
@@ -575,13 +626,13 @@ class GrokSearchProvider(BaseSearchProvider):
                     for line in self._lines:
                         yield line
 
-            content = await self._parse_streaming_response(
+            content, sources = await self._parse_streaming_response_result(
                 _LineResponse(body_text, response.headers),
                 ctx,
                 render_sources=render_sources,
             )
 
-        if not content and body_text.strip():
+        if not content and not sources and body_text.strip():
             normalized = body_text.lower()
             if "<html" in normalized and "login" in normalized:
                 raise ValueError("API 代理返回了登录页面，请检查认证状态")
@@ -589,7 +640,7 @@ class GrokSearchProvider(BaseSearchProvider):
 
         await log_info(ctx, f"completion parsed ({len(content)} chars)", config.debug_enabled)
 
-        return content
+        return content, sources
 
     async def _execute_stream_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
         """执行带重试机制的流式 HTTP 请求"""
@@ -614,6 +665,22 @@ class GrokSearchProvider(BaseSearchProvider):
                         return await self._parse_streaming_response(response, ctx, render_sources=render_sources)
 
     async def _execute_completion_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
+        content, _ = await self._execute_completion_with_retry_result(
+            headers,
+            payload,
+            ctx,
+            render_sources=render_sources,
+        )
+        return content
+
+    async def _execute_completion_with_retry_result(
+        self,
+        headers: dict,
+        payload: dict,
+        ctx=None,
+        *,
+        render_sources: bool = True,
+    ) -> tuple[str, list[dict]]:
         """执行带重试机制的非流式 HTTP 请求，兼容 JSON completion 与 SSE 文本响应。"""
         timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
         endpoint = f"{self.api_url}/chat/completions"
@@ -632,7 +699,11 @@ class GrokSearchProvider(BaseSearchProvider):
                         json=payload,
                     )
                     response.raise_for_status()
-                    return await self._parse_completion_response(response, ctx, render_sources=render_sources)
+                    return await self._parse_completion_response_result(
+                        response,
+                        ctx,
+                        render_sources=render_sources,
+                    )
 
     async def describe_url(self, url: str, ctx=None) -> dict:
         """让 Grok 阅读单个 URL 并返回 title + extracts"""
