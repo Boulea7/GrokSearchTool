@@ -2522,6 +2522,39 @@ async def test_get_sources_returns_standardized_metadata_for_inline_links(monkey
 
 
 @pytest.mark.asyncio
+async def test_web_search_preserves_structured_provider_source_metadata_in_cache(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+        async def search_with_sources(self, query, platform):
+            return (
+                "Search answer",
+                [
+                    {
+                        "title": "Structured Guide",
+                        "url": "https://docs.example.com/guide",
+                        "description": "Structured description",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["content"] == "Search answer"
+    assert result["sources_count"] == 1
+    assert cached["sources"][0]["title"] == "Structured Guide"
+    assert cached["sources"][0]["description"] == "Structured description"
+    assert cached["sources"][0]["snippet"] == "Structured description"
+
+
+@pytest.mark.asyncio
 async def test_web_search_splits_extra_sources_across_providers(monkeypatch):
     calls = {"tavily": 0, "firecrawl": 0}
 

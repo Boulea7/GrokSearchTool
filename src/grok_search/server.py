@@ -1122,36 +1122,40 @@ async def web_search(
             if effective_params["time_range"]:
                 warnings.append("time_range_not_applied_without_tavily_search")
 
-    async def _run_grok_with_model(current_model: str) -> tuple[str, str | None, str | None]:
+    async def _run_grok_with_model(current_model: str) -> tuple[str, list[dict], str | None, str | None]:
         grok_provider = GrokSearchProvider(api_url, api_key, current_model)
         grok_provider.time_context_required = bool(
             effective_params["topic"] != "general" or effective_params["time_range"]
         )
         try:
-            result = await grok_provider.search(validated_params["query"], platform)
+            if hasattr(grok_provider, "search_with_sources"):
+                result, structured_sources = await grok_provider.search_with_sources(validated_params["query"], platform)
+            else:
+                result = await grok_provider.search(validated_params["query"], platform)
+                structured_sources = []
         except Exception as exc:
-            return "", _format_grok_error(exc), "upstream_request_failed"
+            return "", [], _format_grok_error(exc), "upstream_request_failed"
         if not result or not result.strip():
-            return "", "搜索失败: 上游返回空响应，请检查模型或代理配置", "upstream_empty_response"
-        return result, None, None
+            return "", structured_sources, "搜索失败: 上游返回空响应，请检查模型或代理配置", "upstream_empty_response"
+        return result, structured_sources, None, None
 
-    async def _safe_grok() -> tuple[str, str | None, str | None, str, bool]:
-        result, error_message, error_code = await _run_grok_with_model(effective_model)
+    async def _safe_grok() -> tuple[str, list[dict], str | None, str | None, str, bool]:
+        result, structured_sources, error_message, error_code = await _run_grok_with_model(effective_model)
         if error_message is None:
-            return result, None, None, effective_model, False
+            return result, structured_sources, None, None, effective_model, False
         if not _is_grok_model_unavailable_message(error_message):
-            return "", error_message, error_code, effective_model, False
+            return "", [], error_message, error_code, effective_model, False
 
         for candidate in _fallback_candidates_for_model(requested_model, effective_model, available_models):
-            retry_result, retry_error_message, retry_error_code = await _run_grok_with_model(candidate)
+            retry_result, retry_sources, retry_error_message, retry_error_code = await _run_grok_with_model(candidate)
             if retry_error_message is None:
-                return retry_result, None, None, candidate, True
+                return retry_result, retry_sources, None, None, candidate, True
             error_message = retry_error_message
             error_code = retry_error_code
             if not _is_grok_model_unavailable_message(retry_error_message):
                 break
 
-        return "", error_message, error_code, effective_model, False
+        return "", [], error_message, error_code, effective_model, False
 
     async def _safe_tavily() -> tuple[list[dict] | None, str | None]:
         try:
@@ -1190,7 +1194,7 @@ async def web_search(
 
     gathered = await asyncio.gather(*coros)
 
-    grok_result, grok_error, grok_error_code, actual_grok_model, runtime_fallback_applied = gathered[0]
+    grok_result, grok_structured_sources, grok_error, grok_error_code, actual_grok_model, runtime_fallback_applied = gathered[0]
     if runtime_fallback_applied and actual_grok_model != effective_model:
         effective_model = actual_grok_model
         effective_params["model"] = actual_grok_model
@@ -1212,6 +1216,7 @@ async def web_search(
     answer, grok_sources = split_answer_and_sources(grok_result)
     if not grok_sources:
         grok_sources = extract_sources_from_text(grok_result)
+    grok_sources = merge_sources(grok_structured_sources, grok_sources)
     extra = _extra_results_to_sources(tavily_results, firecrawl_results)
     all_sources = merge_sources(grok_sources, extra)
     content = answer.strip()
