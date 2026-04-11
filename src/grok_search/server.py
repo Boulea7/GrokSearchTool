@@ -523,15 +523,14 @@ def _extra_results_to_sources(
     tavily_results: list[dict] | None,
     firecrawl_results: list[dict] | None,
 ) -> list[dict]:
-    sources: list[dict] = []
-    seen: set[str] = set()
+    firecrawl_sources: list[dict] = []
+    tavily_sources: list[dict] = []
 
     if firecrawl_results:
         for r in firecrawl_results:
             url = (r.get("url") or "").strip()
-            if not url or url in seen:
+            if not url:
                 continue
-            seen.add(url)
             item: dict = {"url": url, "provider": "firecrawl"}
             title = (r.get("title") or "").strip()
             if title:
@@ -539,14 +538,13 @@ def _extra_results_to_sources(
             desc = (r.get("description") or "").strip()
             if desc:
                 item["description"] = desc
-            sources.append(item)
+            firecrawl_sources.append(item)
 
     if tavily_results:
         for r in tavily_results:
             url = (r.get("url") or "").strip()
-            if not url or url in seen:
+            if not url:
                 continue
-            seen.add(url)
             item: dict = {"url": url, "provider": "tavily"}
             title = (r.get("title") or "").strip()
             if title:
@@ -557,9 +555,9 @@ def _extra_results_to_sources(
             score = r.get("score")
             if isinstance(score, (int, float)) and not isinstance(score, bool):
                 item["score"] = score
-            sources.append(item)
+            tavily_sources.append(item)
 
-    return sources
+    return merge_sources(firecrawl_sources, tavily_sources)
 
 
 def _extract_firecrawl_markdown_payload(data: dict) -> str:
