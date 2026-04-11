@@ -1,8 +1,10 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
+import venv
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,36 @@ def _run_python(code: str) -> subprocess.CompletedProcess[str]:
         check=False,
         timeout=30,
     )
+
+
+def _run_subprocess(
+    args: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    timeout: int = 120,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+
+
+def _venv_python(venv_dir: Path) -> Path:
+    if os.name == "nt":
+        return venv_dir / "Scripts" / "python.exe"
+    return venv_dir / "bin" / "python"
+
+
+def _venv_script(venv_dir: Path, script_name: str) -> Path:
+    if os.name == "nt":
+        return venv_dir / "Scripts" / f"{script_name}.exe"
+    return venv_dir / "bin" / script_name
 
 
 def test_run_python_sets_timeout(monkeypatch):
@@ -256,6 +288,122 @@ def test_provider_lazy_export_propagates_dependency_errors_only_on_access():
     assert payload["package_import_ok"] is True
     assert payload["type"] == "ModuleNotFoundError"
     assert payload["name"] == "tenacity"
+
+
+def test_built_local_wheel_exposes_console_script_and_install_surface(tmp_path):
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is required to build a local wheel artifact")
+
+    dist_dir = tmp_path / "dist"
+    build_result = _run_subprocess(
+        [uv, "build", "--wheel", "--out-dir", str(dist_dir)],
+        cwd=ROOT_DIR,
+        timeout=180,
+    )
+    assert build_result.returncode == 0, build_result.stderr
+
+    wheels = sorted(dist_dir.glob("*.whl"))
+    assert len(wheels) == 1
+    wheel_path = wheels[0]
+
+    venv_dir = tmp_path / "venv"
+    venv.EnvBuilder(with_pip=True, system_site_packages=True).create(venv_dir)
+    venv_python = _venv_python(venv_dir)
+    install_result = _run_subprocess(
+        [str(venv_python), "-m", "pip", "install", "--no-deps", str(wheel_path)],
+        cwd=ROOT_DIR,
+        timeout=180,
+    )
+    assert install_result.returncode == 0, install_result.stderr
+
+    script_path = _venv_script(venv_dir, "grok-search")
+    assert script_path.exists(), f"Expected console script at {script_path}"
+
+    metadata_code = textwrap.dedent(
+        """
+        import importlib.metadata
+        import json
+        import pathlib
+
+        dist = importlib.metadata.distribution("grok-search")
+        console_scripts = {
+            entry.name: entry.value
+            for entry in dist.entry_points
+            if entry.group == "console_scripts"
+        }
+        print(json.dumps({
+            "console_scripts": console_scripts,
+            "files_include_server": "grok_search/server.py" in {str(item) for item in dist.files or []},
+            "script_exists": pathlib.Path(%(script_path)r).exists(),
+        }))
+        """
+        % {"script_path": str(script_path)}
+    )
+    metadata_result = _run_subprocess(
+        [str(venv_python), "-c", metadata_code],
+        cwd=ROOT_DIR,
+    )
+    assert metadata_result.returncode == 0, metadata_result.stderr
+    metadata_payload = json.loads(metadata_result.stdout)
+    assert metadata_payload["console_scripts"]["grok-search"] == "grok_search.server:main"
+    assert metadata_payload["files_include_server"] is True
+    assert metadata_payload["script_exists"] is True
+
+    import_surface_code = textwrap.dedent(
+        """
+        import builtins
+        import importlib
+        import json
+
+        original_import = builtins.__import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "fastmcp" or name.startswith("fastmcp."):
+                raise ModuleNotFoundError("No module named 'fastmcp'", name="fastmcp")
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = blocked_import
+
+        grok_search = importlib.import_module("grok_search")
+        config = importlib.import_module("grok_search.config")
+        planning = importlib.import_module("grok_search.planning")
+        providers = importlib.import_module("grok_search.providers")
+
+        payload = {
+            "package_name": grok_search.__name__,
+            "config_name": config.__name__,
+            "planning_name": planning.__name__,
+            "providers_package_name": providers.__name__,
+        }
+
+        try:
+            grok_search.mcp
+        except Exception as exc:
+            payload["mcp_error"] = {
+                "type": type(exc).__name__,
+                "name": getattr(exc, "name", ""),
+            }
+        else:
+            payload["mcp_error"] = {"type": "ok"}
+
+        print(json.dumps(payload))
+        """
+    )
+    import_surface_result = _run_subprocess(
+        [str(venv_python), "-c", import_surface_code],
+        cwd=ROOT_DIR,
+    )
+    assert import_surface_result.returncode == 0, import_surface_result.stderr
+    import_payload = json.loads(import_surface_result.stdout)
+    assert import_payload["package_name"] == "grok_search"
+    assert import_payload["config_name"] == "grok_search.config"
+    assert import_payload["planning_name"] == "grok_search.planning"
+    assert import_payload["providers_package_name"] == "grok_search.providers"
+    assert import_payload["mcp_error"] == {
+        "type": "ModuleNotFoundError",
+        "name": "fastmcp",
+    }
 
 
 def test_from_import_base_provider_does_not_trigger_grok_provider_dependencies():
