@@ -933,6 +933,8 @@ def _classify_sources_cache_entry(entry: object) -> tuple[dict | None, str]:
     normalized_entry = _normalize_sources_cache_entry(entry)
     if normalized_entry is None:
         return None, "unreadable"
+    if normalized_entry["sources"] and not standardize_sources(normalized_entry["sources"]):
+        return normalized_entry, "unreadable"
     if normalized_entry["search_status"] == "error":
         return normalized_entry, "error"
     return normalized_entry, "readable"
