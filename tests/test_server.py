@@ -645,6 +645,36 @@ async def test_get_config_info_reports_get_sources_cache_summary(monkeypatch):
     }
 
 
+@pytest.mark.asyncio
+async def test_get_config_info_excludes_invalid_cached_source_rows_from_readable_sessions(monkeypatch):
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    await server._SOURCES_CACHE.set(
+        "invalid-source-session",
+        server._build_sources_cache_entry(
+            [{"title": "Broken", "url": "not-a-valid-url"}],
+            search_status="ok",
+            search_error=None,
+        ),
+    )
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
+    assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
+        "total_sessions": 1,
+        "readable_sessions": 0,
+        "error_sessions": 0,
+        "partial_sessions": 0,
+        "unreadable_sessions": 1,
+    }
+
+
 def test_summarize_source_cache_entries_counts_unreadable_sessions():
     summary = server._summarize_source_cache_entries(
         [
@@ -660,6 +690,26 @@ def test_summarize_source_cache_entries_counts_unreadable_sessions():
     assert summary == {
         "total_sessions": 2,
         "readable_sessions": 1,
+        "error_sessions": 0,
+        "partial_sessions": 0,
+        "unreadable_sessions": 1,
+    }
+
+
+def test_summarize_source_cache_entries_treats_invalid_source_rows_as_unreadable():
+    summary = server._summarize_source_cache_entries(
+        [
+            server._build_sources_cache_entry(
+                [{"title": "Broken", "url": "not-a-valid-url"}],
+                search_status="ok",
+                search_error=None,
+            ),
+        ]
+    )
+
+    assert summary == {
+        "total_sessions": 1,
+        "readable_sessions": 0,
         "error_sessions": 0,
         "partial_sessions": 0,
         "unreadable_sessions": 1,
