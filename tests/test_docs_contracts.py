@@ -11,6 +11,7 @@ README_JA = ROOT_DIR / "README.ja.md"
 README_RU = ROOT_DIR / "README.ru.md"
 PYPROJECT = ROOT_DIR / "pyproject.toml"
 SECURITY = ROOT_DIR / "SECURITY.md"
+ROADMAP = ROOT_DIR / "docs" / "ROADMAP.md"
 
 
 def test_readme_requires_explicit_v1_suffix_for_grok_api_url():
@@ -207,6 +208,17 @@ def test_docs_pin_release_repo_and_stdio_first_host_story():
     assert "fork/upstream" in agents
 
 
+def test_roadmap_keeps_stdio_first_positioning_without_relisting_already_aligned_planning_story():
+    roadmap = ROADMAP.read_text(encoding="utf-8")
+
+    assert "lightweight MCP plus companion skill" in roadmap
+    assert "Long-running `deep research` remains a separate advanced capability direction" in roadmap
+    assert "officially tested, community-tested, and planned integrations" in roadmap
+    assert "local `stdio` usage first" in roadmap
+    assert "companion-skill guidance" in roadmap
+    assert "host-facing examples" in roadmap
+
+
 def test_docs_explain_get_sources_warning_round_trip_and_cache_summary_contract():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
@@ -224,6 +236,43 @@ def test_docs_explain_get_sources_warning_round_trip_and_cache_summary_contract(
     assert "`cache_summary`" in lifecycle
     assert "`search_warnings`" in agents
     assert "`cache_summary`" in agents
+
+
+def test_docs_align_support_levels_across_readme_and_compatibility():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+
+    assert "`Officially tested`" in readme
+    assert "`Community-tested`" in readme
+    assert "`Planned`" in readme
+    assert "`Officially tested`" in compatibility
+    assert "`Community-tested`" in compatibility
+    assert "`Planned`" in compatibility
+
+
+def test_get_sources_lifecycle_docs_lock_core_handle_and_readiness_contract():
+    lifecycle = GET_SOURCES_LIFECYCLE.read_text(encoding="utf-8")
+
+    assert "shared-daemon" in lifecycle
+    assert "non-durable" in lifecycle
+    assert "session_id_not_found_or_expired" in lifecycle
+    assert "possession-based" in lifecycle
+    assert "`partial_ready`" in lifecycle
+
+
+def test_docs_align_minimal_stdio_smoke_check_and_native_tls_guidance():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+
+    assert "### 最小 smoke check" in readme
+    assert "## Minimum `stdio` smoke check" in compatibility
+    assert "`get_config_info`" in readme
+    assert "`web_search`" in readme
+    assert "`get_sources`" in readme
+    assert "`web_fetch`" in readme
+    assert "`web_map`" in readme
+    assert "`--native-tls`" in readme
+    assert "`--native-tls`" in compatibility
 
 
 def test_localized_readmes_pin_release_repo_and_fork_story():
