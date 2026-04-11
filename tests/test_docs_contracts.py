@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 
 
@@ -12,6 +14,20 @@ README_RU = ROOT_DIR / "README.ru.md"
 PYPROJECT = ROOT_DIR / "pyproject.toml"
 SECURITY = ROOT_DIR / "SECURITY.md"
 ROADMAP = ROOT_DIR / "docs" / "ROADMAP.md"
+
+GET_SOURCES_LIFECYCLE_CONTRACT_START = "<!-- docs-contract:get-sources-lifecycle:start -->"
+GET_SOURCES_LIFECYCLE_CONTRACT_END = "<!-- docs-contract:get-sources-lifecycle:end -->"
+
+
+def _extract_get_sources_lifecycle_contract() -> dict:
+    text = GET_SOURCES_LIFECYCLE.read_text(encoding="utf-8")
+
+    start = text.index(GET_SOURCES_LIFECYCLE_CONTRACT_START) + len(GET_SOURCES_LIFECYCLE_CONTRACT_START)
+    end = text.index(GET_SOURCES_LIFECYCLE_CONTRACT_END)
+    section = text[start:end]
+    match = re.search(r"```json\s*(\{.*?\})\s*```", section, re.DOTALL)
+    assert match, "Expected a fenced JSON contract between lifecycle markers."
+    return json.loads(match.group(1))
 
 
 def test_readme_requires_explicit_v1_suffix_for_grok_api_url():
@@ -258,6 +274,47 @@ def test_get_sources_lifecycle_docs_lock_core_handle_and_readiness_contract():
     assert "session_id_not_found_or_expired" in lifecycle
     assert "possession-based" in lifecycle
     assert "`partial_ready`" in lifecycle
+
+
+def test_get_sources_lifecycle_doc_exposes_machine_readable_state_matrix():
+    contract = _extract_get_sources_lifecycle_contract()
+
+    assert contract["doc"] == "get_sources_lifecycle"
+    assert contract["version"] >= 1
+    assert set(contract["feature_readiness_states"]) >= {"not_ready", "partial_ready", "ready"}
+    assert set(contract["result_states"]) >= {
+        "miss",
+        "unavailable_due_to_search_error",
+        "empty",
+    }
+
+
+def test_get_sources_lifecycle_state_matrix_locks_required_states_without_prose_coupling():
+    contract = _extract_get_sources_lifecycle_contract()
+
+    not_ready = contract["feature_readiness_states"]["not_ready"]
+    miss = contract["result_states"]["miss"]
+    unavailable = contract["result_states"]["unavailable_due_to_search_error"]
+    empty = contract["result_states"]["empty"]
+
+    assert not_ready["surface"] == "feature_readiness.get_sources.status"
+    assert not_ready["observable"]["status"] == "not_ready"
+    assert not_ready["observable"]["transient"] is True
+    assert not_ready["depends_on"] == "web_search readiness"
+
+    assert miss["surface"] == "get_sources response"
+    assert miss["observable"]["error"] == "session_id_not_found_or_expired"
+    assert miss["observable"]["sources_count"] == 0
+    assert miss["observable"]["sources"] == []
+
+    assert unavailable["observable"]["source_state"] == "unavailable_due_to_search_error"
+    assert unavailable["observable"]["search_status"] == "error"
+    assert unavailable["observable"]["sources_count"] == 0
+
+    assert empty["observable"]["source_state"] == "empty"
+    assert empty["observable"]["search_status"] == "ok"
+    assert empty["observable"]["search_error"] is None
+    assert empty["observable"]["sources_count"] == 0
 
 
 def test_docs_align_minimal_stdio_smoke_check_and_native_tls_guidance():
