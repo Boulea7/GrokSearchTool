@@ -1652,11 +1652,25 @@ def _build_doctor_check(
 
 
 def _check_reason_code(check: dict) -> str | None:
-    for key in ("reason_code", "warning_code", "error_kind", "skipped_reason"):
+    for key in ("reason_code", "warning_code", "error_kind"):
         value = check.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    skipped_reason = check.get("skipped_reason")
+    if isinstance(skipped_reason, str) and skipped_reason.strip():
+        return _normalize_skipped_reason_code(skipped_reason)
     return None
+
+
+def _normalize_skipped_reason_code(skipped_reason: str) -> str:
+    normalized = skipped_reason.strip()
+    if not normalized:
+        return "provider_not_configured"
+    if normalized.endswith("ENABLED=false"):
+        return "provider_disabled"
+    if normalized.endswith("API_KEY 未配置"):
+        return "missing_api_key"
+    return "provider_not_configured"
 
 
 def _readiness_cause_from_check(check: dict) -> dict:
@@ -2037,13 +2051,24 @@ async def _probe_web_fetch() -> dict:
 
 def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> dict:
     if check["status"] == "ok":
-        return {"status": "ready", "message": check["message"]}
+        item = {"status": "ready", "message": check["message"], "check_id": check["check_id"]}
+        reason_code = _check_reason_code(check)
+        if reason_code:
+            item["reason_code"] = reason_code
+        return item
     if check["status"] == "skipped":
-        item = {"status": "not_ready", "message": not_ready_message}
+        item = {"status": "not_ready", "message": not_ready_message, "check_id": check["check_id"]}
         if check.get("skipped_reason"):
             item["skipped_reason"] = check["skipped_reason"]
+        reason_code = _check_reason_code(check)
+        if reason_code:
+            item["reason_code"] = reason_code
         return item
-    return {"status": "degraded", "message": check["message"]}
+    item = {"status": "degraded", "message": check["message"], "check_id": check["check_id"]}
+    reason_code = _check_reason_code(check)
+    if reason_code:
+        item["reason_code"] = reason_code
+    return item
 
 
 def _build_get_sources_readiness(
@@ -2054,7 +2079,7 @@ def _build_get_sources_readiness(
 ) -> dict:
     degraded_by: list[dict] = []
     if not has_readable_source_session:
-        degraded_by.append({"reason_code": "no_readable_source_session"})
+        degraded_by.append({"reason_code": _get_sources_readiness_reason_code(source_cache_summary)})
 
     if has_readable_source_session:
         status = "ready"
@@ -2072,6 +2097,20 @@ def _build_get_sources_readiness(
         "probe_scope": "cache_state",
         "degraded_by": degraded_by,
     }
+
+
+def _get_sources_readiness_reason_code(source_cache_summary: Optional[dict[str, int]]) -> str:
+    summary = source_cache_summary or {}
+    total_sessions = summary.get("total_sessions", 0)
+    error_sessions = summary.get("error_sessions", 0)
+    unreadable_sessions = summary.get("unreadable_sessions", 0)
+    if total_sessions == 0:
+        return "empty_source_cache"
+    if error_sessions == total_sessions:
+        return "error_only_source_cache"
+    if unreadable_sessions == total_sessions:
+        return "unreadable_only_source_cache"
+    return "no_readable_source_session"
 
 
 def _has_readable_source_session(cache_entries: list[object]) -> bool:

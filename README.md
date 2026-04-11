@@ -329,7 +329,7 @@ claude mcp list
 
 说明：
 - `topic`、`time_range`、`include_domains`、`exclude_domains` 当前是 Tavily-backed supplemental search 的能力；如果本次请求没有实际走 Tavily 补充搜索，主请求仍可继续执行，但这些控制项不会真正生效，并会通过 `warnings` 或 `partial` 状态体现。
-- 若上游只返回信源列表而没有正文，或正文命中当前的截断启发式，`web_search` 当前也会返回 `partial`；其中 `get_sources.search_status` 会同步保留该降级状态，但 `get_sources` 本身仍不会回放原始 `warnings` 列表。
+- 若上游只返回信源列表而没有正文，或正文命中当前的截断启发式，`web_search` 当前也会返回 `partial`；其中 `get_sources.search_status` 会同步保留该降级状态，`get_sources.search_warnings` 会回放与该搜索会话绑定的 warning code。
 
 ### `get_sources` — 获取信源
 

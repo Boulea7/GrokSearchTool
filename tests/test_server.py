@@ -592,6 +592,9 @@ async def test_get_config_info_get_sources_requires_readable_session_not_error_o
 
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
     assert "尚无可读取的 source session" in payload["feature_readiness"]["get_sources"]["message"]
+    assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
+        {"reason_code": "error_only_source_cache"}
+    ]
     assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
         "total_sessions": 1,
         "readable_sessions": 0,
@@ -666,6 +669,9 @@ async def test_get_config_info_excludes_invalid_cached_source_rows_from_readable
     payload = await load_config_info()
 
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
+    assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
+        {"reason_code": "unreadable_only_source_cache"}
+    ]
     assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
         "total_sessions": 1,
         "readable_sessions": 0,
@@ -804,10 +810,17 @@ async def test_get_config_info_skips_unconfigured_optional_providers(monkeypatch
         payload["feature_readiness"]["web_fetch"]["providers"]["tavily"]["skipped_reason"]
         == "TAVILY_API_KEY 未配置"
     )
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["tavily"]["check_id"] == "tavily_extract"
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["tavily"]["reason_code"] == "missing_api_key"
     assert (
         payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["skipped_reason"]
         == "FIRECRAWL_API_KEY 未配置"
     )
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["check_id"] == "firecrawl_scrape"
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["reason_code"] == "missing_api_key"
+    assert payload["feature_readiness"]["web_map"]["degraded_by"] == [
+        {"check_id": "tavily_map", "status": "skipped", "reason_code": "missing_api_key"}
+    ]
     assert payload["doctor"]["recommendations_detail"]
     assert {
         item["check_id"] for item in payload["doctor"]["recommendations_detail"]
