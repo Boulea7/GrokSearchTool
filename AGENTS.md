@@ -63,7 +63,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 
 返回 `dict`：
 
-- 成功时返回：`session_id`、`sources`、`sources_count`、`search_status`、`search_error`、`source_state`
+- 成功时返回：`session_id`、`sources`、`sources_count`、`search_status`、`search_error`、`search_warnings`、`source_state`
 - miss 时返回：`session_id`、`sources=[]`、`sources_count=0`
 - `error`：仅在 `session_id` 缺失或过期时返回
 
@@ -110,11 +110,12 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - 首次建立 `search_strategy` 时必须提供 `approach`；只有 strategy 已建立后，后续非 `is_revision` 调用才允许只追加 `search_terms`
 - `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
 - `grok_model_selection` 当前表示 `/models` 可见性阶段就已确认当前模型不适合直接使用，并会在真实请求前预选更合适的 Grok 候选模型；`grok_model_runtime_fallback` 则表示当前 probe model 在真实 `chat/completions` 路径上仍需在运行时二次回退才成功；这两个 check 可能同时出现
-- `web_search` 当前在“只返回信源列表、没有正文”或“正文疑似截断”时也会降级为 `partial`；`get_sources.search_status` 会保留该降级状态，但 `get_sources` 当前仍不会回放原始 `warnings`
+- `web_search` 当前在“只返回信源列表、没有正文”或“正文疑似截断”时也会降级为 `partial`；`get_sources.search_status` 会保留该降级状态，并通过 `search_warnings` 回放当前缓存的 warning code；旧缓存条目默认回放空数组
 - `grok_search_probe` 当前除 `ok` / `error` 外，也可能因为正文质量降级返回 `warning`；例如只拿到信源列表或正文疑似截断时，`feature_readiness.web_search` 应显示为 `degraded`
 - 当前运行时模型回退属于 best-effort 兼容路径：依赖 `/models` 返回候选列表，且上游错误摘要命中“模型不可用”类文案；若 `/models` 本身不可用，或错误类型不匹配，则不保证自动继续回退
 - 当前诊断 `web_search degraded` 时，`GROK_MODEL_SOURCE` 应视为根因分析的一等信息；若活动模型来自进程 env 或项目 `.env.local` / `.env` 覆盖，则与持久化配置层造成的 mismatch 是不同问题
 - `feature_readiness.get_sources` 当前只有在运行中进程里至少存在一个非 error 的可读取 source session 时才会显示 `ready`；若缓存里只有失败搜索留下的 session，则应保持 `partial_ready`
+- `feature_readiness.get_sources` 当前会附带 `cache_summary`，至少包含 `total_sessions`、`readable_sessions`、`error_sessions`、`partial_sessions`，用于快速观察 source cache 的整体状态
 - `feature_readiness.get_sources` 属于 `transient` readiness 信号；当前不应仅因其为 `partial_ready` 就拉低 overall doctor
 - `doctor` 当前会保留字符串版 `recommendations`，并额外提供结构化 `recommendations_detail`
 - 若 `GROK_MODEL_SOURCE` 是 `process_env`、`project_env_local` 或 `project_env`，单独调用 `switch_model` 不会改变当前进程；应先修改或删除对应覆盖层

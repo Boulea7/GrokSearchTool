@@ -581,6 +581,55 @@ async def test_get_config_info_get_sources_requires_readable_session_not_error_o
 
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
     assert "尚无可读取的 source session" in payload["feature_readiness"]["get_sources"]["message"]
+    assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
+        "total_sessions": 1,
+        "readable_sessions": 0,
+        "error_sessions": 1,
+        "partial_sessions": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_reports_get_sources_cache_summary(monkeypatch):
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    await server._SOURCES_CACHE.set(
+        "partial-session",
+        server._build_sources_cache_entry(
+            [{"title": "OpenAI", "url": "https://openai.com/"}],
+            search_status="partial",
+            search_error=None,
+        ),
+    )
+    await server._SOURCES_CACHE.set(
+        "ok-empty-session",
+        server._build_sources_cache_entry([],
+            search_status="ok",
+            search_error=None,
+        ),
+    )
+    await server._SOURCES_CACHE.set(
+        "error-session",
+        server._build_sources_cache_entry([],
+            search_status="error",
+            search_error="validation_error",
+        ),
+    )
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["get_sources"]["status"] == "ready"
+    assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
+        "total_sessions": 3,
+        "readable_sessions": 2,
+        "error_sessions": 1,
+        "partial_sessions": 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -2253,6 +2302,7 @@ async def test_get_sources_marks_failed_search_session_as_unavailable():
     assert cached["search_status"] == "error"
     assert cached["search_error"] == "validation_error"
     assert cached["source_state"] == "unavailable_due_to_search_error"
+    assert cached["search_warnings"] == []
 
 
 @pytest.mark.asyncio
@@ -2274,6 +2324,7 @@ async def test_get_sources_distinguishes_successful_empty_source_sessions(monkey
     assert cached["search_status"] == "ok"
     assert cached["search_error"] is None
     assert cached["source_state"] == "empty"
+    assert cached["search_warnings"] == []
 
 
 @pytest.mark.asyncio
@@ -2929,7 +2980,7 @@ async def test_web_search_surfaces_sources_only_response_without_empty_content(m
     assert result["status"] == "partial"
     assert "body_missing_sources_only" in result["warnings"]
     assert cached["search_status"] == "partial"
-    assert "warnings" not in cached
+    assert cached["search_warnings"] == ["body_missing_sources_only"]
 
 
 @pytest.mark.asyncio
@@ -2949,7 +3000,25 @@ async def test_web_search_marks_probably_truncated_body_as_partial(monkeypatch):
     assert result["status"] == "partial"
     assert "body_probably_truncated" in result["warnings"]
     assert cached["search_status"] == "partial"
-    assert "warnings" not in cached
+    assert cached["search_warnings"] == ["body_probably_truncated"]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_defaults_search_warnings_for_legacy_cache_entries():
+    session_id = "legacy-no-warning-session"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [{"title": "OpenAI", "url": "https://openai.com/"}],
+            "search_status": "partial",
+            "search_error": None,
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["search_status"] == "partial"
+    assert cached["search_warnings"] == []
 
 
 def test_configure_windows_event_loop_policy(monkeypatch):

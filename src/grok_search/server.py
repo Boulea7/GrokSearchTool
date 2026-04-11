@@ -861,11 +861,23 @@ def _build_search_response(
     }
 
 
+def _normalize_search_warnings(search_warnings: Optional[list[str]]) -> list[str]:
+    normalized: list[str] = []
+    for item in search_warnings or []:
+        if not isinstance(item, str):
+            continue
+        warning = item.strip()
+        if warning and warning not in normalized:
+            normalized.append(warning)
+    return normalized
+
+
 def _build_sources_cache_entry(
     sources: list[dict],
     *,
     search_status: str,
     search_error: str | None,
+    search_warnings: Optional[list[str]] = None,
 ) -> dict:
     if sources:
         source_state = "available"
@@ -878,6 +890,7 @@ def _build_sources_cache_entry(
         "sources": sources,
         "search_status": search_status,
         "search_error": search_error,
+        "search_warnings": _normalize_search_warnings(search_warnings),
         "source_state": source_state,
     }
 
@@ -889,6 +902,7 @@ def _normalize_sources_cache_entry(entry: object) -> dict | None:
             "sources": entry.get("sources", []),
             "search_status": search_status,
             "search_error": entry.get("search_error"),
+            "search_warnings": _normalize_search_warnings(entry.get("search_warnings")),
             "source_state": entry.get("source_state") or (
                 "available"
                 if entry.get("sources")
@@ -897,7 +911,12 @@ def _normalize_sources_cache_entry(entry: object) -> dict | None:
         }
 
     if isinstance(entry, list):
-        return _build_sources_cache_entry(entry, search_status="ok", search_error=None)
+        return _build_sources_cache_entry(
+            entry,
+            search_status="ok",
+            search_error=None,
+            search_warnings=[],
+        )
 
     return None
 
@@ -1223,6 +1242,7 @@ async def web_search(
             standardized_sources,
             search_status=status,
             search_error=error,
+            search_warnings=warnings,
         ),
     )
 
@@ -1289,6 +1309,7 @@ async def get_sources(
         "sources_count": len(standardized_sources),
         "search_status": normalized_entry["search_status"],
         "search_error": normalized_entry["search_error"],
+        "search_warnings": normalized_entry["search_warnings"],
         "source_state": updated_entry["source_state"],
     }
 
@@ -1983,10 +2004,31 @@ def _has_readable_source_session(cache_entries: list[object]) -> bool:
     return False
 
 
+def _summarize_source_cache_entries(cache_entries: list[object]) -> dict[str, int]:
+    summary = {
+        "total_sessions": len(cache_entries),
+        "readable_sessions": 0,
+        "error_sessions": 0,
+        "partial_sessions": 0,
+    }
+    for entry in cache_entries:
+        normalized_entry = _normalize_sources_cache_entry(entry)
+        if normalized_entry is None:
+            continue
+        if normalized_entry["search_status"] == "error":
+            summary["error_sessions"] += 1
+            continue
+        summary["readable_sessions"] += 1
+        if normalized_entry["search_status"] == "partial":
+            summary["partial_sessions"] += 1
+    return summary
+
+
 def _build_feature_readiness(
     checks: list[dict],
     *,
     has_readable_source_session: bool = False,
+    source_cache_summary: Optional[dict[str, int]] = None,
 ) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
@@ -2083,12 +2125,14 @@ def _build_feature_readiness(
             {
                 "status": "ready",
                 "message": "当前进程内已存在可读取的 source session 缓存。",
+                "cache_summary": source_cache_summary or _summarize_source_cache_entries([]),
                 "transient": True,
             }
             if has_readable_source_session
             else {
                 "status": "partial_ready" if web_search_status != "not_ready" else "not_ready",
                 "message": "接口可用，但当前进程内尚无可读取的 source session；需先执行成功的 web_search。",
+                "cache_summary": source_cache_summary or _summarize_source_cache_entries([]),
                 "transient": True,
             }
         ),
@@ -2588,9 +2632,11 @@ async def get_config_info(
     )
 
     source_cache_entries = await _SOURCES_CACHE.snapshot()
+    source_cache_summary = _summarize_source_cache_entries(source_cache_entries)
     feature_readiness = _build_feature_readiness(
         checks,
         has_readable_source_session=_has_readable_source_session(source_cache_entries),
+        source_cache_summary=source_cache_summary,
     )
     doctor = _build_doctor_payload(checks, feature_readiness, recommendations, recommendation_details)
     config_info["connection_test"] = _build_connection_test_from_models_check(grok_models)

@@ -5,6 +5,7 @@
 - `session_id` is a process-local handle backed by the running server's in-memory LRU cache.
 - It is transient, non-durable, non-caller-bound, and should not be treated as a secret token.
 - In a shared-daemon setup, any caller that holds a valid `session_id` inside the same running process can read the cached sources.
+- Successful `get_sources` reads now also return additive `search_warnings` for that cached search session; legacy cache entries that never stored warning codes default to `search_warnings=[]`.
 
 ## Miss semantics
 
@@ -15,6 +16,7 @@
 
 - `feature_readiness.get_sources = ready` means the current process already holds at least one readable non-error source session.
 - `feature_readiness.get_sources = partial_ready` means the interface exists, but the current process does not yet hold a readable session.
+- `feature_readiness.get_sources` now includes additive `cache_summary` data with a lightweight cache snapshot: `total_sessions`, `readable_sessions`, `error_sessions`, and `partial_sessions`.
 - This readiness is marked `transient` and does not lower the overall doctor status by itself.
 
 ## Why caller binding is not implemented yet
