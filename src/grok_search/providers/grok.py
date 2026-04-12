@@ -289,6 +289,15 @@ class GrokSearchProvider(BaseSearchProvider):
             config.debug_enabled,
         )
 
+        if (
+            "_execute_completion_with_retry" in self.__dict__
+            and "_execute_completion_with_retry_result" not in self.__dict__
+        ):
+            self._last_completion_sources = []
+            execute_completion = self._execute_completion_with_retry
+            content = await execute_completion(headers, payload, ctx)
+            return content, list(self._last_completion_sources)
+
         content, sources = await self._execute_completion_with_retry_result(
             headers,
             payload,

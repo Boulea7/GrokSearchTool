@@ -395,6 +395,18 @@ def test_standardize_sources_merges_complementary_metadata_for_canonicalized_url
             "score": 0.91,
             "published_at": None,
             "retrieved_at": "2026-04-05T12:34:56Z",
+            "contributors": [
+                {
+                    "url": "https://docs.example.com/Guide",
+                    "provider": "grok",
+                    "title": "Readable Title",
+                },
+                {
+                    "url": "https://docs.example.com/Guide",
+                    "provider": "tavily",
+                    "score": 0.91,
+                },
+            ],
             "rank": 1,
         }
     ]
@@ -959,6 +971,19 @@ def test_merge_sources_replaces_exact_duplicate_url_with_richer_item():
             "provider": "tavily",
             "description": "More context",
             "score": 0.9,
+            "contributors": [
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "grok",
+                    "title": "Sparse",
+                },
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "tavily",
+                    "title": "Richer",
+                    "score": 0.9,
+                },
+            ],
         }
     ]
 
@@ -991,6 +1016,19 @@ def test_merge_sources_preserves_readable_metadata_when_scored_duplicate_is_spar
             "custom_field": "keep-me",
             "score": 0.91,
             "published_at": "2026-04-05",
+            "contributors": [
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "grok",
+                    "title": "Readable Title",
+                },
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "tavily",
+                    "score": 0.91,
+                    "published_at": "2026-04-05",
+                },
+            ],
         }
     ]
 
@@ -1025,6 +1063,21 @@ def test_merge_sources_high_score_duplicate_keeps_existing_source_labels_when_pr
             "origin_type": "citation",
             "score": 0.91,
             "published_at": "2026-04-05",
+            "contributors": [
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "grok",
+                    "source": "curated",
+                    "origin_type": "citation",
+                    "title": "Primary Title",
+                },
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "tavily",
+                    "score": 0.91,
+                    "published_at": "2026-04-05",
+                },
+            ],
         }
     ]
 

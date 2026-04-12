@@ -3350,6 +3350,19 @@ async def test_get_sources_merges_richer_supplemental_metadata_for_duplicate_url
             "score": 0.91,
             "published_at": None,
             "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "contributors": [
+                {
+                    "url": "https://docs.example.com/guide",
+                    "provider": "firecrawl",
+                    "title": "Example Docs",
+                },
+                {
+                    "url": "https://docs.example.com/guide",
+                    "provider": "tavily",
+                    "title": "Canonical Guide",
+                    "score": 0.91,
+                },
+            ],
             "rank": 1,
         }
     ]
@@ -3492,6 +3505,19 @@ async def test_get_sources_keeps_richer_metadata_for_exact_duplicate_url_across_
             "score": 0.91,
             "published_at": None,
             "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "contributors": [
+                {
+                    "url": "https://openai.com/blog",
+                    "provider": "grok",
+                    "title": "OpenAI Blog",
+                },
+                {
+                    "url": "https://openai.com/blog",
+                    "provider": "tavily",
+                    "title": "OpenAI Blog",
+                    "score": 0.91,
+                },
+            ],
             "rank": 1,
         }
     ]
@@ -3534,6 +3560,18 @@ async def test_get_sources_preserves_readable_title_when_exact_duplicate_provide
             "score": 0.91,
             "published_at": None,
             "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "contributors": [
+                {
+                    "url": "https://primary.example.com/guide",
+                    "provider": "grok",
+                    "title": "Primary Source",
+                },
+                {
+                    "url": "https://primary.example.com/guide",
+                    "provider": "tavily",
+                    "score": 0.91,
+                },
+            ],
             "rank": 1,
         }
     ]

@@ -249,7 +249,7 @@ def _merge_duplicate_source_items(
             merged[key] = candidate_value
 
     contributors = _merge_contributor_snapshots(existing, candidate)
-    if len(contributors) > 1:
+    if _should_publish_contributors(contributors):
         merged["contributors"] = contributors
     else:
         merged.pop("contributors", None)
@@ -322,7 +322,7 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
         raw_item["published_at"] = _normalize_optional_text(raw_item.get("published_at") or raw_item.get("published_date"))
         raw_item["retrieved_at"] = _normalize_optional_text(raw_item.get("retrieved_at")) or timestamp
         contributor_snapshots = _extract_contributor_snapshots(raw_item)
-        if len(contributor_snapshots) > 1:
+        if _should_publish_contributors(contributor_snapshots):
             raw_item["contributors"] = contributor_snapshots
         else:
             raw_item.pop("contributors", None)
@@ -385,6 +385,21 @@ def _merge_contributor_snapshots(*items: Mapping[str, Any]) -> list[dict[str, An
             seen.add(key)
             merged.append(snapshot)
     return merged
+
+
+def _should_publish_contributors(contributors: list[dict[str, Any]]) -> bool:
+    if len(contributors) <= 1:
+        return False
+    identities = {
+        (
+            contributor.get("url"),
+            contributor.get("provider"),
+            contributor.get("source"),
+            contributor.get("origin_type"),
+        )
+        for contributor in contributors
+    }
+    return len(identities) > 1
 
 
 def _extract_contributor_snapshots(item: Mapping[str, Any]) -> list[dict[str, Any]]:
