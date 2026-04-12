@@ -39,6 +39,7 @@ class DeepResearchRuntime:
         continue_from_job_id: str = "",
         plan_only: bool = False,
         force_new: bool = False,
+        schedule: bool = True,
     ) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
         normalized_include_domains = list(include_domains or [])
@@ -89,7 +90,7 @@ class DeepResearchRuntime:
         )
         job = self.store.get_job(job.job_id)
 
-        if not plan_only:
+        if not plan_only and schedule:
             await self._schedule(job.job_id)
 
         return self._job_payload(job, reused=False)
@@ -127,7 +128,7 @@ class DeepResearchRuntime:
             "artifacts": [artifact.model_dump() for artifact in self.store.list_artifacts(job_id)],
         }
 
-    async def resume(self, job_id: str) -> dict[str, Any]:
+    async def resume(self, job_id: str, *, schedule: bool = True) -> dict[str, Any]:
         job = self.store.get_job(job_id)
         if job.status not in {"draft", "failed", "interrupted"}:
             return self._job_payload(job, reused=False)
@@ -144,7 +145,8 @@ class DeepResearchRuntime:
             message="Deep research job resumed.",
             data={},
         )
-        await self._schedule(job_id)
+        if schedule:
+            await self._schedule(job_id)
         return self._job_payload(job, reused=False)
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
@@ -177,6 +179,10 @@ class DeepResearchRuntime:
         return {
             "jobs": [self._serialize_job(job) for job in jobs],
         }
+
+    async def run_job(self, job_id: str) -> dict[str, Any]:
+        await self._run(job_id)
+        return await self.result(job_id)
 
     def write_artifact(self, job_id: str, kind: str, content: str, content_type: str) -> dict[str, Any]:
         path = self.store.artifact_abspath(job_id, kind)
