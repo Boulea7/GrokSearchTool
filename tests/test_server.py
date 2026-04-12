@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from grok_search import server
+from grok_search.providers.base import BaseSearchProvider
 from grok_search.sources import SourcesCache
 
 ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL = server._preflight_public_target_url
@@ -1917,6 +1918,80 @@ async def test_probe_web_search_prefers_search_with_sources_when_available(monke
 
 
 @pytest.mark.asyncio
+async def test_provider_search_with_sources_passes_full_supported_kwargs():
+    captured = {}
+
+    class DummyProvider:
+        async def search_with_sources(
+            self,
+            query,
+            platform="",
+            min_results=3,
+            max_results=10,
+            ctx=None,
+        ):
+            captured["call"] = {
+                "query": query,
+                "platform": platform,
+                "min_results": min_results,
+                "max_results": max_results,
+                "ctx": ctx,
+            }
+            return "Search answer", [{"title": "Guide", "url": "https://docs.example.com/guide"}]
+
+    ctx = object()
+    content, sources = await server._provider_search_with_sources(
+        DummyProvider(),
+        "test query",
+        platform="GitHub",
+        min_results=1,
+        max_results=2,
+        ctx=ctx,
+    )
+
+    assert content == "Search answer"
+    assert sources == [{"title": "Guide", "url": "https://docs.example.com/guide"}]
+    assert captured["call"] == {
+        "query": "test query",
+        "platform": "GitHub",
+        "min_results": 1,
+        "max_results": 2,
+        "ctx": ctx,
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_search_with_sources_supports_legacy_narrow_base_provider_signature():
+    class NarrowProvider(BaseSearchProvider):
+        async def search(self, query: str, platform: str = "") -> str:
+            return f"answer:{query}:{platform}"
+
+        def get_provider_name(self) -> str:
+            return "narrow"
+
+    content, sources = await server._provider_search_with_sources(
+        NarrowProvider("https://api.example.com", "test-key"),
+        "test query",
+        platform="GitHub",
+        min_results=1,
+        max_results=2,
+    )
+
+    assert content == "answer:test query:GitHub"
+    assert sources == []
+
+
+@pytest.mark.asyncio
+async def test_provider_search_with_sources_rejects_invalid_return_shape():
+    class DummyProvider:
+        async def search_with_sources(self, query, platform=""):
+            return "Search answer"
+
+    with pytest.raises(TypeError, match="search_with_sources"):
+        await server._provider_search_with_sources(DummyProvider(), "test query")
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_marks_web_fetch_as_degraded_when_only_firecrawl_probe_warns(monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
@@ -2422,6 +2497,61 @@ async def test_web_search_retries_with_alternate_available_grok_model_after_runt
     assert result["effective_params"]["model"] == "grok-4.20-0309-non-reasoning"
     assert "model_fallback_applied" in result["warnings"]
     assert captured["models"] == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_runtime_fallback_preserves_structured_sources_from_typed_path(monkeypatch):
+    captured = {"models": []}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            self.model = model
+            captured["models"].append(model)
+
+        async def search_with_sources(self, query, platform="", min_results=3, max_results=10, ctx=None):
+            if self.model == "grok-4.20-0309":
+                request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+                response = httpx.Response(
+                    503,
+                    request=request,
+                    json={"error": {"message": "No available channel for model grok-4.20-0309"}},
+                )
+                raise httpx.HTTPStatusError("unavailable", request=request, response=response)
+            return "Search answer", [{"title": "Structured Guide", "url": "https://docs.example.com/guide"}]
+
+        async def search(self, query, platform=""):
+            return "unused fallback path"
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-0309-non-reasoning"
+    assert "model_fallback_applied" in result["warnings"]
+    assert captured["models"] == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+    assert cached["sources"] == [
+        {
+            "title": "Structured Guide",
+            "url": "https://docs.example.com/guide",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "docs.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
 
 
 @pytest.mark.asyncio
