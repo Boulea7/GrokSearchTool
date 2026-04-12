@@ -258,6 +258,7 @@ def test_packaging_workflow_enforces_distribution_and_contract_checks():
     assert "uv build --wheel --sdist" in text
     assert "tests/test_package_imports.py" in text
     assert "tests/test_docs_contracts.py" in text
+    assert "dist/*.tar.gz" in text
     assert "import grok_search.planning" in text
     assert "import grok_search.server" in text
     assert "from grok_search.server import main" in text
@@ -269,6 +270,7 @@ def test_releasing_doc_covers_version_tag_changelog_and_artifact_verification():
     assert "CHANGELOG.md" in text
     assert "git tag" in text
     assert "uv build --wheel --sdist" in text
+    assert "dist/*.tar.gz" in text
     assert "grok_search.planning" in text
     assert "grok_search.server" in text
     assert "grok-search" in text
