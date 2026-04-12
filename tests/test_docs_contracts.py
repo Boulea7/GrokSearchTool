@@ -351,8 +351,8 @@ def test_get_sources_lifecycle_state_matrix_locks_required_states_without_prose_
     assert unavailable["observable"]["sources_count"] == 0
 
     assert empty["observable"]["source_state"] == "empty"
-    assert empty["observable"]["search_status"] == "ok"
     assert empty["observable"]["search_error"] is None
+    assert "search_status" not in empty["observable"]
     assert empty["observable"]["sources_count"] == 0
 
 
@@ -531,6 +531,8 @@ def test_docs_explain_contributors_and_legacy_source_overload_contract():
     assert "legacy-overloaded field" in readme_en
     assert "legacy-overloaded field" in compatibility
     assert "lossy aggregate display row" in compatibility
+    assert "不同的 contributor identity" in readme
+    assert "distinct contributor identity" in readme_en
 
 
 def test_localized_readmes_cover_reason_code_and_contributors_contract():
@@ -717,6 +719,32 @@ def test_docs_explain_preflight_warning_side_channel_without_payload_shape_chang
     assert "does not change successful tool payloads" in compatibility
     assert "caller-visible warning" in agents
     assert "不会改写成功返回体" in agents
+
+
+def test_docs_explain_web_fetch_and_web_map_preflight_contract():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+
+    assert "`GET` 而不是 `HEAD`" in readme
+    assert "`5` 次预检请求" in readme
+    assert "skipped_due_to_error" in readme
+    assert "loopback" in readme
+    assert "private" in readme
+    assert "GET rather than `HEAD`" in compatibility
+    assert "fifth preflight still encounters a new redirect" in compatibility
+    assert "skipped_due_to_error" in compatibility
+
+
+def test_docs_explain_toggle_builtin_tools_stable_error_contract():
+    readme = README.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+
+    assert "git_root_not_found" in readme
+    assert "settings_file_invalid" in readme
+    assert "settings_write_failed" in readme
+    assert "invalid_action" in readme
+    assert "client-specific" in compatibility
+    assert "local Git project context detection" in compatibility
 
 
 def test_localized_readmes_explain_redirect_preflight_contract():

@@ -345,7 +345,7 @@ claude mcp list
 - `session_id_not_found_or_expired` 当前统一覆盖进程重启、TTL 到期、LRU 淘汰，以及不可读的旧缓存条目等 miss 场景。
 - `search_warnings` 当前会回放与该搜索会话绑定的 warning code；旧缓存条目若没有该字段，则默认返回空数组。
 - `sources_count` 当前等于标准化、去重与过滤之后最终写入缓存的信源数量，不等于上游原始 citations 条数。
-- 去重后的单条 source 当前应被理解为 normalized aggregate row：如果同一 URL 同时来自多个输入路径，`provider` 表示该聚合结果最终保留下来的 normalized winner provider，而 `source`、`origin_type` 等 provenance metadata 仍可能来自其他贡献行；如需看 contributor 级 attribution，应优先读取 additive `contributors`。
+- 去重后的单条 source 当前应被理解为 normalized aggregate row：如果同一 URL 同时来自多个输入路径，`provider` 表示该聚合结果最终保留下来的 normalized winner provider，而 `source`、`origin_type` 等 provenance metadata 仍可能来自其他贡献行；只有当不同的 contributor identity 被折叠进同一行时，才会额外暴露 additive `contributors` 供调用方查看 contributor 级 attribution。
 - `source` 当前仍带有 legacy 重载语义：当 `origin_type` 缺失时，它仍可能被当作旧缓存里的 provider alias 回填到 `provider`；只有在 `origin_type` 等 provenance 信号存在时，`source` 才更接近 provenance label。调用方不应把它当作无歧义字段。
 - `rank` 当前会按 `score`、来源身份清晰度与稳定去重顺序生成，不再对 Grok 引用做额外优先级偏置。
 - `standardize_sources` 当前会在去重时规范化 URL 的 scheme/host 大小写，因此同一页面的 mixed-case 变体可能折叠为一个 source；同时会保留普通锚点（fragment），避免不同页面段落引用被误合并，并继续剥离 URL `userinfo`、遮罩常见 query / fragment 签名参数，以及常见 OAuth/OIDC credential 参数（如 `client_secret`、`refresh_token`、`id_token`、`password`）。高置信度 cloud-signed credential 键（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）当前也属于遮罩范围。显式默认端口（如 `:443` / `:80`）当前仍会保留，不会与隐式默认端口 URL 自动折叠。
@@ -378,6 +378,7 @@ claude mcp list
 说明：
 - Tavily Map 默认可能返回外部域名链接；若你需要更接近站内 sitemap 的结果，请结合 `instructions` 收紧范围，并按返回结果自行过滤。当前文档中的这条说明对应 Tavily 文档中 `allow_external=true` 的默认行为，本封装暂未直接暴露该开关。
 - 默认会拒绝非 `http/https`、loopback、明显私有网络目标、单标签主机名、常见私网后缀主机、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把私网 IP 编进公网 DNS 名的 alias 形态，并在调用 Tavily 前继续做可见 redirect 目标复检。
+- 上述边界同样覆盖明显的 private / 私有网络目标；当前策略优先阻断这类目标，再决定是否继续调用下游 provider。
 - 可见 redirect 复检当前使用 `GET` 而不是 `HEAD`；最多会发起 `5` 次预检请求，如果到第 `5` 次预检时仍然看到新的可见重定向，就会返回“目标 URL 重定向次数过多”并拒绝继续执行下游 provider。若预检超时或发生请求级错误，则会标记为 `skipped_due_to_error`，并继续执行下游 provider；因此该边界当前应被理解为 best-effort safety boundary，而不是对 split-horizon / 本地 DNS 私有解析的强保证。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
@@ -438,6 +439,12 @@ claude mcp list
 | `action` | string | 否 | `"status"` | `"on"` 禁用官方工具 / `"off"` 启用官方工具 / `"status"` 查看状态 |
 
 通过修改项目级 `.claude/settings.json` 的 `permissions.deny`，为 Claude Code 添加或移除内建网页工具的 deny 规则。
+
+稳定错误码：
+- `git_root_not_found`：当前目录不在可识别的 Git 项目里，无法定位项目级 `.claude/settings.json`
+- `settings_file_invalid`：`.claude/settings.json` 存在但 JSON / 结构不合法
+- `settings_write_failed`：项目设置文件写回失败
+- `invalid_action`：`action` 不是 `on` / `off` / `status`
 
 ### `plan_intent` / `plan_complexity` / `plan_sub_query` / `plan_search_term` / `plan_tool_mapping` / `plan_execution`
 

@@ -6,7 +6,7 @@
 - It is transient, non-durable, non-caller-bound, and should not be treated as a secret token.
 - In a shared-daemon setup, any caller that holds a valid `session_id` inside the same running process can read the cached sources.
 - Successful `get_sources` reads now also return additive `search_warnings` for that cached search session; legacy cache entries that never stored warning codes default to `search_warnings=[]`.
-- Returned source rows are lossy aggregate display rows. When multiple inputs collapse into one row, additive `contributors` carries contributor-level attribution, while top-level `provider` remains the winner provider for that row.
+- Returned source rows are lossy aggregate display rows. Additive `contributors` is only exposed when distinct contributor identities collapse into one row, while top-level `provider` remains the winner provider for that row.
 - `source` remains a legacy-overloaded field: older cache entries may still use it as a provider alias when `origin_type` is absent.
 
 ## Miss semantics
@@ -40,7 +40,7 @@ The key distinction is that `feature_readiness.get_sources.status` describes whe
 | `ready` | `feature_readiness.get_sources.status` | The current process already holds at least one readable non-error source session. | `status=ready`, `transient=true` |
 | `miss` | `get_sources` response | The requested `session_id` is unavailable because it never existed in this process anymore. | `sources=[]`, `sources_count=0`, `error=session_id_not_found_or_expired` |
 | `unavailable_due_to_search_error` | `get_sources.source_state` | The session exists, but the originating `web_search` ended in `search_status=error`. | `source_state=unavailable_due_to_search_error`, `sources=[]`, `sources_count=0` |
-| `empty` | `get_sources.source_state` | The session exists and the search succeeded, but no readable sources survived extraction/standardization. | `source_state=empty`, `search_status=ok`, `sources=[]`, `sources_count=0` |
+| `empty` | `get_sources.source_state` | The session exists, but no readable sources survived extraction/standardization for that cached session. | `source_state=empty`, `sources=[]`, `sources_count=0` |
 
 <!-- docs-contract:get-sources-lifecycle:start -->
 ```json
@@ -95,7 +95,6 @@ The key distinction is that `feature_readiness.get_sources.status` describes whe
       "surface": "get_sources.source_state",
       "observable": {
         "source_state": "empty",
-        "search_status": "ok",
         "search_error": null,
         "sources": [],
         "sources_count": 0
