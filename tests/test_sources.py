@@ -1029,6 +1029,55 @@ def test_merge_sources_high_score_duplicate_keeps_existing_source_labels_when_pr
     ]
 
 
+def test_merge_sources_adds_contributors_for_duplicate_url_across_providers():
+    merged = merge_sources(
+        [
+            {
+                "title": "Primary Title",
+                "url": "https://dup.example.com/page",
+                "provider": "grok",
+                "source": "curated",
+                "origin_type": "citation",
+            },
+        ],
+        [
+            {
+                "url": "https://dup.example.com/page",
+                "provider": "tavily",
+                "score": 0.91,
+                "published_at": "2026-04-05",
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "title": "Primary Title",
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "source": "curated",
+            "origin_type": "citation",
+            "score": 0.91,
+            "published_at": "2026-04-05",
+            "contributors": [
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "grok",
+                    "source": "curated",
+                    "origin_type": "citation",
+                    "title": "Primary Title",
+                },
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "tavily",
+                    "score": 0.91,
+                    "published_at": "2026-04-05",
+                },
+            ],
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_sources_cache_evicts_least_recently_used_entry():
     cache = SourcesCache(max_size=2)

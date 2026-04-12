@@ -476,6 +476,24 @@ def test_docs_cover_additive_source_provenance_and_machine_readiness_fields():
     assert "одного вызова `switch_model` недостаточно" in readme_ru
 
 
+def test_docs_explain_contributors_and_legacy_source_overload_contract():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    lifecycle = GET_SOURCES_LIFECYCLE.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "`contributors`" in readme
+    assert "`contributors`" in readme_en
+    assert "`contributors`" in compatibility
+    assert "`contributors`" in lifecycle
+    assert "`contributors`" in agents
+    assert "legacy 重载语义" in readme
+    assert "legacy-overloaded field" in readme_en
+    assert "legacy-overloaded field" in compatibility
+    assert "lossy aggregate display row" in compatibility
+
+
 def test_docs_lock_provider_level_machine_fields_and_get_sources_readiness_wording():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")

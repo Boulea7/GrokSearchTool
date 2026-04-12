@@ -6,6 +6,8 @@
 - It is transient, non-durable, non-caller-bound, and should not be treated as a secret token.
 - In a shared-daemon setup, any caller that holds a valid `session_id` inside the same running process can read the cached sources.
 - Successful `get_sources` reads now also return additive `search_warnings` for that cached search session; legacy cache entries that never stored warning codes default to `search_warnings=[]`.
+- Returned source rows are lossy aggregate display rows. When multiple inputs collapse into one row, additive `contributors` carries contributor-level attribution, while top-level `provider` remains the winner provider for that row.
+- `source` remains a legacy-overloaded field: older cache entries may still use it as a provider alias when `origin_type` is absent.
 
 ## Miss semantics
 
