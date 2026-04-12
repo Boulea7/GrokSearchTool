@@ -241,7 +241,7 @@ If supplemental search goes through Tavily, `max_results` is currently clamped t
 These controls currently apply to Tavily-backed supplemental search only; if Tavily is unavailable or not selected for the supplemental path, the request may still succeed with warnings and the controls will not be fully enforced.
 When the upstream returns only source links without a usable body, or when the answer matches the current truncation heuristics, `web_search` also returns `partial`. `get_sources.search_status` keeps that downgraded status and now also replays the cached `search_warnings` codes for the same session.
 
-Successful `get_sources` responses include `session_id`, `sources`, and `sources_count`, where each source is standardized with metadata such as `provider`, `domain`, `score`, `retrieved_at`, and `rank`, and may add provenance fields such as `origin_type` when available. They also return:
+Successful `get_sources` responses include `session_id`, `sources`, and `sources_count`, where each source is standardized with metadata such as `provider`, `domain`, `score`, `retrieved_at`, and `rank`, and may add provenance fields such as `origin_type` and `contributors` when available. They also return:
 
 - `search_status`
 - `search_error`
@@ -253,6 +253,8 @@ Successful `get_sources` responses include `session_id`, `sources`, and `sources
 Legacy cache entries that predate this contract simply return `search_warnings=[]`.
 
 `sources_count` is the final post-standardization, post-dedupe source count written into the cache, not the upstream raw citation count.
+After dedupe, each source row should be treated as a lossy aggregate display row: `provider` reflects the winner provider for that row, while `source` / `origin_type` may still come from another contributing row. Use additive `contributors` for contributor-level attribution.
+`source` is still a legacy-overloaded field: when `origin_type` is absent it may still be reused as an old provider alias, and only becomes closer to a provenance label when provenance signals survive the upstream path.
 `rank` currently follows `score`, source identity quality, and stable dedupe order without giving Grok-origin citations extra priority.
 `standardize_sources` canonicalizes scheme/host casing for dedupe, so mixed-case variants of the same page may collapse into one source; it still preserves ordinary URL fragments, removes URL userinfo, and masks common signature/token parameters plus common OAuth/OIDC credential keys such as `client_secret`, `refresh_token`, `id_token`, and `password`. High-confidence cloud-signed credential keys such as `X-Amz-Credential`, `X-Goog-Credential`, and `GoogleAccessId` are also masked. Explicit default ports such as `:443` and `:80` are still preserved and are not collapsed into implicit-default URLs.
 

@@ -3046,6 +3046,64 @@ async def test_get_sources_keeps_backend_provider_when_structured_source_include
 
 
 @pytest.mark.asyncio
+async def test_get_sources_exact_duplicate_url_across_providers_exposes_contributors(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+        async def search_with_sources(self, query, platform):
+            return (
+                "Search answer",
+                [
+                    {
+                        "title": "Primary Title",
+                        "url": "https://dup.example.com/page",
+                        "source": "curated",
+                        "origin_type": "citation",
+                    }
+                ],
+            )
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "url": "https://dup.example.com/page",
+                "content": "Latest updates",
+                "score": 0.91,
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search("test query", extra_sources=1)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"][0]["provider"] == "tavily"
+    assert cached["sources"][0]["source"] == "curated"
+    assert cached["sources"][0]["origin_type"] == "citation"
+    assert cached["sources"][0]["contributors"] == [
+        {
+            "url": "https://dup.example.com/page",
+            "provider": "grok",
+            "source": "curated",
+            "origin_type": "citation",
+            "title": "Primary Title",
+        },
+        {
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "score": 0.91,
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_web_search_keeps_provider_sources_when_structured_path_returns_sources_only(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
@@ -3346,6 +3404,18 @@ async def test_get_sources_merges_canonicalized_supplemental_duplicate_urls(monk
             "published_at": None,
             "retrieved_at": cached["sources"][0]["retrieved_at"],
             "rank": 1,
+            "contributors": [
+                {
+                    "url": "https://docs.example.com/Guide",
+                    "provider": "firecrawl",
+                    "title": "Readable Title",
+                },
+                {
+                    "url": "https://docs.example.com/Guide",
+                    "provider": "tavily",
+                    "score": 0.91,
+                },
+            ],
         }
     ]
 
@@ -3537,6 +3607,76 @@ async def test_get_sources_standardizes_legacy_cached_sources_on_read():
 
 
 @pytest.mark.asyncio
+async def test_get_sources_legacy_cache_with_source_and_origin_type_keeps_overloaded_contract():
+    session_id = "legacy-overloaded-source"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "source": "curated",
+                "origin_type": "citation",
+            }
+        ],
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == [
+        {
+            "title": "Legacy Source",
+            "url": "https://legacy.example.com/page",
+            "provider": "grok",
+            "source": "curated",
+            "origin_type": "citation",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "legacy.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_legacy_cache_uses_source_as_provider_alias_when_origin_type_missing():
+    session_id = "legacy-provider-alias"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "source": "legacy-provider",
+            }
+        ],
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == [
+        {
+            "title": "Legacy Source",
+            "url": "https://legacy.example.com/page",
+            "provider": "legacy-provider",
+            "source": "legacy-provider",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "legacy.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_sources_standardizes_mapping_like_legacy_cached_sources_on_read():
     session_id = "legacy-mapping-session"
     await server._SOURCES_CACHE.set(
@@ -3594,6 +3734,48 @@ async def test_get_sources_reuses_standardized_timestamp_for_legacy_cache():
 
     assert migrated[0]["retrieved_at"] == first["sources"][0]["retrieved_at"]
     assert first["sources"][0]["retrieved_at"] == second["sources"][0]["retrieved_at"]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_legacy_duplicate_rows_write_back_stable_contributors():
+    session_id = "legacy-duplicate-contributors"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        [
+            {
+                "title": "Primary Title",
+                "url": "https://dup.example.com/page",
+                "source": "curated",
+                "origin_type": "citation",
+            },
+            {
+                "url": "https://dup.example.com/page",
+                "provider": "tavily",
+                "score": 0.91,
+            },
+        ],
+    )
+
+    first = await server.get_sources(session_id)
+    migrated = await server._SOURCES_CACHE.get(session_id)
+    second = await server.get_sources(session_id)
+
+    assert first["sources"] == second["sources"]
+    assert migrated == first["sources"]
+    assert first["sources"][0]["contributors"] == [
+        {
+            "url": "https://dup.example.com/page",
+            "provider": "grok",
+            "source": "curated",
+            "origin_type": "citation",
+            "title": "Primary Title",
+        },
+        {
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "score": 0.91,
+        },
+    ]
 
 
 @pytest.mark.asyncio

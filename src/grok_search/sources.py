@@ -240,11 +240,19 @@ def _merge_duplicate_source_items(
     merged = dict(existing)
 
     for key, candidate_value in dict(candidate).items():
+        if key == "contributors":
+            continue
         if key == "url":
             merged[key] = candidate_value if prefer_candidate else merged.get(key, candidate_value)
             continue
         if _should_take_merged_source_value(key, merged.get(key), candidate_value, prefer_candidate=prefer_candidate):
             merged[key] = candidate_value
+
+    contributors = _merge_contributor_snapshots(existing, candidate)
+    if len(contributors) > 1:
+        merged["contributors"] = contributors
+    else:
+        merged.pop("contributors", None)
 
     return merged
 
@@ -313,6 +321,11 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
         raw_item["score"] = _normalize_score(raw_item.get("score"))
         raw_item["published_at"] = _normalize_optional_text(raw_item.get("published_at") or raw_item.get("published_date"))
         raw_item["retrieved_at"] = _normalize_optional_text(raw_item.get("retrieved_at")) or timestamp
+        contributor_snapshots = _extract_contributor_snapshots(raw_item)
+        if len(contributor_snapshots) > 1:
+            raw_item["contributors"] = contributor_snapshots
+        else:
+            raw_item.pop("contributors", None)
         raw_item["_source_order"] = index
         canonical_key = _canonicalize_source_dedupe_key(url)
         existing = standardized_by_url.get(canonical_key)
@@ -351,6 +364,78 @@ def _source_priority_key(item: dict) -> tuple:
 
 def _should_replace_standardized_source(existing: dict, candidate: dict) -> bool:
     return _source_priority_key(candidate) < _source_priority_key(existing)
+
+
+def _merge_contributor_snapshots(*items: Mapping[str, Any]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
+    for item in items:
+        for snapshot in _extract_contributor_snapshots(item):
+            key = (
+                snapshot.get("url"),
+                snapshot.get("provider"),
+                snapshot.get("source"),
+                snapshot.get("origin_type"),
+                snapshot.get("title"),
+                snapshot.get("score"),
+                snapshot.get("published_at"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(snapshot)
+    return merged
+
+
+def _extract_contributor_snapshots(item: Mapping[str, Any]) -> list[dict[str, Any]]:
+    contributors = item.get("contributors")
+    if isinstance(contributors, list):
+        snapshots = [
+            snapshot
+            for contributor in contributors
+            if isinstance(contributor, Mapping)
+            for snapshot in [_build_contributor_snapshot(contributor)]
+            if snapshot
+        ]
+        if snapshots:
+            return snapshots
+
+    snapshot = _build_contributor_snapshot(item)
+    return [snapshot] if snapshot else []
+
+
+def _build_contributor_snapshot(item: Mapping[str, Any]) -> dict[str, Any]:
+    url = _normalize_url(item.get("url"))
+    if not url:
+        return {}
+
+    snapshot: dict[str, Any] = {"url": _canonicalize_source_dedupe_key(url)}
+    provider_value = item.get("provider")
+    if _is_empty_merged_source_value(provider_value) and _should_use_legacy_source_alias(item):
+        provider_value = item.get("source")
+    snapshot["provider"] = _normalize_provider(provider_value)
+
+    title = _normalize_text(item.get("title"))
+    if title:
+        snapshot["title"] = title
+
+    source = _normalize_optional_text(item.get("source"))
+    if source:
+        snapshot["source"] = source
+
+    origin_type = _normalize_optional_text(item.get("origin_type"))
+    if origin_type:
+        snapshot["origin_type"] = origin_type
+
+    score = _normalize_score(item.get("score"))
+    if score is not None:
+        snapshot["score"] = score
+
+    published_at = _normalize_optional_text(item.get("published_at") or item.get("published_date"))
+    if published_at:
+        snapshot["published_at"] = published_at
+
+    return snapshot
 
 
 def split_answer_and_sources(text: str) -> tuple[str, list[dict]]:

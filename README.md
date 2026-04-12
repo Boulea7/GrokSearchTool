@@ -344,7 +344,7 @@ claude mcp list
 | `session_id` | string | 是 | `web_search` 返回的 `session_id` |
 
 返回值（结构化字典）：
-- 成功时返回 `session_id`、`sources_count`、`sources`；其中每个 source 至少包含 `title`、`url`、`provider`、`source_type`、`snippet`、`domain`、`score`、`published_at`、`retrieved_at`、`rank`，并会在可用时以 additive 方式补充如 `origin_type` 这类 provenance 字段
+- 成功时返回 `session_id`、`sources_count`、`sources`；其中每个 source 至少包含 `title`、`url`、`provider`、`source_type`、`snippet`、`domain`、`score`、`published_at`、`retrieved_at`、`rank`，并会在可用时以 additive 方式补充如 `origin_type`、`contributors` 这类 provenance 字段
 - 成功时还会返回 `search_status`、`search_error`、`search_warnings`、`source_state`，用于区分成功但无信源、部分成功和失败，并回放当前会话缓存中的非致命 warning code
 - miss 时返回 `session_id`、`sources=[]`、`sources_count=0`
 - `error`: 仅在 `session_id` 缺失或过期时返回，例如 `session_id_not_found_or_expired`
@@ -353,7 +353,8 @@ claude mcp list
 - `session_id_not_found_or_expired` 当前统一覆盖进程重启、TTL 到期、LRU 淘汰，以及不可读的旧缓存条目等 miss 场景。
 - `search_warnings` 当前会回放与该搜索会话绑定的 warning code；旧缓存条目若没有该字段，则默认返回空数组。
 - `sources_count` 当前等于标准化、去重与过滤之后最终写入缓存的信源数量，不等于上游原始 citations 条数。
-- 去重后的单条 source 当前应被理解为 normalized aggregate row：如果同一 URL 同时来自多个输入路径，`provider` 表示该聚合结果最终保留下来的 normalized winner provider，而 `source`、`origin_type` 等 provenance metadata 仍可能来自其他贡献行。
+- 去重后的单条 source 当前应被理解为 normalized aggregate row：如果同一 URL 同时来自多个输入路径，`provider` 表示该聚合结果最终保留下来的 normalized winner provider，而 `source`、`origin_type` 等 provenance metadata 仍可能来自其他贡献行；如需看 contributor 级 attribution，应优先读取 additive `contributors`。
+- `source` 当前仍带有 legacy 重载语义：当 `origin_type` 缺失时，它仍可能被当作旧缓存里的 provider alias 回填到 `provider`；只有在 `origin_type` 等 provenance 信号存在时，`source` 才更接近 provenance label。调用方不应把它当作无歧义字段。
 - `rank` 当前会按 `score`、来源身份清晰度与稳定去重顺序生成，不再对 Grok 引用做额外优先级偏置。
 - `standardize_sources` 当前会在去重时规范化 URL 的 scheme/host 大小写，因此同一页面的 mixed-case 变体可能折叠为一个 source；同时会保留普通锚点（fragment），避免不同页面段落引用被误合并，并继续剥离 URL `userinfo`、遮罩常见 query / fragment 签名参数，以及常见 OAuth/OIDC credential 参数（如 `client_secret`、`refresh_token`、`id_token`、`password`）。高置信度 cloud-signed credential 键（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）当前也属于遮罩范围。显式默认端口（如 `:443` / `:80`）当前仍会保留，不会与隐式默认端口 URL 自动折叠。
 - 默认不会把裸 `auth` / `key` 这类宽泛参数名一并视为敏感字段；当前 masking 仍优先收口到高置信度 credential / 签名键，避免误伤普通诊断信息、示例 URL 与可核验 source 链接。

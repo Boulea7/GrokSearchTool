@@ -97,7 +97,8 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`；其中 `topic` 当前支持 `general` / `news` / `finance`，`time_range` 当前支持 `day` / `week` / `month` / `year`，并兼容 `d` / `w` / `m` / `y`
 - `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`
 - `get_sources` 当前会统一返回标准化 metadata；`rank` 当前会按 `score`、来源身份清晰度与稳定去重顺序生成，不再对 Grok 引用额外偏置
-- `get_sources` 返回的单条 source 当前应理解为 normalized aggregate row；若同一 URL 来自多个输入路径，`provider` 表示该聚合结果最终保留的 winner provider，而 `source` / `origin_type` 等 provenance metadata 仍可能来自其他贡献行
+- `get_sources` 返回的单条 source 当前应理解为 lossy aggregate display row；若同一 URL 来自多个输入路径，`provider` 表示该聚合结果最终保留的 winner provider，而 `source` / `origin_type` 等 provenance metadata 仍可能来自其他贡献行；如需看 contributor 级 attribution，应优先读取 additive `contributors`
+- `source` 当前仍带有 legacy 重载语义：当 `origin_type` 缺失时，它仍可能被当作旧缓存里的 provider alias 回填到 `provider`
 - `standardize_sources` 当前会在去重时规范化 URL 的 scheme/host 大小写，因此同一页面的 mixed-case 变体可能折叠为单个 source；这会影响最终的 `sources_count` 与 `rank`
 - `standardize_sources` 当前不会把显式默认端口（如 `:443` / `:80`）与隐式默认端口 URL 自动折叠；如需调整该语义，应先视为明确 contract change 并补回归测试与文档
 - `get_sources` 当前依赖当前服务器进程内的内存型 LRU 缓存；默认 TTL 约 1 小时、当前上限 256 个 session。`session_id` 是 shared-daemon、transient、非 durable、非 caller-bound handle，也不应被理解为 secret token；`session_id_not_found_or_expired` 当前统一覆盖进程重启、TTL 到期、缓存淘汰与不可读旧缓存 miss
