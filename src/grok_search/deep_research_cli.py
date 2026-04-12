@@ -3,7 +3,6 @@ import asyncio
 import json
 import subprocess
 import sys
-import time
 from typing import Any
 
 from .config import config
@@ -41,7 +40,7 @@ async def _watch_job(runtime: DeepResearchRuntime, job_id: str, *, interval_seco
         if status["status"] in TERMINAL_STATUSES:
             print(f"status={status['status']} progress={status['progress_pct']}")
             return
-        time.sleep(interval_seconds)
+        await asyncio.sleep(interval_seconds)
 
 
 async def _handle_start(args: argparse.Namespace) -> int:
@@ -90,7 +89,7 @@ async def _handle_events(args: argparse.Namespace) -> int:
             status = await runtime.status(args.job_id)
             if status["status"] in TERMINAL_STATUSES:
                 return 0
-            time.sleep(args.interval_seconds)
+            await asyncio.sleep(args.interval_seconds)
     _print_json(await runtime.events(args.job_id, after_seq=args.after_seq, limit=args.limit))
     return 0
 

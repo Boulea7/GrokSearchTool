@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from grok_search import server
+from grok_search import deep_research_runtime
 from grok_search.deep_research_runtime import DeepResearchRuntime
 
 
@@ -129,3 +130,21 @@ async def test_deep_research_resume_from_draft_uses_existing_plan(tmp_path):
 
     assert resumed["job_id"] == response["job_id"]
     assert status["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_search_query_falls_back_to_extracting_inline_urls(monkeypatch):
+    async def fake_provider_search(provider, query, **kwargs):
+        return (
+            "SQLite is simple for local tooling. Source: https://example.com/sqlite",
+            [],
+        )
+
+    monkeypatch.setattr(deep_research_runtime, "_provider_search_with_sources", fake_provider_search)
+    monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+
+    answer, sources = await deep_research_runtime._search_query("SQLite vs PostgreSQL")
+
+    assert "SQLite is simple" in answer
+    assert sources[0]["url"] == "https://example.com/sqlite"

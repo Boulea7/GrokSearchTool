@@ -10,6 +10,7 @@ from .deep_research_types import DeepResearchJob, utc_now_iso
 from .providers.base import _filter_supported_search_kwargs
 from .providers.grok import GrokSearchProvider
 from .sources import merge_sources, split_answer_and_sources, standardize_sources
+from .utils import extract_unique_urls
 
 
 Runner = Callable[["DeepResearchRuntime", str], Awaitable[None]]
@@ -465,6 +466,8 @@ async def _search_query(query: str) -> tuple[str, list[dict]]:
     content, sources = await _provider_search_with_sources(provider, query, min_results=3, max_results=8)
     answer, extracted_sources = split_answer_and_sources(content)
     merged = standardize_sources(merge_sources(sources, extracted_sources))
+    if not merged:
+        merged = standardize_sources([{"url": url} for url in extract_unique_urls(answer or content)])
     return answer.strip() or content.strip(), merged
 
 
