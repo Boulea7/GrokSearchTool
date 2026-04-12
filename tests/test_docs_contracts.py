@@ -494,6 +494,25 @@ def test_docs_explain_contributors_and_legacy_source_overload_contract():
     assert "lossy aggregate display row" in compatibility
 
 
+def test_localized_readmes_cover_reason_code_and_contributors_contract():
+    zh_tw = README_ZH_TW.read_text(encoding="utf-8")
+    ja = README_JA.read_text(encoding="utf-8")
+    ru = README_RU.read_text(encoding="utf-8")
+
+    assert "`check_id`" in zh_tw
+    assert "`reason_code`" in zh_tw
+    assert "`contributors`" in zh_tw
+    assert "即使 `web_search` 目前尚未 ready" in zh_tw
+    assert "`check_id`" in ja
+    assert "`reason_code`" in ja
+    assert "`contributors`" in ja
+    assert "`web_search` が現在 not ready" in ja
+    assert "`check_id`" in ru
+    assert "`reason_code`" in ru
+    assert "`contributors`" in ru
+    assert "`web_search` сейчас not ready" in ru
+
+
 def test_docs_lock_provider_level_machine_fields_and_get_sources_readiness_wording():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")

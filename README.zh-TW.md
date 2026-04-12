@@ -192,13 +192,15 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `detail="summary"` 目前只是同一次診斷結果的緊湊欄位投影，不是額外的輕量執行路徑。
 - `connection_test` 目前只反映 `/models` 的可達性，不代表目前活動模型一定能通過真實 `chat/completions` 路徑；若 `web_search` 顯示 `degraded`，應一併查看 `doctor`、`feature_readiness`、`GROK_MODEL_SOURCE` 與 `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe`。
 - `grok_model_selection` 表示在 `/models` 可見性階段就已發現目前模型不適合直接使用；`grok_model_runtime_fallback` 則表示真實 `/chat/completions` 路徑只能靠執行期二次回退到另一個 Grok 候選模型才成功。這兩個 check 可能同時出現。
-- `feature_readiness.web_fetch.providers` 會附帶 provider 級狀態；`verified_path` 表示真實抓取探針實際打通的後端，未執行的 provider 可能帶有 `skipped_reason`。
-- `feature_readiness.get_sources` 只有在目前進程內至少存在一個非 error、可讀取的 source session 時才會顯示 `ready`；若快取裡只有失敗搜尋留下的 session，狀態會維持 `partial_ready`。
+- `feature_readiness.web_fetch.providers` 會附帶 provider 級狀態；`verified_path` 表示真實抓取探針實際打通的後端，穩定包含 `check_id`，並會在可判定時附帶 `reason_code`，未執行的 provider 仍可能帶有 `skipped_reason`。
+- `feature_readiness.get_sources` 只有在目前進程內至少存在一個非 error、可讀取的 source session 時才會顯示 `ready`；若快取裡只有失敗搜尋留下的 session，狀態會維持 `partial_ready`。即使 `web_search` 目前尚未 ready，只要進程裡仍保有可讀 session，`get_sources` 仍可能維持 `ready`，並透過 `degraded_by` 暴露上游問題。
 - 即使 API Key 已脫敏，診斷結果仍可能包含本機絕對路徑、endpoint/hostname 與精簡後的上游錯誤摘要；顯而易見的 bearer、token、簽名 query / fragment，以及高置信度 cloud-signed credential 鍵（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）也會做遮罩，但對外分享前仍請先複核。
 - `get_sources` 成功返回時固定包含 `session_id`、`sources`、`sources_count`、`search_status`、`search_error` 與 `source_state`；只有 `session_id` 缺失或過期時才會額外回傳 `error=session_id_not_found_or_expired`。
 - `get_sources` 使用目前進程內的記憶體型 LRU 快取（預設 TTL 約 1 小時、上限 256 個 session）；`session_id` 是 shared-daemon transient handle，不是 durable、caller-bound capability，也不是 secret token。進程重啟、TTL 到期或快取淘汰後，先前的 `session_id` 會失效。
 - `sources_count` 目前等於標準化、去重與過濾後最終寫入快取的信源數量，不等於上游原始 citations 條數。
 - `get_sources` 回傳的 `rank` 目前會依 `score`、來源身分清晰度與穩定去重順序生成，不再對 Grok 引用額外偏置；`standardize_sources` 在去重時也會規範 URL 的 scheme/host 大小寫，因此同一頁面的 mixed-case 變體可能折疊為單一 source。同時仍會保留安全 fragment、剝離 URL `userinfo`、遮罩常見簽名參數，以及高置信度 cloud-signed credential 鍵（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）；顯式預設埠（如 `:443` / `:80`）目前仍會保留，不會和隱式預設埠 URL 自動折疊。
+- 去重後的單條 source 目前應理解為 lossy aggregate display row；若需要 contributor 級 attribution，應優先讀取 additive `contributors`。
+- `source` 目前仍帶有 legacy 重載語義：當 `origin_type` 缺失時，它仍可能被當作舊快取裡的 provider alias。
 
 ## Companion Skill
 

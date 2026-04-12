@@ -15,6 +15,9 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT_DIR / "src"
 README = ROOT_DIR / "README.md"
 README_EN = ROOT_DIR / "README.en.md"
+README_ZH_TW = ROOT_DIR / "README.zh-TW.md"
+README_JA = ROOT_DIR / "README.ja.md"
+README_RU = ROOT_DIR / "README.ru.md"
 
 
 def _run_python(code: str) -> subprocess.CompletedProcess[str]:
@@ -457,6 +460,9 @@ def test_built_local_wheel_exposes_console_script_and_install_surface(tmp_path):
 def test_readme_install_snippets_match_distribution_contract():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
+    readme_zh_tw = README_ZH_TW.read_text(encoding="utf-8")
+    readme_ja = README_JA.read_text(encoding="utf-8")
+    readme_ru = README_RU.read_text(encoding="utf-8")
 
     expected_repo = "git+https://github.com/Boulea7/GrokSearchTool@main"
     expected_executable = "grok-search"
@@ -468,23 +474,38 @@ def test_readme_install_snippets_match_distribution_contract():
         "FIRECRAWL_API_KEY",
     }
 
-    claude_zh = _extract_claude_add_json_payload(readme, "### 一键安装")
-    claude_en = _extract_claude_add_json_payload(readme_en, "### Add as an MCP server")
-    for payload in (claude_zh, claude_en):
+    claude_payloads = [
+        _extract_claude_add_json_payload(readme, "### 一键安装"),
+        _extract_claude_add_json_payload(readme_en, "### Add as an MCP server"),
+        _extract_claude_add_json_payload(readme_zh_tw, "### 安裝為 MCP"),
+        _extract_claude_add_json_payload(readme_ja, "### MCP として追加"),
+        _extract_claude_add_json_payload(readme_ru, "### Добавление как MCP"),
+    ]
+    for payload in claude_payloads:
         assert payload["command"] == "uvx"
         assert payload["args"] == ["--from", expected_repo, expected_executable]
         assert set(payload["env"]) == expected_env_keys
 
-    codex_zh = _extract_toml_block_after_marker(readme, "#### Codex CLI / Codex 风格 MCP 客户端")
-    codex_en = _extract_toml_block_after_marker(readme_en, "#### Codex CLI / Codex-style clients")
-    for block in (codex_zh, codex_en):
+    codex_blocks = [
+        _extract_toml_block_after_marker(readme, "#### Codex CLI / Codex 风格 MCP 客户端"),
+        _extract_toml_block_after_marker(readme_en, "#### Codex CLI / Codex-style clients"),
+        _extract_toml_block_after_marker(readme_zh_tw, "#### Codex CLI / Codex 風格 MCP 客戶端"),
+        _extract_toml_block_after_marker(readme_ja, "#### Codex CLI / Codex-style clients"),
+        _extract_toml_block_after_marker(readme_ru, "#### Codex CLI / клиенты в стиле Codex"),
+    ]
+    for block in codex_blocks:
         assert _extract_toml_string(block, "command") == "uvx"
         assert _extract_toml_array(block, "args") == ["--from", expected_repo, expected_executable]
         assert _extract_toml_env_keys(block) == expected_env_keys
 
-    cherry_zh = _extract_json_block_after_marker(readme, "#### Cherry Studio")
-    cherry_en = _extract_json_block_after_marker(readme_en, "#### Cherry Studio")
-    for payload in (cherry_zh, cherry_en):
+    cherry_payloads = [
+        _extract_json_block_after_marker(readme, "#### Cherry Studio"),
+        _extract_json_block_after_marker(readme_en, "#### Cherry Studio"),
+        _extract_json_block_after_marker(readme_zh_tw, "#### Cherry Studio"),
+        _extract_json_block_after_marker(readme_ja, "#### Cherry Studio"),
+        _extract_json_block_after_marker(readme_ru, "#### Cherry Studio"),
+    ]
+    for payload in cherry_payloads:
         assert payload["name"] == "grok-search"
         assert payload["command"] == "uvx"
         assert payload["args"] == ["--from", expected_repo, expected_executable]

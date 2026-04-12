@@ -192,13 +192,15 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `detail="summary"` は現時点では同じ診断実行結果のコンパクトな投影であり、別個の軽量実行パスではありません。
 - `connection_test` は現時点では `/models` 到達性しか表しません。`web_search` が `degraded` の場合は、`doctor`、`feature_readiness`、`GROK_MODEL_SOURCE`、`grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` を合わせて原因を判断してください。
 - `grok_model_selection` は `/models` 可視段階でそのモデルが不適切だと分かったことを示し、`grok_model_runtime_fallback` は実際の `/chat/completions` 経路が別の Grok 候補への実行時の再フォールバックでようやく成功したことを示します。両方の check が同時に現れる場合があります。
-- `feature_readiness.web_fetch.providers` には provider 単位の状態が含まれ、`verified_path` は実 fetch probe が通った backend を示します。skip された provider には `skipped_reason` が付く場合があります。
-- `feature_readiness.get_sources` が `ready` になるのは、現在のプロセス内に少なくとも 1 つの非 error で読み出し可能な source session がある場合だけです。失敗検索だけが残っている場合は `partial_ready` のままです。
+- `feature_readiness.web_fetch.providers` には provider 単位の状態が含まれ、`verified_path` は実 fetch probe が通った backend を示します。各 provider item には安定した `check_id` が含まれ、判定できる場合は `reason_code` も付き、skip された provider には `skipped_reason` が付く場合があります。
+- `feature_readiness.get_sources` が `ready` になるのは、現在のプロセス内に少なくとも 1 つの非 error で読み出し可能な source session がある場合だけです。失敗検索だけが残っている場合は `partial_ready` のままです。`web_search` が現在 not ready でも、読み出し可能な cached session が残っていれば `get_sources` は引き続き `ready` を返し、上流問題は `degraded_by` に出ます。
 - API Key はマスクされますが、診断ペイロードにはローカル絶対パス、endpoint/hostname、短い upstream エラー要約が残る場合があります。明白な bearer/token/署名 query に加えて、`X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId` のような高信頼 cloud-signed credential key もマスクされますが、外部共有前に確認してください。
 - `get_sources` が成功したときは、常に `session_id`、`sources`、`sources_count`、`search_status`、`search_error`、`source_state` を返します。`session_id` が欠落または期限切れのときだけ `error=session_id_not_found_or_expired` が追加されます。
 - `get_sources` は現在のサーバープロセス内にあるメモリ型 LRU キャッシュ（既定 TTL は約 1 時間、上限 256 session）を参照します。`session_id` は shared-daemon transient handle であり、durable でも caller-bound でも secret token でもありません。`session_id_not_found_or_expired` はプロセス再起動、TTL 切れ、eviction、読み出せない旧キャッシュ miss をまとめて表します。
 - `sources_count` は現在、標準化・重複排除・フィルタ後に最終的にキャッシュへ書き込まれた source 数を表し、upstream の生 citation 件数そのものではありません。
 - `get_sources` の `rank` は現在 `score`、source identity の明確さ、安定した dedupe 順に従い、Grok 由来の引用へ追加の優先度は与えません。`standardize_sources` は dedupe の際に scheme/host の大文字小文字差を正規化するため、同じページの mixed-case variant は 1 件に畳み込まれる場合があります。その一方で安全な fragment は保持し、URL の `userinfo`、代表的な署名パラメータ、そして `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId` のような高信頼 cloud-signed credential key は引き続き除去またはマスクします。明示的な既定ポート（`:443` / `:80`）は現時点では保持され、暗黙の既定ポート URL と自動では畳み込まれません。
+- 重複排除後の 1 行は現在 lossy aggregate display row として解釈してください。contributor 単位の attribution が必要な場合は additive `contributors` を優先してください。
+- `source` は現在も legacy-overloaded field であり、`origin_type` が無い場合は古い cache で provider alias として再利用されることがあります。
 
 ## Companion Skill
 
