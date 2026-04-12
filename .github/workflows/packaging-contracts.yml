@@ -26,9 +26,15 @@ jobs:
       - name: Install development dependencies
         run: uv sync --extra dev
 
-      - name: Run packaging and docs contract tests
+      - name: Run packaging, docs, and deep research contract tests
         run: |
-          uv run --with pytest --with pytest-asyncio pytest -q tests/test_package_imports.py tests/test_docs_contracts.py
+          uv run --with pytest --with pytest-asyncio pytest -q \
+            tests/test_package_imports.py \
+            tests/test_docs_contracts.py \
+            tests/test_deep_research_store.py \
+            tests/test_deep_research_runtime.py \
+            tests/test_deep_research_server.py \
+            tests/test_deep_research_cli.py
 
       - name: Build wheel and sdist
         run: uv build --wheel --sdist
@@ -39,8 +45,14 @@ jobs:
           . .venv-wheel-smoke/bin/activate
           python -m pip install dist/*.whl
           python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"
+          python -c "import grok_search.deep_research_runtime; import grok_search.deep_research_store"
+          python -m grok_search.deep_research_cli --help
+          grok-search-research --help
           deactivate
           python -m venv .venv-sdist-smoke
           . .venv-sdist-smoke/bin/activate
           python -m pip install dist/*.tar.gz
           python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"
+          python -c "import grok_search.deep_research_runtime; import grok_search.deep_research_store"
+          python -m grok_search.deep_research_cli --help
+          grok-search-research --help

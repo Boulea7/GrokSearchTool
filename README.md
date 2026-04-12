@@ -240,8 +240,8 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_DEEP_RESEARCH_DIR` | 否 | `~/.config/grok-search/deep-research` | deep research SQLite 状态与 artifacts 根目录 |
 | `GROK_DEEP_RESEARCH_DEFAULT_BUDGET_SECONDS` | 否 | `240` | deep research 默认目标预算秒数 |
 | `GROK_DEEP_RESEARCH_HARD_TIMEOUT_SECONDS` | 否 | `600` | deep research 硬超时上限 |
-| `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | 否 | `3` | 默认 deep research runtime 的最大并行研究单元数 |
-| `GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS` | 否 | `1800` | 最近完成 deep research job 的默认复用窗口 |
+| `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | 否 | `3` | 默认 deep research runtime 的最大并发 research unit 数 |
+| `GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS` | 否 | `1800` | 已完成 deep research job 按 `finished_at` 参与复用的时间窗口 |
 | `PYTHONIOENCODING` | 否 | `utf-8` | 建议显式设为 UTF-8，减少 Windows / 中转站日志乱码 |
 | `PYTHONUNBUFFERED` | 否 | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
 | `PYTHONUTF8` | 否 | `1` | 强制 Python UTF-8 模式 |
@@ -473,11 +473,11 @@ claude mcp list
 
 说明：
 - 这是高于 `plan_* -> web_search` 的高级层，不替代默认轻路径。
-- `deep_research_start` 会创建 job，并立即生成 `plan.json`；非 `plan_only` 场景下，任务会异步推进并逐步产出 `partial_report.md`、`final_report.md`、`citations.json`、`report.json`。
-- `deep_research_status` 返回 job、阶段、进度与 artifact 摘要。
+- `deep_research_start` 会创建 job，并立即生成结构化 `plan.json`；其中至少包含 `brief`、`sub_questions`、`search_strategy`、`report_outline`、`research_units`，并在 continuation 场景下额外写出 `continuation.json`。非 `plan_only` 场景下，任务会异步推进并逐步产出 `partial_report.md`、`final_report.md`、`sources.json`、`citations.json`、`report.json`。
+- `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要。
 - `deep_research_events` 返回有序事件流，支持 `after_seq` 增量读取。
-- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts。
-- `deep_research_resume` 目前支持从 `draft`、`failed`、`interrupted` job 继续。
+- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。
+- `deep_research_resume` 目前支持从 `draft`、`failed`、`interrupted` job 继续，并优先从最新的 completed research-unit checkpoint 续跑，而不是整 job 从头执行。
 - `deep_research_cancel` 只负责发起取消请求；运行中的 job 会在阶段边界或下一次检查点更新时收口。
 - `deep_research_list` 提供最近 job 列表，适合 CLI 或宿主做结果检索。
 </details>
@@ -545,8 +545,8 @@ grok-search-research continue JOB_ID "Focus on resume and checkpoint trade-offs"
 CLI 当前优先承接：
 - 持续 watch 事件流
 - 读取指定 artifact
-- 从已有研究结果继续开新 job
-- 对 draft / interrupted / failed job 做 resume
+- 从已有研究结果和 artifacts 继续开新 job
+- 对 draft / interrupted / failed job 按 checkpoint 做 resume
 
 ## 许可证
 
