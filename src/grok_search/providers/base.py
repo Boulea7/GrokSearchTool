@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import inspect
 from typing import Any, Dict
 
 
@@ -51,13 +52,15 @@ class BaseSearchProvider(ABC):
         max_results: int = 10,
         ctx=None,
     ) -> tuple[str, list[dict[str, Any]]]:
-        return await self.search(
-            query,
-            platform=platform,
-            min_results=min_results,
-            max_results=max_results,
-            ctx=ctx,
-        ), []
+        kwargs = {
+            "platform": platform,
+            "min_results": min_results,
+            "max_results": max_results,
+            "ctx": ctx,
+        }
+        parameters = inspect.signature(self.search).parameters
+        supported_kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+        return await self.search(query, **supported_kwargs), []
 
     @abstractmethod
     def get_provider_name(self) -> str:

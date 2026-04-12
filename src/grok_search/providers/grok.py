@@ -1,5 +1,4 @@
 import httpx
-import inspect
 import json
 import re
 from datetime import datetime, timezone
@@ -290,13 +289,13 @@ class GrokSearchProvider(BaseSearchProvider):
             config.debug_enabled,
         )
 
-        self._last_completion_sources = []
-        execute_completion = self._execute_completion_with_retry
-        if "render_sources" in inspect.signature(execute_completion).parameters:
-            content = await execute_completion(headers, payload, ctx, render_sources=False)
-        else:
-            content = await execute_completion(headers, payload, ctx)
-        return content, list(self._last_completion_sources)
+        content, sources = await self._execute_completion_with_retry_result(
+            headers,
+            payload,
+            ctx,
+            render_sources=False,
+        )
+        return content, sources
 
     async def fetch(self, url: str, ctx=None) -> str:
         headers = self._build_api_headers()

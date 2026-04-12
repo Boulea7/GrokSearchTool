@@ -509,6 +509,16 @@ async def _provider_search_with_sources(
     max_results: int = 10,
     ctx=None,
 ) -> tuple[str, list[dict]]:
+    def _normalize_search_with_sources_result(result) -> tuple[str, list[dict]]:
+        if not isinstance(result, tuple) or len(result) != 2:
+            raise TypeError("provider.search_with_sources must return a (content, sources) tuple")
+        content, structured_sources = result
+        if not isinstance(content, str):
+            raise TypeError("provider.search_with_sources must return string content")
+        if not isinstance(structured_sources, list):
+            raise TypeError("provider.search_with_sources must return sources as a list")
+        return content, structured_sources
+
     async def _call_with_supported_kwargs(method):
         kwargs = {
             "platform": platform,
@@ -521,8 +531,9 @@ async def _provider_search_with_sources(
         return await method(query, **supported_kwargs)
 
     if hasattr(provider, "search_with_sources"):
-        content, structured_sources = await _call_with_supported_kwargs(provider.search_with_sources)
-        return content, structured_sources
+        return _normalize_search_with_sources_result(
+            await _call_with_supported_kwargs(provider.search_with_sources)
+        )
 
     content = await _call_with_supported_kwargs(provider.search)
     return content, []

@@ -454,15 +454,16 @@ async def test_search_with_sources_uses_execute_completion_with_retry_override(m
 
     async def fake_execute(headers, payload, ctx, render_sources=True):
         captured["render_sources"] = render_sources
-        return "Search answer"
+        return "Search answer", [{"title": "Structured Guide", "url": "https://docs.example.com/guide"}]
 
-    monkeypatch.setattr(provider, "_execute_completion_with_retry", fake_execute)
+    provider._last_completion_sources = [{"title": "stale", "url": "https://stale.example.com"}]
+    monkeypatch.setattr(provider, "_execute_completion_with_retry_result", fake_execute)
 
     content, sources = await provider.search_with_sources("test query")
 
     assert captured["render_sources"] is False
     assert content == "Search answer"
-    assert sources == []
+    assert sources == [{"title": "Structured Guide", "url": "https://docs.example.com/guide"}]
 
 
 @pytest.mark.asyncio
