@@ -238,7 +238,7 @@ def test_roadmap_keeps_stdio_first_positioning_without_relisting_already_aligned
     roadmap = ROADMAP.read_text(encoding="utf-8")
 
     assert "lightweight MCP plus companion skill" in roadmap
-    assert "Long-running `deep research` remains a separate advanced capability direction" in roadmap
+    assert "Long-running `deep research` is now an implemented advanced capability direction" in roadmap
     assert "officially tested, community-tested, and planned integrations" in roadmap
     assert "local `stdio` usage first" in roadmap
     assert "companion-skill guidance" in roadmap
@@ -414,6 +414,22 @@ def test_docs_keep_planning_first_and_cli_first_research_story():
     assert "CLI-first" in compatibility
     assert "`plan_* -> web_search`" in agents
     assert "deep research" in agents
+
+
+def test_docs_explain_deep_research_job_surface_and_cli():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "`deep_research_start`" in readme
+    assert "`grok-search-research`" in readme
+    assert "`deep_research_start`" in readme_en
+    assert "`grok-search-research`" in readme_en
+    assert "`deep_research_*`" in compatibility
+    assert "`deep_research_resume`" in agents
+    assert "`deep_research_*`" in skill
 
 
 def test_docs_lock_finance_topic_and_diagnostic_detail_contracts():

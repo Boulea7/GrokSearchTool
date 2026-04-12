@@ -4,7 +4,7 @@
 
 GrokSearch 是一個獨立維護的 MCP 伺服器，面向需要快速、可靠、可核驗來源的網頁上下文能力的助理與通用客戶端。
 
-它整合 `Grok` 搜尋與 `Tavily`、`Firecrawl` 擷取能力，提供適合輕量查詢、來源核對、聚焦抓取，並以 `plan_* -> web_search` 為推薦核心路徑的 MCP 工具面；對於明確單跳、低歧義且規劃收益很低的查詢，也允許直接呼叫 `web_search`；對更重的探索任務，未來將以 `deep research` 方向擴展。
+它整合 `Grok` 搜尋與 `Tavily`、`Firecrawl` 擷取能力，提供適合輕量查詢、來源核對、聚焦抓取，並以 `plan_* -> web_search` 為推薦核心路徑的 MCP 工具面；對於明確單跳、低歧義且規劃收益很低的查詢，也允許直接呼叫 `web_search`；對更重的探索任務，現在提供進階 `deep research` 層。
 
 公開 package import contract 目前分成兩層：`grok_search.mcp` 是 access-time lazy export，只有真正存取該導出時才需要 `fastmcp`；`grok_search.providers.GrokSearchProvider` 也是 access-time lazy export，普通非 provider 匯入不應僅因 Grok provider 相關依賴缺失而提早失敗。這只是在匯入時收口邊界，不改變安裝時依賴宣告，也不應被理解為這些依賴已變成 optional extras。
 
@@ -15,11 +15,12 @@ GrokSearch 是一個獨立維護的 MCP 伺服器，面向需要快速、可靠�
 - `web_fetch`：優先 Tavily，失敗時回退 Firecrawl
 - `web_map`：網站結構映射
 - `plan_*`：複雜或含糊搜尋的分階段規劃工具
+- `deep_research_*`：非互動、可恢復的進階深度研究 job 工具
 - `get_config_info`：檢查設定、`/models` 連通性與輕量 doctor
 - `switch_model`：切換預設 Grok 模型
 - `toggle_builtin_tools`：切換 Claude Code 內建 WebSearch / WebFetch
 
-目前公開 MCP 工具共 `13` 個：
+目前公開 MCP 工具共 `20` 個：
 
 - `web_search`
 - `get_sources`
@@ -34,6 +35,13 @@ GrokSearch 是一個獨立維護的 MCP 伺服器，面向需要快速、可靠�
 - `plan_search_term`
 - `plan_tool_mapping`
 - `plan_execution`
+- `deep_research_start`
+- `deep_research_status`
+- `deep_research_events`
+- `deep_research_result`
+- `deep_research_resume`
+- `deep_research_cancel`
+- `deep_research_list`
 
 `plan_search_term` 會在首次建立 `search_strategy` 時設定 `approach` / `fallback_plan`；後續非 `is_revision` 呼叫只會追加 `search_terms`，不會隱式改寫既有 strategy metadata。
 planning `session_id` 是目前進程內的 transient handle，預設 TTL 約 1 小時、LRU 上限 256；若進程重啟、TTL 到期或快取淘汰，應從新的 `plan_intent` 重新開始。
