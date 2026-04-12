@@ -1,12 +1,25 @@
 import asyncio
+import datetime as dt
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from .config import config
 from .deep_research_store import DeepResearchStore
-from .deep_research_types import DeepResearchJob, utc_now_iso
+from .deep_research_types import (
+    DeepResearchCheckpointState,
+    DeepResearchClaim,
+    DeepResearchContinuation,
+    DeepResearchEvidenceItem,
+    DeepResearchJob,
+    DeepResearchPlan,
+    DeepResearchReportSection,
+    DeepResearchResearchUnit,
+    DeepResearchSectionCitations,
+    utc_now_iso,
+)
 from .providers.base import _filter_supported_search_kwargs
 from .providers.grok import GrokSearchProvider
 from .sources import merge_sources, split_answer_and_sources, standardize_sources
@@ -14,10 +27,135 @@ from .utils import extract_unique_urls
 
 
 Runner = Callable[["DeepResearchRuntime", str], Awaitable[None]]
+_JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
+_MAX_CLAIM_LENGTH = 220
 
 
 def _json_markdown_block(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _slugify(value: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "-", value.strip().lower())
+    return text.strip("-") or "item"
+
+
+def _normalize_whitespace(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip())
+
+
+def _trim_text(value: str, *, limit: int = 400) -> str:
+    text = _normalize_whitespace(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _parse_utc_iso(value: str) -> dt.datetime | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return dt.datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(dt.UTC)
+    except ValueError:
+        return None
+
+
+def _parse_json_object(value: str) -> dict[str, Any]:
+    text = (value or "").strip()
+    if not text:
+        raise ValueError("planner returned empty content")
+    fenced = _JSON_BLOCK_RE.search(text)
+    if fenced:
+        text = fenced.group(1).strip()
+    return json.loads(text)
+
+
+def _normalize_depends_on(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",")]
+        return [item for item in items if item]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _validate_research_units(units: list[DeepResearchResearchUnit]) -> None:
+    known_ids = {unit.unit_id for unit in units}
+    for unit in units:
+        unknown = [dependency for dependency in unit.depends_on if dependency not in known_ids]
+        if unknown:
+            raise ValueError(f"unknown dependencies for {unit.unit_id}: {', '.join(unknown)}")
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    units_by_id = {unit.unit_id: unit for unit in units}
+
+    def visit(unit_id: str) -> None:
+        if unit_id in visited:
+            return
+        if unit_id in visiting:
+            raise ValueError(f"cyclic dependency detected at {unit_id}")
+        visiting.add(unit_id)
+        for dependency in units_by_id[unit_id].depends_on:
+            visit(dependency)
+        visiting.remove(unit_id)
+        visited.add(unit_id)
+
+    for unit in units:
+        visit(unit.unit_id)
+
+
+def _sanitize_source_id_list(source_ids: list[str], source_registry: list[dict[str, Any]]) -> list[str]:
+    valid_ids = {item["source_id"] for item in source_registry if item.get("source_id")}
+    return [source_id for source_id in source_ids if source_id in valid_ids]
+
+
+def _sanitize_unit_results(
+    unit_results: dict[str, dict[str, Any]],
+    source_registry: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    sanitized: dict[str, dict[str, Any]] = {}
+    for unit_id, result in unit_results.items():
+        normalized = dict(result)
+        normalized["source_ids"] = _sanitize_source_id_list(list(normalized.get("source_ids", [])), source_registry)
+        normalized["citations"] = _sanitize_source_id_list(list(normalized.get("citations", [])), source_registry)
+        sanitized[unit_id] = normalized
+    return sanitized
+
+
+def _sanitize_evidence_items(
+    evidence_items: list[dict[str, Any]],
+    source_registry: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for item in evidence_items:
+        normalized = dict(item)
+        normalized["source_ids"] = _sanitize_source_id_list(list(normalized.get("source_ids", [])), source_registry)
+        sanitized.append(normalized)
+    return sanitized
+
+
+def _sanitize_sections(
+    sections: list[dict[str, Any]],
+    source_registry: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for section in sections:
+        normalized_section = dict(section)
+        normalized_claims: list[dict[str, Any]] = []
+        for claim in section.get("claims", []):
+            normalized_claim = dict(claim)
+            normalized_claim["citations"] = _sanitize_source_id_list(list(normalized_claim.get("citations", [])), source_registry)
+            normalized_claims.append(normalized_claim)
+        normalized_section["claims"] = normalized_claims
+        normalized_section["citations"] = sorted(
+            {citation for claim in normalized_claims for citation in claim.get("citations", [])}
+        )
+        sanitized.append(normalized_section)
+    return sanitized
 
 
 class DeepResearchRuntime:
@@ -79,15 +217,28 @@ class DeepResearchRuntime:
             resolved_budget_seconds=resolved_budget_seconds,
             continued_from_job_id=continue_from_job_id,
         )
-        plan = self._build_plan(job)
-        self.write_artifact(job.job_id, "plan.json", _json_markdown_block(plan), "application/json")
-        self.store.save_checkpoint(job.job_id, phase="planning", checkpoint_key="planning", state=plan)
+        continuation = self._build_continuation_context(continue_from_job_id)
+        plan = await self._build_plan(job, continuation)
+        self.write_artifact(job.job_id, "plan.json", _json_markdown_block(plan.model_dump()), "application/json")
+        self.store.save_checkpoint(
+            job.job_id,
+            phase="planning",
+            checkpoint_key="planning",
+            state=DeepResearchCheckpointState(plan=plan).model_dump(),
+        )
+        if continuation.mode == "continue":
+            self.write_artifact(
+                job.job_id,
+                "continuation.json",
+                _json_markdown_block(continuation.model_dump()),
+                "application/json",
+            )
         self.store.append_event(
             job.job_id,
             type="job_created",
             phase="planning",
             message="Deep research job created.",
-            data={"plan_only": plan_only},
+            data={"plan_only": plan_only, "continuation_mode": continuation.mode},
         )
         job = self.store.get_job(job.job_id)
 
@@ -98,8 +249,10 @@ class DeepResearchRuntime:
 
     async def status(self, job_id: str) -> dict[str, Any]:
         job = self.store.get_job(job_id)
+        artifacts = [artifact.model_dump() for artifact in self.store.list_artifacts(job_id)]
         payload = self._serialize_job(job)
-        payload["artifact_kinds"] = [artifact.kind for artifact in self.store.list_artifacts(job_id)]
+        payload["artifact_kinds"] = [artifact["kind"] for artifact in artifacts]
+        payload["artifacts"] = artifacts
         return payload
 
     async def events(self, job_id: str, *, after_seq: int = 0, limit: int = 100) -> dict[str, Any]:
@@ -117,6 +270,10 @@ class DeepResearchRuntime:
         final_text = self.store.read_artifact_text(job_id, "final_report.md")
         citations_text = self.store.read_artifact_text(job_id, "citations.json")
         report_text = self.store.read_artifact_text(job_id, "report.json")
+        sources_text = self.store.read_artifact_text(job_id, "sources.json")
+        citations = json.loads(citations_text) if citations_text else None
+        if isinstance(citations, dict) and "source_registry" in citations:
+            citations = {**citations["source_registry"], **citations}
         return {
             "job_id": job_id,
             "status": job.status,
@@ -124,7 +281,8 @@ class DeepResearchRuntime:
             "plan": json.loads(plan_text) if plan_text else None,
             "partial_report": partial_text,
             "final_report": final_text,
-            "citations": json.loads(citations_text) if citations_text else None,
+            "sources": json.loads(sources_text) if sources_text else None,
+            "citations": citations,
             "report": json.loads(report_text) if report_text else None,
             "artifacts": [artifact.model_dump() for artifact in self.store.list_artifacts(job_id)],
         }
@@ -138,13 +296,14 @@ class DeepResearchRuntime:
             status="queued",
             last_error="",
             cancel_requested=False,
+            heartbeat_at=utc_now_iso(),
         )
         self.store.append_event(
             job_id,
             type="job_resumed",
             phase=job.phase,
-            message="Deep research job resumed.",
-            data={},
+            message="Deep research job resumed from checkpoint.",
+            data={"checkpoint_key": job.current_checkpoint},
         )
         if schedule:
             await self._schedule(job_id)
@@ -245,44 +404,306 @@ class DeepResearchRuntime:
             async with self._task_lock:
                 self._tasks.pop(job_id, None)
 
-    def _build_plan(self, job: DeepResearchJob) -> dict[str, Any]:
+    async def _build_plan(self, job: DeepResearchJob, continuation: DeepResearchContinuation) -> DeepResearchPlan:
+        try:
+            raw_plan = await self._generate_plan_with_model(job, continuation)
+            return self._normalize_plan_payload(job, raw_plan, continuation)
+        except Exception:
+            return self._build_fallback_plan(job, continuation)
+
+    async def _generate_plan_with_model(
+        self,
+        job: DeepResearchJob,
+        continuation: DeepResearchContinuation,
+    ) -> dict[str, Any]:
+        api_url = config.grok_api_url
+        api_key = config.grok_api_key
+        provider = GrokSearchProvider(api_url, api_key, config.grok_model)
+        planner_prompt = (
+            "You are planning a deep research job.\n"
+            "Return valid JSON only with keys: brief, sub_questions, search_strategy, report_outline, research_units, planner_metadata.\n"
+            "Keep the plan lightweight and execution-ready.\n"
+            "research_units must be an array of objects with unit_id, unit_type, title, goal, query/url/instructions, depends_on, status, notes.\n"
+            "Prefer search units, and only include fetch/map units when clearly justified.\n"
+            "Keep report_outline concise and aligned with the research goal.\n"
+        )
+        user_prompt = _json_markdown_block(
+            {
+                "query": job.query,
+                "context": job.context,
+                "effort": job.effort,
+                "time_budget_seconds": job.resolved_budget_seconds,
+                "include_domains": job.include_domains,
+                "exclude_domains": job.exclude_domains,
+                "continuation": continuation.model_dump(),
+            }
+        )
+        headers = provider._build_api_headers()
+        payload = {
+            "model": provider.model,
+            "messages": [
+                {"role": "system", "content": planner_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+        }
+        content, _ = await provider._execute_completion_with_retry_result(headers, payload, render_sources=False)
+        try:
+            return _parse_json_object(content)
+        except Exception:
+            repair_payload = {
+                "model": provider.model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Repair the following into valid JSON matching the requested schema. Return JSON only.",
+                    },
+                    {"role": "user", "content": content},
+                ],
+                "stream": False,
+            }
+            repaired, _ = await provider._execute_completion_with_retry_result(
+                headers,
+                repair_payload,
+                render_sources=False,
+            )
+            return _parse_json_object(repaired)
+
+    def _build_fallback_plan(
+        self,
+        job: DeepResearchJob,
+        continuation: DeepResearchContinuation,
+    ) -> DeepResearchPlan:
         query = job.query.strip()
         context = job.context.strip()
-        base_queries = [query]
+        search_queries = [query]
         if context:
-            base_queries.append(f"{query} {context}".strip())
+            search_queries.append(f"{query} {context}".strip())
+        if continuation.previous_summary:
+            search_queries.append(f"{query} follow up findings".strip())
         if job.effort == "deep":
-            base_queries.append(f"{query} recent developments")
-            base_queries.append(f"{query} comparisons and tradeoffs")
-        else:
-            base_queries.append(f"{query} key findings")
-
-        search_queries: list[str] = []
+            search_queries.append(f"{query} tradeoffs")
+        unique_queries: list[str] = []
         seen: set[str] = set()
-        for item in base_queries:
-            normalized = item.strip()
-            if not normalized or normalized in seen:
-                continue
-            seen.add(normalized)
-            search_queries.append(normalized)
+        for item in search_queries:
+            normalized = _normalize_whitespace(item)
+            if normalized and normalized not in seen:
+                unique_queries.append(normalized)
+                seen.add(normalized)
 
-        return {
-            "query": query,
-            "context": context,
+        raw_plan = {
+            "brief": {
+                "objective": query,
+                "deliverable": "A structured deep research report with citations.",
+                "success_criteria": [
+                    "Answer the main research question.",
+                    "Ground each section in verifiable sources.",
+                ],
+            },
+            "sub_questions": [
+                {"id": f"sq{index}", "question": item, "reason": "Cover the core research surface."}
+                for index, item in enumerate(unique_queries[:3], start=1)
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": unique_queries[: max(1, config.deep_research_max_concurrency)],
+                "selective_fetch": {
+                    "max_urls_per_search": 1 if job.effort != "deep" else 2,
+                    "prefer_titles_matching_outline": True,
+                },
+            },
+            "report_outline": [
+                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+                {"section_id": "key-findings", "title": "Key Findings", "goal": "Cover the strongest findings."},
+                {"section_id": "open-questions", "title": "Open Questions", "goal": "Call out remaining gaps."},
+            ],
+            "research_units": [
+                {
+                    "unit_id": f"unit-search-{index}",
+                    "unit_type": "search",
+                    "title": f"Research query {index}",
+                    "goal": f"Investigate: {item}",
+                    "query": item,
+                    "depends_on": [],
+                    "status": "pending",
+                    "notes": "",
+                }
+                for index, item in enumerate(unique_queries[: max(1, config.deep_research_max_concurrency)], start=1)
+            ],
+            "planner_metadata": {"planner": "fallback", "used_fallback": True},
+        }
+        return self._normalize_plan_payload(job, raw_plan, continuation)
+
+    def _normalize_plan_payload(
+        self,
+        job: DeepResearchJob,
+        raw_plan: dict[str, Any],
+        continuation: DeepResearchContinuation,
+    ) -> DeepResearchPlan:
+        if raw_plan.get("search_queries") and not raw_plan.get("search_strategy"):
+            raw_plan = {
+                **raw_plan,
+                "search_strategy": {
+                    "approach": "targeted",
+                    "search_queries": raw_plan.get("search_queries") or [],
+                    "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+                },
+            }
+        if raw_plan.get("report_sections") and not raw_plan.get("report_outline"):
+            raw_plan = {
+                **raw_plan,
+                "report_outline": [
+                    {"section_id": _slugify(title), "title": title, "goal": title}
+                    for title in raw_plan.get("report_sections") or []
+                ],
+            }
+        sub_questions = raw_plan.get("sub_questions") or []
+        if not sub_questions:
+            sub_questions = [{"id": "sq1", "question": job.query, "reason": "Cover the primary question."}]
+
+        report_outline = raw_plan.get("report_outline") or [
+            {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+            {"section_id": "key-findings", "title": "Key Findings", "goal": "Present the main evidence."},
+        ]
+        research_units = raw_plan.get("research_units") or []
+        if not research_units:
+            search_queries = (raw_plan.get("search_strategy") or {}).get("search_queries") or [job.query]
+            research_units = [
+                {
+                    "unit_id": f"unit-search-{index}",
+                    "unit_type": "search",
+                    "title": f"Search {index}",
+                    "goal": f"Investigate {query}",
+                    "query": query,
+                    "depends_on": [],
+                    "status": "pending",
+                    "notes": "",
+                }
+                for index, query in enumerate(search_queries[: max(1, config.deep_research_max_concurrency)], start=1)
+            ]
+
+        normalized_units: list[dict[str, Any]] = []
+        for index, item in enumerate(research_units, start=1):
+            unit_id = item.get("unit_id") or f"unit-{item.get('unit_type', 'search')}-{index}"
+            normalized_units.append(
+                {
+                    "unit_id": unit_id,
+                    "unit_type": item.get("unit_type", "search"),
+                    "title": item.get("title") or f"Unit {index}",
+                    "goal": item.get("goal") or item.get("query") or item.get("url") or f"Unit {index}",
+                    "query": item.get("query", ""),
+                    "url": item.get("url", ""),
+                    "instructions": item.get("instructions", ""),
+                    "depends_on": _normalize_depends_on(item.get("depends_on")),
+                    "status": item.get("status", "pending"),
+                    "notes": item.get("notes", ""),
+                }
+            )
+
+        normalized_outline: list[dict[str, Any]] = []
+        for index, item in enumerate(report_outline, start=1):
+            title = item.get("title") or f"Section {index}"
+            normalized_outline.append(
+                {
+                    "section_id": item.get("section_id") or _slugify(title),
+                    "title": title,
+                    "goal": item.get("goal") or title,
+                }
+            )
+
+        strategy = raw_plan.get("search_strategy") or {}
+        if not strategy.get("search_queries"):
+            strategy["search_queries"] = [
+                unit["query"] for unit in normalized_units if unit["unit_type"] == "search" and unit["query"]
+            ] or [job.query]
+        strategy.setdefault("approach", "targeted")
+        strategy.setdefault("selective_fetch", {"max_urls_per_search": 1, "prefer_titles_matching_outline": True})
+
+        normalized = {
+            "query": job.query,
+            "context": job.context,
             "effort": job.effort,
             "time_budget_seconds": job.resolved_budget_seconds,
             "include_domains": job.include_domains,
             "exclude_domains": job.exclude_domains,
-            "search_queries": search_queries,
-            "report_sections": [
-                "Executive Summary",
-                "Research Plan",
-                "Key Findings",
-                "Open Questions / Gaps",
-                "Detailed Report",
-                "Citations",
-            ],
+            "brief": raw_plan.get("brief")
+            or {
+                "objective": job.query,
+                "deliverable": "A structured deep research report with citations.",
+                "success_criteria": ["Answer the query with source-backed sections."],
+            },
+            "sub_questions": sub_questions,
+            "search_strategy": strategy,
+            "report_outline": normalized_outline,
+            "research_units": normalized_units,
+            "continuation": continuation.model_dump(),
+            "planner_metadata": raw_plan.get("planner_metadata") or {"planner": "fallback", "used_fallback": True},
         }
+        plan = DeepResearchPlan.model_validate(normalized)
+        _validate_research_units(plan.research_units)
+        return plan
+
+    def _build_continuation_context(self, continue_from_job_id: str) -> DeepResearchContinuation:
+        if not continue_from_job_id:
+            return DeepResearchContinuation(mode="fresh")
+        job = self.store.get_job(continue_from_job_id)
+
+        report_text = self.store.read_artifact_text(continue_from_job_id, "report.json")
+        final_report = self.store.read_artifact_text(continue_from_job_id, "final_report.md") or ""
+        partial_report = self.store.read_artifact_text(continue_from_job_id, "partial_report.md") or ""
+        plan_text = self.store.read_artifact_text(continue_from_job_id, "plan.json") or ""
+        sources_text = self.store.read_artifact_text(continue_from_job_id, "sources.json") or "[]"
+        checkpoints = self.store.list_checkpoints(continue_from_job_id)
+
+        previous_summary = ""
+        if report_text:
+            try:
+                report = json.loads(report_text)
+                previous_summary = report.get("summary") or ""
+            except Exception:
+                previous_summary = ""
+        if not previous_summary:
+            lines = [line.strip() for line in final_report.splitlines() if line.strip() and not line.startswith("#")]
+            previous_summary = lines[0] if lines else ""
+        if not previous_summary:
+            lines = [line.strip() for line in partial_report.splitlines() if line.strip() and not line.startswith("#")]
+            previous_summary = lines[0] if lines else ""
+
+        prior_plan_summary = ""
+        if plan_text:
+            try:
+                plan = json.loads(plan_text)
+                sub_questions = plan.get("sub_questions") or []
+                prior_plan_summary = "; ".join(
+                    item.get("question", "").strip() for item in sub_questions if item.get("question", "").strip()
+                )
+            except Exception:
+                prior_plan_summary = ""
+        if not prior_plan_summary and checkpoints:
+            latest_state = checkpoints[-1].state or {}
+            plan_state = latest_state.get("plan") if isinstance(latest_state, dict) else None
+            if isinstance(plan_state, dict):
+                prior_plan_summary = "; ".join(
+                    item.get("question", "").strip()
+                    for item in plan_state.get("sub_questions", []) or []
+                    if item.get("question", "").strip()
+                )
+
+        try:
+            source_count = len(json.loads(sources_text))
+        except Exception:
+            source_count = 0
+        if source_count == 0 and checkpoints:
+            latest_state = checkpoints[-1].state or {}
+            source_count = len((latest_state.get("sources") or [])) if isinstance(latest_state, dict) else 0
+
+        return DeepResearchContinuation(
+            mode="continue",
+            source_job_id=continue_from_job_id,
+            previous_summary=_trim_text(previous_summary or f"Continuation from {job.status} job {continue_from_job_id}.", limit=400),
+            prior_plan_summary=_trim_text(prior_plan_summary, limit=400),
+            source_count=source_count,
+        )
 
     def _request_fingerprint(
         self,
@@ -323,95 +744,226 @@ class DeepResearchRuntime:
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
         return job.model_dump()
 
+    def _read_plan(self, job_id: str, job: DeepResearchJob | None = None) -> DeepResearchPlan:
+        plan_text = self.store.read_artifact_text(job_id, "plan.json")
+        if plan_text:
+            raw_plan = json.loads(plan_text)
+            if job is None:
+                job = self.store.get_job(job_id)
+            continuation = self._build_continuation_context(job.continued_from_job_id)
+            plan = self._normalize_plan_payload(job, raw_plan, continuation)
+            if raw_plan != plan.model_dump():
+                self.write_artifact(job_id, "plan.json", _json_markdown_block(plan.model_dump()), "application/json")
+            return plan
+        if job is None:
+            job = self.store.get_job(job_id)
+        continuation = self._build_continuation_context(job.continued_from_job_id)
+        return self._build_fallback_plan(job, continuation)
+
+    def _load_checkpoint_state(self, job: DeepResearchJob) -> DeepResearchCheckpointState | None:
+        checkpoints = self.store.list_checkpoints(job.job_id)
+        if not checkpoints:
+            return None
+        candidates: list[Any] = []
+        if job.current_checkpoint:
+            candidates.extend(
+                checkpoint
+                for checkpoint in checkpoints
+                if checkpoint.checkpoint_key == job.current_checkpoint
+            )
+        candidates.extend(
+            checkpoint
+            for checkpoint in reversed(checkpoints)
+            if checkpoint.checkpoint_key != job.current_checkpoint
+        )
+        for checkpoint in candidates:
+            raw_state = checkpoint.state or {}
+            if "plan" not in raw_state and isinstance(raw_state, dict) and raw_state.get("query"):
+                raw_state = {"plan": raw_state}
+            if "plan" not in raw_state:
+                continue
+            try:
+                if isinstance(raw_state.get("plan"), dict):
+                    raw_state = {
+                        **raw_state,
+                        "plan": self._normalize_plan_payload(
+                            job,
+                            raw_state["plan"],
+                            self._build_continuation_context(job.continued_from_job_id),
+                        ).model_dump(),
+                    }
+                return DeepResearchCheckpointState.model_validate(raw_state)
+            except Exception:
+                continue
+        return None
+
 
 async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
+    job = runtime.store.get_job(job_id)
+    now_iso = utc_now_iso()
+    started_at = job.started_at or now_iso
     job = runtime.store.update_job(
         job_id,
         status="running",
-        started_at=utc_now_iso(),
-        heartbeat_at=utc_now_iso(),
+        started_at=started_at,
+        heartbeat_at=now_iso,
+        attempt_count=job.attempt_count + 1,
+        last_error="",
     )
-    plan_text = runtime.store.read_artifact_text(job_id, "plan.json")
-    plan = json.loads(plan_text) if plan_text else runtime._build_plan(job)
+    checkpoint_state = runtime._load_checkpoint_state(job)
+    plan = checkpoint_state.plan if checkpoint_state else runtime._read_plan(job_id, job)
+    runtime.write_artifact(job_id, "plan.json", _json_markdown_block(plan.model_dump()), "application/json")
 
     runtime.store.append_event(
         job_id,
         type="phase_started",
         phase="planning",
         message="Planning started.",
-        data={"query_count": len(plan["search_queries"])},
+        data={"unit_count": len(plan.research_units)},
     )
-    runtime.store.save_checkpoint(job_id, phase="planning", checkpoint_key="planning", state=plan)
-    runtime.store.update_job(job_id, progress_pct=10.0, heartbeat_at=utc_now_iso())
+    runtime.store.update_job(job_id, phase="planning", progress_pct=10.0, heartbeat_at=utc_now_iso())
 
     if runtime.store.get_job(job_id).cancel_requested:
-        runtime.store.update_job(job_id, status="canceled", finished_at=utc_now_iso(), heartbeat_at=utc_now_iso())
-        runtime.store.append_event(job_id, type="job_canceled", phase="planning", message="Canceled.", data={})
+        _mark_canceled(runtime, job_id, "planning")
         return
 
-    notes: list[dict[str, Any]] = []
-    merged_sources: list[dict] = []
+    completed_unit_ids = list(checkpoint_state.completed_unit_ids) if checkpoint_state else []
+    unit_results = dict(checkpoint_state.unit_results) if checkpoint_state else {}
+    source_registry = list(checkpoint_state.sources) if checkpoint_state else []
+    evidence_items = list(checkpoint_state.evidence_items) if checkpoint_state else []
+    sections = list(checkpoint_state.sections) if checkpoint_state else []
+    unit_results = _sanitize_unit_results(unit_results, source_registry)
+    evidence_items = _sanitize_evidence_items(evidence_items, source_registry)
+    sections = _sanitize_sections(sections, source_registry)
+    started_at_dt = _parse_utc_iso(job.started_at) or dt.datetime.now(dt.UTC)
+
     runtime.store.update_job(job_id, phase="researching", progress_pct=20.0, heartbeat_at=utc_now_iso())
     runtime.store.append_event(
         job_id,
         type="phase_started",
         phase="researching",
         message="Researching source material.",
-        data={},
+        data={"completed_units": len(completed_unit_ids)},
     )
 
-    search_queries = plan["search_queries"][: config.deep_research_max_concurrency + 1]
-    for index, query in enumerate(search_queries, start=1):
-        if runtime.store.get_job(job_id).cancel_requested:
-            runtime.store.update_job(job_id, status="canceled", finished_at=utc_now_iso(), heartbeat_at=utc_now_iso())
-            runtime.store.append_event(job_id, type="job_canceled", phase="researching", message="Canceled.", data={})
-            return
-        answer, sources = await _search_query(query)
-        note = {
-            "query": query,
-            "answer": answer,
-            "sources": sources,
-        }
-        notes.append(note)
-        merged_sources = merge_sources(merged_sources, sources)
-        runtime.store.save_checkpoint(
-            job_id,
-            phase="researching",
-            checkpoint_key=f"researching-{index}",
-            state={"completed_queries": index, "last_query": query},
-        )
-        runtime.store.append_event(
-            job_id,
-            type="research_unit_completed",
-            phase="researching",
-            message=f"Completed research unit {index}.",
-            data={"query": query, "sources_count": len(sources)},
-        )
-        runtime.store.update_job(job_id, progress_pct=min(20.0 + index * 20.0, 75.0), heartbeat_at=utc_now_iso())
+    unit_total = max(len(plan.research_units), 1)
+    while len(completed_unit_ids) < len(plan.research_units):
+        progressed = False
+        for unit in plan.research_units:
+            if unit.unit_id in completed_unit_ids:
+                continue
+            if any(dep not in completed_unit_ids for dep in unit.depends_on):
+                continue
+            if runtime.store.get_job(job_id).cancel_requested:
+                _mark_canceled(runtime, job_id, "researching")
+                return
+            elapsed_seconds = (dt.datetime.now(dt.UTC) - started_at_dt).total_seconds()
+            if elapsed_seconds >= job.resolved_budget_seconds:
+                _write_partial_outputs(runtime, job_id, plan, completed_unit_ids, unit_results, sections)
+                runtime.store.update_job(
+                    job_id,
+                    status="interrupted",
+                    phase="researching",
+                    last_error="time_budget_exceeded",
+                    finished_at=utc_now_iso(),
+                    heartbeat_at=utc_now_iso(),
+                )
+                runtime.store.append_event(
+                    job_id,
+                    type="job_interrupted",
+                    phase="researching",
+                    message="Deep research paused after reaching the time budget.",
+                    data={"completed_units": len(completed_unit_ids)},
+                )
+                return
 
-    notes_jsonl = "\n".join(_json_markdown_block(item) for item in notes)
-    runtime.write_artifact(job_id, "notes.jsonl", notes_jsonl, "application/x-ndjson")
-    standardized_sources = standardize_sources(merged_sources)
-    runtime.write_artifact(job_id, "sources.json", _json_markdown_block(standardized_sources), "application/json")
+            unit_result, new_sources, new_evidence = await _execute_research_unit(runtime, plan, unit)
+            source_registry, source_ids = _merge_source_registry(source_registry, new_sources)
+            for evidence in new_evidence:
+                evidence["source_ids"] = [source_id for source_id in evidence.get("source_ids", []) if source_id in source_ids] or source_ids
+            completed_unit_ids.append(unit.unit_id)
+            unit_results[unit.unit_id] = {
+                "unit_id": unit.unit_id,
+                "unit_type": unit.unit_type,
+                "summary": unit_result["summary"],
+                "detail": unit_result["detail"],
+                "citations": source_ids,
+                "source_ids": source_ids,
+            }
+            evidence_items.extend(new_evidence)
+            unit_results = _sanitize_unit_results(unit_results, source_registry)
+            evidence_items = _sanitize_evidence_items(evidence_items, source_registry)
+            checkpoint_state = DeepResearchCheckpointState(
+                plan=plan,
+                completed_unit_ids=completed_unit_ids,
+                unit_results=unit_results,
+                sources=source_registry,
+                evidence_items=evidence_items,
+                sections=sections,
+            )
+            runtime.store.save_checkpoint(
+                job_id,
+                phase="researching",
+                checkpoint_key=f"researching-{unit.unit_id}",
+                state=checkpoint_state.model_dump(),
+            )
+            runtime.store.append_event(
+                job_id,
+                type="research_unit_completed",
+                phase="researching",
+                message=f"Completed {unit.unit_id}.",
+                data={"unit_type": unit.unit_type, "sources_count": len(source_ids)},
+            )
+            progress = 20.0 + (len(completed_unit_ids) / unit_total) * 50.0
+            runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
+            progressed = True
+        if not progressed:
+            remaining_units = [unit.unit_id for unit in plan.research_units if unit.unit_id not in completed_unit_ids]
+            raise ValueError(f"research_plan_blocked: unresolved dependencies for {', '.join(remaining_units)}")
 
-    runtime.store.update_job(job_id, phase="synthesizing", progress_pct=80.0, heartbeat_at=utc_now_iso())
+    sections = _build_section_citations(plan.report_outline, evidence_items, source_registry)
+    unit_results = _sanitize_unit_results(unit_results, source_registry)
+    runtime.store.update_job(job_id, phase="synthesizing", progress_pct=82.0, heartbeat_at=utc_now_iso())
     runtime.store.append_event(
         job_id,
         type="phase_started",
         phase="synthesizing",
         message="Synthesizing findings.",
-        data={"note_count": len(notes)},
+        data={"section_count": len(sections)},
     )
-    partial_report = _build_partial_report(plan, notes)
+    partial_report = _build_partial_report(plan, completed_unit_ids, unit_results, sections)
     runtime.write_artifact(job_id, "partial_report.md", partial_report, "text/markdown")
     runtime.store.save_checkpoint(
         job_id,
         phase="synthesizing",
         checkpoint_key="synthesizing",
-        state={"note_count": len(notes), "sources_count": len(standardized_sources)},
+        state=DeepResearchCheckpointState(
+            plan=plan,
+            completed_unit_ids=completed_unit_ids,
+            unit_results=unit_results,
+            sources=source_registry,
+            evidence_items=evidence_items,
+            sections=sections,
+        ).model_dump(),
     )
 
-    runtime.store.update_job(job_id, phase="finalizing", progress_pct=92.0, heartbeat_at=utc_now_iso())
+    if runtime.store.get_job(job_id).cancel_requested:
+        _mark_canceled(runtime, job_id, "synthesizing")
+        return
+
+    citations = {
+        "source_registry": {item["source_id"]: item for item in source_registry},
+        "sections": _sanitize_sections(sections, source_registry),
+    }
+    report = {
+        "query": plan.query,
+        "summary": citations["sections"][0]["claims"][0]["text"] if citations["sections"] and citations["sections"][0]["claims"] else "",
+        "status": "completed",
+        "sections": citations["sections"],
+        "unit_results": unit_results,
+    }
+    final_report = _build_final_report(plan, sections, citations["source_registry"])
+    runtime.store.update_job(job_id, phase="finalizing", progress_pct=94.0, heartbeat_at=utc_now_iso())
     runtime.store.append_event(
         job_id,
         type="phase_started",
@@ -419,28 +971,22 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         message="Finalizing report.",
         data={},
     )
-    final_report = _build_final_report(plan, notes, standardized_sources)
-    runtime.write_artifact(job_id, "final_report.md", final_report, "text/markdown")
-    citations = _build_citations(standardized_sources)
+    runtime.write_artifact(job_id, "sources.json", _json_markdown_block(source_registry), "application/json")
     runtime.write_artifact(job_id, "citations.json", _json_markdown_block(citations), "application/json")
-    runtime.write_artifact(
-        job_id,
-        "report.json",
-        _json_markdown_block(
-            {
-                "query": job.query,
-                "status": "completed",
-                "notes_count": len(notes),
-                "sources_count": len(standardized_sources),
-            }
-        ),
-        "application/json",
-    )
+    runtime.write_artifact(job_id, "report.json", _json_markdown_block(report), "application/json")
+    runtime.write_artifact(job_id, "final_report.md", final_report, "text/markdown")
     runtime.store.save_checkpoint(
         job_id,
         phase="finalizing",
         checkpoint_key="finalizing",
-        state={"artifact_kinds": [artifact.kind for artifact in runtime.store.list_artifacts(job_id)]},
+        state=DeepResearchCheckpointState(
+            plan=plan,
+            completed_unit_ids=completed_unit_ids,
+            unit_results=unit_results,
+            sources=source_registry,
+            evidence_items=evidence_items,
+            sections=sections,
+        ).model_dump(),
     )
     runtime.store.update_job(
         job_id,
@@ -455,8 +1001,227 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         type="job_completed",
         phase="finalizing",
         message="Deep research completed.",
-        data={"sources_count": len(standardized_sources)},
+        data={"sources_count": len(source_registry)},
     )
+
+
+def _mark_canceled(runtime: DeepResearchRuntime, job_id: str, phase: str) -> None:
+    runtime.store.update_job(job_id, status="canceled", finished_at=utc_now_iso(), heartbeat_at=utc_now_iso())
+    runtime.store.append_event(job_id, type="job_canceled", phase=phase, message="Canceled.", data={})
+
+
+def _write_partial_outputs(
+    runtime: DeepResearchRuntime,
+    job_id: str,
+    plan: DeepResearchPlan,
+    completed_unit_ids: list[str],
+    unit_results: dict[str, dict[str, Any]],
+    sections: list[dict[str, Any]],
+) -> None:
+    partial_report = _build_partial_report(plan, completed_unit_ids, unit_results, sections)
+    runtime.write_artifact(job_id, "partial_report.md", partial_report, "text/markdown")
+
+
+async def _execute_research_unit(
+    runtime: DeepResearchRuntime,
+    plan: DeepResearchPlan,
+    unit: DeepResearchResearchUnit,
+) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
+    if unit.unit_type == "fetch":
+        fetched = await _fetch_url(unit.url)
+        detail = fetched or "No content fetched."
+        source = {"url": unit.url, "title": unit.title}
+        return (
+            {"summary": _trim_text(detail, limit=180), "detail": detail},
+            [source],
+            [
+                DeepResearchEvidenceItem(
+                    evidence_id=f"evidence-{unit.unit_id}",
+                    unit_id=unit.unit_id,
+                    summary=_trim_text(detail, limit=_MAX_CLAIM_LENGTH),
+                    detail=detail,
+                ).model_dump()
+            ],
+        )
+
+    if unit.unit_type == "map":
+        mapped = await _map_url(unit.url, unit.instructions)
+        detail = mapped or "No site map returned."
+        return (
+            {"summary": _trim_text(detail, limit=180), "detail": detail},
+            [{"url": unit.url, "title": unit.title}],
+            [
+                DeepResearchEvidenceItem(
+                    evidence_id=f"evidence-{unit.unit_id}",
+                    unit_id=unit.unit_id,
+                    summary=_trim_text(detail, limit=_MAX_CLAIM_LENGTH),
+                    detail=detail,
+                ).model_dump()
+            ],
+        )
+
+    answer, sources = await _search_query(unit.query or unit.goal)
+    evidence_items = [
+        DeepResearchEvidenceItem(
+            evidence_id=f"evidence-{unit.unit_id}-search",
+            unit_id=unit.unit_id,
+            summary=_trim_text(answer, limit=_MAX_CLAIM_LENGTH),
+            detail=answer,
+        ).model_dump()
+    ]
+    selective_fetch = plan.search_strategy.selective_fetch
+    fetch_limit = max(0, selective_fetch.max_urls_per_search)
+    for source in sources[:fetch_limit]:
+        fetched = await _fetch_url(source["url"])
+        if not fetched:
+            continue
+        evidence_items.append(
+            DeepResearchEvidenceItem(
+                evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
+                unit_id=unit.unit_id,
+                summary=_trim_text(fetched, limit=_MAX_CLAIM_LENGTH),
+                detail=fetched,
+            ).model_dump()
+        )
+    return (
+        {"summary": _trim_text(answer, limit=180), "detail": answer},
+        sources,
+        evidence_items,
+    )
+
+
+def _merge_source_registry(
+    existing_sources: list[dict[str, Any]],
+    new_sources: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    existing_by_url = {
+        item["url"]: dict(item)
+        for item in existing_sources
+        if isinstance(item, dict) and isinstance(item.get("url"), str) and item["url"].strip()
+    }
+    next_index = len(existing_by_url) + 1
+    merged_ids: list[str] = []
+    for source in standardize_sources(new_sources):
+        url = source.get("url", "").strip()
+        if not url:
+            continue
+        if url in existing_by_url:
+            current = existing_by_url[url]
+            current.update({key: value for key, value in source.items() if value not in ("", None, [])})
+            existing_by_url[url] = current
+        else:
+            current = dict(source)
+            current["source_id"] = f"R{next_index}"
+            next_index += 1
+            existing_by_url[url] = current
+        merged_ids.append(existing_by_url[url]["source_id"])
+    merged_sources = sorted(existing_by_url.values(), key=lambda item: item["source_id"])
+    return merged_sources, merged_ids
+
+
+def _build_section_citations(
+    outline: list[DeepResearchReportSection],
+    evidence_items: list[dict[str, Any]],
+    source_registry: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    all_source_ids = [item["source_id"] for item in source_registry]
+    claims_pool = [
+        DeepResearchEvidenceItem.model_validate(item)
+        for item in evidence_items
+        if item.get("summary")
+    ]
+    if not claims_pool:
+        claims_pool = [
+            DeepResearchEvidenceItem(
+                evidence_id="evidence-empty",
+                unit_id="none",
+                summary="No conclusive evidence was collected.",
+                detail="No conclusive evidence was collected.",
+            )
+        ]
+
+    sections: list[dict[str, Any]] = []
+    claim_index = 1
+    for section in outline:
+        section_claims: list[dict[str, Any]] = []
+        for evidence in claims_pool:
+            claim = DeepResearchClaim(
+                claim_id=f"{section.section_id}-claim-{claim_index}",
+                text=_trim_text(evidence.summary, limit=_MAX_CLAIM_LENGTH),
+                citations=evidence.source_ids or all_source_ids[:1],
+            )
+            section_claims.append(claim.model_dump())
+            claim_index += 1
+            if len(section_claims) >= 2:
+                break
+        section_model = DeepResearchSectionCitations(
+            section_id=section.section_id,
+            title=section.title,
+            claims=section_claims,
+            citations=sorted({citation for claim in section_claims for citation in claim.get("citations", [])}),
+        )
+        sections.append(section_model.model_dump())
+    return sections
+
+
+def _build_partial_report(
+    plan: DeepResearchPlan,
+    completed_unit_ids: list[str],
+    unit_results: dict[str, dict[str, Any]],
+    sections: list[dict[str, Any]],
+) -> str:
+    lines = [
+        "# Partial Report",
+        "",
+        "## Progress",
+        "",
+        f"- Completed units: {len(completed_unit_ids)} / {len(plan.research_units)}",
+        "",
+        "## Research Brief",
+        "",
+        f"- Objective: {plan.brief.objective}",
+        f"- Deliverable: {plan.brief.deliverable}",
+        "",
+        "## Completed Units",
+        "",
+    ]
+    for unit_id in completed_unit_ids:
+        result = unit_results.get(unit_id, {})
+        lines.append(f"- `{unit_id}`: {result.get('summary', 'Completed.')}")
+    if sections:
+        lines.extend(["", "## Draft Sections", ""])
+        for section in sections:
+            lines.append(f"### {section['title']}")
+            lines.append("")
+            for claim in section.get("claims", []):
+                refs = ", ".join(claim.get("citations", []))
+                lines.append(f"- {claim['text']} [{refs}]".rstrip())
+            lines.append("")
+    pending_titles = [unit.title for unit in plan.research_units if unit.unit_id not in completed_unit_ids]
+    if pending_titles:
+        lines.extend(["## Remaining Work", ""])
+        lines.extend(f"- {title}" for title in pending_titles)
+    return "\n".join(lines).strip() + "\n"
+
+
+def _build_final_report(
+    plan: DeepResearchPlan,
+    sections: list[dict[str, Any]],
+    source_registry: dict[str, dict[str, Any]],
+) -> str:
+    lines = [f"# {plan.query}", ""]
+    for section in sections:
+        lines.append(f"## {section['title']}")
+        lines.append("")
+        for claim in section.get("claims", []):
+            refs = ", ".join(claim.get("citations", []))
+            lines.append(f"- {claim['text']} [{refs}]".rstrip())
+        lines.append("")
+    lines.extend(["## Sources", ""])
+    for source_id, item in source_registry.items():
+        title = item.get("title") or item["url"]
+        lines.append(f"- [{source_id}] {title} - {item['url']}")
+    return "\n".join(lines).strip() + "\n"
 
 
 async def _search_query(query: str) -> tuple[str, list[dict]]:
@@ -490,50 +1255,19 @@ async def _provider_search_with_sources(
     return content, sources
 
 
-def _build_partial_report(plan: dict[str, Any], notes: list[dict[str, Any]]) -> str:
-    lines = [
-        "# Partial Report",
-        "",
-        "## Research Plan",
-        "",
-    ]
-    lines.extend(f"- {query}" for query in plan["search_queries"])
-    lines.extend(["", "## Working Notes", ""])
-    for note in notes:
-        lines.append(f"### {note['query']}")
-        lines.append("")
-        lines.append(note["answer"] or "No answer returned.")
-        lines.append("")
-    return "\n".join(lines).strip() + "\n"
+async def _fetch_url(url: str) -> str | None:
+    from . import server
+
+    result = await server.web_fetch(url)
+    if not result or result.startswith("提取失败:") or result.startswith("配置错误:"):
+        return None
+    return result
 
 
-def _build_final_report(plan: dict[str, Any], notes: list[dict[str, Any]], sources: list[dict[str, Any]]) -> str:
-    lines = [
-        f"# {plan['query']}",
-        "",
-        "## Executive Summary",
-        "",
-    ]
-    for note in notes:
-        summary_line = note["answer"].splitlines()[0].strip() if note["answer"].strip() else "No summary available."
-        lines.append(f"- {summary_line}")
-    lines.extend(["", "## Research Plan", ""])
-    lines.extend(f"- {query}" for query in plan["search_queries"])
-    lines.extend(["", "## Detailed Report", ""])
-    for note in notes:
-        lines.append(f"### {note['query']}")
-        lines.append("")
-        lines.append(note["answer"] or "No answer returned.")
-        lines.append("")
-    lines.extend(["## Citations", ""])
-    for citation_id, item in _build_citations(sources).items():
-        title = item.get("title") or item["url"]
-        lines.append(f"- [{citation_id}] {title} - {item['url']}")
-    return "\n".join(lines).strip() + "\n"
+async def _map_url(url: str, instructions: str = "") -> str | None:
+    from . import server
 
-
-def _build_citations(sources: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    citations: dict[str, dict[str, Any]] = {}
-    for index, source in enumerate(sources, start=1):
-        citations[f"R{index}"] = source
-    return citations
+    result = await server.web_map(url, instructions=instructions)
+    if not result or result.startswith("映射失败:") or result.startswith("配置错误:"):
+        return None
+    return result

@@ -1,6 +1,7 @@
 import json
 import secrets
 import sqlite3
+import datetime as dt
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,17 @@ def _json_loads(value: str | None) -> Any:
     if not value:
         return None
     return json.loads(value)
+
+
+def _parse_utc_iso(value: str) -> dt.datetime | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        normalized = text.replace("Z", "+00:00")
+        return dt.datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
 
 
 class DeepResearchStore:
@@ -419,10 +431,15 @@ class DeepResearchStore:
             ).fetchall()
         for row in rows:
             job = self._row_to_job(row)
-            if job.status in {"queued", "running"}:
+            if job.status in {"draft", "queued", "running"}:
                 return job
             if job.status == "completed" and recent_reuse_seconds > 0:
-                return job
+                finished_at = _parse_utc_iso(job.finished_at)
+                if finished_at is None:
+                    continue
+                age_seconds = (dt.datetime.now(dt.UTC) - finished_at.astimezone(dt.UTC)).total_seconds()
+                if age_seconds <= recent_reuse_seconds:
+                    return job
         return None
 
     def reconcile_incomplete_jobs(self) -> list[DeepResearchJob]:
