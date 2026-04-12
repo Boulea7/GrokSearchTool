@@ -15,7 +15,7 @@ Long-running `deep research` is now an implemented advanced capability direction
 ## Now
 
 - Strengthen the core `web_search`, `get_sources`, `web_fetch`, `web_map`, and `get_config_info` experience while keeping the default workflow fast and lightweight
-- Stabilize the new `deep_research_*` job surface, persistence layer, CLI workflow, and real-world probes without turning the default path into a heavyweight agent platform
+- Stabilize the new `deep_research_*` job surface, persistence layer, CLI workflow, structured planner, checkpoint-aware resume/continue flow, and real-world probes without turning the default path into a heavyweight agent platform
 - Improve source provenance, confidence cues, and result ordering so useful evidence is surfaced before low-value noise
 - Expand compatibility and installation validation for important MCP hosts, with clear distinctions between officially tested, community-tested, and planned integrations
 - Keep tightening diagnostics and release discipline around configuration checks, compatibility smoke tests, tags, changelog hygiene, and installation verification, with packaging contracts enforced in CI and release steps documented explicitly
@@ -29,7 +29,7 @@ Long-running `deep research` is now an implemented advanced capability direction
 
 ## Later
 
-- Deepen `deep research` orchestration with stronger planning, richer report synthesis, extended `map -> fetch` flows, better retries, and continuation ergonomics
+- Deepen `deep research` orchestration with more adaptive planning, richer report synthesis, extended `map -> fetch` flows, better retries, and stronger runtime recovery semantics
 - Evaluate optional advanced MCP affordances only if they preserve the lightweight default experience
 - Revisit expert versus basic interaction layers only if they can be added without making the default MCP and skill experience heavier or slower
 

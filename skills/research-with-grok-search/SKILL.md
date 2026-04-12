@@ -58,6 +58,12 @@ Use `deep_research_*` instead of overloading the lightweight path when the task 
 - partial reports or exported artifacts
 - a report-oriented result rather than a single direct answer
 
+For deep research control flows:
+
+- prefer `grok-search-research` for long-running watch loops, targeted artifact reads, and continuation-heavy local workflows
+- use `deep_research_resume` when resuming the same job from its latest checkpoint boundary
+- use `deep_research_start(...continue_from_job_id=...)` or CLI `continue` when opening a new follow-up job that should consume previous artifacts and findings
+
 ### 4. Verify sources before making strong claims
 
 - prefer at least two independent sources for key facts
