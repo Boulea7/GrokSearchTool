@@ -14,6 +14,9 @@ README_RU = ROOT_DIR / "README.ru.md"
 PYPROJECT = ROOT_DIR / "pyproject.toml"
 SECURITY = ROOT_DIR / "SECURITY.md"
 ROADMAP = ROOT_DIR / "docs" / "ROADMAP.md"
+GITIGNORE = ROOT_DIR / ".gitignore"
+RELEASING = ROOT_DIR / "docs" / "RELEASING.md"
+PACKAGING_WORKFLOW = ROOT_DIR / ".github" / "workflows" / "packaging-contracts.yml"
 
 GET_SOURCES_LIFECYCLE_CONTRACT_START = "<!-- docs-contract:get-sources-lifecycle:start -->"
 GET_SOURCES_LIFECYCLE_CONTRACT_END = "<!-- docs-contract:get-sources-lifecycle:end -->"
@@ -201,6 +204,13 @@ def test_readme_fastmcp_badge_matches_pyproject_minimum_dependency():
     assert 'fastmcp>=2.3.0' in pyproject
 
 
+def test_readme_does_not_treat_uv_tool_install_as_public_release_contract():
+    text = README.read_text(encoding="utf-8")
+
+    assert "### 本地优先启动建议" not in text
+    assert 'uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"' not in text
+
+
 def test_security_policy_mentions_redirect_preflight_degraded_boundary():
     text = SECURITY.read_text(encoding="utf-8")
 
@@ -233,6 +243,35 @@ def test_roadmap_keeps_stdio_first_positioning_without_relisting_already_aligned
     assert "local `stdio` usage first" in roadmap
     assert "companion-skill guidance" in roadmap
     assert "host-facing examples" in roadmap
+
+
+def test_gitignore_covers_build_artifacts():
+    text = GITIGNORE.read_text(encoding="utf-8")
+
+    assert "build/" in text
+    assert "dist/" in text
+
+
+def test_packaging_workflow_enforces_distribution_and_contract_checks():
+    text = PACKAGING_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "uv build --wheel --sdist" in text
+    assert "tests/test_package_imports.py" in text
+    assert "tests/test_docs_contracts.py" in text
+    assert "import grok_search.planning" in text
+    assert "import grok_search.server" in text
+    assert "from grok_search.server import main" in text
+
+
+def test_releasing_doc_covers_version_tag_changelog_and_artifact_verification():
+    text = RELEASING.read_text(encoding="utf-8")
+
+    assert "CHANGELOG.md" in text
+    assert "git tag" in text
+    assert "uv build --wheel --sdist" in text
+    assert "grok_search.planning" in text
+    assert "grok_search.server" in text
+    assert "grok-search" in text
 
 
 def test_docs_explain_get_sources_warning_round_trip_and_cache_summary_contract():

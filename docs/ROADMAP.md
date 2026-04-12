@@ -17,7 +17,7 @@ Long-running `deep research` remains a separate advanced capability direction an
 - Strengthen the core `web_search`, `get_sources`, `web_fetch`, `web_map`, and `get_config_info` experience while keeping the default workflow fast and lightweight
 - Improve source provenance, confidence cues, and result ordering so useful evidence is surfaced before low-value noise
 - Expand compatibility and installation validation for important MCP hosts, with clear distinctions between officially tested, community-tested, and planned integrations
-- Build a stronger diagnostics and release discipline around configuration checks, compatibility smoke tests, tags, changelog hygiene, and installation verification
+- Keep tightening diagnostics and release discipline around configuration checks, compatibility smoke tests, tags, changelog hygiene, and installation verification, with packaging contracts enforced in CI and release steps documented explicitly
 
 ## Next
 
