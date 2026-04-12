@@ -398,6 +398,7 @@ def test_built_local_wheel_exposes_console_script_and_install_surface(tmp_path):
         "fastmcp>=2.3.0",
         "httpx[socks]>=0.28.0",
         "mcp[cli]>=1.21.2",
+        "pydantic>=2.0.0",
         "tenacity>=8.0.0",
     }.issubset(set(metadata_payload["requires"]))
 
@@ -454,6 +455,75 @@ def test_built_local_wheel_exposes_console_script_and_install_surface(tmp_path):
     assert import_payload["mcp_error"] == {
         "type": "ModuleNotFoundError",
         "name": "fastmcp",
+    }
+
+
+def test_built_local_distributions_include_wheel_and_sdist(tmp_path):
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is required to build local distribution artifacts")
+
+    dist_dir = tmp_path / "dist"
+    build_result = _run_subprocess(
+        [uv, "build", "--wheel", "--sdist", "--out-dir", str(dist_dir)],
+        cwd=ROOT_DIR,
+        timeout=180,
+    )
+    assert build_result.returncode == 0, build_result.stderr
+
+    wheels = sorted(dist_dir.glob("*.whl"))
+    sdists = sorted(dist_dir.glob("*.tar.gz"))
+    assert len(wheels) == 1
+    assert len(sdists) == 1
+
+
+def test_built_local_wheel_supports_direct_artifact_import_surface(tmp_path):
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is required to build a local wheel artifact")
+
+    dist_dir = tmp_path / "dist"
+    build_result = _run_subprocess(
+        [uv, "build", "--wheel", "--out-dir", str(dist_dir)],
+        cwd=ROOT_DIR,
+        timeout=180,
+    )
+    assert build_result.returncode == 0, build_result.stderr
+
+    wheels = sorted(dist_dir.glob("*.whl"))
+    assert len(wheels) == 1
+    wheel_path = wheels[0]
+
+    import_code = textwrap.dedent(
+        """
+        import importlib
+        import json
+        import sys
+
+        sys.path.insert(0, %(wheel_path)r)
+
+        planning = importlib.import_module("grok_search.planning")
+        server = importlib.import_module("grok_search.server")
+
+        payload = {
+            "planning_module": planning.__name__,
+            "server_module": server.__name__,
+            "main_callable": callable(server.main),
+            "main_module": getattr(server.main, "__module__", ""),
+        }
+        print(json.dumps(payload))
+        """
+        % {"wheel_path": str(wheel_path)}
+    )
+    result = _run_subprocess([sys.executable, "-c", import_code], cwd=ROOT_DIR)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "planning_module": "grok_search.planning",
+        "server_module": "grok_search.server",
+        "main_callable": True,
+        "main_module": "grok_search.server",
     }
 
 
