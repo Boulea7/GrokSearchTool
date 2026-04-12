@@ -20,16 +20,23 @@ python3 -m py_compile src/grok_search/*.py src/grok_search/providers/*.py tests/
 uv build --wheel --sdist
 ```
 
-5. Run artifact smoke checks against the built wheel in a fresh virtual environment:
+5. Run artifact smoke checks against both the built wheel and the built source distribution in fresh virtual environments:
 
 ```bash
-python3 -m venv .venv-release-smoke
-. .venv-release-smoke/bin/activate
+python3 -m venv .venv-wheel-smoke
+. .venv-wheel-smoke/bin/activate
 python -m pip install dist/*.whl
 python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"
 python -c "import importlib.metadata; print(importlib.metadata.distribution('grok-search').entry_points)"
 deactivate
-rm -rf .venv-release-smoke
+
+python3 -m venv .venv-sdist-smoke
+. .venv-sdist-smoke/bin/activate
+python -m pip install dist/*.tar.gz
+python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"
+deactivate
+
+rm -rf .venv-wheel-smoke .venv-sdist-smoke
 ```
 
 The smoke check must confirm:
@@ -38,6 +45,7 @@ The smoke check must confirm:
 - `grok_search.server` imports from the built artifact
 - `grok_search.server.main` resolves as the console entry target
 - the installed `grok-search` distribution exposes the expected console script
+- the built `dist/*.tar.gz` source distribution also installs and imports cleanly
 
 6. Push the release branch and create an annotated Git tag:
 

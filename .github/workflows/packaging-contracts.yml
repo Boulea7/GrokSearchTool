@@ -35,7 +35,12 @@ jobs:
 
       - name: Run built artifact smoke checks
         run: |
-          python -m venv .venv-packaging-smoke
-          . .venv-packaging-smoke/bin/activate
+          python -m venv .venv-wheel-smoke
+          . .venv-wheel-smoke/bin/activate
           python -m pip install dist/*.whl
+          python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"
+          deactivate
+          python -m venv .venv-sdist-smoke
+          . .venv-sdist-smoke/bin/activate
+          python -m pip install dist/*.tar.gz
           python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"
