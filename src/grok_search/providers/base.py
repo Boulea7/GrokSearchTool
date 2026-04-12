@@ -1,5 +1,5 @@
-from abc import ABC, abstractmethod
 import inspect
+from abc import ABC, abstractmethod
 from typing import Any, Dict
 
 
@@ -26,6 +26,19 @@ class SearchResult:
             "source": self.source,
             "published_date": self.published_date,
         }
+
+
+def _filter_supported_search_kwargs(method, kwargs: dict[str, Any]) -> dict[str, Any]:
+    parameters = inspect.signature(method).parameters.values()
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return kwargs
+
+    supported_names = {
+        parameter.name
+        for parameter in parameters
+        if parameter.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    }
+    return {key: value for key, value in kwargs.items() if key in supported_names}
 
 
 class BaseSearchProvider(ABC):
@@ -58,8 +71,7 @@ class BaseSearchProvider(ABC):
             "max_results": max_results,
             "ctx": ctx,
         }
-        parameters = inspect.signature(self.search).parameters
-        supported_kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+        supported_kwargs = _filter_supported_search_kwargs(self.search, kwargs)
         return await self.search(query, **supported_kwargs), []
 
     @abstractmethod
