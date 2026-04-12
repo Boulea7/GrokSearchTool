@@ -43,6 +43,7 @@ try:
         engine as planning_engine,
         _split_csv,
     )
+    from grok_search.deep_research_runtime import DeepResearchRuntime
 except ImportError:
     from .providers.grok import GrokSearchProvider
     from .providers.base import _filter_supported_search_kwargs
@@ -69,6 +70,7 @@ except ImportError:
         engine as planning_engine,
         _split_csv,
     )
+    from .deep_research_runtime import DeepResearchRuntime
 
 mcp = FastMCP("grok-search")
 
@@ -83,6 +85,7 @@ _PREFERRED_GROK_MODEL = "grok-4.20-0309"
 _MODEL_FALLBACK_WARNING = "model_fallback_applied"
 _BODY_MISSING_SOURCES_ONLY_WARNING = "body_missing_sources_only"
 _BODY_PROBABLY_TRUNCATED_WARNING = "body_probably_truncated"
+_DEEP_RESEARCH_RUNTIME = DeepResearchRuntime(config.deep_research_dir)
 
 
 def _available_models_cache_now() -> float:
@@ -3576,6 +3579,111 @@ async def plan_execution(
         is_revision=is_revision, confidence=confidence,
         phase_data={"parallel": parallel, "sequential": seq, "estimated_rounds": estimated_rounds},
     ), ensure_ascii=False, indent=2)
+
+
+@mcp.tool(
+    name="deep_research_start",
+    output_schema=None,
+    description="""
+    Start an advanced deep research job that runs asynchronously and produces progress events,
+    partial artifacts, and a final report. This is the heavyweight research path and should not
+    replace the default lightweight `plan_* -> web_search` flow for simple lookups.
+    """,
+)
+async def deep_research_start(
+    query: Annotated[str, "Primary research question."],
+    context: Annotated[str, "Optional additional context or constraints."] = "",
+    effort: Annotated[str, "Research effort profile. Recommended values: standard | deep."] = "standard",
+    time_budget_seconds: Annotated[int, "Optional target time budget in seconds."] = 0,
+    include_domains: Annotated[Optional[list[str]], "Optional domain allowlist."] = None,
+    exclude_domains: Annotated[Optional[list[str]], "Optional domain denylist."] = None,
+    continue_from_job_id: Annotated[str, "Optional prior job to continue from."] = "",
+    plan_only: Annotated[bool, "Create a draft plan without running the research job."] = False,
+    force_new: Annotated[bool, "Force creation of a new job even if a reusable job exists."] = False,
+) -> dict:
+    if not query.strip():
+        return {"error": "validation_error", "message": "query 不能为空"}
+    return await _DEEP_RESEARCH_RUNTIME.start(
+        query=query,
+        context=context,
+        effort=effort,
+        time_budget_seconds=time_budget_seconds or None,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+        continue_from_job_id=continue_from_job_id,
+        plan_only=plan_only,
+        force_new=force_new,
+    )
+
+
+@mcp.tool(
+    name="deep_research_status",
+    output_schema=None,
+    description="Get the current status, phase, progress, and artifact summary for a deep research job.",
+)
+async def deep_research_status(
+    job_id: Annotated[str, "Deep research job ID."]
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.status(job_id)
+
+
+@mcp.tool(
+    name="deep_research_events",
+    output_schema=None,
+    description="Fetch ordered deep research events, optionally starting after a known sequence number.",
+)
+async def deep_research_events(
+    job_id: Annotated[str, "Deep research job ID."],
+    after_seq: Annotated[int, "Return only events with seq greater than this value."] = 0,
+    limit: Annotated[int, "Maximum number of events to return."] = 100,
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.events(job_id, after_seq=after_seq, limit=limit)
+
+
+@mcp.tool(
+    name="deep_research_result",
+    output_schema=None,
+    description="Return the current deep research result, including plan, partial report, final report, and citations when available.",
+)
+async def deep_research_result(
+    job_id: Annotated[str, "Deep research job ID."],
+    include_partial: Annotated[bool, "Include partial artifacts when the job is incomplete."] = True,
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.result(job_id, include_partial=include_partial)
+
+
+@mcp.tool(
+    name="deep_research_resume",
+    output_schema=None,
+    description="Resume a draft, failed, or interrupted deep research job from its latest checkpoint.",
+)
+async def deep_research_resume(
+    job_id: Annotated[str, "Deep research job ID."]
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.resume(job_id)
+
+
+@mcp.tool(
+    name="deep_research_cancel",
+    output_schema=None,
+    description="Request cancellation for a deep research job.",
+)
+async def deep_research_cancel(
+    job_id: Annotated[str, "Deep research job ID."]
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.cancel(job_id)
+
+
+@mcp.tool(
+    name="deep_research_list",
+    output_schema=None,
+    description="List recent deep research jobs, optionally filtered by status.",
+)
+async def deep_research_list(
+    status: Annotated[str, "Optional status filter."] = "",
+    limit: Annotated[int, "Maximum number of jobs to return."] = 50,
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.list_jobs(status=status, limit=limit)
 
 
 def _configure_windows_event_loop_policy() -> None:

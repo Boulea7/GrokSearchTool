@@ -178,6 +178,45 @@ class Config:
         return int(self._get_env_value("GROK_RETRY_MAX_WAIT", "10") or "10")
 
     @property
+    def deep_research_dir(self) -> Path:
+        raw = self._get_env_value("GROK_DEEP_RESEARCH_DIR")
+        if raw:
+            return Path(raw).expanduser()
+        return Path.home() / ".config" / "grok-search" / "deep-research"
+
+    @property
+    def deep_research_default_budget_seconds(self) -> int:
+        raw = self._get_env_value("GROK_DEEP_RESEARCH_DEFAULT_BUDGET_SECONDS", "240") or "240"
+        try:
+            return max(60, int(raw))
+        except ValueError:
+            return 240
+
+    @property
+    def deep_research_hard_timeout_seconds(self) -> int:
+        raw = self._get_env_value("GROK_DEEP_RESEARCH_HARD_TIMEOUT_SECONDS", "600") or "600"
+        try:
+            return max(120, int(raw))
+        except ValueError:
+            return 600
+
+    @property
+    def deep_research_max_concurrency(self) -> int:
+        raw = self._get_env_value("GROK_DEEP_RESEARCH_MAX_CONCURRENCY", "3") or "3"
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return 3
+
+    @property
+    def deep_research_recent_reuse_seconds(self) -> int:
+        raw = self._get_env_value("GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS", "1800") or "1800"
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return 1800
+
+    @property
     def output_cleanup_enabled(self) -> bool:
         raw = self._get_env_value("GROK_OUTPUT_CLEANUP")
         if raw is None:

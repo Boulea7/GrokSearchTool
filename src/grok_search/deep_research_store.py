@@ -282,6 +282,18 @@ class DeepResearchStore:
             for row in rows
         ]
 
+    def list_jobs(self, *, status: str = "", limit: int = 50) -> list[DeepResearchJob]:
+        query = "SELECT * FROM jobs"
+        params: list[Any] = []
+        if status:
+            query += " WHERE status = ?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return [self._row_to_job(row) for row in rows]
+
     def save_checkpoint(
         self,
         job_id: str,
@@ -382,6 +394,18 @@ class DeepResearchStore:
             )
             for row in rows
         ]
+
+    def artifact_abspath(self, job_id: str, kind: str) -> Path:
+        return self._artifacts_dir / job_id / kind
+
+    def read_artifact_text(self, job_id: str, kind: str) -> str | None:
+        artifact = self._get_artifact(job_id, kind)
+        if artifact is None:
+            return None
+        path = self._root_dir / artifact.path
+        if not path.exists():
+            return None
+        return path.read_text(encoding="utf-8")
 
     def find_reusable_job(self, request_fingerprint: str, *, recent_reuse_seconds: int) -> DeepResearchJob | None:
         with self._connect() as connection:
