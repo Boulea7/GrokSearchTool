@@ -270,6 +270,9 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "config_status",
     ):
         assert summary_payload[key] == default_payload[key]
+    assert summary_payload["doctor"]["status"] == default_payload["doctor"]["status"]
+    assert summary_payload["doctor"]["summary"] == default_payload["doctor"]["summary"]
+    assert summary_payload["doctor"]["recommendations"] == default_payload["doctor"]["recommendations"]
 
 
 @pytest.mark.asyncio
@@ -848,6 +851,15 @@ async def test_get_config_info_skips_unconfigured_optional_providers(monkeypatch
     assert payload["feature_readiness"]["web_map"]["degraded_by"] == [
         {"check_id": "tavily_map", "status": "skipped", "reason_code": "missing_api_key"}
     ]
+    assert payload["feature_readiness"]["web_fetch"]["degraded_by"] == [
+        {"check_id": "tavily_extract", "status": "skipped", "reason_code": "missing_api_key"},
+        {"check_id": "firecrawl_scrape", "status": "skipped", "reason_code": "missing_api_key"},
+        {
+            "check_id": "web_fetch_probe",
+            "status": "skipped",
+            "reason_code": "no_fetch_provider_configured",
+        },
+    ]
     assert payload["doctor"]["recommendations_detail"]
     assert {
         item["check_id"] for item in payload["doctor"]["recommendations_detail"]
@@ -877,6 +889,11 @@ async def test_get_config_info_marks_provider_probe_failures_as_degraded(monkeyp
     assert checks["tavily_map"]["status"] == "error"
     assert payload["feature_readiness"]["web_map"]["status"] == "degraded"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
+    assert payload["feature_readiness"]["web_fetch"]["degraded_by"][-1] == {
+        "check_id": "web_fetch_probe",
+        "status": "error",
+        "reason_code": "probe_failed",
+    }
     assert payload["doctor"]["recommendations"]
 
 
@@ -1134,7 +1151,47 @@ async def test_get_config_info_ignores_client_specific_toggle_in_overall_doctor_
 
     assert payload["feature_readiness"]["toggle_builtin_tools"]["status"] == "not_ready"
     assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["based_on_checks"] == [
+        "claude_code_project"
+    ]
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["probe_scope"] == "client_context"
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["degraded_by"] == [
+        {
+            "check_id": "claude_code_project",
+            "status": "skipped",
+            "reason_code": "missing_git_context",
+        }
+    ]
     assert payload["doctor"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_get_sources_can_stay_ready_when_web_search_is_not_ready_but_cache_is_readable(
+    monkeypatch,
+):
+    monkeypatch.delenv("GROK_API_URL", raising=False)
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+    await server._SOURCES_CACHE.set(
+        "readable-session",
+        server._build_sources_cache_entry(
+            [{"title": "OpenAI", "url": "https://openai.com/"}],
+            search_status="ok",
+            search_error=None,
+        ),
+    )
+    patch_async_client(monkeypatch, {}, {})
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["web_search"]["status"] == "not_ready"
+    assert payload["feature_readiness"]["get_sources"]["status"] == "ready"
+    assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
+        {
+            "check_id": "grok_config",
+            "status": "error",
+            "reason_code": "config_error",
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -476,6 +476,24 @@ def test_docs_cover_additive_source_provenance_and_machine_readiness_fields():
     assert "одного вызова `switch_model` недостаточно" in readme_ru
 
 
+def test_docs_lock_provider_level_machine_fields_and_get_sources_readiness_wording():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    lifecycle = GET_SOURCES_LIFECYCLE.read_text(encoding="utf-8")
+
+    assert "`check_id`" in readme
+    assert "`reason_code`" in readme
+    assert "`check_id`" in readme_en
+    assert "`reason_code`" in readme_en
+    assert "`check_id`" in compatibility
+    assert "`reason_code`" in compatibility
+    assert "即使 `web_search` 当前尚未 ready" in readme
+    assert "still report `ready`" in readme_en
+    assert "still reports `ready`" in compatibility
+    assert "already holds a readable session" in lifecycle
+
+
 def test_localized_readmes_explain_switch_model_runtime_override_return_contract():
     localized_expectations = {
         README_EN: [

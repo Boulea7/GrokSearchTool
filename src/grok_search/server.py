@@ -1708,6 +1708,8 @@ def _normalize_skipped_reason_code(skipped_reason: str) -> str:
     normalized = skipped_reason.strip()
     if not normalized:
         return "provider_not_configured"
+    if re.fullmatch(r"[a-z0-9_]+", normalized):
+        return normalized
     if normalized.endswith("ENABLED=false"):
         return "provider_disabled"
     if normalized.endswith("API_KEY 未配置"):
