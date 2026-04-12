@@ -1,0 +1,209 @@
+from pathlib import Path
+
+from grok_search.deep_research_store import DeepResearchStore
+from grok_search.deep_research_types import (
+    DeepResearchArtifact,
+    DeepResearchCheckpoint,
+    DeepResearchEvent,
+    DeepResearchJob,
+)
+
+
+def make_store(tmp_path: Path) -> DeepResearchStore:
+    return DeepResearchStore(tmp_path / "deep-research")
+
+
+def test_store_creates_and_reads_job(tmp_path):
+    store = make_store(tmp_path)
+
+    created = store.create_job(
+        query="Compare frontier coding agents",
+        request_fingerprint="fp-1",
+        status="queued",
+        phase="planning",
+        effort="standard",
+        context="Focus on resumable research patterns.",
+        include_domains=["github.com"],
+        exclude_domains=["reddit.com"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    loaded = store.get_job(created.job_id)
+
+    assert isinstance(created, DeepResearchJob)
+    assert loaded == created
+    assert loaded.query == "Compare frontier coding agents"
+    assert loaded.status == "queued"
+    assert loaded.phase == "planning"
+    assert loaded.include_domains == ["github.com"]
+    assert loaded.exclude_domains == ["reddit.com"]
+    assert loaded.resolved_budget_seconds == 240
+
+
+def test_store_appends_events_with_monotonic_sequence(tmp_path):
+    store = make_store(tmp_path)
+    job = store.create_job(
+        query="Research stateful agents",
+        request_fingerprint="fp-events",
+        status="running",
+        phase="researching",
+        effort="deep",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=300,
+        continued_from_job_id="",
+    )
+
+    first = store.append_event(
+        job.job_id,
+        type="phase_started",
+        phase="planning",
+        message="Planning started.",
+        data={"step": 1},
+    )
+    second = store.append_event(
+        job.job_id,
+        type="phase_completed",
+        phase="planning",
+        message="Planning completed.",
+        data={"step": 1},
+    )
+
+    events = store.list_events(job.job_id)
+
+    assert isinstance(first, DeepResearchEvent)
+    assert isinstance(second, DeepResearchEvent)
+    assert [event.seq for event in events] == [1, 2]
+    assert store.list_events(job.job_id, after_seq=1) == [second]
+
+
+def test_store_persists_checkpoints_and_artifacts(tmp_path):
+    store = make_store(tmp_path)
+    job = store.create_job(
+        query="Research checkpoints",
+        request_fingerprint="fp-checkpoints",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    checkpoint = store.save_checkpoint(
+        job.job_id,
+        phase="researching",
+        checkpoint_key="round-1",
+        state={"completed_units": 2},
+    )
+    artifact = store.upsert_artifact(
+        job.job_id,
+        kind="partial_report.md",
+        path="jobs/job-1/partial_report.md",
+        content_type="text/markdown",
+        metadata={"bytes": 128},
+    )
+
+    checkpoints = store.list_checkpoints(job.job_id)
+    artifacts = store.list_artifacts(job.job_id)
+
+    assert isinstance(checkpoint, DeepResearchCheckpoint)
+    assert isinstance(artifact, DeepResearchArtifact)
+    assert checkpoints == [checkpoint]
+    assert artifacts == [artifact]
+    assert checkpoints[0].state == {"completed_units": 2}
+    assert artifacts[0].metadata == {"bytes": 128}
+
+
+def test_store_reuses_active_or_recent_job_by_request_fingerprint(tmp_path):
+    store = make_store(tmp_path)
+    active = store.create_job(
+        query="Research active reuse",
+        request_fingerprint="fp-reuse",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    assert store.find_reusable_job("fp-reuse", recent_reuse_seconds=1800) == active
+
+    store.update_job(
+        active.job_id,
+        status="completed",
+        phase="finalizing",
+        progress_pct=100.0,
+        finished_at="2026-04-12T14:00:00Z",
+    )
+    completed = store.get_job(active.job_id)
+
+    assert store.find_reusable_job("fp-reuse", recent_reuse_seconds=1800) == completed
+
+
+def test_store_marks_inflight_jobs_as_interrupted_during_recovery(tmp_path):
+    store = make_store(tmp_path)
+    running = store.create_job(
+        query="Research inflight recovery",
+        request_fingerprint="fp-recover-running",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    queued = store.create_job(
+        query="Research queued recovery",
+        request_fingerprint="fp-recover-queued",
+        status="queued",
+        phase="planning",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    draft = store.create_job(
+        query="Research draft recovery",
+        request_fingerprint="fp-recover-draft",
+        status="draft",
+        phase="planning",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=True,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    recovered = store.reconcile_incomplete_jobs()
+
+    assert {job.job_id for job in recovered} == {running.job_id, queued.job_id}
+    assert store.get_job(running.job_id).status == "interrupted"
+    assert store.get_job(queued.job_id).status == "interrupted"
+    assert store.get_job(draft.job_id).status == "draft"
