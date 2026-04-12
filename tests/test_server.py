@@ -733,6 +733,81 @@ def test_summarize_source_cache_entries_counts_unreadable_sessions():
     }
 
 
+@pytest.mark.parametrize(
+    ("search_status", "input_sources", "expected_status", "expected_sources", "expected_source_state"),
+    [
+        ("ok", [], "ok", [], "empty"),
+        ("ok", [{"title": "OpenAI", "url": "https://openai.com/"}], "ok", [{"title": "OpenAI", "url": "https://openai.com/"}], "available"),
+        ("partial", [], "partial", [], "empty"),
+        ("partial", [{"title": "OpenAI", "url": "https://openai.com/"}], "partial", [{"title": "OpenAI", "url": "https://openai.com/"}], "available"),
+        ("error", [], "error", [], "unavailable_due_to_search_error"),
+        ("error", [{"title": "OpenAI", "url": "https://openai.com/"}], "error", [], "unavailable_due_to_search_error"),
+        ("mystery", [{"title": "OpenAI", "url": "https://openai.com/"}], "ok", [{"title": "OpenAI", "url": "https://openai.com/"}], "available"),
+    ],
+)
+def test_build_sources_cache_entry_normalizes_state_matrix(
+    search_status,
+    input_sources,
+    expected_status,
+    expected_sources,
+    expected_source_state,
+):
+    entry = server._build_sources_cache_entry(
+        input_sources,
+        search_status=search_status,
+        search_error="upstream_error" if search_status == "error" else None,
+        search_warnings=["body_probably_truncated", "body_probably_truncated", 123],
+    )
+
+    assert entry["search_status"] == expected_status
+    assert entry["sources"] == expected_sources
+    assert entry["source_state"] == expected_source_state
+    assert entry["search_warnings"] == ["body_probably_truncated"]
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected_kind"),
+    [
+        (
+            server._build_sources_cache_entry(
+                [],
+                search_status="error",
+                search_error="validation_error",
+            ),
+            "error",
+        ),
+        (
+            server._build_sources_cache_entry(
+                [],
+                search_status="partial",
+                search_error=None,
+            ),
+            "readable",
+        ),
+        (
+            server._build_sources_cache_entry(
+                [{"title": "OpenAI", "url": "https://openai.com/"}],
+                search_status="ok",
+                search_error=None,
+            ),
+            "readable",
+        ),
+        (
+            server._build_sources_cache_entry(
+                [{"title": "Broken", "url": "not-a-valid-url"}],
+                search_status="ok",
+                search_error=None,
+            ),
+            "unreadable",
+        ),
+    ],
+)
+def test_classify_sources_cache_entry_state_matrix(entry, expected_kind):
+    _, kind = server._classify_sources_cache_entry(entry)
+
+    assert kind == expected_kind
+
+
 def test_summarize_source_cache_entries_treats_invalid_source_rows_as_unreadable():
     summary = server._summarize_source_cache_entries(
         [
@@ -1984,6 +2059,39 @@ async def test_provider_search_with_sources_passes_full_supported_kwargs():
         "min_results": 1,
         "max_results": 2,
         "ctx": ctx,
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_search_with_sources_passes_full_kwargs_to_variadic_duck_typed_provider():
+    captured = {}
+
+    class DummyProvider:
+        async def search_with_sources(self, query, **kwargs):
+            captured["query"] = query
+            captured["kwargs"] = kwargs
+            return "Search answer", [{"title": "Guide", "url": "https://docs.example.com/guide"}]
+
+    ctx = object()
+    content, sources = await server._provider_search_with_sources(
+        DummyProvider(),
+        "test query",
+        platform="GitHub",
+        min_results=1,
+        max_results=2,
+        ctx=ctx,
+    )
+
+    assert content == "Search answer"
+    assert sources == [{"title": "Guide", "url": "https://docs.example.com/guide"}]
+    assert captured == {
+        "query": "test query",
+        "kwargs": {
+            "platform": "GitHub",
+            "min_results": 1,
+            "max_results": 2,
+            "ctx": ctx,
+        },
     }
 
 

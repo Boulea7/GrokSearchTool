@@ -116,6 +116,8 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `web_search` 当前在“只返回信源列表、没有正文”或“正文疑似截断”时也会降级为 `partial`；`get_sources.search_status` 会保留该降级状态，并通过 `search_warnings` 回放当前缓存的 warning code；旧缓存条目默认回放空数组
 - legacy cache 中未知的 `search_status` 当前会在 readback 时归一化回 `ok`；`error` 之外的未知状态不再原样透传给 `get_sources`
 - `get_sources.source_state=empty` 当前只表示“该 cached session 没有可读 source”；它不再隐含 `search_status` 必然是 `ok`，因为 `partial` 搜索也可能在标准化后留下空 source 集合
+- `BaseSearchProvider.search_with_sources()` 与 `server._provider_search_with_sources()` 当前共享同一套 kwargs 过滤逻辑；若 provider 方法声明 `**kwargs`，则会收到完整的 `platform` / `min_results` / `max_results` / `ctx`
+- provider compatibility surface 当前仍允许 legacy 窄签名 override，但对支持 `**kwargs` 的 provider 不再静默丢弃上述查询参数
 - `grok_search_probe` 当前除 `ok` / `error` 外，也可能因为正文质量降级返回 `warning`；例如只拿到信源列表或正文疑似截断时，`feature_readiness.web_search` 应显示为 `degraded`
 - 当前运行时模型回退属于 best-effort 兼容路径：依赖 `/models` 返回候选列表，且上游错误摘要命中“模型不可用”类文案；若 `/models` 本身不可用，或错误类型不匹配，则不保证自动继续回退
 - 当前诊断 `web_search degraded` 时，`GROK_MODEL_SOURCE` 应视为根因分析的一等信息；若活动模型来自进程 env 或项目 `.env.local` / `.env` 覆盖，则与持久化配置层造成的 mismatch 是不同问题

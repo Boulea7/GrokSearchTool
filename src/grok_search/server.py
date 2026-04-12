@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import re
 import sys
 import time
@@ -20,6 +19,7 @@ if str(src_dir) not in sys.path:
 # 尝试使用绝对导入（支持 mcp run）
 try:
     from grok_search.providers.grok import GrokSearchProvider
+    from grok_search.providers.base import _filter_supported_search_kwargs
     from grok_search.logger import log_info, log_warning
     from grok_search.config import config
     from grok_search.sources import (
@@ -45,6 +45,7 @@ try:
     )
 except ImportError:
     from .providers.grok import GrokSearchProvider
+    from .providers.base import _filter_supported_search_kwargs
     from .logger import log_info, log_warning
     from .config import config
     from .sources import (
@@ -526,8 +527,7 @@ async def _provider_search_with_sources(
             "max_results": max_results,
             "ctx": ctx,
         }
-        parameters = inspect.signature(method).parameters
-        supported_kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+        supported_kwargs = _filter_supported_search_kwargs(method, kwargs)
         return await method(query, **supported_kwargs)
 
     if hasattr(provider, "search_with_sources"):

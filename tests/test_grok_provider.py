@@ -56,6 +56,43 @@ async def test_base_provider_search_with_sources_bridges_to_search():
 
 
 @pytest.mark.asyncio
+async def test_base_provider_search_with_sources_passes_full_kwargs_to_variadic_search():
+    captured = {}
+
+    class VariadicProvider(BaseSearchProvider):
+        async def search(self, query: str, **kwargs) -> str:
+            captured["query"] = query
+            captured["kwargs"] = kwargs
+            return "ok"
+
+        def get_provider_name(self) -> str:
+            return "variadic"
+
+    ctx = object()
+    provider = VariadicProvider("https://api.example.com", "test-key")
+
+    content, sources = await provider.search_with_sources(
+        "probe",
+        platform="GitHub",
+        min_results=1,
+        max_results=2,
+        ctx=ctx,
+    )
+
+    assert content == "ok"
+    assert sources == []
+    assert captured == {
+        "query": "probe",
+        "kwargs": {
+            "platform": "GitHub",
+            "min_results": 1,
+            "max_results": 2,
+            "ctx": ctx,
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_search_uses_non_stream_completion_and_user_agent(monkeypatch):
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     captured = {}
