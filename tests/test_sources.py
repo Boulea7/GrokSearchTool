@@ -1131,6 +1131,51 @@ def test_merge_sources_adds_contributors_for_duplicate_url_across_providers():
     ]
 
 
+def test_merge_sources_same_provider_duplicate_does_not_publish_contributors_without_identity_change():
+    merged = merge_sources(
+        [
+            {
+                "title": "Primary Title",
+                "url": "https://dup.example.com/page",
+                "provider": "grok",
+            },
+        ],
+        [
+            {
+                "title": "Richer Title",
+                "url": "https://dup.example.com/page",
+                "provider": "grok",
+                "description": "Guide content",
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "title": "Richer Title",
+            "url": "https://dup.example.com/page",
+            "provider": "grok",
+            "description": "Guide content",
+        }
+    ]
+
+
+def test_standardize_sources_keeps_query_order_as_part_of_dedupe_contract():
+    sources = standardize_sources(
+        [
+            {"title": "First", "url": "https://example.com/guide?a=1&b=2"},
+            {"title": "Second", "url": "https://example.com/guide?b=2&a=1"},
+        ],
+        retrieved_at="2026-04-12T09:00:00Z",
+    )
+
+    assert [item["url"] for item in sources] == [
+        "https://example.com/guide?a=1&b=2",
+        "https://example.com/guide?b=2&a=1",
+    ]
+    assert [item["rank"] for item in sources] == [1, 2]
+
+
 @pytest.mark.asyncio
 async def test_sources_cache_evicts_least_recently_used_entry():
     cache = SourcesCache(max_size=2)

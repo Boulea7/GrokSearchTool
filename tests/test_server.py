@@ -963,6 +963,33 @@ async def test_get_config_info_rejects_malformed_tavily_probe_shape(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_recommendations_detail_keeps_minimum_machine_shape(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"unexpected": []},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"wrong": []},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["doctor"]["recommendations_detail"]
+    for item in payload["doctor"]["recommendations_detail"]:
+        assert set(item) >= {"message", "severity"}
+        assert item["severity"] in {"warning", "error"}
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_rejects_tavily_map_non_string_results(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     responses = {
@@ -2752,6 +2779,29 @@ async def test_get_sources_distinguishes_successful_empty_source_sessions(monkey
 
 
 @pytest.mark.asyncio
+async def test_get_sources_keeps_partial_status_for_empty_sessions():
+    session_id = "partial-empty-session"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [],
+            "search_status": "partial",
+            "search_error": None,
+            "search_warnings": ["body_probably_truncated"],
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == []
+    assert cached["sources_count"] == 0
+    assert cached["search_status"] == "partial"
+    assert cached["search_error"] is None
+    assert cached["search_warnings"] == ["body_probably_truncated"]
+    assert cached["source_state"] == "empty"
+
+
+@pytest.mark.asyncio
 async def test_web_search_marks_partial_when_controls_cannot_be_applied(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
@@ -3835,6 +3885,27 @@ async def test_get_sources_migrates_legacy_error_cache_to_unavailable_state():
     assert cached["search_status"] == "error"
     assert cached["search_error"] == "validation_error"
     assert cached["source_state"] == "unavailable_due_to_search_error"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_normalizes_unknown_legacy_search_status_to_ok():
+    session_id = "legacy-unknown-search-status"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [{"title": "Legacy Source", "url": "https://legacy.example.com/page"}],
+            "search_status": "mystery",
+            "search_error": None,
+            "search_warnings": ["body_missing_sources_only"],
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["search_status"] == "ok"
+    assert cached["search_error"] is None
+    assert cached["search_warnings"] == ["body_missing_sources_only"]
+    assert cached["source_state"] == "available"
 
 
 @pytest.mark.asyncio
@@ -5166,6 +5237,7 @@ async def test_web_map_continues_when_redirect_preflight_times_out(monkeypatch):
 @pytest.mark.asyncio
 async def test_web_map_reports_skipped_preflight_progress_when_debug_enabled(monkeypatch):
     messages = []
+    ctx = ProgressContext()
 
     async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
         return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
@@ -5196,11 +5268,11 @@ async def test_web_map_reports_skipped_preflight_progress_when_debug_enabled(mon
     monkeypatch.setenv("GROK_DEBUG", "true")
     server.config.reset_runtime_state()
 
-    result = await server.web_map("https://public.example.com/start")
+    result = await server.web_map("https://public.example.com/start", ctx=ctx)
 
     assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
     assert any(
-        context is None and is_debug and message.startswith("Redirect preflight skipped: ")
+        context is ctx and is_debug and message.startswith("Redirect preflight skipped: ")
         for context, message, is_debug in messages
     )
 

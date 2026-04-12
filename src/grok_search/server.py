@@ -922,6 +922,16 @@ def _normalize_search_warnings(search_warnings: Optional[list[str]]) -> list[str
     return normalized
 
 
+def _normalize_search_status(search_status: object) -> str:
+    if not isinstance(search_status, str):
+        return "ok"
+
+    normalized = search_status.strip().lower()
+    if normalized in {"ok", "partial", "error"}:
+        return normalized
+    return "ok"
+
+
 def _build_sources_cache_entry(
     sources: list[dict],
     *,
@@ -929,13 +939,14 @@ def _build_sources_cache_entry(
     search_error: str | None,
     search_warnings: Optional[list[str]] = None,
 ) -> dict:
-    normalized_sources = [] if search_status == "error" else sources
+    normalized_status = _normalize_search_status(search_status)
+    normalized_sources = [] if normalized_status == "error" else sources
     return {
         "sources": normalized_sources,
-        "search_status": search_status,
+        "search_status": normalized_status,
         "search_error": search_error,
         "search_warnings": _normalize_search_warnings(search_warnings),
-        "source_state": _derive_source_state(normalized_sources, search_status),
+        "source_state": _derive_source_state(normalized_sources, normalized_status),
     }
 
 
@@ -949,7 +960,7 @@ def _derive_source_state(sources: list[dict], search_status: str) -> str:
 
 def _normalize_sources_cache_entry(entry: object) -> dict | None:
     if isinstance(entry, dict) and isinstance(entry.get("sources"), list):
-        search_status = entry.get("search_status") or "ok"
+        search_status = _normalize_search_status(entry.get("search_status"))
         sources = [] if search_status == "error" else entry.get("sources", [])
         normalized = {
             **{
@@ -1671,7 +1682,7 @@ async def web_map(
         return f"映射失败: {preflight.message}"
     if preflight.status == "skipped_due_to_error":
         await log_warning(ctx, f"Warning: Redirect preflight skipped: {preflight.message}")
-        await log_info(None, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
+        await log_info(ctx, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     result = await _call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
     return result
