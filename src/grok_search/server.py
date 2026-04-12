@@ -918,34 +918,49 @@ def _build_sources_cache_entry(
     search_error: str | None,
     search_warnings: Optional[list[str]] = None,
 ) -> dict:
+    normalized_sources = [] if search_status == "error" else sources
     return {
-        "sources": sources,
+        "sources": normalized_sources,
         "search_status": search_status,
         "search_error": search_error,
         "search_warnings": _normalize_search_warnings(search_warnings),
-        "source_state": _derive_source_state(sources, search_status),
+        "source_state": _derive_source_state(normalized_sources, search_status),
     }
 
 
 def _derive_source_state(sources: list[dict], search_status: str) -> str:
-    if sources:
-        return "available"
     if search_status == "error":
         return "unavailable_due_to_search_error"
+    if sources:
+        return "available"
     return "empty"
 
 
 def _normalize_sources_cache_entry(entry: object) -> dict | None:
     if isinstance(entry, dict) and isinstance(entry.get("sources"), list):
         search_status = entry.get("search_status") or "ok"
-        sources = entry.get("sources", [])
-        return {
+        sources = [] if search_status == "error" else entry.get("sources", [])
+        normalized = {
+            **{
+                key: value
+                for key, value in entry.items()
+                if key
+                not in {
+                    "sources",
+                    "search_status",
+                    "search_error",
+                    "search_warnings",
+                    "source_state",
+                }
+            },
             "sources": sources,
             "search_status": search_status,
             "search_error": entry.get("search_error"),
             "search_warnings": _normalize_search_warnings(entry.get("search_warnings")),
             "source_state": entry.get("source_state") or _derive_source_state(sources, search_status),
         }
+        normalized["source_state"] = _derive_source_state(normalized["sources"], search_status)
+        return normalized
 
     if isinstance(entry, list):
         return _build_sources_cache_entry(
@@ -1351,10 +1366,8 @@ async def get_sources(
         "source_state": recalculated_state,
     }
     if updated_entry != cached_entry:
-        if isinstance(cached_entry, list):
-            await _SOURCES_CACHE.set(session_id, standardized_sources)
-        else:
-            await _SOURCES_CACHE.set(session_id, updated_entry)
+        rewritten_entry = standardized_sources if isinstance(cached_entry, list) else updated_entry
+        await _SOURCES_CACHE.update(session_id, rewritten_entry, preserve_expiry=True)
 
     return {
         "session_id": session_id,

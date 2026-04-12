@@ -3431,6 +3431,33 @@ async def test_get_sources_migrates_legacy_error_cache_to_unavailable_state():
 
 
 @pytest.mark.asyncio
+async def test_get_sources_clears_sources_for_error_cache_entries_even_if_rows_are_readable():
+    session_id = "legacy-error-with-sources"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [
+                {
+                    "title": "Readable Source",
+                    "url": "https://docs.example.com/guide",
+                    "description": "Guide content",
+                }
+            ],
+            "search_status": "error",
+            "search_error": "upstream_request_failed",
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == []
+    assert cached["sources_count"] == 0
+    assert cached["search_status"] == "error"
+    assert cached["search_error"] == "upstream_request_failed"
+    assert cached["source_state"] == "unavailable_due_to_search_error"
+
+
+@pytest.mark.asyncio
 async def test_get_sources_does_not_keep_available_state_for_invalid_legacy_urls():
     session_id = "legacy-invalid-session"
     await server._SOURCES_CACHE.set(
@@ -3527,6 +3554,103 @@ async def test_get_sources_defaults_search_warnings_for_legacy_cache_entries():
 
     assert cached["search_status"] == "partial"
     assert cached["search_warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_sources_legacy_list_migration_does_not_extend_ttl(monkeypatch):
+    current_time = {"value": 1000.0}
+    cache = server.SourcesCache(max_size=32, ttl_seconds=10, now_fn=lambda: current_time["value"])
+    monkeypatch.setattr(server, "_SOURCES_CACHE", cache)
+    session_id = "legacy-list-ttl"
+
+    await cache.set(
+        session_id,
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "description": "Legacy description",
+            }
+        ],
+    )
+
+    current_time["value"] = 1009.0
+    first = await server.get_sources(session_id)
+    assert first["sources_count"] == 1
+
+    current_time["value"] = 1011.0
+    expired = await server.get_sources(session_id)
+
+    assert expired == {
+        "session_id": session_id,
+        "sources": [],
+        "sources_count": 0,
+        "error": "session_id_not_found_or_expired",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_sources_legacy_dict_migration_preserves_unknown_additive_fields():
+    session_id = "legacy-dict-extra-fields"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [{"title": "OpenAI", "url": "https://openai.com/"}],
+            "search_status": "ok",
+            "search_error": None,
+            "source_state": "available",
+            "future_flag": {"enabled": True},
+            "provenance": {"mode": "legacy"},
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+    migrated = await server._SOURCES_CACHE.get(session_id)
+
+    assert cached["sources_count"] == 1
+    assert migrated["future_flag"] == {"enabled": True}
+    assert migrated["provenance"] == {"mode": "legacy"}
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_get_sources_uses_no_readable_source_session_for_mixed_unreadable_cache(monkeypatch):
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    await server._SOURCES_CACHE.set(
+        "error-session",
+        server._build_sources_cache_entry([], search_status="error", search_error="validation_error"),
+    )
+    await server._SOURCES_CACHE.set(
+        "invalid-session",
+        server._build_sources_cache_entry(
+            [{"title": "Broken", "url": "not-a-valid-url"}],
+            search_status="ok",
+            search_error=None,
+        ),
+    )
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
+    assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
+        {
+            "check_id": "source_cache_state",
+            "status": "degraded",
+            "reason_code": "no_readable_source_session",
+        }
+    ]
+    assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
+        "total_sessions": 2,
+        "readable_sessions": 0,
+        "error_sessions": 1,
+        "partial_sessions": 0,
+        "unreadable_sessions": 1,
+    }
 
 
 def test_configure_windows_event_loop_policy(monkeypatch):

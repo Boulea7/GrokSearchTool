@@ -134,9 +134,23 @@ class SourcesCache:
             self._cache.pop(session_id, None)
 
     async def set(self, session_id: str, sources: object) -> None:
+        await self.update(session_id, sources)
+
+    async def update(
+        self,
+        session_id: str,
+        sources: object,
+        *,
+        preserve_expiry: bool = False,
+    ) -> None:
         async with self._lock:
             self._purge_expired_locked()
-            self._cache[session_id] = (self._expires_at(), sources)
+            expires_at = self._expires_at()
+            if preserve_expiry:
+                existing = self._cache.get(session_id)
+                if existing is not None:
+                    expires_at = existing[0]
+            self._cache[session_id] = (expires_at, sources)
             self._cache.move_to_end(session_id)
             while len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
