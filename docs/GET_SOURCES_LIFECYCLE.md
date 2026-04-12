@@ -16,7 +16,8 @@
 
 - The `ready` state for `feature_readiness.get_sources` means the current process already holds at least one readable non-error source session.
 - The `partial_ready` state for `feature_readiness.get_sources` means the interface exists, but the current process does not yet hold a readable session.
-- The `not_ready` state for `feature_readiness.get_sources` means `web_search` itself is not ready yet, so `get_sources` cannot become usable by merely waiting for cache state to change.
+- The `not_ready` state for `feature_readiness.get_sources` means `web_search` itself is not ready yet and the current process does not already hold a readable session.
+- If the current process already holds a readable session, `get_sources` can still report `ready` even when `web_search` is currently not ready; that upstream problem is surfaced through `degraded_by` rather than by downgrading the cached-session readability signal.
 - `feature_readiness.get_sources` now includes additive `cache_summary` data with a lightweight cache snapshot: `total_sessions`, `readable_sessions`, `error_sessions`, `partial_sessions`, and `unreadable_sessions`.
 - This readiness is marked `transient` and does not lower the overall doctor status by itself.
 
