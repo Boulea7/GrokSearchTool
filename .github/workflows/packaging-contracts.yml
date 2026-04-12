@@ -1,0 +1,41 @@
+name: Packaging Contracts
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - codex/**
+
+jobs:
+  packaging-contracts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install development dependencies
+        run: uv sync --extra dev
+
+      - name: Run packaging and docs contract tests
+        run: |
+          uv run --with pytest --with pytest-asyncio pytest -q tests/test_package_imports.py tests/test_docs_contracts.py
+
+      - name: Build wheel and sdist
+        run: uv build --wheel --sdist
+
+      - name: Run built artifact smoke checks
+        run: |
+          python -m venv .venv-packaging-smoke
+          . .venv-packaging-smoke/bin/activate
+          python -m pip install dist/*.whl
+          python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"

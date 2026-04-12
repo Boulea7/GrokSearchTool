@@ -42,6 +42,8 @@ python3 -m py_compile src/grok_search/*.py src/grok_search/providers/*.py tests/
 
 If your change touches only documentation, state that clearly in the PR and explain why code verification was not needed.
 
+Release-specific packaging and tagging steps are documented in [`docs/RELEASING.md`](docs/RELEASING.md).
+
 ## What to Include in a Pull Request
 
 - a clear summary of the problem and the change
