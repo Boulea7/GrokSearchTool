@@ -42,6 +42,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - Long-running `deep research` workflows should not be treated as the default MCP install story
 - The recommended core interaction path remains `plan_* -> web_search`
 - Clear single-hop lookups may still call `web_search` directly when planning would add little value
+- `deep_research_*` is now available as a non-interactive MCP job surface for advanced report-style research
 - Any interactive `deep research` experience should remain CLI-first; MCP and skill integrations should stay non-interactive
 - planning `session_id` values are in-process transient handles with about a 1-hour TTL and a 256-session LRU cap; restart, expiry, or eviction requires starting again from a fresh `plan_intent`
 - the planning wrappers intentionally keep scalar shim inputs such as CSV `depends_on`, semicolon-grouped `parallel_groups`, and string `params_json`; `executable_plan` returns normalized structured shapes

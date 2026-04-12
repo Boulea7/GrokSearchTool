@@ -10,11 +10,12 @@ The core product focus is:
 - help models gather broad and relevant context without wasting their own token budget
 - stay practical across multiple MCP-capable hosts instead of over-optimizing for a single CLI workflow
 
-Long-running `deep research` remains a separate advanced capability direction and should not complicate the default MCP experience.
+Long-running `deep research` is now an implemented advanced capability direction and should still not complicate the default MCP experience.
 
 ## Now
 
 - Strengthen the core `web_search`, `get_sources`, `web_fetch`, `web_map`, and `get_config_info` experience while keeping the default workflow fast and lightweight
+- Stabilize the new `deep_research_*` job surface, persistence layer, CLI workflow, and real-world probes without turning the default path into a heavyweight agent platform
 - Improve source provenance, confidence cues, and result ordering so useful evidence is surfaced before low-value noise
 - Expand compatibility and installation validation for important MCP hosts, with clear distinctions between officially tested, community-tested, and planned integrations
 - Keep tightening diagnostics and release discipline around configuration checks, compatibility smoke tests, tags, changelog hygiene, and installation verification, with packaging contracts enforced in CI and release steps documented explicitly
@@ -28,8 +29,8 @@ Long-running `deep research` remains a separate advanced capability direction an
 
 ## Later
 
-- Evolve `deep research` as a separate advanced product layer, with the default priority on CLI-oriented workflows and careful evaluation of optional advanced MCP modes
-- Evaluate deeper research orchestration such as extended `map -> fetch` flows, resumable jobs, progress reporting, exported research artifacts, and support bundles
+- Deepen `deep research` orchestration with stronger planning, richer report synthesis, extended `map -> fetch` flows, better retries, and continuation ergonomics
+- Evaluate optional advanced MCP affordances only if they preserve the lightweight default experience
 - Revisit expert versus basic interaction layers only if they can be added without making the default MCP and skill experience heavier or slower
 
 ## Compatibility Intent

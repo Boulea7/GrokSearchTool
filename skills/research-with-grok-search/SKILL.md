@@ -49,6 +49,14 @@ Stop early based on complexity:
 - `get_sources`: inspect cached sources for a prior search
 - `web_fetch`: read the content of a specific page
 - `web_map`: discover pages in a site section
+- `deep_research_*`: start, inspect, resume, cancel, and retrieve advanced report-style research jobs when the task is multi-minute, open-ended, or needs resumable artifacts
+
+Use `deep_research_*` instead of overloading the lightweight path when the task needs:
+
+- multi-phase progress
+- resumable or cancelable execution
+- partial reports or exported artifacts
+- a report-oriented result rather than a single direct answer
 
 ### 4. Verify sources before making strong claims
 

@@ -25,6 +25,7 @@ GrokSearch MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构�
 - `Tavily` 负责搜索控制、网页提取与站点映射
 - `Firecrawl` 负责抓取托底与补充信源
 - `plan_*` 负责复杂问题的轻量规划
+- `deep_research_*` 负责高级、异步、报告型深度研究任务
 - `get_sources` 负责把来源从“答案里的链接”升级成结构化可读取的信源数据
 
 当前推荐主路径是 `plan_* -> web_search`，并在需要来源核对时按需调用 `get_sources`；对明确单跳、低歧义、规划收益很低的查询，也允许直接调用 `web_search`。更重的深度探索能力继续收口到 `deep research`，并优先在 CLI 落地。
@@ -36,6 +37,7 @@ Client / Assistant
   └─ MCP / companion skill
       └─ GrokSearch Server
           ├─ plan_*      -> 轻量规划层
+          ├─ deep_research_* -> 异步 job 层
           ├─ web_search  -> Grok 主答案
           │                + Tavily supplemental search
           │                + Firecrawl supplemental search
@@ -52,13 +54,14 @@ Client / Assistant
 - `plan_* -> web_search`：默认轻量研究路径；需要结构化来源时再调用 `get_sources`
 - `web_fetch`：抓单页正文
 - `web_map`：看站点结构
-- `deep research`：更长时间、更强编排的高级研究层，当前优先在 CLI 里承接
+- `deep research`：更长时间、更强编排的高级研究层，当前提供非交互 MCP job surface，并由 CLI 承接更完整交互
 
 ### 核心价值
 
 - **答案与来源分离**：`web_search` 返回正文，`get_sources` 返回结构化来源，便于后续核验、排序和复用
 - **多 provider 协作**：Grok 负责主回答，Tavily 负责搜索控制 / 抓取 / 映射，Firecrawl 负责托底和补充
 - **轻量规划优先**：复杂任务先走 `plan_*`，简单任务直接搜，避免无意义的重编排
+- **深度研究独立分层**：高级研究走 `deep_research_*` 与 `grok-search-research`，不挤占默认轻路径
 - **面向真实运维**：内置 `get_config_info`、feature readiness、最小真实探针、稳定错误契约
 - **运行时安全边界**：对抓取/映射目标做 URL 边界收口，对诊断输出和来源 URL 做敏感信息遮罩
 - **兼容 OpenAI 风格接入**：可对接 Grok-compatible 中转与镜像站，但实际兼容性仍取决于上游对 `/models` 与 `/chat/completions` 的实现
@@ -234,6 +237,11 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_RETRY_MAX_ATTEMPTS` | 否 | `3` | 最大重试次数 |
 | `GROK_RETRY_MULTIPLIER` | 否 | `1` | 重试退避乘数 |
 | `GROK_RETRY_MAX_WAIT` | 否 | `10` | 重试最大等待秒数 |
+| `GROK_DEEP_RESEARCH_DIR` | 否 | `~/.config/grok-search/deep-research` | deep research SQLite 状态与 artifacts 根目录 |
+| `GROK_DEEP_RESEARCH_DEFAULT_BUDGET_SECONDS` | 否 | `240` | deep research 默认目标预算秒数 |
+| `GROK_DEEP_RESEARCH_HARD_TIMEOUT_SECONDS` | 否 | `600` | deep research 硬超时上限 |
+| `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | 否 | `3` | 默认 deep research runtime 的最大并行研究单元数 |
+| `GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS` | 否 | `1800` | 最近完成 deep research job 的默认复用窗口 |
 | `PYTHONIOENCODING` | 否 | `utf-8` | 建议显式设为 UTF-8，减少 Windows / 中转站日志乱码 |
 | `PYTHONUNBUFFERED` | 否 | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
 | `PYTHONUTF8` | 否 | `1` | 强制 Python UTF-8 模式 |
@@ -458,6 +466,20 @@ claude mcp list
 - planning `session_id` 当前是进程内的 transient handle，默认 TTL 约 1 小时、LRU 上限 256；进程重启、TTL 到期或缓存淘汰后，应从新的 `plan_intent` session 重新开始。
 - 首次建立 `search_strategy` 时必须提供 `approach`；只有在 strategy 已建立后，后续非 `is_revision` 调用才允许只追加 `search_terms`。
 - 当 session 缺失、阶段顺序错误，或 revision 会破坏下游阶段时，当前会返回结构化错误，并明确要求从新 session 重新开始相应 planning 流程。
+
+### `deep_research_start` / `deep_research_status` / `deep_research_events` / `deep_research_result` / `deep_research_resume` / `deep_research_cancel` / `deep_research_list`
+
+高级深度研究 job 层，适合多分钟、可恢复、可查询中间进度与 artifacts 的报告型任务。
+
+说明：
+- 这是高于 `plan_* -> web_search` 的高级层，不替代默认轻路径。
+- `deep_research_start` 会创建 job，并立即生成 `plan.json`；非 `plan_only` 场景下，任务会异步推进并逐步产出 `partial_report.md`、`final_report.md`、`citations.json`、`report.json`。
+- `deep_research_status` 返回 job、阶段、进度与 artifact 摘要。
+- `deep_research_events` 返回有序事件流，支持 `after_seq` 增量读取。
+- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts。
+- `deep_research_resume` 目前支持从 `draft`、`failed`、`interrupted` job 继续。
+- `deep_research_cancel` 只负责发起取消请求；运行中的 job 会在阶段边界或下一次检查点更新时收口。
+- `deep_research_list` 提供最近 job 列表，适合 CLI 或宿主做结果检索。
 </details>
 
 ## 四、常见问题
@@ -510,6 +532,21 @@ A: 当前版本已经尽量把错误显性化，你可以按以下方式理解�
 - [发布说明](./docs/RELEASING.md)
 - [更新记录](./CHANGELOG.md)
 - [Companion Skill](./skills/research-with-grok-search/SKILL.md)
+
+## 六、Deep Research CLI
+
+```bash
+grok-search-research start "Compare open-source deep research frameworks" --watch
+grok-search-research list
+grok-search-research result JOB_ID --artifact final_report.md
+grok-search-research continue JOB_ID "Focus on resume and checkpoint trade-offs" --watch
+```
+
+CLI 当前优先承接：
+- 持续 watch 事件流
+- 读取指定 artifact
+- 从已有研究结果继续开新 job
+- 对 draft / interrupted / failed job 做 resume
 
 ## 许可证
 

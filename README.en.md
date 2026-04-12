@@ -4,7 +4,7 @@ English | [简体中文](README.md) | [繁體中文](README.zh-TW.md) | [日本�
 
 GrokSearch is an independently maintained MCP server for assistants and clients that need fast, reliable, source-backed web context.
 
-It combines `Grok` search with `Tavily` and `Firecrawl` extraction, then exposes a stable MCP tool surface for lightweight lookups, source verification, focused page fetching, a recommended `plan_* -> web_search` workflow for complex searches, and a future `deep research` direction for heavier exploration tasks. For clear, low-ambiguity single-hop lookups where planning adds little value, direct `web_search` is still acceptable.
+It combines `Grok` search with `Tavily` and `Firecrawl` extraction, then exposes a stable MCP tool surface for lightweight lookups, source verification, focused page fetching, a recommended `plan_* -> web_search` workflow for complex searches, and an advanced `deep research` layer for heavier exploration tasks. For clear, low-ambiguity single-hop lookups where planning adds little value, direct `web_search` is still acceptable.
 
 The public package import contract currently has two boundaries: `grok_search.mcp` is an access-time lazy export, so `fastmcp` is only required when that export is actually accessed; `grok_search.providers.GrokSearchProvider` is also an access-time lazy export, so ordinary non-provider imports should not fail early just because Grok-provider dependencies are missing. This only narrows import-time behavior, does not change the install-time dependency declaration, and should not be read as turning package dependencies into optional extras.
 
@@ -17,11 +17,12 @@ Public `stdio` installation snippets currently use the maintained release repo `
 - `web_fetch`: Tavily-first page extraction with Firecrawl fallback
 - `web_map`: website structure mapping
 - `plan_*`: phased planning tools for complex or ambiguous searches
+- `deep_research_*`: asynchronous job tools for advanced report-style research
 - `get_config_info`: inspect configuration and test `/models`
 - `switch_model`: change the default Grok model
 - `toggle_builtin_tools`: toggle Claude Code built-in WebSearch / WebFetch
 
-The public MCP surface currently includes `13` tools:
+The public MCP surface currently includes `20` tools:
 
 - `web_search`
 - `get_sources`
@@ -36,6 +37,13 @@ The public MCP surface currently includes `13` tools:
 - `plan_search_term`
 - `plan_tool_mapping`
 - `plan_execution`
+- `deep_research_start`
+- `deep_research_status`
+- `deep_research_events`
+- `deep_research_result`
+- `deep_research_resume`
+- `deep_research_cancel`
+- `deep_research_list`
 
 `plan_search_term` sets `approach` / `fallback_plan` when `search_strategy` is first created; later non-revision calls append `search_terms` only and do not implicitly rewrite existing strategy metadata.
 planning `session_id` values are in-process transient handles with about a 1-hour TTL and a 256-session LRU cap, so restart / expiry / eviction requires starting again from a fresh `plan_intent`.
@@ -153,6 +161,11 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `GROK_RETRY_MAX_ATTEMPTS` | No | Max retry attempts |
 | `GROK_RETRY_MULTIPLIER` | No | Retry backoff multiplier |
 | `GROK_RETRY_MAX_WAIT` | No | Max retry wait |
+| `GROK_DEEP_RESEARCH_DIR` | No | Root directory for deep research SQLite state and artifacts |
+| `GROK_DEEP_RESEARCH_DEFAULT_BUDGET_SECONDS` | No | Default target budget for deep research jobs |
+| `GROK_DEEP_RESEARCH_HARD_TIMEOUT_SECONDS` | No | Hard upper timeout for a deep research job |
+| `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | No | Max parallel research units in the default runtime |
+| `GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS` | No | Reuse window for recent completed deep research jobs |
 
 Notes:
 
@@ -166,7 +179,8 @@ Notes:
 - when redirect preflight falls back to `skipped_due_to_error`, the implementation now emits a caller-visible warning through MCP context, but does not rewrite successful return payloads
 - the recommended core path is `plan_* -> web_search`
 - direct `web_search` is still allowed for clear single-hop lookups when planning adds little value
-- interactive `deep research` workflows are planned CLI-first rather than as conversational MCP/skill interactions
+- advanced `deep research` is now exposed as a non-interactive MCP job surface plus a richer CLI workflow
+- interactive `deep research` workflows remain CLI-first rather than as conversational MCP/skill interactions
 - `web_fetch` still works with Firecrawl only.
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` injects local time context according to `GROK_TIME_CONTEXT_MODE` (`always` by default)
@@ -268,6 +282,7 @@ Use it when you want a structured workflow for:
 - phased planning before searching
 - source verification after `web_search`
 - choosing between `web_search`, `get_sources`, `web_fetch`, and `web_map`
+- routing heavier, multi-minute report jobs into `deep_research_*` instead of overloading the lightweight path
 
 ### Install the skill
 
@@ -282,6 +297,17 @@ ln -s /absolute/path/to/GrokSearch/skills/research-with-grok-search ~/.codex/ski
 
 ```bash
 PYTHONPATH=src uv run python -m grok_search.server
+```
+
+### Deep Research CLI
+
+Use `grok-search-research` when you want richer local interaction around the advanced deep research job layer.
+
+```bash
+grok-search-research start "Compare open-source deep research frameworks" --watch
+grok-search-research list
+grok-search-research result JOB_ID --artifact final_report.md
+grok-search-research continue JOB_ID "Focus on resume and checkpoint trade-offs" --watch
 ```
 
 ### Verification

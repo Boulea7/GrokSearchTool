@@ -4,7 +4,7 @@
 
 GrokSearch — это независимо поддерживаемый MCP-сервер для ассистентов и клиентов, которым нужен быстрый, надёжный и подтверждаемый источниками веб-контекст.
 
-Он объединяет поиск через `Grok` и извлечение контента через `Tavily` / `Firecrawl`, предоставляя лёгкий MCP-набор инструментов для поиска, проверки источников, выборочного извлечения страниц и рекомендуемого основного маршрута `plan_* -> web_search` для сложных запросов. Для ясных одношаговых запросов с низкой неоднозначностью также допустим прямой вызов `web_search`. Для более тяжёлых задач в будущем будет развиваться отдельное направление `deep research`.
+Он объединяет поиск через `Grok` и извлечение контента через `Tavily` / `Firecrawl`, предоставляя лёгкий MCP-набор инструментов для поиска, проверки источников, выборочного извлечения страниц и рекомендуемого основного маршрута `plan_* -> web_search` для сложных запросов. Для ясных одношаговых запросов с низкой неоднозначностью также допустим прямой вызов `web_search`. Для более тяжёлых задач теперь доступен отдельный продвинутый слой `deep research`.
 
 Публичный package import contract сейчас имеет две границы: `grok_search.mcp` — это access-time lazy export, поэтому `fastmcp` требуется только при фактическом обращении к этому экспорту; `grok_search.providers.GrokSearchProvider` тоже является access-time lazy export, поэтому обычные non-provider импорты не должны падать заранее только из-за отсутствия зависимостей Grok provider. Это лишь сужает import-time поведение, не меняет декларацию зависимостей на этапе установки и не должно читаться как превращение package dependencies в optional extras.
 
@@ -15,11 +15,12 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `web_fetch`: сначала Tavily, затем Firecrawl как fallback
 - `web_map`: карта структуры сайта
 - `plan_*`: поэтапное планирование для сложных или неоднозначных запросов
+- `deep_research_*`: асинхронные job-инструменты для продвинутого глубинного исследования
 - `get_config_info`: проверка конфигурации, `/models` и лёгкий doctor
 - `switch_model`: смена модели Grok по умолчанию
 - `toggle_builtin_tools`: переключение встроенных WebSearch / WebFetch в Claude Code
 
-Сейчас опубликовано `13` MCP-инструментов.
+Сейчас опубликовано `20` MCP-инструментов.
 
 - `web_search`
 - `get_sources`
@@ -34,6 +35,13 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `plan_search_term`
 - `plan_tool_mapping`
 - `plan_execution`
+- `deep_research_start`
+- `deep_research_status`
+- `deep_research_events`
+- `deep_research_result`
+- `deep_research_resume`
+- `deep_research_cancel`
+- `deep_research_list`
 
 `plan_search_term` задаёт `approach` / `fallback_plan` при первом создании `search_strategy`; последующие вызовы без `is_revision` только добавляют `search_terms` и не переписывают существующие strategy metadata неявно.
 planning `session_id` — это in-process transient handle с TTL около 1 часа и LRU-лимитом 256 сессий; после рестарта процесса, истечения TTL или eviction нужно начинать заново с нового `plan_intent`.
