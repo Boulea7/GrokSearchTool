@@ -6,6 +6,7 @@ from grok_search.deep_research_types import (
     DeepResearchCheckpoint,
     DeepResearchEvent,
     DeepResearchJob,
+    utc_now_iso,
 )
 
 
@@ -149,11 +150,58 @@ def test_store_reuses_active_or_recent_job_by_request_fingerprint(tmp_path):
         status="completed",
         phase="finalizing",
         progress_pct=100.0,
-        finished_at="2026-04-12T14:00:00Z",
+        finished_at=utc_now_iso(),
     )
     completed = store.get_job(active.job_id)
 
     assert store.find_reusable_job("fp-reuse", recent_reuse_seconds=1800) == completed
+
+
+def test_store_reuses_matching_draft_job(tmp_path):
+    store = make_store(tmp_path)
+    draft = store.create_job(
+        query="Draft reuse",
+        request_fingerprint="fp-draft-reuse",
+        status="draft",
+        phase="planning",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=True,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    assert store.find_reusable_job("fp-draft-reuse", recent_reuse_seconds=1800) == draft
+
+
+def test_store_does_not_reuse_expired_completed_job(tmp_path):
+    store = make_store(tmp_path)
+    completed = store.create_job(
+        query="Research expired reuse window",
+        request_fingerprint="fp-expired-reuse",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    store.update_job(
+        completed.job_id,
+        status="completed",
+        phase="finalizing",
+        progress_pct=100.0,
+        finished_at="2020-01-01T00:00:00Z",
+    )
+
+    assert store.find_reusable_job("fp-expired-reuse", recent_reuse_seconds=1800) is None
 
 
 def test_store_marks_inflight_jobs_as_interrupted_during_recovery(tmp_path):

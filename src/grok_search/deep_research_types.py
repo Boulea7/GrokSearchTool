@@ -21,6 +21,9 @@ DeepResearchPhase = Literal[
     "finalizing",
 ]
 
+DeepResearchUnitType = Literal["search", "fetch", "map"]
+DeepResearchUnitStatus = Literal["pending", "running", "completed", "failed", "skipped"]
+
 
 def utc_now_iso() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -78,3 +81,99 @@ class DeepResearchArtifact(BaseModel):
     created_at: str
     updated_at: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeepResearchBrief(BaseModel):
+    objective: str
+    deliverable: str
+    success_criteria: list[str] = Field(default_factory=list)
+
+
+class DeepResearchSubQuestion(BaseModel):
+    id: str
+    question: str
+    reason: str
+
+
+class DeepResearchSelectiveFetchConfig(BaseModel):
+    max_urls_per_search: int = 1
+    prefer_titles_matching_outline: bool = True
+
+
+class DeepResearchSearchStrategy(BaseModel):
+    approach: str
+    search_queries: list[str] = Field(default_factory=list)
+    selective_fetch: DeepResearchSelectiveFetchConfig = Field(default_factory=DeepResearchSelectiveFetchConfig)
+
+
+class DeepResearchReportSection(BaseModel):
+    section_id: str
+    title: str
+    goal: str
+
+
+class DeepResearchContinuation(BaseModel):
+    mode: Literal["fresh", "continue"] = "fresh"
+    source_job_id: str = ""
+    previous_summary: str = ""
+    prior_plan_summary: str = ""
+    source_count: int = 0
+
+
+class DeepResearchResearchUnit(BaseModel):
+    unit_id: str
+    unit_type: DeepResearchUnitType
+    title: str
+    goal: str
+    query: str = ""
+    url: str = ""
+    instructions: str = ""
+    depends_on: list[str] = Field(default_factory=list)
+    status: DeepResearchUnitStatus = "pending"
+    notes: str = ""
+
+
+class DeepResearchEvidenceItem(BaseModel):
+    evidence_id: str
+    unit_id: str
+    source_ids: list[str] = Field(default_factory=list)
+    summary: str
+    detail: str = ""
+
+
+class DeepResearchClaim(BaseModel):
+    claim_id: str
+    text: str
+    citations: list[str] = Field(default_factory=list)
+
+
+class DeepResearchSectionCitations(BaseModel):
+    section_id: str
+    title: str
+    claims: list[DeepResearchClaim] = Field(default_factory=list)
+    citations: list[str] = Field(default_factory=list)
+
+
+class DeepResearchPlan(BaseModel):
+    query: str
+    context: str = ""
+    effort: str
+    time_budget_seconds: int
+    include_domains: list[str] = Field(default_factory=list)
+    exclude_domains: list[str] = Field(default_factory=list)
+    brief: DeepResearchBrief
+    sub_questions: list[DeepResearchSubQuestion] = Field(default_factory=list)
+    search_strategy: DeepResearchSearchStrategy
+    report_outline: list[DeepResearchReportSection] = Field(default_factory=list)
+    research_units: list[DeepResearchResearchUnit] = Field(default_factory=list)
+    continuation: DeepResearchContinuation = Field(default_factory=DeepResearchContinuation)
+    planner_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeepResearchCheckpointState(BaseModel):
+    plan: DeepResearchPlan
+    completed_unit_ids: list[str] = Field(default_factory=list)
+    unit_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_items: list[dict[str, Any]] = Field(default_factory=list)
+    sections: list[dict[str, Any]] = Field(default_factory=list)

@@ -258,10 +258,18 @@ def test_packaging_workflow_enforces_distribution_and_contract_checks():
     assert "uv build --wheel --sdist" in text
     assert "tests/test_package_imports.py" in text
     assert "tests/test_docs_contracts.py" in text
+    assert "tests/test_deep_research_runtime.py" in text
+    assert "tests/test_deep_research_store.py" in text
+    assert "tests/test_deep_research_server.py" in text
+    assert "tests/test_deep_research_cli.py" in text
     assert "dist/*.tar.gz" in text
     assert "import grok_search.planning" in text
     assert "import grok_search.server" in text
+    assert "import grok_search.deep_research_runtime" in text
+    assert "import grok_search.deep_research_store" in text
     assert "from grok_search.server import main" in text
+    assert "python -m grok_search.deep_research_cli --help" in text
+    assert "grok-search-research --help" in text
 
 
 def test_releasing_doc_covers_version_tag_changelog_and_artifact_verification():
@@ -430,6 +438,24 @@ def test_docs_explain_deep_research_job_surface_and_cli():
     assert "`deep_research_*`" in compatibility
     assert "`deep_research_resume`" in agents
     assert "`deep_research_*`" in skill
+
+
+def test_docs_explain_checkpoint_resume_continuation_and_structured_artifacts():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "`sources.json`" in readme
+    assert "`brief`" in readme
+    assert "`research_units`" in readme
+    assert "artifact 摘要" in readme
+    assert "最新的 completed research-unit checkpoint" in readme
+    assert "consumes the previous job's artifacts and findings" in readme_en
+    assert "`sources.json`" in agents
+    assert "`continue_from_job_id`" in agents
+    assert "latest checkpoint boundary" in skill
+    assert "previous artifacts and findings" in skill
 
 
 def test_docs_lock_finance_topic_and_diagnostic_detail_contracts():
