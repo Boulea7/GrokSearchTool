@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,8 @@ import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT_DIR / "src"
+README = ROOT_DIR / "README.md"
+README_EN = ROOT_DIR / "README.en.md"
 
 
 def _run_python(code: str) -> subprocess.CompletedProcess[str]:
@@ -59,6 +62,44 @@ def _venv_script(venv_dir: Path, script_name: str) -> Path:
     if os.name == "nt":
         return venv_dir / "Scripts" / f"{script_name}.exe"
     return venv_dir / "bin" / script_name
+
+
+def _extract_json_block_after_marker(text: str, marker: str) -> dict:
+    pattern = re.escape(marker) + r".*?```json\s*(\{.*?\})\s*```"
+    match = re.search(pattern, text, re.DOTALL)
+    assert match, f"Expected JSON code block after marker: {marker}"
+    return json.loads(match.group(1))
+
+
+def _extract_claude_add_json_payload(text: str, marker: str) -> dict:
+    pattern = re.escape(marker) + r".*?claude mcp add-json grok-search --scope user '(\{.*?\})'"
+    match = re.search(pattern, text, re.DOTALL)
+    assert match, f"Expected claude mcp add-json payload after marker: {marker}"
+    return json.loads(match.group(1))
+
+
+def _extract_toml_block_after_marker(text: str, marker: str) -> str:
+    pattern = re.escape(marker) + r".*?```toml\s*(.*?)```"
+    match = re.search(pattern, text, re.DOTALL)
+    assert match, f"Expected TOML code block after marker: {marker}"
+    return match.group(1)
+
+
+def _extract_toml_string(block: str, key: str) -> str:
+    match = re.search(rf"^{re.escape(key)}\s*=\s*\"([^\"]+)\"", block, re.MULTILINE)
+    assert match, f"Expected TOML string for {key}"
+    return match.group(1)
+
+
+def _extract_toml_array(block: str, key: str) -> list[str]:
+    match = re.search(rf"^{re.escape(key)}\s*=\s*(\[[^\n]+\])", block, re.MULTILINE)
+    assert match, f"Expected TOML array for {key}"
+    return json.loads(match.group(1).replace("'", '"'))
+
+
+def _extract_toml_env_keys(block: str) -> set[str]:
+    env_lines = re.findall(r"^([A-Z0-9_]+)\s*=\s*\"[^\"]*\"$", block, re.MULTILINE)
+    return set(env_lines)
 
 
 def test_run_python_sets_timeout(monkeypatch):
@@ -308,7 +349,7 @@ def test_built_local_wheel_exposes_console_script_and_install_surface(tmp_path):
     wheel_path = wheels[0]
 
     venv_dir = tmp_path / "venv"
-    venv.EnvBuilder(with_pip=True, system_site_packages=True).create(venv_dir)
+    venv.EnvBuilder(with_pip=True, system_site_packages=False).create(venv_dir)
     venv_python = _venv_python(venv_dir)
     install_result = _run_subprocess(
         [str(venv_python), "-m", "pip", "install", "--no-deps", str(wheel_path)],
@@ -336,6 +377,7 @@ def test_built_local_wheel_exposes_console_script_and_install_surface(tmp_path):
             "console_scripts": console_scripts,
             "files_include_server": "grok_search/server.py" in {str(item) for item in dist.files or []},
             "script_exists": pathlib.Path(%(script_path)r).exists(),
+            "requires": sorted(dist.requires or []),
         }))
         """
         % {"script_path": str(script_path)}
@@ -349,6 +391,12 @@ def test_built_local_wheel_exposes_console_script_and_install_surface(tmp_path):
     assert metadata_payload["console_scripts"]["grok-search"] == "grok_search.server:main"
     assert metadata_payload["files_include_server"] is True
     assert metadata_payload["script_exists"] is True
+    assert {
+        "fastmcp>=2.3.0",
+        "httpx[socks]>=0.28.0",
+        "mcp[cli]>=1.21.2",
+        "tenacity>=8.0.0",
+    }.issubset(set(metadata_payload["requires"]))
 
     import_surface_code = textwrap.dedent(
         """
@@ -367,13 +415,13 @@ def test_built_local_wheel_exposes_console_script_and_install_surface(tmp_path):
 
         grok_search = importlib.import_module("grok_search")
         config = importlib.import_module("grok_search.config")
-        planning = importlib.import_module("grok_search.planning")
+        sources = importlib.import_module("grok_search.sources")
         providers = importlib.import_module("grok_search.providers")
 
         payload = {
             "package_name": grok_search.__name__,
             "config_name": config.__name__,
-            "planning_name": planning.__name__,
+            "sources_name": sources.__name__,
             "providers_package_name": providers.__name__,
         }
 
@@ -398,12 +446,49 @@ def test_built_local_wheel_exposes_console_script_and_install_surface(tmp_path):
     import_payload = json.loads(import_surface_result.stdout)
     assert import_payload["package_name"] == "grok_search"
     assert import_payload["config_name"] == "grok_search.config"
-    assert import_payload["planning_name"] == "grok_search.planning"
+    assert import_payload["sources_name"] == "grok_search.sources"
     assert import_payload["providers_package_name"] == "grok_search.providers"
     assert import_payload["mcp_error"] == {
         "type": "ModuleNotFoundError",
         "name": "fastmcp",
     }
+
+
+def test_readme_install_snippets_match_distribution_contract():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+
+    expected_repo = "git+https://github.com/Boulea7/GrokSearchTool@main"
+    expected_executable = "grok-search"
+    expected_env_keys = {
+        "GROK_API_URL",
+        "GROK_API_KEY",
+        "TAVILY_API_KEY",
+        "TAVILY_API_URL",
+        "FIRECRAWL_API_KEY",
+    }
+
+    claude_zh = _extract_claude_add_json_payload(readme, "### 一键安装")
+    claude_en = _extract_claude_add_json_payload(readme_en, "### Add as an MCP server")
+    for payload in (claude_zh, claude_en):
+        assert payload["command"] == "uvx"
+        assert payload["args"] == ["--from", expected_repo, expected_executable]
+        assert set(payload["env"]) == expected_env_keys
+
+    codex_zh = _extract_toml_block_after_marker(readme, "#### Codex CLI / Codex 风格 MCP 客户端")
+    codex_en = _extract_toml_block_after_marker(readme_en, "#### Codex CLI / Codex-style clients")
+    for block in (codex_zh, codex_en):
+        assert _extract_toml_string(block, "command") == "uvx"
+        assert _extract_toml_array(block, "args") == ["--from", expected_repo, expected_executable]
+        assert _extract_toml_env_keys(block) == expected_env_keys
+
+    cherry_zh = _extract_json_block_after_marker(readme, "#### Cherry Studio")
+    cherry_en = _extract_json_block_after_marker(readme_en, "#### Cherry Studio")
+    for payload in (cherry_zh, cherry_en):
+        assert payload["name"] == "grok-search"
+        assert payload["command"] == "uvx"
+        assert payload["args"] == ["--from", expected_repo, expected_executable]
+        assert set(payload["env"]) == expected_env_keys
 
 
 def test_from_import_base_provider_does_not_trigger_grok_provider_dependencies():
