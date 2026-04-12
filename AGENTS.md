@@ -97,10 +97,11 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `web_search` 当前支持轻量显式控制：`topic`、`time_range`、`include_domains`、`exclude_domains`；其中 `topic` 当前支持 `general` / `news` / `finance`，`time_range` 当前支持 `day` / `week` / `month` / `year`，并兼容 `d` / `w` / `m` / `y`
 - `web_search` 的本地时间上下文注入当前受 `GROK_TIME_CONTEXT_MODE` 控制，默认 `always`
 - `get_sources` 当前会统一返回标准化 metadata；`rank` 当前会按 `score`、来源身份清晰度与稳定去重顺序生成，不再对 Grok 引用额外偏置
-- `get_sources` 返回的单条 source 当前应理解为 normalized aggregate row 与 lossy aggregate display row；若同一 URL 来自多个输入路径，`provider` 表示该聚合结果最终保留的 winner provider，而 `source` / `origin_type` 等 provenance metadata 仍可能来自其他贡献行；如需看 contributor 级 attribution，应优先读取 additive `contributors`
+- `get_sources` 返回的单条 source 当前应理解为 normalized aggregate row 与 lossy aggregate display row；若同一 URL 来自多个输入路径，`provider` 表示该聚合结果最终保留的 winner provider，而 `source` / `origin_type` 等 provenance metadata 仍可能来自其他贡献行；只有当不同的 contributor identity 被折叠进同一行时，才会额外暴露 additive `contributors`
 - `source` 当前仍带有 legacy 重载语义：当 `origin_type` 缺失时，它仍可能被当作旧缓存里的 provider alias 回填到 `provider`
 - `standardize_sources` 当前会在去重时规范化 URL 的 scheme/host 大小写，因此同一页面的 mixed-case 变体可能折叠为单个 source；这会影响最终的 `sources_count` 与 `rank`
 - `standardize_sources` 当前不会把显式默认端口（如 `:443` / `:80`）与隐式默认端口 URL 自动折叠；如需调整该语义，应先视为明确 contract change 并补回归测试与文档
+- `standardize_sources` 当前会把 query 参数顺序视为 dedupe key 的一部分；不同 query 顺序的 URL 目前不会自动折叠为同一 source
 - `get_sources` 当前依赖当前服务器进程内的内存型 LRU 缓存；默认 TTL 约 1 小时、当前上限 256 个 session。`session_id` 是 shared-daemon、transient、非 durable、非 caller-bound handle，也不应被理解为 secret token；`session_id_not_found_or_expired` 当前统一覆盖进程重启、TTL 到期、缓存淘汰与不可读旧缓存 miss
 - `Config.get_config_info()` 只返回基础配置快照；MCP 工具 `get_config_info` 会保留该快照，并新增 `connection_test`、`doctor`、`feature_readiness` 与最小真实探针结果；当前还支持 additive `detail=full|summary` 分级输出，默认仍为 `full`
 - `detail=summary` 当前只是同一次诊断结果的紧凑字段投影，不是额外的轻执行路径
@@ -113,6 +114,8 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `connection_test` 当前只反映 `/models` 连通性；真实运行时可用性应结合 `doctor` 与 `feature_readiness` 判断
 - `grok_model_selection` 当前表示 `/models` 可见性阶段就已确认当前模型不适合直接使用，并会在真实请求前预选更合适的 Grok 候选模型；`grok_model_runtime_fallback` 则表示当前 probe model 在真实 `chat/completions` 路径上仍需在运行时二次回退才成功；这两个 check 可能同时出现
 - `web_search` 当前在“只返回信源列表、没有正文”或“正文疑似截断”时也会降级为 `partial`；`get_sources.search_status` 会保留该降级状态，并通过 `search_warnings` 回放当前缓存的 warning code；旧缓存条目默认回放空数组
+- legacy cache 中未知的 `search_status` 当前会在 readback 时归一化回 `ok`；`error` 之外的未知状态不再原样透传给 `get_sources`
+- `get_sources.source_state=empty` 当前只表示“该 cached session 没有可读 source”；它不再隐含 `search_status` 必然是 `ok`，因为 `partial` 搜索也可能在标准化后留下空 source 集合
 - `grok_search_probe` 当前除 `ok` / `error` 外，也可能因为正文质量降级返回 `warning`；例如只拿到信源列表或正文疑似截断时，`feature_readiness.web_search` 应显示为 `degraded`
 - 当前运行时模型回退属于 best-effort 兼容路径：依赖 `/models` 返回候选列表，且上游错误摘要命中“模型不可用”类文案；若 `/models` 本身不可用，或错误类型不匹配，则不保证自动继续回退
 - 当前诊断 `web_search degraded` 时，`GROK_MODEL_SOURCE` 应视为根因分析的一等信息；若活动模型来自进程 env 或项目 `.env.local` / `.env` 覆盖，则与持久化配置层造成的 mismatch 是不同问题
@@ -127,6 +130,7 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `feature_readiness.web_fetch` 当前应优先尊重真实 `web_fetch_probe` 的结果；即使单点 provider 探测通过，真实抓取探针失败时也应保持 `degraded`
 - `GROK_DEBUG=false` 时，`log_info()` 当前不会写这类 helper progress log，也不会通过 `ctx.info()` 对外转发中间进度；这些信号当前是 debug-only progress/debug signal
 - redirect preflight 因 timeout 或请求级错误被标记为 `skipped_due_to_error` 时，当前还会通过 MCP context 发出 caller-visible warning，但不会改写成功返回体
+- `web_map` 在 redirect preflight 被标记为 `skipped_due_to_error` 时，当前 debug progress 也会沿用调用方 `ctx`，与 `web_fetch` 保持一致
 - `web_fetch` 目前优先使用 Tavily extract，失败时回退到 Firecrawl scrape
 - Tavily supplemental search 当前会把 `max_results` 限制在 Tavily 文档给出的上限 `20`
 - `web_fetch` / `web_map` / Tavily 补充搜索当前只暴露 provider 能力的受控子集，不等同于 Tavily / Firecrawl 的全量原生 API
@@ -142,6 +146,9 @@ uv run --with pytest --with pytest-asyncio pytest -q
 - `standardize_sources` 当前会保留普通锚点（fragment）以避免不同页面段落引用被误合并；但 URL `userinfo`、常见签名参数以及 `client_secret` / `refresh_token` / `id_token` / `password` 这类常见 credential 参数会被遮罩；`X-Amz-Credential` / `X-Goog-Credential` / `GoogleAccessId` 这类高置信度 cloud-signed credential 键当前也属于遮罩范围
 - 当前默认不会把裸 `auth` / `key` 这类宽泛参数名直接当作敏感字段；masking 仍优先针对高置信度 credential / signature 键，避免误伤普通诊断信息、示例 URL 与可核验 source 链接
 - `toggle_builtin_tools` 仅针对 Claude Code 项目级设置生效，不应视为通用 MCP 特性
+- `toggle_builtin_tools` 当前会稳定返回 `git_root_not_found`、`settings_file_invalid`、`settings_write_failed`、`invalid_action` 这组机器可读错误码
+- packaging contract 当前已显式声明 `pydantic` 为运行时依赖，并通过 `.github/workflows/packaging-contracts.yml` 持续验证 wheel/sdist 构建、artifact import smoke 与 packaging/docs contract tests；发布步骤统一记录在 `docs/RELEASING.md`
+- 仓库当前默认忽略 `build/` 与 `dist/` 构建产物，避免 packaging smoke 与 release 验证留下的副产物误入版本控制
 - 多数对外 user-facing 错误当前不再附带 `request_id`；但个别上游空占位 completion 异常当前仍可能携带 `request_id`。`get_config_info` 中的 Claude 项目上下文检查也不再回显绝对 Git 根路径
 - 根包 `grok_search` 当前对 `mcp` 采用 lazy export；非 server 模块导入不应再因为 `fastmcp` 缺失而提前失败
 - `grok_search.providers.GrokSearchProvider` 当前也采用 access-time lazy export；普通非 provider 导入不应仅因 Grok provider 相关依赖缺失而提前失败
