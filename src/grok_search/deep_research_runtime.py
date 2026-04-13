@@ -71,6 +71,11 @@ _NOISY_EVIDENCE_MARKERS = (
     "sign in",
     "sign up",
     "skip to content",
+    "table of contents",
+    "english * deutsch",
+    "español",
+    "privacy policy",
+    "cookie policy",
 )
 _PREFERRED_TECHNICAL_TERMS = (
     "checkpoint",
@@ -92,6 +97,19 @@ _COMMUNITY_SOURCE_DOMAINS = {
     "dev.to",
     "medium.com",
 }
+_GAP_SECTION_MARKERS = ("remaining gap", "remaining gaps", "open question", "open questions")
+_GAP_EVIDENCE_MARKERS = (
+    "needs confirmation",
+    "need confirmation",
+    "unclear",
+    "unknown",
+    "not enough evidence",
+    "insufficient evidence",
+    "requires follow-up",
+    "further research",
+    "remaining gap",
+    "open question",
+)
 
 
 def _json_markdown_block(data: Any) -> str:
@@ -129,6 +147,10 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
     return unique
 
 
+def _stable_text_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
 def _tokenize_keywords(value: str) -> list[str]:
     tokens = re.findall(r"[a-z0-9][a-z0-9+.-]*", (value or "").lower())
     return [token for token in tokens if len(token) > 2 and token not in _STOPWORDS and not token.isdigit()]
@@ -146,6 +168,8 @@ def _is_noisy_text(value: str) -> bool:
     if lowered.startswith("[") and "](" in lowered:
         return True
     if len(re.findall(r"https?://", lowered)) >= 3 and len(text) < 500:
+        return True
+    if len(text) <= 80 and sum(1 for marker in ("english", "deutsch", "español", "français") if marker in lowered) >= 2:
         return True
     return False
 
@@ -168,6 +192,16 @@ def _summarize_evidence_text(value: str, *, limit: int = _MAX_CLAIM_LENGTH) -> s
     lines = _extract_meaningful_lines(value)
     text = " ".join(lines[:4]) if lines else _normalize_whitespace(value)
     return _trim_text(text, limit=limit)
+
+
+def _extract_markdown_title(value: str) -> str:
+    for raw_line in (value or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            return _normalize_whitespace(line.lstrip("#").strip())
+    return ""
 
 
 def _count_keyword_overlap(text: str, keywords: list[str]) -> int:
@@ -259,6 +293,102 @@ def _normalize_citations_payload(value: Any) -> dict[str, Any] | None:
     if value and all(isinstance(item, dict) and "url" in item for item in value.values()):
         return {"source_registry": value, "sections": []}
     return value
+
+
+def _is_gap_section(section: DeepResearchReportSection | dict[str, Any]) -> bool:
+    title = section.title if isinstance(section, DeepResearchReportSection) else str(section.get("title", ""))
+    goal = section.goal if isinstance(section, DeepResearchReportSection) else str(section.get("goal", ""))
+    lowered = f"{title} {goal}".lower()
+    return any(marker in lowered for marker in _GAP_SECTION_MARKERS)
+
+
+def _has_gap_signal(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _GAP_EVIDENCE_MARKERS)
+
+
+def _source_registry_key(url: str) -> str:
+    split = urlsplit((url or "").strip())
+    if not split.scheme or not split.netloc:
+        return (url or "").strip().lower()
+    netloc = split.netloc.lower()
+    return f"{split.scheme.lower()}://{netloc}{split.path}?{split.query}#{split.fragment}"
+
+
+def _next_source_id(existing_sources: list[dict[str, Any]]) -> str:
+    used_numbers: set[int] = set()
+    for item in existing_sources:
+        source_id = str(item.get("source_id", "")).strip()
+        if source_id.startswith("R") and source_id[1:].isdigit():
+            used_numbers.add(int(source_id[1:]))
+    next_number = 1
+    while next_number in used_numbers:
+        next_number += 1
+    return f"R{next_number}"
+
+
+def _source_sort_tuple(item: dict[str, Any]) -> tuple:
+    rank_hint = item.get("rank")
+    if not isinstance(rank_hint, int):
+        rank_hint = 10_000
+    score = item.get("score")
+    return (
+        -_source_quality_bias(item),
+        0 if item.get("title") else 1,
+        0 if item.get("snippet") or item.get("description") else 1,
+        0 if item.get("provider") else 1,
+        0 if score is not None else 1,
+        -(score if isinstance(score, (int, float)) else 0.0),
+        rank_hint,
+        str(item.get("url", "")),
+    )
+
+
+def _merge_source_metadata(existing: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(existing)
+    for key, value in candidate.items():
+        if key == "rank":
+            continue
+        if value in ("", None, []):
+            continue
+        current = merged.get(key)
+        if current in ("", None, []):
+            merged[key] = value
+            continue
+        if key in {"description", "snippet"} and len(str(value)) > len(str(current)):
+            merged[key] = value
+            continue
+        if key == "title" and len(str(value)) > len(str(current)):
+            merged[key] = value
+            continue
+        if key == "contributors":
+            merged[key] = value
+            continue
+    return merged
+
+
+def _enrich_source_from_fetched_text(source: dict[str, Any], fetched_text: str) -> dict[str, Any]:
+    enriched = dict(source)
+    title = _extract_markdown_title(fetched_text)
+    summary = _summarize_evidence_text(fetched_text, limit=280)
+    if title and not enriched.get("title"):
+        enriched["title"] = title
+    if summary:
+        if not enriched.get("snippet"):
+            enriched["snippet"] = summary
+        if not enriched.get("description"):
+            enriched["description"] = summary
+    if not enriched.get("domain") and enriched.get("url"):
+        enriched["domain"] = urlsplit(enriched["url"]).netloc.lower()
+    return enriched
+
+
+def _report_artifact_contract_error(job: DeepResearchJob) -> dict[str, str]:
+    errors: dict[str, str] = {}
+    if job.status == "completed":
+        for kind in ("sources.json", "citations.json", "report.json", "final_report.md"):
+            errors[kind] = "missing_required_artifact"
+    return errors
 
 
 def _parse_utc_iso(value: str) -> dt.datetime | None:
@@ -598,6 +728,11 @@ class DeepResearchRuntime:
             artifact_errors["sources.json"] = sources_error
         if citations_error:
             artifact_errors["citations.json"] = citations_error
+        if not artifact_errors:
+            required = _report_artifact_contract_error(job)
+            for kind, error_code in required.items():
+                if self.store.read_artifact_text(job_id, kind) is None:
+                    artifact_errors[kind] = error_code
         citations = _normalize_citations_payload(citations_value)
         return {
             "job_id": job_id,
@@ -620,6 +755,9 @@ class DeepResearchRuntime:
         job = self.store.update_job(
             job_id,
             status="queued",
+            progress_pct=0.0,
+            started_at="",
+            finished_at="",
             last_error="",
             cancel_requested=False,
             heartbeat_at=utc_now_iso(),
@@ -730,17 +868,14 @@ class DeepResearchRuntime:
         try:
             job = self.store.get_job(job_id)
             if job.cancel_requested:
-                self.store.update_job(job_id, status="canceled", finished_at=utc_now_iso(), heartbeat_at=utc_now_iso())
-                self.store.append_event(
-                    job_id,
-                    type="job_canceled",
-                    phase=job.phase,
-                    message="Deep research canceled before start.",
-                    data={},
-                )
+                _mark_canceled(self, job_id, job.phase, data={"reason": "cancel_requested_before_start"})
                 return
             await self._runner(self, job_id)
         except Exception as exc:
+            current_job = self.store.get_job(job_id)
+            if current_job.cancel_requested:
+                _mark_canceled(self, job_id, current_job.phase, data={"error": str(exc), "reason": "cancel_requested"})
+                return
             self.store.update_job(
                 job_id,
                 status="failed",
@@ -1044,6 +1179,7 @@ class DeepResearchRuntime:
         partial_report = self.store.read_artifact_text(continue_from_job_id, "partial_report.md") or ""
         plan_text = self.store.read_artifact_text(continue_from_job_id, "plan.json") or ""
         sources_text = self.store.read_artifact_text(continue_from_job_id, "sources.json") or "[]"
+        citations_text = self.store.read_artifact_text(continue_from_job_id, "citations.json") or ""
         checkpoints = self.store.list_checkpoints(continue_from_job_id)
         checkpoint_state, checkpoint_meta = self._load_checkpoint_state(job)
         report: dict[str, Any] = {}
@@ -1088,6 +1224,11 @@ class DeepResearchRuntime:
             carry_forward_sources = list(json.loads(sources_text))
         except Exception:
             carry_forward_sources = []
+        if not carry_forward_sources and citations_text:
+            citations_value, _ = _safe_load_json_artifact(citations_text)
+            normalized_citations = _normalize_citations_payload(citations_value)
+            if normalized_citations and isinstance(normalized_citations.get("source_registry"), dict):
+                carry_forward_sources = list(normalized_citations["source_registry"].values())
 
         latest_state = checkpoints[-1].state or {} if checkpoints else {}
         if not carry_forward_sources and checkpoint_state:
@@ -1170,7 +1311,8 @@ class DeepResearchRuntime:
         payload = self._serialize_job(job)
         payload["reused"] = reused
         plan_text = self.store.read_artifact_text(job.job_id, "plan.json")
-        payload["plan"] = json.loads(plan_text) if plan_text else None
+        plan_value, _ = _safe_load_json_artifact(plan_text)
+        payload["plan"] = plan_value
         return payload
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
@@ -1350,6 +1492,15 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             return
 
         batch_units = ready_units[: max(1, config.deep_research_max_concurrency)]
+        for unit in batch_units:
+            runtime.store.append_event(
+                job_id,
+                type="research_unit_started",
+                phase="researching",
+                message=f"Started {unit.unit_id}.",
+                data={"unit_type": unit.unit_type},
+            )
+        runtime.store.update_job(job_id, heartbeat_at=utc_now_iso())
         batch_results = await asyncio.gather(
             *[_execute_research_unit(runtime, plan, unit) for unit in batch_units],
             return_exceptions=True,
@@ -1407,6 +1558,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             progress = 20.0 + (len(completed_unit_ids) / unit_total) * 50.0
             runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
         if batch_error is not None:
+            if runtime.store.get_job(job_id).cancel_requested:
+                _mark_canceled(
+                    runtime,
+                    job_id,
+                    "researching",
+                    data={"error": str(batch_error), "reason": "cancel_requested_during_batch"},
+                )
+                return
             raise batch_error
 
     sections = _build_section_citations(plan.report_outline, evidence_items, source_registry)
@@ -1502,9 +1661,15 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     )
 
 
-def _mark_canceled(runtime: DeepResearchRuntime, job_id: str, phase: str) -> None:
+def _mark_canceled(
+    runtime: DeepResearchRuntime,
+    job_id: str,
+    phase: str,
+    *,
+    data: dict[str, Any] | None = None,
+) -> None:
     runtime.store.update_job(job_id, status="canceled", finished_at=utc_now_iso(), heartbeat_at=utc_now_iso())
-    runtime.store.append_event(job_id, type="job_canceled", phase=phase, message="Canceled.", data={})
+    runtime.store.append_event(job_id, type="job_canceled", phase=phase, message="Canceled.", data=data or {})
 
 
 def _write_partial_outputs(
@@ -1584,10 +1749,16 @@ async def _execute_research_unit(
         fetched = await _fetch_url(source["url"])
         if not fetched:
             continue
+        enriched_source = _enrich_source_from_fetched_text(source, fetched)
+        for index, original_source in enumerate(sources):
+            if original_source.get("url") == enriched_source.get("url"):
+                sources[index] = enriched_source
+                break
         evidence_items.append(
             DeepResearchEvidenceItem(
                 evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
                 unit_id=unit.unit_id,
+                source_ids=[source.get("source_id", "")] if source.get("source_id") else [],
                 summary=_summarize_evidence_text(fetched, limit=_MAX_CLAIM_LENGTH),
                 detail=fetched,
             ).model_dump()
@@ -1603,28 +1774,31 @@ def _merge_source_registry(
     existing_sources: list[dict[str, Any]],
     new_sources: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    existing_by_url = {
-        item["url"]: dict(item)
-        for item in existing_sources
-        if isinstance(item, dict) and isinstance(item.get("url"), str) and item["url"].strip()
-    }
-    next_index = len(existing_by_url) + 1
+    existing_by_key: dict[str, dict[str, Any]] = {}
+    for item in existing_sources:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url", "")).strip()
+        if not url:
+            continue
+        existing_by_key[_source_registry_key(url)] = dict(item)
     merged_ids: list[str] = []
     for source in standardize_sources(new_sources):
         url = source.get("url", "").strip()
         if not url:
             continue
-        if url in existing_by_url:
-            current = existing_by_url[url]
-            current.update({key: value for key, value in source.items() if value not in ("", None, [])})
-            existing_by_url[url] = current
-        else:
+        key = _source_registry_key(url)
+        current = existing_by_key.get(key)
+        if current is None:
             current = dict(source)
-            current["source_id"] = f"R{next_index}"
-            next_index += 1
-            existing_by_url[url] = current
-        merged_ids.append(existing_by_url[url]["source_id"])
-    merged_sources = sorted(existing_by_url.values(), key=lambda item: item["source_id"])
+            current["source_id"] = current.get("source_id") or _next_source_id(list(existing_by_key.values()))
+        else:
+            current = _merge_source_metadata(current, source)
+        existing_by_key[key] = current
+        merged_ids.append(current["source_id"])
+    merged_sources = sorted(existing_by_key.values(), key=_source_sort_tuple)
+    for rank, item in enumerate(merged_sources, start=1):
+        item["rank"] = rank
     return merged_sources, merged_ids
 
 
@@ -1675,7 +1849,12 @@ def _build_section_citations(
     sections: list[dict[str, Any]] = []
     claim_index = 1
     used_evidence_ids: set[str] = set()
+    used_claim_keys: set[str] = set()
     for section in outline:
+        if _is_gap_section(section) and not any(
+            _has_gap_signal(item.summary) or _has_gap_signal(item.detail) for item in claims_pool
+        ):
+            continue
         section_keywords = _tokenize_keywords(f"{section.title} {section.goal}")
         section_claims: list[dict[str, Any]] = []
         ranked_pool = sorted(
@@ -1692,16 +1871,24 @@ def _build_section_citations(
             claim_text = _summarize_evidence_text(evidence.summary or evidence.detail, limit=_MAX_CLAIM_LENGTH)
             if not claim_text or _is_noisy_text(claim_text):
                 continue
+            claim_key = _stable_text_key(claim_text)
+            if claim_key in used_claim_keys:
+                continue
             claim = DeepResearchClaim(
                 claim_id=f"{section.section_id}-claim-{claim_index}",
                 text=claim_text,
                 citations=evidence.source_ids or all_source_ids[:1],
+                unit_id=evidence.unit_id,
+                evidence_ids=[evidence.evidence_id],
             )
             section_claims.append(claim.model_dump())
             used_evidence_ids.add(evidence.evidence_id)
+            used_claim_keys.add(claim_key)
             claim_index += 1
             if len(section_claims) >= 2:
                 break
+        if not section_claims:
+            continue
         section_model = DeepResearchSectionCitations(
             section_id=section.section_id,
             title=section.title,

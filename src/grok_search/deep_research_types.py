@@ -155,6 +155,8 @@ class DeepResearchClaim(BaseModel):
     claim_id: str
     text: str
     citations: list[str] = Field(default_factory=list)
+    unit_id: str = ""
+    evidence_ids: list[str] = Field(default_factory=list)
 
 
 class DeepResearchSectionCitations(BaseModel):

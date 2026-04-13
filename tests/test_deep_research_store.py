@@ -250,8 +250,14 @@ def test_store_marks_inflight_jobs_as_interrupted_during_recovery(tmp_path):
     )
 
     recovered = store.reconcile_incomplete_jobs()
+    running_events = store.list_events(running.job_id)
+    queued_events = store.list_events(queued.job_id)
 
     assert {job.job_id for job in recovered} == {running.job_id, queued.job_id}
     assert store.get_job(running.job_id).status == "interrupted"
     assert store.get_job(queued.job_id).status == "interrupted"
+    assert store.get_job(running.job_id).last_error == "worker_restarted"
+    assert store.get_job(queued.job_id).finished_at
+    assert running_events[-1].type == "job_interrupted"
+    assert queued_events[-1].data["reason"] == "worker_restarted"
     assert store.get_job(draft.job_id).status == "draft"
