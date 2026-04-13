@@ -12,6 +12,7 @@ uv.lock
 .env.*
 .codex/
 .claude/
+.worktrees/
 *.pem
 *.key
 *.p12
