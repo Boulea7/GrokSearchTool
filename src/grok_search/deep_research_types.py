@@ -121,6 +121,9 @@ class DeepResearchContinuation(BaseModel):
     continuation_goal: str = ""
     source_count: int = 0
     checkpoint_key: str = ""
+
+
+class DeepResearchContinuationState(DeepResearchContinuation):
     carry_forward_sources: list[dict[str, Any]] = Field(default_factory=list)
     carry_forward_evidence: list[dict[str, Any]] = Field(default_factory=list)
     carry_forward_sections: list[dict[str, Any]] = Field(default_factory=list)
