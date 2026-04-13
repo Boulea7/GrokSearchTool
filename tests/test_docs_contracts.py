@@ -477,6 +477,42 @@ def test_docs_explain_deep_research_reuse_batch_and_citations_contract():
     assert "`batch_id`" in agents
 
 
+def test_docs_explain_deep_research_lifecycle_and_source_quality_contracts():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "`failed` / `canceled` / `interrupted`" in readme
+    assert "`artifact_errors`" in readme
+    assert "`source_key`" in readme
+    assert "`quality_score`" in readme
+    assert "`unit_id`" in readme
+    assert "`evidence_ids`" in readme
+    assert "`failed`, `canceled`, and `interrupted` jobs" in readme_en
+    assert "`source_key`" in readme_en
+    assert "`quality_tier`" in readme_en
+    assert "`unit_id`" in readme_en
+    assert "`evidence_ids`" in readme_en
+    assert "`quality_score`" in agents
+    assert "`quality_tier`" in agents
+    assert "`evidence_ids`" in agents
+    assert "claim provenance fields" in skill
+
+
+def test_docs_explain_continuation_source_fallback_and_resume_attempt_reset():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "`citations.json.source_registry`" in readme
+    assert "新的 attempt 时间窗口" in readme
+    assert "`citations.json.source_registry`" in agents
+    assert "新的 attempt 时间窗口" in agents
+    assert "`citations.json.source_registry`" in readme_en
+    assert "new attempt time window" in readme_en
+
+
 def test_docs_explain_runtime_concurrency_as_ready_unit_parallelism():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
