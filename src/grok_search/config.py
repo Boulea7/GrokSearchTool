@@ -3,6 +3,7 @@ import json
 import re
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from typing import Any
 
 _SENSITIVE_URL_PARAM_KEYS = {
     "api_key",
@@ -320,9 +321,64 @@ class Config:
             url = self.grok_api_url
         except ValueError:
             return model
-        if "openrouter" in url.lower() and ":online" not in model:
+        return self._apply_model_suffix_for_url(model, url)
+
+    @staticmethod
+    def _apply_model_suffix_for_url(model: str, api_url: str) -> str:
+        if not model:
+            return model
+        if "openrouter" in api_url.lower() and ":online" not in model:
             return f"{model}:online"
         return model
+
+    def _raw_env_keys(self) -> set[str]:
+        project_env = self._load_project_env()
+        return set(os.environ) | set(project_env)
+
+    def grok_provider_chain(self, model_override: str | None = None) -> list[dict[str, Any]]:
+        primary_url = self.grok_api_url
+        primary_key = self.grok_api_key
+        base_model = self.grok_model if model_override is None else model_override
+        chain: list[dict[str, Any]] = [
+            {
+                "name": "primary",
+                "api_url": primary_url,
+                "api_key": primary_key,
+                "model": self._apply_model_suffix_for_url(base_model, primary_url),
+                "source": "primary",
+            }
+        ]
+        seen: set[tuple[str, str, str]] = {
+            (chain[0]["api_url"], chain[0]["api_key"], chain[0]["model"])
+        }
+        suffixes = sorted(
+            {
+                int(match.group(1))
+                for key in self._raw_env_keys()
+                if (match := re.fullmatch(r"GROK_API_URL_(\d+)", key))
+            }
+        )
+        for suffix in suffixes:
+            provider_url = self._get_env_value(f"GROK_API_URL_{suffix}")
+            provider_key = self._get_env_value(f"GROK_API_KEY_{suffix}")
+            if not provider_url or not provider_key:
+                continue
+            provider_model = self._get_env_value(f"GROK_MODEL_{suffix}")
+            resolved_model = self._apply_model_suffix_for_url(provider_model if provider_model is not None else base_model, provider_url)
+            identity = (provider_url, provider_key, resolved_model)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            chain.append(
+                {
+                    "name": f"provider_{suffix}",
+                    "api_url": provider_url,
+                    "api_key": provider_key,
+                    "model": resolved_model,
+                    "source": self._get_env_value_source(f"GROK_API_URL_{suffix}") or "project_env",
+                }
+            )
+        return chain
 
     @property
     def grok_model(self) -> str:

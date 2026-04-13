@@ -2690,6 +2690,36 @@ async def test_web_search_runtime_fallback_preserves_structured_sources_from_typ
 
 
 @pytest.mark.asyncio
+async def test_web_search_fails_over_to_numbered_grok_provider(monkeypatch):
+    async def fake_models(api_url, api_key):
+        return []
+
+    patch_async_client(
+        monkeypatch,
+        responses={
+            ("POST", "https://secondary.example.com/v1/chat/completions"): httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "fallback provider ok"}}]},
+            )
+        },
+        exceptions={
+            ("POST", "https://api.example.com/v1/chat/completions"): httpx.ConnectError("primary down"),
+        },
+    )
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setenv("GROK_API_URL_2", "https://secondary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY_2", "secondary-key")
+    monkeypatch.setenv("GROK_MODEL_2", "grok-4.20-0309")
+    server.config.reset_runtime_state()
+
+    result = await server.web_search("fallback provider test", extra_sources=0)
+
+    assert result["status"] == "ok"
+    assert result["error"] is None
+    assert "fallback provider ok" in result["content"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_does_not_report_model_fallback_when_all_runtime_candidates_fail(monkeypatch):
     captured = {"models": []}
 

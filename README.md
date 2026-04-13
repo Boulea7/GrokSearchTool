@@ -223,6 +223,9 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式，推荐显式包含 `/v1` 后缀；代码层不会仅因省略 `/v1` 就预先拦截，但多数 OpenAI 兼容端点仍可能因此在运行时失败，并通常伴随兼容性 warning） |
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
 | `GROK_MODEL` | 否 | `grok-4.20-0309` | 默认模型；优先级见下方说明（进程 env > 项目 `.env.local` > 项目 `.env` > 持久化 config > 代码默认值） |
+| `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | 否 | - | 第 2 个 Grok 供应商；当主供应商失败时会自动切到该供应商继续重试 |
+| `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | 否 | - | 更多 Grok 供应商，按编号升序依次作为 failover provider chain |
+| `GROK_MODEL_FALLBACKS` | 否 | 内建降级链 | 逗号分隔的模型自动降级顺序；当当前供应商明确返回“模型不可用”时，会在同一供应商内按该顺序继续尝试，例如可显式包含 `grok-4.1-fast` |
 | `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
@@ -249,6 +252,10 @@ claude mcp add-json grok-search --scope user '{
 > 模型解析优先级为：进程里的 `GROK_MODEL` > 项目 `.env.local` > 项目 `.env` > `~/.config/grok-search/config.json` 中由 `switch_model` 持久化的值 > 代码默认值 `grok-4.20-0309`。如使用 OpenRouter 兼容地址，运行时还会自动补齐 `:online` 后缀。
 
 > 环境变量优先级按“是否存在”判断：只要进程环境里显式设置了某个键，即使值为空字符串，也不会再回落到项目 `.env.local` / `.env`。
+>
+> 若配置了 `GROK_API_URL_2` / `GROK_API_KEY_2` 及更高编号的同名变量，运行时会把它们视为备用 Grok 供应商链路：当前一个供应商在真实请求阶段失败时，会自动按编号顺序切换到下一个继续尝试，直到命中可用供应商或全部失败为止。
+>
+> 若配置了 `GROK_MODEL_FALLBACKS`，当某个供应商明确返回“模型不可用”时，运行时会在同一供应商内按你给出的模型顺序继续尝试；未显式配置时，会使用内建的 Grok 4.20 -> `grok-4.1-fast` 等降级链。
 
 > `get_config_info` 的基础配置快照当前会额外返回 `GROK_MODEL_SOURCE`，用于标识当前活动模型来自哪一层（如 `process_env`、`project_env_local`、`project_env`、`persisted_config`、`default`）。如果这里显示的是 `process_env` 或 `project_env_local` / `project_env`，单独调用 `switch_model` 不会改变当前进程，需先修改对应覆盖层。
 
