@@ -64,6 +64,7 @@ For deep research control flows:
 - use `deep_research_resume` when resuming the same job from its latest checkpoint boundary
 - use `deep_research_start(...continue_from_job_id=...)` or CLI `continue` when opening a new follow-up job that should consume previous artifacts and findings
 - remember that `deep_research_start` may return `reused=true` unless you explicitly force a brand-new job
+- treat `sources.json` / `citations.json` as the canonical source registry surfaces; prefer the enriched source metadata and claim provenance fields over raw source counts when judging evidence quality
 
 ### 4. Verify sources before making strong claims
 

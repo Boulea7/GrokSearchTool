@@ -308,7 +308,7 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
         if not description:
             description = snippet
 
-        raw_item["title"] = _normalize_text(raw_item.get("title")) or _guess_title_from_url(url)
+        raw_item["title"] = _normalize_text(raw_item.get("title"))
         raw_item["url"] = url
         provider_value = raw_item.get("provider")
         if _is_empty_merged_source_value(provider_value) and _should_use_legacy_source_alias(raw_item):
@@ -920,24 +920,6 @@ def _normalize_score(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
-
-
-def _guess_title_from_url(url: str) -> str:
-    parsed = urlparse(url)
-    path = (parsed.path or "").strip("/")
-    if not path:
-        return ""
-    candidate = path.split("/")[-1]
-    if not candidate:
-        return ""
-    candidate = re.sub(r"\.[a-z0-9]{1,6}$", "", candidate, flags=re.IGNORECASE)
-    candidate = candidate.replace("-", " ").replace("_", " ")
-    candidate = re.sub(r"\s+", " ", candidate).strip()
-    if len(candidate) < 4:
-        return ""
-    if candidate.isdigit():
-        return ""
-    return candidate[:1].upper() + candidate[1:]
 
 
 def _extract_domain(url: str) -> str:

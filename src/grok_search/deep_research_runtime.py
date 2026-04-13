@@ -204,6 +204,20 @@ def _extract_markdown_title(value: str) -> str:
     return ""
 
 
+def _guess_title_from_url(url: str) -> str:
+    split = urlsplit((url or "").strip())
+    path = (split.path or "").strip("/")
+    if not path:
+        return ""
+    candidate = path.split("/")[-1]
+    candidate = re.sub(r"\.[a-z0-9]{1,6}$", "", candidate, flags=re.IGNORECASE)
+    candidate = candidate.replace("-", " ").replace("_", " ")
+    candidate = re.sub(r"\s+", " ", candidate).strip()
+    if len(candidate) < 4 or candidate.isdigit():
+        return ""
+    return candidate[:1].upper() + candidate[1:]
+
+
 def _count_keyword_overlap(text: str, keywords: list[str]) -> int:
     lowered = (text or "").lower()
     return sum(1 for keyword in keywords if keyword in lowered)
@@ -403,6 +417,8 @@ def _merge_source_metadata(existing: dict[str, Any], candidate: dict[str, Any]) 
         if key == "contributors":
             merged[key] = value
             continue
+    if not merged.get("title") and merged.get("url"):
+        merged["title"] = _guess_title_from_url(str(merged["url"]))
     return merged
 
 
@@ -1854,6 +1870,8 @@ def _merge_source_registry(
             current["source_id"] = current.get("source_id") or _next_source_id(list(existing_by_key.values()))
         else:
             current = _merge_source_metadata(current, source)
+        if not current.get("title") and current.get("url"):
+            current["title"] = _guess_title_from_url(str(current["url"]))
         current["source_key"] = key
         current["quality_score"] = _source_quality_score(current)
         current["quality_tier"] = _source_quality_tier(current)
