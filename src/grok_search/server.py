@@ -1559,6 +1559,18 @@ async def _call_firecrawl_scrape(
         except Exception as e:
             last_error = _format_fetch_error("Firecrawl", e)
             await log_info(ctx, f"Firecrawl scrape failed: {last_error}", config.debug_enabled)
+            retryable = False
+            if isinstance(e, (httpx.TimeoutException, httpx.RequestError)):
+                retryable = True
+            elif isinstance(e, httpx.HTTPStatusError):
+                retryable = e.response.status_code in {408, 429, 500, 502, 503, 504}
+            if retryable and attempt + 1 < max_retries:
+                await log_info(
+                    ctx,
+                    f"Firecrawl: request error, retry {attempt + 1}/{max_retries}",
+                    config.debug_enabled,
+                )
+                continue
             return None, last_error
     return None, last_error
 
@@ -1586,11 +1598,8 @@ async def web_fetch(
     ctx: Context = None
 ) -> str:
     preflight = await _preflight_public_target_url(url)
-    if preflight.status == "reject":
+    if preflight.status != "allow":
         return f"提取失败: {preflight.message}"
-    if preflight.status == "skipped_due_to_error":
-        await log_warning(ctx, f"Warning: Redirect preflight skipped: {preflight.message}")
-        await log_info(ctx, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     await log_info(ctx, "Begin Fetch request", config.debug_enabled)
 
@@ -1701,11 +1710,8 @@ async def web_map(
     ctx: Context = None,
 ) -> str:
     preflight = await _preflight_public_target_url(url)
-    if preflight.status == "reject":
+    if preflight.status != "allow":
         return f"映射失败: {preflight.message}"
-    if preflight.status == "skipped_due_to_error":
-        await log_warning(ctx, f"Warning: Redirect preflight skipped: {preflight.message}")
-        await log_info(ctx, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     result = await _call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
     return result

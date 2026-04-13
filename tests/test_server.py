@@ -5229,7 +5229,7 @@ async def test_preflight_redirect_targets_passes_expected_transport_settings(mon
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_continues_when_redirect_preflight_is_skipped(monkeypatch):
+async def test_web_fetch_rejects_when_redirect_preflight_request_errors(monkeypatch):
     calls = {"tavily": 0, "firecrawl": 0}
 
     async def fake_tavily(url):
@@ -5263,12 +5263,12 @@ async def test_web_fetch_continues_when_redirect_preflight_is_skipped(monkeypatc
 
     result = await server.web_fetch("https://public.example.com/start")
 
-    assert result == "# Tavily"
-    assert calls == {"tavily": 1, "firecrawl": 0}
+    assert result == "提取失败: 目标 URL 重定向预检失败"
+    assert calls == {"tavily": 0, "firecrawl": 0}
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_continues_when_redirect_preflight_times_out(monkeypatch):
+async def test_web_fetch_rejects_when_redirect_preflight_times_out(monkeypatch):
     calls = {"tavily": 0, "firecrawl": 0}
 
     async def fake_tavily(url):
@@ -5301,12 +5301,12 @@ async def test_web_fetch_continues_when_redirect_preflight_times_out(monkeypatch
 
     result = await server.web_fetch("https://public.example.com/start")
 
-    assert result == "# Tavily"
-    assert calls == {"tavily": 1, "firecrawl": 0}
+    assert result == "提取失败: 目标 URL 重定向预检超时"
+    assert calls == {"tavily": 0, "firecrawl": 0}
 
 
 @pytest.mark.asyncio
-async def test_web_map_continues_when_redirect_preflight_is_skipped(monkeypatch):
+async def test_web_map_rejects_when_redirect_preflight_request_errors(monkeypatch):
     calls = {"map": 0}
 
     async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
@@ -5335,12 +5335,12 @@ async def test_web_map_continues_when_redirect_preflight_is_skipped(monkeypatch)
 
     result = await server.web_map("https://public.example.com/start")
 
-    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
-    assert calls == {"map": 1}
+    assert result == "映射失败: 目标 URL 重定向预检失败"
+    assert calls == {"map": 0}
 
 
 @pytest.mark.asyncio
-async def test_web_map_continues_when_redirect_preflight_times_out(monkeypatch):
+async def test_web_map_rejects_when_redirect_preflight_times_out(monkeypatch):
     calls = {"map": 0}
 
     async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
@@ -5368,20 +5368,13 @@ async def test_web_map_continues_when_redirect_preflight_times_out(monkeypatch):
 
     result = await server.web_map("https://public.example.com/start")
 
-    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
-    assert calls == {"map": 1}
+    assert result == "映射失败: 目标 URL 重定向预检超时"
+    assert calls == {"map": 0}
 
 
 @pytest.mark.asyncio
-async def test_web_map_reports_skipped_preflight_progress_when_debug_enabled(monkeypatch):
-    messages = []
+async def test_web_fetch_does_not_emit_ctx_messages_when_preflight_blocks(monkeypatch):
     ctx = ProgressContext()
-
-    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
-        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
-
-    async def fake_log_info(ctx, message, is_debug=False):
-        messages.append((ctx, message, is_debug))
 
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
@@ -5397,108 +5390,18 @@ async def test_web_map_reports_skipped_preflight_progress_when_debug_enabled(mon
             request = httpx.Request("GET", url, headers=headers)
             raise httpx.RequestError("boom", request=request)
 
-    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(server, "log_info", fake_log_info)
     monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("TAVILY_ENABLED", "true")
-    monkeypatch.setenv("GROK_DEBUG", "true")
-    server.config.reset_runtime_state()
-
-    result = await server.web_map("https://public.example.com/start", ctx=ctx)
-
-    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
-    assert any(
-        context is ctx and is_debug and message.startswith("Redirect preflight skipped: ")
-        for context, message, is_debug in messages
-    )
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_reports_skipped_preflight_progress_when_debug_enabled(monkeypatch):
-    messages = []
-    ctx = ProgressContext()
-
-    async def fake_tavily(url):
-        return "# Tavily", None
-
-    async def fake_log_info(context, message, is_debug=False):
-        messages.append((context, message, is_debug))
-
-    class RedirectingAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url, headers=None):
-            request = httpx.Request("GET", url, headers=headers)
-            raise httpx.RequestError("boom", request=request)
-
-    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
-    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(server, "log_info", fake_log_info)
-    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
-    monkeypatch.setenv("GROK_DEBUG", "true")
-    server.config.reset_runtime_state()
 
     result = await server.web_fetch("https://public.example.com/start", ctx=ctx)
 
-    assert result == "# Tavily"
-    assert any(
-        context is ctx and is_debug and message.startswith("Redirect preflight skipped: ")
-        for context, message, is_debug in messages
-    )
+    assert result == "提取失败: 目标 URL 重定向预检失败"
+    assert ctx.messages == []
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_reports_skipped_preflight_warning_to_ctx_even_when_debug_disabled(monkeypatch):
+async def test_web_map_does_not_emit_ctx_messages_when_preflight_blocks(monkeypatch):
     ctx = ProgressContext()
-
-    async def fake_tavily(url):
-        return "# Tavily", None
-
-    class RedirectingAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url, headers=None):
-            request = httpx.Request("GET", url, headers=headers)
-            raise httpx.RequestError("boom", request=request)
-
-    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
-    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
-    monkeypatch.setenv("GROK_DEBUG", "false")
-    server.config.reset_runtime_state()
-
-    result = await server.web_fetch("https://public.example.com/start", ctx=ctx)
-
-    assert result == "# Tavily"
-    assert any(message.startswith("Warning: Redirect preflight skipped: ") for message in ctx.messages)
-
-
-@pytest.mark.asyncio
-async def test_web_map_reports_skipped_preflight_warning_to_ctx_even_when_debug_disabled(monkeypatch):
-    ctx = ProgressContext()
-
-    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
-        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
 
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
@@ -5513,85 +5416,13 @@ async def test_web_map_reports_skipped_preflight_warning_to_ctx_even_when_debug_
         async def get(self, url, headers=None):
             raise httpx.TimeoutException("slow")
 
-    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
     monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("TAVILY_ENABLED", "true")
-    monkeypatch.setenv("GROK_DEBUG", "false")
-    server.config.reset_runtime_state()
 
     result = await server.web_map("https://public.example.com/start", ctx=ctx)
 
-    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
-    assert any(message.startswith("Warning: Redirect preflight skipped: ") for message in ctx.messages)
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_keeps_success_payload_when_warning_ctx_delivery_fails(monkeypatch):
-    ctx = FailingProgressContext()
-
-    async def fake_tavily(url):
-        return "# Tavily", None
-
-    class RedirectingAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url, headers=None):
-            request = httpx.Request("GET", url, headers=headers)
-            raise httpx.RequestError("boom", request=request)
-
-    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
-    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
-    monkeypatch.setenv("GROK_DEBUG", "false")
-    server.config.reset_runtime_state()
-
-    result = await server.web_fetch("https://public.example.com/start", ctx=ctx)
-
-    assert result == "# Tavily"
-
-
-@pytest.mark.asyncio
-async def test_web_map_keeps_success_payload_when_warning_ctx_delivery_fails(monkeypatch):
-    ctx = FailingProgressContext()
-
-    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
-        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
-
-    class RedirectingAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url, headers=None):
-            raise httpx.TimeoutException("slow")
-
-    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
-    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("TAVILY_ENABLED", "true")
-    monkeypatch.setenv("GROK_DEBUG", "false")
-    server.config.reset_runtime_state()
-
-    result = await server.web_map("https://public.example.com/start", ctx=ctx)
-
-    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
+    assert result == "映射失败: 目标 URL 重定向预检超时"
+    assert ctx.messages == []
 
 
 @pytest.mark.asyncio
@@ -6010,6 +5841,32 @@ async def test_call_firecrawl_scrape_retries_empty_markdown_then_succeeds(monkey
         httpx,
         "AsyncClient",
         lambda *args, **kwargs: StubAsyncClient(responses, {}, *args, **kwargs),
+    )
+
+    content, error = await server._call_firecrawl_scrape("https://example.com")
+
+    assert error is None
+    assert content == "# recovered"
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_scrape_retries_request_error_then_succeeds(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    request = httpx.Request("POST", "https://api.firecrawl.dev/v2/scrape")
+    responses = {
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): [
+            httpx.Response(200, json={"data": {"markdown": "# recovered"}}),
+        ],
+    }
+    exceptions = {
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): [
+            httpx.RequestError("boom", request=request),
+        ],
+    }
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: StubAsyncClient(responses, exceptions, *args, **kwargs),
     )
 
     content, error = await server._call_firecrawl_scrape("https://example.com")
