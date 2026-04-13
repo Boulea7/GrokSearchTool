@@ -83,7 +83,7 @@ def patch_async_client(monkeypatch, responses=None, exceptions=None):
 
 
 async def load_config_info():
-    return json.loads(await server.get_config_info())
+    return await server.get_config_info()
 
 
 def doctor_checks(payload):
@@ -139,7 +139,7 @@ async def test_get_config_info_default_detail_keeps_full_payload(monkeypatch):
     }
     patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
+    payload = await server.get_config_info()
 
     assert "connection_test" in payload
     assert "feature_readiness" in payload
@@ -173,7 +173,7 @@ async def test_get_config_info_summary_detail_returns_machine_readable_minimum(m
     }
     patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info("summary"))
+    payload = await server.get_config_info("summary")
 
     assert "connection_test" in payload
     assert "feature_readiness" in payload
@@ -218,11 +218,11 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
     }
     patch_async_client(monkeypatch, responses)
 
-    default_payload = json.loads(await server.get_config_info())
+    default_payload = await server.get_config_info()
     patch_async_client(monkeypatch, responses)
-    explicit_full_payload = json.loads(await server.get_config_info(" Full "))
+    explicit_full_payload = await server.get_config_info(" Full ")
     patch_async_client(monkeypatch, responses)
-    summary_payload = json.loads(await server.get_config_info(" Summary "))
+    summary_payload = await server.get_config_info(" Summary ")
 
     assert set(default_payload) == set(explicit_full_payload)
     assert strip_response_times(default_payload) == strip_response_times(explicit_full_payload)
@@ -308,7 +308,7 @@ async def test_get_config_info_summary_includes_all_base_snapshot_keys(monkeypat
     monkeypatch.setattr(server.config, "get_config_info", wrapped_get_config_info)
     patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info("summary"))
+    payload = await server.get_config_info("summary")
 
     assert payload["EXPERIMENTAL_FLAG"] == "enabled"
 
@@ -408,7 +408,7 @@ async def test_get_config_info_summary_and_full_run_the_same_probe_set(monkeypat
 
 @pytest.mark.asyncio
 async def test_get_config_info_rejects_unknown_detail_mode():
-    payload = json.loads(await server.get_config_info("verbose"))
+    payload = await server.get_config_info("verbose")
 
     assert payload["error"] == "invalid_detail"
     assert "detail" in payload["message"]
@@ -1649,7 +1649,7 @@ async def test_get_config_info_summary_exposes_runtime_override_machine_fields(m
     }
     patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info("summary"))
+    payload = await server.get_config_info("summary")
     web_search = payload["feature_readiness"]["web_search"]
 
     assert web_search["status"] == "degraded"

@@ -6,6 +6,10 @@ from grok_search import planning
 from grok_search import server
 
 
+def as_payload(value):
+    return value if isinstance(value, dict) else json.loads(value)
+
+
 @pytest.fixture(autouse=True)
 def reset_planning_state():
     planning.engine.reset()
@@ -15,7 +19,7 @@ def reset_planning_state():
 
 @pytest.mark.asyncio
 async def test_legacy_plan_flow_level_1_still_completes_after_sub_query():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Simple factual lookup.",
             core_question="What is OpenAI?",
@@ -25,7 +29,7 @@ async def test_legacy_plan_flow_level_1_still_completes_after_sub_query():
     )
     session_id = intent["session_id"]
 
-    complexity = json.loads(
+    complexity = as_payload(
         await server.plan_complexity(
             session_id=session_id,
             thought="Low complexity.",
@@ -37,7 +41,7 @@ async def test_legacy_plan_flow_level_1_still_completes_after_sub_query():
     )
     assert complexity["plan_complete"] is False
 
-    decomposition = json.loads(
+    decomposition = as_payload(
         await server.plan_sub_query(
             session_id=session_id,
             thought="One sub-query is enough.",
@@ -54,7 +58,7 @@ async def test_legacy_plan_flow_level_1_still_completes_after_sub_query():
 
 @pytest.mark.asyncio
 async def test_missing_session_returns_structured_error():
-    result = json.loads(
+    result = as_payload(
         await server.plan_complexity(
             session_id="",
             thought="Missing session.",
@@ -72,7 +76,7 @@ async def test_missing_session_returns_structured_error():
 
 @pytest.mark.asyncio
 async def test_out_of_order_phase_returns_error():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Resolve an ambiguous query.",
@@ -81,7 +85,7 @@ async def test_out_of_order_phase_returns_error():
         )
     )
 
-    wrong = json.loads(
+    wrong = as_payload(
         await server.plan_sub_query(
             session_id=intent["session_id"],
             thought="Skip complexity on purpose.",
@@ -99,7 +103,7 @@ async def test_out_of_order_phase_returns_error():
 
 @pytest.mark.asyncio
 async def test_revision_cannot_create_later_phase_out_of_order():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Resolve an ambiguous query.",
@@ -108,7 +112,7 @@ async def test_revision_cannot_create_later_phase_out_of_order():
         )
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_execution(
             session_id=intent["session_id"],
             thought="Try to bypass ordering with a revision.",
@@ -124,7 +128,7 @@ async def test_revision_cannot_create_later_phase_out_of_order():
 
 @pytest.mark.asyncio
 async def test_plan_intent_revision_rejects_existing_downstream_phases():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -143,7 +147,7 @@ async def test_plan_intent_revision_rejects_existing_downstream_phases():
         justification="Need downstream phases to exist.",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_intent(
             session_id=session_id,
             thought="Intent revision should fail once downstream exists.",
@@ -161,7 +165,7 @@ async def test_plan_intent_revision_rejects_existing_downstream_phases():
 
 @pytest.mark.asyncio
 async def test_plan_intent_revision_requires_existing_session():
-    result = json.loads(
+    result = as_payload(
         await server.plan_intent(
             session_id="missing-session",
             thought="Revision against a missing session should fail.",
@@ -178,7 +182,7 @@ async def test_plan_intent_revision_requires_existing_session():
 
 @pytest.mark.asyncio
 async def test_plan_intent_revision_rejects_empty_session_id():
-    result = json.loads(
+    result = as_payload(
         await server.plan_intent(
             session_id="",
             thought="Empty revision session should fail.",
@@ -195,7 +199,7 @@ async def test_plan_intent_revision_rejects_empty_session_id():
 
 @pytest.mark.asyncio
 async def test_plan_complexity_revision_rejects_existing_downstream_phases():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -224,7 +228,7 @@ async def test_plan_complexity_revision_rejects_existing_downstream_phases():
         tool_hint="web_search",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_complexity(
             session_id=session_id,
             thought="Complexity revision should fail once downstream exists.",
@@ -243,7 +247,7 @@ async def test_plan_complexity_revision_rejects_existing_downstream_phases():
 
 @pytest.mark.asyncio
 async def test_plan_complexity_rejects_implicit_overwrite_when_downstream_phases_exist():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -271,7 +275,7 @@ async def test_plan_complexity_rejects_implicit_overwrite_when_downstream_phases
         tool_hint="web_search",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_complexity(
             session_id=session_id,
             thought="Implicit overwrite should fail.",
@@ -289,7 +293,7 @@ async def test_plan_complexity_rejects_implicit_overwrite_when_downstream_phases
 
 @pytest.mark.asyncio
 async def test_level_1_blocks_later_phases():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Simple factual lookup.",
             core_question="What is OpenAI?",
@@ -318,7 +322,7 @@ async def test_level_1_blocks_later_phases():
         tool_hint="web_search",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_search_term(
             session_id=session_id,
             thought="This should be blocked for level 1.",
@@ -334,7 +338,7 @@ async def test_level_1_blocks_later_phases():
 
 @pytest.mark.asyncio
 async def test_level_2_plan_success_returns_complete_executable_plan():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -395,7 +399,7 @@ async def test_level_2_plan_success_returns_complete_executable_plan():
         tool="web_search",
         reason="Need pricing facts.",
     )
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Map compatibility.",
@@ -423,7 +427,7 @@ async def test_level_2_plan_success_returns_complete_executable_plan():
 
 @pytest.mark.asyncio
 async def test_level_2_blocks_execution_phase_after_tool_selection():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -466,7 +470,7 @@ async def test_level_2_blocks_execution_phase_after_tool_selection():
         reason="Need direct comparison facts.",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_execution(
             session_id=session_id,
             thought="Execution should be blocked for level 2.",
@@ -481,7 +485,7 @@ async def test_level_2_blocks_execution_phase_after_tool_selection():
 
 @pytest.mark.asyncio
 async def test_first_search_term_requires_approach():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Moderate lookup.",
             core_question="Compare Grok and Tavily.",
@@ -510,7 +514,7 @@ async def test_first_search_term_requires_approach():
         tool_hint="web_search",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_search_term(
             session_id=session_id,
             thought="Missing approach on first term.",
@@ -525,7 +529,7 @@ async def test_first_search_term_requires_approach():
 
 @pytest.mark.asyncio
 async def test_plan_tool_mapping_rejects_invalid_tool():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Moderate lookup.",
             core_question="Compare providers.",
@@ -563,7 +567,7 @@ async def test_plan_tool_mapping_rejects_invalid_tool():
         approach="targeted",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Use an invalid tool.",
@@ -578,7 +582,7 @@ async def test_plan_tool_mapping_rejects_invalid_tool():
 
 @pytest.mark.asyncio
 async def test_plan_search_term_rejects_more_than_eight_words():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Moderate lookup.",
             core_question="Compare providers.",
@@ -607,7 +611,7 @@ async def test_plan_search_term_rejects_more_than_eight_words():
         tool_hint="web_search",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_search_term(
             session_id=session_id,
             thought="Too many words.",
@@ -623,7 +627,7 @@ async def test_plan_search_term_rejects_more_than_eight_words():
 
 @pytest.mark.asyncio
 async def test_plan_search_term_rejects_multiple_sub_query_purposes():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Moderate lookup.",
             core_question="Compare providers.",
@@ -652,7 +656,7 @@ async def test_plan_search_term_rejects_multiple_sub_query_purposes():
         tool_hint="web_search",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_search_term(
             session_id=session_id,
             thought="Multiple purposes are invalid.",
@@ -668,7 +672,7 @@ async def test_plan_search_term_rejects_multiple_sub_query_purposes():
 
 @pytest.mark.asyncio
 async def test_plan_search_term_append_preserves_existing_strategy_metadata():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Moderate lookup.",
             core_question="Compare providers.",
@@ -741,7 +745,7 @@ async def test_plan_search_term_append_preserves_existing_strategy_metadata():
 
 @pytest.mark.asyncio
 async def test_plan_search_term_revision_replaces_strategy_metadata():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Moderate lookup.",
             core_question="Compare providers.",
@@ -803,7 +807,7 @@ async def test_plan_search_term_revision_replaces_strategy_metadata():
 
 @pytest.mark.asyncio
 async def test_plan_tool_mapping_rejects_invalid_params_json():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Moderate lookup.",
             core_question="Compare providers.",
@@ -841,7 +845,7 @@ async def test_plan_tool_mapping_rejects_invalid_params_json():
         approach="targeted",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Invalid params_json should fail.",
@@ -857,7 +861,7 @@ async def test_plan_tool_mapping_rejects_invalid_params_json():
 
 @pytest.mark.asyncio
 async def test_plan_tool_mapping_rejects_non_object_params_json_with_stable_field_name():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Moderate lookup.",
             core_question="Compare providers.",
@@ -895,7 +899,7 @@ async def test_plan_tool_mapping_rejects_non_object_params_json_with_stable_fiel
         approach="targeted",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Non-object params_json should fail.",
@@ -914,7 +918,7 @@ async def test_plan_tool_mapping_rejects_non_object_params_json_with_stable_fiel
 
 @pytest.mark.asyncio
 async def test_plan_tool_mapping_treats_null_params_json_as_missing_params():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Moderate lookup.",
             core_question="Compare providers.",
@@ -952,7 +956,7 @@ async def test_plan_tool_mapping_treats_null_params_json_as_missing_params():
         approach="targeted",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Null params_json should be treated as missing.",
@@ -975,7 +979,7 @@ async def test_plan_tool_mapping_treats_null_params_json_as_missing_params():
 
 @pytest.mark.asyncio
 async def test_plan_sub_query_rejects_duplicate_ids():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -1004,7 +1008,7 @@ async def test_plan_sub_query_rejects_duplicate_ids():
         tool_hint="web_search",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_sub_query(
             session_id=session_id,
             thought="Duplicate sub-query id should fail.",
@@ -1021,7 +1025,7 @@ async def test_plan_sub_query_rejects_duplicate_ids():
 
 @pytest.mark.asyncio
 async def test_plan_sub_query_rejects_invalid_tool_hint():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -1040,7 +1044,7 @@ async def test_plan_sub_query_rejects_invalid_tool_hint():
         justification="Need a valid sub-query tool hint.",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_sub_query(
             session_id=session_id,
             thought="Invalid tool hint should fail.",
@@ -1057,7 +1061,7 @@ async def test_plan_sub_query_rejects_invalid_tool_hint():
 
 @pytest.mark.asyncio
 async def test_plan_sub_query_rejects_unknown_dependency():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -1076,7 +1080,7 @@ async def test_plan_sub_query_rejects_unknown_dependency():
         justification="Need multiple sub-queries.",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_sub_query(
             session_id=session_id,
             thought="Unknown dependency should fail.",
@@ -1094,8 +1098,45 @@ async def test_plan_sub_query_rejects_unknown_dependency():
 
 
 @pytest.mark.asyncio
+async def test_plan_sub_query_rejects_boundary_without_explicit_exclusion_language():
+    intent = as_payload(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need decomposition.",
+        level=2,
+        estimated_sub_queries=1,
+        estimated_tool_calls=3,
+        justification="Need boundary validation.",
+    )
+
+    result = as_payload(
+        await server.plan_sub_query(
+            session_id=session_id,
+            thought="Boundary is too vague.",
+            id="sq1",
+            goal="Inspect provider docs.",
+            expected_output="A concise docs summary.",
+            boundary="Focus on provider docs and runtime behavior.",
+            tool_hint="web_search",
+        )
+    )
+
+    assert result["error"] == "validation_error"
+    assert result["details"][0]["field"] == "boundary"
+
+
+@pytest.mark.asyncio
 async def test_plan_search_term_rejects_unknown_sub_query_reference():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -1124,7 +1165,7 @@ async def test_plan_search_term_rejects_unknown_sub_query_reference():
         tool_hint="web_search",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_search_term(
             session_id=session_id,
             thought="Unknown purpose should fail.",
@@ -1141,7 +1182,7 @@ async def test_plan_search_term_rejects_unknown_sub_query_reference():
 
 @pytest.mark.asyncio
 async def test_planning_normalizes_whitespace_padded_ids_across_later_phases():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers deeply.",
@@ -1211,7 +1252,7 @@ async def test_planning_normalizes_whitespace_padded_ids_across_later_phases():
         reason="Need comparison facts.",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_execution(
             session_id=session_id,
             thought="Schedule baseline first, comparison second.",
@@ -1238,7 +1279,7 @@ async def test_planning_normalizes_whitespace_padded_ids_across_later_phases():
 
 @pytest.mark.asyncio
 async def test_plan_tool_mapping_rejects_unknown_sub_query_reference():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -1276,7 +1317,7 @@ async def test_plan_tool_mapping_rejects_unknown_sub_query_reference():
         approach="targeted",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Unknown mapping target should fail.",
@@ -1292,7 +1333,7 @@ async def test_plan_tool_mapping_rejects_unknown_sub_query_reference():
 
 @pytest.mark.asyncio
 async def test_plan_execution_rejects_unknown_or_repeated_ids_and_dependency_order():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers deeply.",
@@ -1365,7 +1406,7 @@ async def test_plan_execution_rejects_unknown_or_repeated_ids_and_dependency_ord
         reason="Need comparison facts.",
     )
 
-    unknown = json.loads(
+    unknown = as_payload(
         await server.plan_execution(
             session_id=session_id,
             thought="Unknown ID should fail.",
@@ -1377,7 +1418,7 @@ async def test_plan_execution_rejects_unknown_or_repeated_ids_and_dependency_ord
     assert unknown["error"] == "validation_error"
     assert "unknown sub-query id" in unknown["message"].lower()
 
-    repeated = json.loads(
+    repeated = as_payload(
         await server.plan_execution(
             session_id=session_id,
             thought="Repeated ID should fail.",
@@ -1389,7 +1430,7 @@ async def test_plan_execution_rejects_unknown_or_repeated_ids_and_dependency_ord
     assert repeated["error"] == "validation_error"
     assert "duplicate execution id" in repeated["message"].lower()
 
-    dependency = json.loads(
+    dependency = as_payload(
         await server.plan_execution(
             session_id=session_id,
             thought="Dependency order should fail.",
@@ -1404,7 +1445,7 @@ async def test_plan_execution_rejects_unknown_or_repeated_ids_and_dependency_ord
 
 @pytest.mark.asyncio
 async def test_plan_sub_query_revision_rejects_dangling_downstream_references():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -1442,7 +1483,7 @@ async def test_plan_sub_query_revision_rejects_dangling_downstream_references():
         approach="targeted",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_sub_query(
             session_id=session_id,
             thought="Revision should fail after downstream phases exist.",
@@ -1461,7 +1502,7 @@ async def test_plan_sub_query_revision_rejects_dangling_downstream_references():
 
 @pytest.mark.asyncio
 async def test_plan_execution_requires_all_sub_queries_to_be_scheduled():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers deeply.",
@@ -1534,7 +1575,7 @@ async def test_plan_execution_requires_all_sub_queries_to_be_scheduled():
         reason="Need comparison facts.",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_execution(
             session_id=session_id,
             thought="Missing sq1 should fail.",
@@ -1550,7 +1591,7 @@ async def test_plan_execution_requires_all_sub_queries_to_be_scheduled():
 
 @pytest.mark.asyncio
 async def test_level_3_plan_flow_completes_with_execution_order_in_executable_plan():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers deeply.",
@@ -1623,7 +1664,7 @@ async def test_level_3_plan_flow_completes_with_execution_order_in_executable_pl
         reason="Need comparison facts.",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_execution(
             session_id=session_id,
             thought="Schedule baseline first, comparison second.",
@@ -1644,7 +1685,7 @@ async def test_level_3_plan_flow_completes_with_execution_order_in_executable_pl
 
 @pytest.mark.asyncio
 async def test_level_2_plan_does_not_complete_until_all_sub_queries_are_mapped():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers deeply.",
@@ -1698,7 +1739,7 @@ async def test_level_2_plan_does_not_complete_until_all_sub_queries_are_mapped()
         round=2,
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Only map one sub-query first.",
@@ -1714,7 +1755,7 @@ async def test_level_2_plan_does_not_complete_until_all_sub_queries_are_mapped()
 
 @pytest.mark.asyncio
 async def test_plan_execution_rejects_incomplete_tool_mapping_coverage():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers deeply.",
@@ -1776,7 +1817,7 @@ async def test_plan_execution_rejects_incomplete_tool_mapping_coverage():
         reason="Need baseline facts.",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_execution(
             session_id=session_id,
             thought="Execution should fail before all sub-queries are mapped.",
@@ -1792,7 +1833,7 @@ async def test_plan_execution_rejects_incomplete_tool_mapping_coverage():
 
 @pytest.mark.asyncio
 async def test_plan_search_term_rejects_mutation_after_execution_order_exists():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers deeply.",
@@ -1842,7 +1883,7 @@ async def test_plan_search_term_rejects_mutation_after_execution_order_exists():
         estimated_rounds=1,
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_search_term(
             session_id=session_id,
             thought="Mutation after downstream planning should fail.",
@@ -1860,7 +1901,7 @@ async def test_plan_search_term_rejects_mutation_after_execution_order_exists():
 
 @pytest.mark.asyncio
 async def test_plan_execution_rejects_implicit_overwrite_without_revision():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers deeply.",
@@ -1910,7 +1951,7 @@ async def test_plan_execution_rejects_implicit_overwrite_without_revision():
         estimated_rounds=1,
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_execution(
             session_id=session_id,
             thought="Implicit overwrite should fail.",
@@ -1927,7 +1968,7 @@ async def test_plan_execution_rejects_implicit_overwrite_without_revision():
 
 @pytest.mark.asyncio
 async def test_plan_sub_query_rejects_self_dependency():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -1946,7 +1987,7 @@ async def test_plan_sub_query_rejects_self_dependency():
         justification="Need dependency validation.",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_sub_query(
             session_id=session_id,
             thought="Self dependency should fail.",
@@ -1965,7 +2006,7 @@ async def test_plan_sub_query_rejects_self_dependency():
 
 @pytest.mark.asyncio
 async def test_plan_sub_query_rejects_duplicate_dependencies():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -1994,7 +2035,7 @@ async def test_plan_sub_query_rejects_duplicate_dependencies():
         tool_hint="web_search",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_sub_query(
             session_id=session_id,
             thought="Duplicate dependency should fail.",
@@ -2013,7 +2054,7 @@ async def test_plan_sub_query_rejects_duplicate_dependencies():
 
 @pytest.mark.asyncio
 async def test_plan_tool_mapping_invalid_params_json_uses_standard_details_shape():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -2051,7 +2092,7 @@ async def test_plan_tool_mapping_invalid_params_json_uses_standard_details_shape
         approach="targeted",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Invalid params JSON should fail.",
@@ -2069,7 +2110,7 @@ async def test_plan_tool_mapping_invalid_params_json_uses_standard_details_shape
 
 @pytest.mark.asyncio
 async def test_plan_tool_mapping_preserves_valid_object_params_in_executable_plan():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -2107,7 +2148,7 @@ async def test_plan_tool_mapping_preserves_valid_object_params_in_executable_pla
         approach="targeted",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Valid object params should be preserved.",
@@ -2131,7 +2172,7 @@ async def test_plan_tool_mapping_preserves_valid_object_params_in_executable_pla
 
 @pytest.mark.asyncio
 async def test_plan_tool_mapping_rejects_duplicate_mapping_for_same_sub_query():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -2177,7 +2218,7 @@ async def test_plan_tool_mapping_rejects_duplicate_mapping_for_same_sub_query():
         reason="Need baseline facts.",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Second mapping for same sub-query should fail.",
@@ -2838,7 +2879,7 @@ def test_planning_engine_refreshes_lru_order_on_session_access():
 
 @pytest.mark.asyncio
 async def test_plan_sub_query_revision_rejects_dependencies_on_removed_ids():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers.",
@@ -2867,7 +2908,7 @@ async def test_plan_sub_query_revision_rejects_dependencies_on_removed_ids():
         tool_hint="web_search",
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_sub_query(
             session_id=session_id,
             thought="Revision should not keep dependencies on removed ids.",
@@ -2887,7 +2928,7 @@ async def test_plan_sub_query_revision_rejects_dependencies_on_removed_ids():
 
 @pytest.mark.asyncio
 async def test_plan_tool_mapping_revision_rejects_existing_execution_order():
-    intent = json.loads(
+    intent = as_payload(
         await server.plan_intent(
             thought="Start planning.",
             core_question="Compare providers deeply.",
@@ -2941,7 +2982,7 @@ async def test_plan_tool_mapping_revision_rejects_existing_execution_order():
         estimated_rounds=1,
     )
 
-    result = json.loads(
+    result = as_payload(
         await server.plan_tool_mapping(
             session_id=session_id,
             thought="Revision should fail after execution order exists.",
