@@ -76,9 +76,14 @@ _NOISY_EVIDENCE_MARKERS = (
     "español",
     "privacy policy",
     "cookie policy",
+    "we use essential cookies",
+    "performance cookies",
+    "anonymous statistics",
     "integrated platform for monitoring",
     "visibility into your stack",
     "observability end-to-end",
+    "following, you can find topics about troubleshooting issues",
+    "these topics can help you to resolve common issues",
 )
 _PREFERRED_TECHNICAL_TERMS = (
     "checkpoint",

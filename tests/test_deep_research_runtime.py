@@ -2049,6 +2049,100 @@ async def test_noisy_marketing_fetch_is_filtered_and_official_docs_rank_first(mo
 
 
 @pytest.mark.asyncio
+async def test_cookie_banner_text_is_filtered_from_summary_and_final_report(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume and restart in AWS DMS have distinct semantics.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                    "title": "Creating tasks for ongoing replication using AWS DMS",
+                    "description": "We use essential cookies and similar tools that are necessary to provide our site and services.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return (
+            "# Creating tasks for ongoing replication using AWS DMS\n\n"
+            "We use essential cookies and similar tools that are necessary to provide our site and services.\n"
+            "We use performance cookies to collect anonymous statistics.\n"
+            "Resume continues from the last recovery checkpoint when source logs remain available.\n"
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="cookie banner filter probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert "We use essential cookies" not in result["report"]["summary"]
+    assert "performance cookies" not in result["report"]["summary"]
+    assert "We use essential cookies" not in result["final_report"]
+    assert "performance cookies" not in result["final_report"]
+    assert "Resume continues from the last recovery checkpoint" in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_troubleshooting_shell_text_is_filtered_from_summary_and_final_report(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume and restart in AWS DMS have distinct semantics.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Troubleshooting.html",
+                    "title": "Troubleshooting migration tasks in AWS Database Migration Service",
+                    "description": "Following, you can find topics about troubleshooting issues with AWS Database Migration Service (AWS DMS).",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return (
+            "# Troubleshooting migration tasks in AWS Database Migration Service\n\n"
+            "Following, you can find topics about troubleshooting issues with AWS Database Migration Service (AWS DMS).\n"
+            "These topics can help you to resolve common issues using both AWS DMS and selected endpoint databases.\n"
+            "Resume-processing continues from the last checkpoint for previously executed tasks.\n"
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="troubleshooting shell filter probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert "Following, you can find topics about troubleshooting issues" not in result["report"]["summary"]
+    assert "These topics can help you to resolve common issues" not in result["report"]["summary"]
+    assert "Following, you can find topics about troubleshooting issues" not in result["final_report"]
+    assert "These topics can help you to resolve common issues" not in result["final_report"]
+    assert "Resume-processing continues from the last checkpoint" in result["final_report"]
+
+
+@pytest.mark.asyncio
 async def test_reused_job_payload_tolerates_invalid_plan_json(tmp_path):
     runtime = build_runtime(tmp_path)
     fingerprint = runtime._request_fingerprint(
