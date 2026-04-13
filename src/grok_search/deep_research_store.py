@@ -384,6 +384,43 @@ class DeepResearchStore:
             metadata=metadata or {},
         )
 
+    def upsert_artifact_batch(
+        self,
+        job_id: str,
+        *,
+        artifacts: list[dict[str, Any]],
+    ) -> list[DeepResearchArtifact]:
+        existing_by_kind = {artifact.kind: artifact for artifact in self.list_artifacts(job_id)}
+        now = utc_now_iso()
+        persisted: list[DeepResearchArtifact] = []
+        with self._connect() as connection:
+            for item in artifacts:
+                kind = str(item["kind"])
+                path = str(item["path"])
+                content_type = str(item["content_type"])
+                metadata = dict(item.get("metadata") or {})
+                created_at = existing_by_kind[kind].created_at if kind in existing_by_kind else now
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO job_artifacts (
+                        job_id, kind, path, content_type, created_at, updated_at, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (job_id, kind, path, content_type, created_at, now, _json_dumps(metadata)),
+                )
+                persisted.append(
+                    DeepResearchArtifact(
+                        job_id=job_id,
+                        kind=kind,
+                        path=path,
+                        content_type=content_type,
+                        created_at=created_at,
+                        updated_at=now,
+                        metadata=metadata,
+                    )
+                )
+        return persisted
+
     def list_artifacts(self, job_id: str) -> list[DeepResearchArtifact]:
         with self._connect() as connection:
             rows = connection.execute(
