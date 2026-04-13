@@ -949,6 +949,179 @@ async def test_continuation_plan_repairs_duplicate_sub_questions_and_generic_out
 
 
 @pytest.mark.asyncio
+async def test_selective_fetch_prefers_official_docs_over_community_pages(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fetched_urls = []
+
+    async def fake_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "checkpoint-docs",
+                "title": "Checkpoint Docs",
+                "goal": "Use official runtime checkpoint documentation.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Checkpoint search",
+                "goal": "Find checkpoint runtime documentation.",
+                "query": "checkpoint runtime docs",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["checkpoint runtime docs"],
+            "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+        }
+        return payload
+
+    async def fake_search(query):
+        return (
+            "Checkpoint runtime docs comparison.",
+            [
+                {
+                    "url": "https://stackoverflow.com/questions/123/checkpoint-runtime",
+                    "title": "Official checkpoint runtime docs guide",
+                    "description": "A community discussion.",
+                },
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime guide",
+                    "description": "Official documentation.",
+                },
+            ],
+        )
+
+    async def fake_fetch(url):
+        fetched_urls.append(url)
+        return "# Fetched\n\nUseful fetched content."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", fake_planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", fake_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fake_fetch)
+
+    response = await runtime.start(query="Prefer official docs", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+
+    assert fetched_urls == ["https://docs.example.com/runtime/checkpoints"]
+
+
+@pytest.mark.asyncio
+async def test_noisy_fetched_shell_text_does_not_enter_final_report(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def fake_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def fake_search(query):
+        return (
+            "Checkpoint resume is the main finding.",
+            [
+                {
+                    "url": "https://stackoverflow.com/questions/123/checkpoint-runtime",
+                    "title": "Checkpoint runtime docs question",
+                    "description": "Community discussion.",
+                }
+            ],
+        )
+
+    async def noisy_fetch(url):
+        return """### current community
+
+### your communities
+
+Communities for your favorite technologies.
+Stack Overflow for Teams is now called Stack Internal.
+Sign up or log in.
+
+# AWS DMS difference between resume and restart
+Resume continues from the last checkpoint.
+"""
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", fake_planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", fake_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", noisy_fetch)
+
+    response = await runtime.start(query="Filter noisy fetch shell", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert "Communities for your favorite technologies" not in result["final_report"]
+    assert "Stack Overflow for Teams is now called" not in result["final_report"]
+    assert "Resume continues from the last checkpoint" in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_map_units_skip_placeholder_claims_when_empty(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def fake_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "runtime-evidence",
+                "title": "Runtime Evidence",
+                "goal": "Collect concrete runtime evidence.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-fetch-1",
+                "unit_type": "fetch",
+                "title": "Fetch docs page",
+                "goal": "Fetch a docs page.",
+                "url": "https://docs.example.com/runtime",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-map-1",
+                "unit_type": "map",
+                "title": "Map docs section",
+                "goal": "Map docs pages.",
+                "url": "https://docs.example.com",
+                "instructions": "Only docs pages.",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": [],
+            "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": True},
+        }
+        return payload
+
+    async def empty_fetch(url):
+        return None
+
+    async def empty_map(url, instructions=""):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", fake_planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", empty_fetch)
+    monkeypatch.setattr("grok_search.deep_research_runtime._map_url", empty_map)
+
+    response = await runtime.start(query="Empty fetch/map handling", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert "No content fetched." not in result["final_report"]
+    assert "No site map returned." not in result["final_report"]
+
+
+@pytest.mark.asyncio
 async def test_run_job_executes_independent_units_concurrently(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     started = []

@@ -83,6 +83,14 @@ _PREFERRED_TECHNICAL_TERMS = (
     "continuation",
     "state",
 )
+_COMMUNITY_SOURCE_DOMAINS = {
+    "stackoverflow.com",
+    "stackexchange.com",
+    "reddit.com",
+    "news.ycombinator.com",
+    "dev.to",
+    "medium.com",
+}
 
 
 def _json_markdown_block(data: Any) -> str:
@@ -429,6 +437,23 @@ def _build_carry_forward_evidence(
                 ).model_dump()
             )
     return evidence_items
+
+
+def _source_quality_bias(source: dict[str, Any]) -> int:
+    url = str(source.get("url", "")).lower()
+    domain = str(source.get("domain", "") or "").lower()
+    if not domain and "://" in url:
+        try:
+            domain = urlsplit(url).netloc.lower()
+        except Exception:
+            domain = ""
+
+    if url.startswith("https://docs.") or url.startswith("http://docs.") or domain.startswith("docs.") or "/docs/" in url or "/documentation/" in url:
+        return 3
+    for community in _COMMUNITY_SOURCE_DOMAINS:
+        if community in url or domain == community or domain.endswith(f".{community}"):
+            return -2
+    return 0
 
 
 class DeepResearchRuntime:
@@ -1477,7 +1502,13 @@ async def _execute_research_unit(
 ) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
     if unit.unit_type == "fetch":
         fetched = await _fetch_url(unit.url)
-        detail = fetched or "No content fetched."
+        if not fetched:
+            return (
+                {"summary": "", "detail": ""},
+                [],
+                [],
+            )
+        detail = fetched
         source = {"url": unit.url, "title": unit.title}
         return (
             {"summary": _summarize_evidence_text(detail, limit=180), "detail": detail},
@@ -1494,7 +1525,13 @@ async def _execute_research_unit(
 
     if unit.unit_type == "map":
         mapped = await _map_url(unit.url, unit.instructions)
-        detail = mapped or "No site map returned."
+        if not mapped:
+            return (
+                {"summary": "", "detail": ""},
+                [],
+                [],
+            )
+        detail = mapped
         return (
             {"summary": _summarize_evidence_text(detail, limit=180), "detail": detail},
             [{"url": unit.url, "title": unit.title}],
@@ -1578,6 +1615,7 @@ def _select_fetch_sources(
     def score(source: dict[str, Any]) -> tuple[int, int, str]:
         title = f"{source.get('title', '')} {source.get('description', '')}"
         return (
+            _source_quality_bias(source),
             _count_keyword_overlap(title, outline_keywords),
             _count_keyword_overlap(title, query_keywords),
             source.get("url", ""),
