@@ -344,6 +344,45 @@ def _source_sort_tuple(item: dict[str, Any]) -> tuple:
     )
 
 
+def _source_quality_score(item: dict[str, Any]) -> int:
+    score = 0
+    score += _source_quality_bias(item) * 10
+    if item.get("title"):
+        score += 4
+    if item.get("snippet"):
+        score += 4
+    if item.get("description"):
+        score += 2
+    if item.get("contributors"):
+        score += 1
+    if item.get("provider"):
+        score += 1
+    return score
+
+
+def _source_quality_tier(item: dict[str, Any]) -> str:
+    bias = _source_quality_bias(item)
+    if bias >= 3:
+        return "official"
+    if bias >= 1:
+        return "high_signal"
+    if bias <= -2:
+        return "community"
+    return "standard"
+
+
+def _preferred_citation_ids(source_ids: list[str], source_registry: list[dict[str, Any]], *, limit: int = 3) -> list[str]:
+    if not source_ids:
+        return []
+    registry_by_id = {item.get("source_id"): item for item in source_registry if item.get("source_id")}
+    ranked = sorted(
+        [registry_by_id[source_id] for source_id in source_ids if source_id in registry_by_id],
+        key=_source_sort_tuple,
+    )
+    narrowed = [item["source_id"] for item in ranked[:limit]]
+    return narrowed or source_ids[:limit]
+
+
 def _merge_source_metadata(existing: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     merged = dict(existing)
     for key, value in candidate.items():
@@ -1115,6 +1154,23 @@ class DeepResearchRuntime:
                     "notes": item.get("notes", ""),
                 }
             )
+        deduped_units: list[dict[str, Any]] = []
+        seen_unit_keys: set[tuple[str, str, str, str]] = set()
+        for index, unit in enumerate(normalized_units, start=1):
+            unit_key = (
+                unit["unit_type"],
+                _normalize_whitespace(unit.get("query", "")).lower(),
+                _normalize_whitespace(unit.get("url", "")).lower(),
+                _normalize_whitespace(unit.get("instructions", "")).lower(),
+            )
+            if unit_key in seen_unit_keys:
+                validation_issues.append("duplicate_research_units")
+                continue
+            seen_unit_keys.add(unit_key)
+            if continuation.mode == "continue" and re.match(r"^(search|research query)\b", unit["title"].lower()):
+                unit["title"] = f"Follow-up {unit['unit_type']} {index}"
+            deduped_units.append(unit)
+        normalized_units = deduped_units or normalized_units
 
         normalized_outline: list[dict[str, Any]] = []
         for index, item in enumerate(report_outline, start=1):
@@ -1520,16 +1576,20 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 continue
             unit_result, new_sources, new_evidence = batch_result
             source_registry, source_ids = _merge_source_registry(source_registry, new_sources)
+            preferred_citations = _preferred_citation_ids(source_ids, source_registry)
             for evidence in new_evidence:
-                evidence["source_ids"] = [source_id for source_id in evidence.get("source_ids", []) if source_id in source_ids] or source_ids
+                narrowed_source_ids = [
+                    source_id for source_id in evidence.get("source_ids", []) if source_id in source_ids
+                ]
+                evidence["source_ids"] = narrowed_source_ids or preferred_citations
             completed_unit_ids.append(unit.unit_id)
             unit_results[unit.unit_id] = {
                 "unit_id": unit.unit_id,
                 "unit_type": unit.unit_type,
                 "summary": unit_result["summary"],
                 "detail": unit_result["detail"],
-                "citations": source_ids,
-                "source_ids": source_ids,
+                "citations": preferred_citations,
+                "source_ids": preferred_citations,
             }
             evidence_items.extend(new_evidence)
             unit_results = _sanitize_unit_results(unit_results, source_registry)
@@ -1794,6 +1854,9 @@ def _merge_source_registry(
             current["source_id"] = current.get("source_id") or _next_source_id(list(existing_by_key.values()))
         else:
             current = _merge_source_metadata(current, source)
+        current["source_key"] = key
+        current["quality_score"] = _source_quality_score(current)
+        current["quality_tier"] = _source_quality_tier(current)
         existing_by_key[key] = current
         merged_ids.append(current["source_id"])
     merged_sources = sorted(existing_by_key.values(), key=_source_sort_tuple)
@@ -1831,6 +1894,7 @@ def _build_section_citations(
     source_registry: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     all_source_ids = [item["source_id"] for item in source_registry]
+    registry_by_id = {item["source_id"]: item for item in source_registry if item.get("source_id")}
     claims_pool = [
         DeepResearchEvidenceItem.model_validate(item)
         for item in evidence_items
@@ -1862,6 +1926,7 @@ def _build_section_citations(
             key=lambda evidence: (
                 _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords),
                 0 if evidence.evidence_id in used_evidence_ids else 1,
+                sum(_source_quality_score(registry_by_id.get(source_id, {})) for source_id in evidence.source_ids),
                 len(evidence.source_ids),
                 evidence.evidence_id,
             ),
