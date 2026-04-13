@@ -92,6 +92,26 @@ def _available_models_cache_now() -> float:
     return time.monotonic()
 
 
+def _instantiate_grok_provider(current_model: str):
+    provider_chain = config.grok_provider_chain(model_override=current_model)
+    provider_cls = GrokSearchProvider
+    try:
+        return provider_cls(
+            provider_chain[0]["api_url"],
+            provider_chain[0]["api_key"],
+            provider_chain[0]["model"],
+            fallback_providers=provider_chain[1:],
+        )
+    except TypeError as exc:
+        if "fallback_providers" not in str(exc):
+            raise
+        return provider_cls(
+            provider_chain[0]["api_url"],
+            provider_chain[0]["api_key"],
+            provider_chain[0]["model"],
+        )
+
+
 def _available_models_cache_expires_at() -> float | None:
     if _AVAILABLE_MODELS_CACHE_TTL_SECONDS <= 0:
         return None
@@ -1213,7 +1233,7 @@ async def web_search(
                 warnings.append("time_range_not_applied_without_tavily_search")
 
     async def _run_grok_with_model(current_model: str) -> tuple[str, list[dict], str | None, str | None]:
-        grok_provider = GrokSearchProvider(api_url, api_key, current_model)
+        grok_provider = _instantiate_grok_provider(current_model)
         grok_provider.time_context_required = bool(
             effective_params["topic"] != "general" or effective_params["time_range"]
         )

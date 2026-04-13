@@ -147,6 +147,56 @@ def test_process_env_takes_precedence_over_project_env_files(monkeypatch, tmp_pa
     assert config.grok_api_url == "https://env.example.com/v1"
 
 
+def test_grok_provider_chain_includes_numbered_fallback_providers(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text(
+        (
+            "GROK_API_URL_2=https://secondary.example.com/v1\n"
+            "GROK_API_KEY_2=secondary-key\n"
+            "GROK_MODEL_2=grok-4.20-0309\n"
+            "GROK_API_URL_3=https://third.example.com/v1\n"
+            "GROK_API_KEY_3=third-key\n"
+        ),
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    chain = config.grok_provider_chain()
+
+    assert [item["api_url"] for item in chain] == [
+        "https://primary.example.com/v1",
+        "https://secondary.example.com/v1",
+        "https://third.example.com/v1",
+    ]
+    assert [item["model"] for item in chain] == [
+        "grok-4.20-0309",
+        "grok-4.20-0309",
+        "grok-4.20-0309",
+    ]
+    assert chain[1]["name"] == "provider_2"
+
+
+def test_grok_provider_chain_does_not_change_base_config_snapshot(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text(
+        "GROK_API_URL_2=https://secondary.example.com/v1\nGROK_API_KEY_2=secondary-key\n",
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    info = config.get_config_info()
+
+    assert "GROK_PROVIDER_COUNT" not in info
+    assert "GROK_PROVIDER_CHAIN" not in info
+
+
 def test_empty_process_env_still_blocks_project_env_fallback(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.setenv("TAVILY_API_KEY", "")

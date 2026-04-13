@@ -961,9 +961,13 @@ class DeepResearchRuntime:
         job: DeepResearchJob,
         continuation: DeepResearchContinuationState,
     ) -> dict[str, Any]:
-        api_url = config.grok_api_url
-        api_key = config.grok_api_key
-        provider = GrokSearchProvider(api_url, api_key, config.grok_model)
+        provider_chain = config.grok_provider_chain(model_override=config.grok_model)
+        provider = GrokSearchProvider(
+            provider_chain[0]["api_url"],
+            provider_chain[0]["api_key"],
+            provider_chain[0]["model"],
+            fallback_providers=provider_chain[1:],
+        )
         planner_prompt = (
             "You are planning a deep research job.\n"
             "Return valid JSON only with keys: brief, sub_questions, search_strategy, report_outline, research_units, planner_metadata.\n"
@@ -1564,14 +1568,6 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             return
 
         batch_units = ready_units[: max(1, config.deep_research_max_concurrency)]
-        for unit in batch_units:
-            runtime.store.append_event(
-                job_id,
-                type="research_unit_started",
-                phase="researching",
-                message=f"Started {unit.unit_id}.",
-                data={"unit_type": unit.unit_type},
-            )
         runtime.store.update_job(job_id, heartbeat_at=utc_now_iso())
         batch_results = await asyncio.gather(
             *[_execute_research_unit(runtime, plan, unit) for unit in batch_units],
@@ -2043,9 +2039,13 @@ def _build_final_report(
 
 
 async def _search_query(query: str) -> tuple[str, list[dict]]:
-    api_url = config.grok_api_url
-    api_key = config.grok_api_key
-    provider = GrokSearchProvider(api_url, api_key, config.grok_model)
+    provider_chain = config.grok_provider_chain(model_override=config.grok_model)
+    provider = GrokSearchProvider(
+        provider_chain[0]["api_url"],
+        provider_chain[0]["api_key"],
+        provider_chain[0]["model"],
+        fallback_providers=provider_chain[1:],
+    )
     content, sources = await _provider_search_with_sources(provider, query, min_results=3, max_results=8)
     answer, extracted_sources = split_answer_and_sources(content)
     merged = standardize_sources(merge_sources(sources, extracted_sources))

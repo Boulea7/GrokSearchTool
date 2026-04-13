@@ -1,10 +1,11 @@
+import copy
 import httpx
 import json
 import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from ipaddress import ip_address
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
 from tenacity.wait import wait_base
@@ -159,6 +160,54 @@ _IGNORED_CONTENT_BLOCK_TYPES = {
     "metadata",
     "usage",
 }
+_MODEL_UNAVAILABLE_MARKERS = (
+    "no available channel for model",
+    "unsupported model",
+    "invalid model",
+    "model not found",
+    "model is not available",
+    "model unavailable",
+    "no model named",
+)
+_DEFAULT_GROK_MODEL_FALLBACKS = {
+    "grok-4.20-0309": [
+        "grok-4.20-fast",
+        "grok-4.20-expert",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-0309-reasoning",
+        "grok-4.1-fast",
+        "grok-4.1-expert",
+        "grok-4.1-mini",
+        "grok-4.1-thinking",
+    ],
+    "grok-4.20-0309-reasoning": [
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-expert",
+        "grok-4.20-fast",
+        "grok-4.1-thinking",
+        "grok-4.1-expert",
+        "grok-4.1-fast",
+        "grok-4.1-mini",
+    ],
+    "grok-4.20-expert": [
+        "grok-4.20-fast",
+        "grok-4.20-0309",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.1-expert",
+        "grok-4.1-fast",
+        "grok-4.1-thinking",
+        "grok-4.1-mini",
+    ],
+    "grok-4.20-fast": [
+        "grok-4.20-0309",
+        "grok-4.20-expert",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.1-fast",
+        "grok-4.1-mini",
+        "grok-4.1-expert",
+        "grok-4.1-thinking",
+    ],
+}
 
 
 def _is_retryable_exception(exc) -> bool:
@@ -168,6 +217,48 @@ def _is_retryable_exception(exc) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in RETRYABLE_STATUS_CODES
     return False
+
+
+def _is_model_unavailable_exception(exc: Exception) -> bool:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return False
+    message = ""
+    try:
+        payload = exc.response.json()
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict):
+                message = str(error.get("message", ""))
+            elif error is not None:
+                message = str(error)
+    except Exception:
+        message = exc.response.text
+    lowered = message.strip().lower()
+    return any(marker in lowered for marker in _MODEL_UNAVAILABLE_MARKERS)
+
+
+def _provider_model_candidates(model: str, api_url: str) -> list[str]:
+    raw_override = (config._get_env_value("GROK_MODEL_FALLBACKS", "") or "").strip()
+    if raw_override:
+        configured = [item.strip() for item in raw_override.split(",") if item.strip()]
+    else:
+        configured = _DEFAULT_GROK_MODEL_FALLBACKS.get(model, [])
+        if not configured and model.startswith("grok-4.20"):
+            configured = [
+                "grok-4.1-fast",
+                "grok-4.1-expert",
+                "grok-4.1-mini",
+                "grok-4.1-thinking",
+            ]
+    candidates = [model]
+    seen = {model}
+    for item in configured:
+        normalized = config._apply_model_suffix_for_url(item, api_url)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        candidates.append(normalized)
+    return candidates
 
 
 def _httpx_client_kwargs_for_url(url: str, *, timeout: httpx.Timeout) -> dict:
@@ -223,21 +314,59 @@ class _WaitWithRetryAfter(wait_base):
 
 
 class GrokSearchProvider(BaseSearchProvider):
-    def __init__(self, api_url: str, api_key: str, model: str = "grok-4.20-0309"):
+    def __init__(
+        self,
+        api_url: str,
+        api_key: str,
+        model: str = "grok-4.20-0309",
+        fallback_providers: list[dict[str, Any]] | None = None,
+    ):
         super().__init__(api_url, api_key)
         self.model = model
         self._last_completion_sources: list[dict] = []
+        self._provider_chain = [
+            {"name": "primary", "api_url": api_url, "api_key": api_key, "model": model},
+            *[
+                {
+                    "name": item.get("name", f"fallback_{index}"),
+                    "api_url": item["api_url"],
+                    "api_key": item["api_key"],
+                    "model": item.get("model", model),
+                }
+                for index, item in enumerate(fallback_providers or [], start=1)
+                if item.get("api_url") and item.get("api_key")
+            ],
+        ]
 
     def get_provider_name(self) -> str:
         return "Grok"
 
     def _build_api_headers(self) -> dict:
+        return self._build_api_headers_for_key(self.api_key)
+
+    def _build_api_headers_for_key(self, api_key: str) -> dict:
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
             "User-Agent": "grok-search-mcp/0.1.0",
         }
+
+    def _iter_provider_configs(self, payload: dict) -> list[dict[str, Any]]:
+        configs: list[dict[str, Any]] = []
+        for item in self._provider_chain:
+            config_model = item.get("model", self.model)
+            effective_model = payload.get("model", config_model) or config_model
+            effective_model = config._apply_model_suffix_for_url(effective_model, item["api_url"])
+            configs.append(
+                {
+                    "name": item.get("name", "provider"),
+                    "api_url": item["api_url"].rstrip("/"),
+                    "api_key": item["api_key"],
+                    "model": effective_model,
+                }
+            )
+        return configs
 
     async def search(self, query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx=None) -> str:
         body, sources = await self.search_with_sources(
@@ -694,24 +823,55 @@ class GrokSearchProvider(BaseSearchProvider):
     async def _execute_stream_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
         """执行带重试机制的流式 HTTP 请求"""
         timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
-        endpoint = f"{self.api_url}/chat/completions"
-
-        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
-            async for attempt in AsyncRetrying(
-                stop=stop_after_attempt(config.retry_max_attempts + 1),
-                wait=_WaitWithRetryAfter(config.retry_multiplier, config.retry_max_wait),
-                retry=retry_if_exception(_is_retryable_exception),
-                reraise=True,
-            ):
-                with attempt:
-                    async with client.stream(
-                        "POST",
-                        endpoint,
-                        headers=headers,
-                        json=payload,
-                    ) as response:
-                        response.raise_for_status()
-                        return await self._parse_streaming_response(response, ctx, render_sources=render_sources)
+        last_exc: Exception | None = None
+        provider_configs = self._iter_provider_configs(payload)
+        for index, provider_config in enumerate(provider_configs):
+            endpoint = f"{provider_config['api_url']}/chat/completions"
+            attempt_headers = self._build_api_headers_for_key(provider_config["api_key"])
+            model_candidates = _provider_model_candidates(provider_config["model"], provider_config["api_url"])
+            try:
+                async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
+                    for model_index, candidate_model in enumerate(model_candidates):
+                        attempt_payload = copy.deepcopy(payload)
+                        attempt_payload["model"] = candidate_model
+                        try:
+                            async for attempt in AsyncRetrying(
+                                stop=stop_after_attempt(config.retry_max_attempts + 1),
+                                wait=_WaitWithRetryAfter(config.retry_multiplier, config.retry_max_wait),
+                                retry=retry_if_exception(_is_retryable_exception),
+                                reraise=True,
+                            ):
+                                with attempt:
+                                    async with client.stream(
+                                        "POST",
+                                        endpoint,
+                                        headers=attempt_headers,
+                                        json=attempt_payload,
+                                    ) as response:
+                                        response.raise_for_status()
+                                        return await self._parse_streaming_response(response, ctx, render_sources=render_sources)
+                        except Exception as exc:
+                            last_exc = exc
+                            if _is_model_unavailable_exception(exc) and model_index < len(model_candidates) - 1:
+                                await log_info(
+                                    ctx,
+                                    f"model fallback: {candidate_model} -> {model_candidates[model_index + 1]} on {provider_config['name']}",
+                                    config.debug_enabled,
+                                )
+                                continue
+                            raise
+            except Exception as exc:
+                last_exc = exc
+                if index == len(provider_configs) - 1:
+                    raise
+                await log_info(
+                    ctx,
+                    f"provider failover: {provider_config['name']} -> {provider_configs[index + 1]['name']} ({type(exc).__name__})",
+                    config.debug_enabled,
+                )
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("No Grok providers configured")
 
     async def _execute_completion_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
         content, sources = await self._execute_completion_with_retry_result(
@@ -733,27 +893,58 @@ class GrokSearchProvider(BaseSearchProvider):
     ) -> tuple[str, list[dict]]:
         """执行带重试机制的非流式 HTTP 请求，兼容 JSON completion 与 SSE 文本响应。"""
         timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
-        endpoint = f"{self.api_url}/chat/completions"
-
-        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
-            async for attempt in AsyncRetrying(
-                stop=stop_after_attempt(config.retry_max_attempts + 1),
-                wait=_WaitWithRetryAfter(config.retry_multiplier, config.retry_max_wait),
-                retry=retry_if_exception(_is_retryable_exception),
-                reraise=True,
-            ):
-                with attempt:
-                    response = await client.post(
-                        endpoint,
-                        headers=headers,
-                        json=payload,
-                    )
-                    response.raise_for_status()
-                    return await self._parse_completion_response_result(
-                        response,
-                        ctx,
-                        render_sources=render_sources,
-                    )
+        last_exc: Exception | None = None
+        provider_configs = self._iter_provider_configs(payload)
+        for index, provider_config in enumerate(provider_configs):
+            endpoint = f"{provider_config['api_url']}/chat/completions"
+            attempt_headers = self._build_api_headers_for_key(provider_config["api_key"])
+            model_candidates = _provider_model_candidates(provider_config["model"], provider_config["api_url"])
+            try:
+                async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
+                    for model_index, candidate_model in enumerate(model_candidates):
+                        attempt_payload = copy.deepcopy(payload)
+                        attempt_payload["model"] = candidate_model
+                        try:
+                            async for attempt in AsyncRetrying(
+                                stop=stop_after_attempt(config.retry_max_attempts + 1),
+                                wait=_WaitWithRetryAfter(config.retry_multiplier, config.retry_max_wait),
+                                retry=retry_if_exception(_is_retryable_exception),
+                                reraise=True,
+                            ):
+                                with attempt:
+                                    response = await client.post(
+                                        endpoint,
+                                        headers=attempt_headers,
+                                        json=attempt_payload,
+                                    )
+                                    response.raise_for_status()
+                                    return await self._parse_completion_response_result(
+                                        response,
+                                        ctx,
+                                        render_sources=render_sources,
+                                    )
+                        except Exception as exc:
+                            last_exc = exc
+                            if _is_model_unavailable_exception(exc) and model_index < len(model_candidates) - 1:
+                                await log_info(
+                                    ctx,
+                                    f"model fallback: {candidate_model} -> {model_candidates[model_index + 1]} on {provider_config['name']}",
+                                    config.debug_enabled,
+                                )
+                                continue
+                            raise
+            except Exception as exc:
+                last_exc = exc
+                if index == len(provider_configs) - 1:
+                    raise
+                await log_info(
+                    ctx,
+                    f"provider failover: {provider_config['name']} -> {provider_configs[index + 1]['name']} ({type(exc).__name__})",
+                    config.debug_enabled,
+                )
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("No Grok providers configured")
 
     async def describe_url(self, url: str, ctx=None) -> dict:
         """让 Grok 阅读单个 URL 并返回 title + extracts"""

@@ -147,6 +147,9 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint; using an explicit `/v1` suffix is recommended, the current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
 | `GROK_API_KEY` | Yes | Grok API key |
 | `GROK_MODEL` | No | Default model; see the precedence notes below |
+| `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | No | The second Grok provider; real requests automatically fail over to it when the primary provider fails |
+| `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | No | Additional Grok providers, tried in numeric order as the fallback chain |
+| `GROK_MODEL_FALLBACKS` | No | Built-in downgrade chain | A comma-separated model fallback order used when a provider explicitly reports that the requested model is unavailable; this can explicitly include `grok-4.1-fast` |
 | `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |
 | `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
@@ -171,6 +174,8 @@ Notes:
 
 - model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value from `switch_model` -> code default `grok-4.20-0309`
 - process env presence wins over project `.env.local` / `.env`, even when the env value is explicitly empty
+- when `GROK_API_URL_2` / `GROK_API_KEY_2` and higher-numbered siblings are configured, runtime Grok requests treat them as an ordered provider chain and automatically fail over to the next provider when the current one fails
+- when `GROK_MODEL_FALLBACKS` is configured, runtime requests use that explicit model downgrade order on the same provider after a model-unavailable error; otherwise the built-in chain still includes options such as `grok-4.1-fast`
 - the base `get_config_info` snapshot now includes `GROK_MODEL_SOURCE`, which tells you which layer currently supplies the active model (`process_env`, `project_env_local`, `project_env`, `persisted_config`, or `default`)
 - the preferred built-in default is now `grok-4.20-0309`; runtime selection stays flexible for Grok 4.1+ models and can fall back to a compatible available Grok model instead of failing just because a suffix differs
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
