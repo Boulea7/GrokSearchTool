@@ -480,6 +480,7 @@ class DeepResearchStore:
         return None
 
     def reconcile_incomplete_jobs(self) -> list[DeepResearchJob]:
+        interrupted_at = utc_now_iso()
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -490,7 +491,20 @@ class DeepResearchStore:
             ).fetchall()
         recovered: list[DeepResearchJob] = []
         for row in rows:
-            job = self.update_job(row["job_id"], status="interrupted")
+            job = self.update_job(
+                row["job_id"],
+                status="interrupted",
+                last_error="worker_restarted",
+                finished_at=interrupted_at,
+                heartbeat_at=interrupted_at,
+            )
+            self.append_event(
+                row["job_id"],
+                type="job_interrupted",
+                phase=row["phase"],
+                message="Deep research interrupted during worker recovery.",
+                data={"reason": "worker_restarted"},
+            )
             recovered.append(job)
         return recovered
 
