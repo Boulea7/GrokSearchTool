@@ -13,6 +13,7 @@ from .deep_research_types import (
     DeepResearchCheckpointState,
     DeepResearchClaim,
     DeepResearchContinuation,
+    DeepResearchContinuationState,
     DeepResearchEvidenceItem,
     DeepResearchJob,
     DeepResearchPlan,
@@ -165,7 +166,7 @@ def _count_keyword_overlap(text: str, keywords: list[str]) -> int:
     return sum(1 for keyword in keywords if keyword in lowered)
 
 
-def _continuation_anchor_terms(continuation: DeepResearchContinuation) -> list[str]:
+def _continuation_anchor_terms(continuation: DeepResearchContinuationState) -> list[str]:
     texts = [
         continuation.continuation_goal,
         continuation.prior_plan_summary,
@@ -175,6 +176,8 @@ def _continuation_anchor_terms(continuation: DeepResearchContinuation) -> list[s
     keyword_counts: dict[str, int] = {}
     for text in texts:
         for token in _tokenize_keywords(text):
+            if token.endswith("s") and token[:-1] in _PREFERRED_TECHNICAL_TERMS:
+                token = token[:-1]
             keyword_counts[token] = keyword_counts.get(token, 0) + 1
 
     anchors: list[str] = []
@@ -186,7 +189,20 @@ def _continuation_anchor_terms(continuation: DeepResearchContinuation) -> list[s
     return anchors[:4]
 
 
-def _should_apply_continuation_rewrite(query: str, continuation: DeepResearchContinuation) -> bool:
+def _compact_continuation(continuation: DeepResearchContinuationState) -> DeepResearchContinuation:
+    return DeepResearchContinuation(
+        mode=continuation.mode,
+        source_job_id=continuation.source_job_id,
+        source_job_status=continuation.source_job_status,
+        previous_summary=continuation.previous_summary,
+        prior_plan_summary=continuation.prior_plan_summary,
+        continuation_goal=continuation.continuation_goal,
+        source_count=continuation.source_count,
+        checkpoint_key=continuation.checkpoint_key,
+    )
+
+
+def _should_apply_continuation_rewrite(query: str, continuation: DeepResearchContinuationState) -> bool:
     if continuation.mode != "continue":
         return False
     lowered = (query or "").lower()
@@ -198,7 +214,7 @@ def _should_apply_continuation_rewrite(query: str, continuation: DeepResearchCon
     return bool(query_terms & technical_terms) or bool(anchor_terms & technical_terms)
 
 
-def _rewrite_research_query(query: str, continuation: DeepResearchContinuation) -> str:
+def _rewrite_research_query(query: str, continuation: DeepResearchContinuationState) -> str:
     text = _normalize_whitespace(query)
     if not text or not _should_apply_continuation_rewrite(text, continuation):
         return text
@@ -265,6 +281,29 @@ def _normalize_depends_on(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return []
+
+
+def _dedupe_sub_questions(sub_questions: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    changed = False
+    for item in sub_questions:
+        question = _normalize_whitespace(str(item.get("question", "")))
+        key = question.lower()
+        if not key:
+            changed = True
+            continue
+        if key in seen:
+            changed = True
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped, changed
+
+
+def _is_generic_outline(report_outline: list[dict[str, Any]]) -> bool:
+    titles = [str(item.get("title", "")).strip().lower() for item in report_outline]
+    return titles == ["executive summary", "key findings", "open questions"]
 
 
 def _validate_research_units(units: list[DeepResearchResearchUnit]) -> None:
@@ -671,7 +710,7 @@ class DeepResearchRuntime:
             async with self._task_lock:
                 self._tasks.pop(job_id, None)
 
-    async def _build_plan(self, job: DeepResearchJob, continuation: DeepResearchContinuation) -> DeepResearchPlan:
+    async def _build_plan(self, job: DeepResearchJob, continuation: DeepResearchContinuationState) -> DeepResearchPlan:
         try:
             raw_plan = await self._generate_plan_with_model(job, continuation)
             return self._normalize_plan_payload(job, raw_plan, continuation)
@@ -681,7 +720,7 @@ class DeepResearchRuntime:
     async def _generate_plan_with_model(
         self,
         job: DeepResearchJob,
-        continuation: DeepResearchContinuation,
+        continuation: DeepResearchContinuationState,
     ) -> dict[str, Any]:
         api_url = config.grok_api_url
         api_key = config.grok_api_key
@@ -741,7 +780,7 @@ class DeepResearchRuntime:
     def _build_fallback_plan(
         self,
         job: DeepResearchJob,
-        continuation: DeepResearchContinuation,
+        continuation: DeepResearchContinuationState,
     ) -> DeepResearchPlan:
         query = _rewrite_research_query(job.query.strip(), continuation)
         context = _rewrite_research_query(job.context.strip(), continuation)
@@ -807,7 +846,7 @@ class DeepResearchRuntime:
         self,
         job: DeepResearchJob,
         raw_plan: dict[str, Any],
-        continuation: DeepResearchContinuation,
+        continuation: DeepResearchContinuationState,
     ) -> DeepResearchPlan:
         if raw_plan.get("search_queries") and not raw_plan.get("search_strategy"):
             raw_plan = {
@@ -826,6 +865,7 @@ class DeepResearchRuntime:
                     for title in raw_plan.get("report_sections") or []
                 ],
             }
+        validation_issues: list[str] = []
         sub_questions = raw_plan.get("sub_questions") or []
         if not sub_questions:
             sub_questions = [{"id": "sq1", "question": _rewrite_research_query(job.query, continuation), "reason": "Cover the primary question."}]
@@ -839,11 +879,21 @@ class DeepResearchRuntime:
                     }
                 )
             sub_questions = normalized_sub_questions
+        sub_questions, deduped_sub_questions = _dedupe_sub_questions(sub_questions)
+        if deduped_sub_questions:
+            validation_issues.append("duplicate_sub_questions")
 
         report_outline = raw_plan.get("report_outline") or [
             {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
             {"section_id": "key-findings", "title": "Key Findings", "goal": "Present the main evidence."},
         ]
+        if continuation.mode == "continue" and _is_generic_outline(report_outline):
+            report_outline = [
+                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the follow-up answer."},
+                {"section_id": "follow-up-findings", "title": "Follow-up Findings", "goal": "Extend or revise prior findings with new evidence."},
+                {"section_id": "remaining-gaps", "title": "Remaining Gaps", "goal": "Call out what still needs confirmation."},
+            ]
+            validation_issues.append("generic_continuation_outline")
         research_units = raw_plan.get("research_units") or []
         if not research_units:
             search_queries = (raw_plan.get("search_strategy") or {}).get("search_queries") or [job.query]
@@ -904,6 +954,13 @@ class DeepResearchRuntime:
         strategy.setdefault("approach", "targeted")
         strategy.setdefault("selective_fetch", {"max_urls_per_search": 1, "prefer_titles_matching_outline": True})
 
+        planner_metadata = dict(raw_plan.get("planner_metadata") or {"planner": "fallback", "used_fallback": True})
+        if validation_issues:
+            planner_metadata["validation"] = {
+                "issues": validation_issues,
+                "repaired": True,
+            }
+
         normalized = {
             "query": job.query,
             "context": job.context,
@@ -921,16 +978,16 @@ class DeepResearchRuntime:
             "search_strategy": strategy,
             "report_outline": normalized_outline,
             "research_units": normalized_units,
-            "continuation": continuation.model_dump(),
-            "planner_metadata": raw_plan.get("planner_metadata") or {"planner": "fallback", "used_fallback": True},
+            "continuation": _compact_continuation(continuation).model_dump(),
+            "planner_metadata": planner_metadata,
         }
         plan = DeepResearchPlan.model_validate(normalized)
         _validate_research_units(plan.research_units)
         return plan
 
-    def _build_continuation_context(self, continue_from_job_id: str) -> DeepResearchContinuation:
+    def _build_continuation_context(self, continue_from_job_id: str) -> DeepResearchContinuationState:
         if not continue_from_job_id:
-            return DeepResearchContinuation(mode="fresh")
+            return DeepResearchContinuationState(mode="fresh")
         job = self.store.get_job(continue_from_job_id)
 
         report_text = self.store.read_artifact_text(continue_from_job_id, "report.json")
@@ -1016,7 +1073,7 @@ class DeepResearchRuntime:
         ) or job.current_checkpoint or (checkpoints[-1].checkpoint_key if checkpoints else "")
         continuation_goal = plan_payload.get("query") or job.query
 
-        return DeepResearchContinuation(
+        return DeepResearchContinuationState(
             mode="continue",
             source_job_id=continue_from_job_id,
             source_job_status=job.status,
@@ -1069,6 +1126,17 @@ class DeepResearchRuntime:
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
         return job.model_dump()
+
+    def _read_runtime_continuation(self, job: DeepResearchJob) -> DeepResearchContinuationState:
+        if not job.continued_from_job_id:
+            return DeepResearchContinuationState(mode="fresh")
+        continuation_text = self.store.read_artifact_text(job.job_id, "continuation.json")
+        if continuation_text:
+            try:
+                return DeepResearchContinuationState.model_validate(json.loads(continuation_text))
+            except Exception:
+                pass
+        return self._build_continuation_context(job.continued_from_job_id)
 
     def _read_plan(self, job_id: str, job: DeepResearchJob | None = None) -> DeepResearchPlan:
         plan_text = self.store.read_artifact_text(job_id, "plan.json")
@@ -1179,7 +1247,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         _mark_canceled(runtime, job_id, "planning")
         return
 
-    continuation = plan.continuation
+    continuation = runtime._read_runtime_continuation(job)
     completed_unit_ids = list(checkpoint_state.completed_unit_ids) if checkpoint_state else []
     unit_results = dict(checkpoint_state.unit_results) if checkpoint_state else dict(continuation.carry_forward_unit_results)
     source_registry = list(checkpoint_state.sources) if checkpoint_state else list(continuation.carry_forward_sources)
