@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 import sys
 import time
@@ -272,35 +273,27 @@ def _is_model_unavailable_check(check: dict) -> bool:
     )
 
 
-def _planning_session_error(session_id: str) -> str:
-    import json
-
-    return json.dumps(
-        {
-            "error": "session_not_found",
-            "message": f"Session '{session_id}' not found. Call plan_intent first.",
-            "expected_phase_order": [
-                "intent_analysis",
-                "complexity_assessment",
-                "query_decomposition",
-                "search_strategy",
-                "tool_selection",
-                "execution_order",
-            ],
-            "restart_from_intent_analysis": True,
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
+def _planning_session_error(session_id: str) -> dict:
+    return {
+        "error": "session_not_found",
+        "message": f"Session '{session_id}' not found. Call plan_intent first.",
+        "expected_phase_order": [
+            "intent_analysis",
+            "complexity_assessment",
+            "query_decomposition",
+            "search_strategy",
+            "tool_selection",
+            "execution_order",
+        ],
+        "restart_from_intent_analysis": True,
+    }
 
 
-def _planning_validation_error(code: str, message: str, details: list | None = None) -> str:
-    import json
-
+def _planning_validation_error(code: str, message: str, details: list | None = None) -> dict:
     payload = {"error": code, "message": message}
     if details:
         payload["details"] = details
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return payload
 
 
 def _format_validation_details(exc: ValidationError) -> list[dict]:
@@ -2511,19 +2504,13 @@ def _render_config_info_payload(config_info: dict, *, detail: str) -> dict:
 )
 async def get_config_info(
     detail: Annotated[str, "Response detail level: full | summary. Defaults to full."] = "full",
-) -> str:
-    import json
-
+) -> dict:
     normalized_detail = (detail or "full").strip().lower() or "full"
     if normalized_detail not in {"full", "summary"}:
-        return json.dumps(
-            {
-                "error": "invalid_detail",
-                "message": "Invalid detail value. Supported values are 'full' and 'summary'.",
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+        return {
+            "error": "invalid_detail",
+            "message": "Invalid detail value. Supported values are 'full' and 'summary'.",
+        }
 
     config_info = config.get_config_info()
     checks: list[dict] = []
@@ -2920,11 +2907,7 @@ async def get_config_info(
     config_info["doctor"] = doctor
     config_info["feature_readiness"] = feature_readiness
 
-    return json.dumps(
-        _render_config_info_payload(config_info, detail=normalized_detail),
-        ensure_ascii=False,
-        indent=2,
-    )
+    return _render_config_info_payload(config_info, detail=normalized_detail)
 
 
 @mcp.tool(
@@ -3140,14 +3123,33 @@ def _get_planning_sub_query_ids(session) -> set[str]:
     }
 
 
-def _planning_validation_message(message: str, field: str | None = None) -> str:
+def _planning_validation_message(message: str, field: str | None = None) -> dict:
     details = None
     if field:
         details = [{"field": field, "message": message, "type": "value_error"}]
     return _planning_validation_error("validation_error", message, details)
 
 
-def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | None:
+def _boundary_has_explicit_exclusion_language(boundary: str, goal: str) -> bool:
+    normalized_boundary = re.sub(r"\s+", " ", (boundary or "").strip()).lower()
+    normalized_goal = re.sub(r"\s+", " ", (goal or "").strip()).lower()
+    if not normalized_boundary or normalized_boundary == normalized_goal:
+        return False
+
+    exclusion_markers = (
+        "exclude",
+        "excluding",
+        "except",
+        "without",
+        "not ",
+        "omit",
+        "outside",
+        "ignore",
+    )
+    return any(marker in normalized_boundary for marker in exclusion_markers)
+
+
+def _validate_sub_query_item(session, item: dict, is_revision: bool) -> dict | None:
     existing_ids = _get_planning_sub_query_ids(session)
     sub_query_id = item["id"].strip()
     valid_dependency_ids = {sub_query_id} if is_revision else existing_ids
@@ -3162,6 +3164,15 @@ def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | No
         return _planning_validation_message(
             f"Duplicate sub-query id: {sub_query_id}",
             "id",
+        )
+
+    if not _boundary_has_explicit_exclusion_language(
+        str(item.get("boundary", "")),
+        str(item.get("goal", "")),
+    ):
+        return _planning_validation_message(
+            "boundary must explicitly state what this sub-query excludes.",
+            "boundary",
         )
 
     dependencies = item.get("depends_on") or []
@@ -3187,7 +3198,7 @@ def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | No
     return None
 
 
-def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -> str | None:
+def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -> dict | None:
     existing_ids = _get_planning_sub_query_ids(session)
     normalized_sub_query_id = sub_query_id.strip()
     if normalized_sub_query_id not in existing_ids:
@@ -3198,7 +3209,7 @@ def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -
     return None
 
 
-def _validate_search_strategy_coverage(session) -> str | None:
+def _validate_search_strategy_coverage(session) -> dict | None:
     missing_ids = sorted(session.missing_search_term_ids())
     if missing_ids:
         return _planning_validation_message(
@@ -3208,7 +3219,7 @@ def _validate_search_strategy_coverage(session) -> str | None:
     return None
 
 
-def _validate_tool_mapping_item(session, sub_query_id: str, is_revision: bool = False) -> str | None:
+def _validate_tool_mapping_item(session, sub_query_id: str, is_revision: bool = False) -> dict | None:
     if not is_revision and sub_query_id in session.tool_mapping_ids():
         return _planning_validation_message(
             f"Duplicate tool mapping for sub-query id: {sub_query_id}",
@@ -3217,7 +3228,7 @@ def _validate_tool_mapping_item(session, sub_query_id: str, is_revision: bool = 
     return None
 
 
-def _validate_tool_mapping_coverage(session) -> str | None:
+def _validate_tool_mapping_coverage(session) -> dict | None:
     missing_ids = sorted(session.missing_tool_mapping_ids())
     if missing_ids:
         return _planning_validation_message(
@@ -3227,7 +3238,7 @@ def _validate_tool_mapping_coverage(session) -> str | None:
     return None
 
 
-def _validate_execution_plan(session, parallel: list[list[str]], sequential: list[str]) -> str | None:
+def _validate_execution_plan(session, parallel: list[list[str]], sequential: list[str]) -> dict | None:
     existing_ids = _get_planning_sub_query_ids(session)
     placement_stage: dict[str, int] = {}
     seen_ids: set[str] = set()
@@ -3287,7 +3298,7 @@ def _validate_execution_plan(session, parallel: list[list[str]], sequential: lis
     return None
 
 
-def _validate_upstream_phase_revision(session, phase: str) -> str | None:
+def _validate_upstream_phase_revision(session, phase: str) -> dict | None:
     try:
         phase_index = PHASE_NAMES.index(phase)
     except ValueError:
@@ -3301,7 +3312,7 @@ def _validate_upstream_phase_revision(session, phase: str) -> str | None:
     return None
 
 
-def _validate_singleton_phase_overwrite(session, phase: str, is_revision: bool) -> str | None:
+def _validate_singleton_phase_overwrite(session, phase: str, is_revision: bool) -> dict | None:
     if is_revision or phase not in session.phases:
         return None
     return _planning_validation_message(
@@ -3333,8 +3344,7 @@ async def plan_intent(
     ambiguities: Annotated[str, "Comma-separated unresolved ambiguities"] = "",
     unverified_terms: Annotated[str, "Comma-separated external terms to verify"] = "",
     is_revision: Annotated[bool, "True to overwrite existing intent"] = False,
-) -> str:
-    import json
+) -> dict:
     session = planning_engine.get_session(session_id) if session_id else None
     if is_revision and not session:
         return _planning_session_error(session_id)
@@ -3359,10 +3369,10 @@ async def plan_intent(
         IntentOutput(**data)
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid intent input.", _format_validation_details(exc))
-    return json.dumps(planning_engine.process_phase(
+    return planning_engine.process_phase(
         phase="intent_analysis", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=data,
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
@@ -3379,8 +3389,7 @@ async def plan_complexity(
     justification: Annotated[str, "Why this complexity level"],
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
     is_revision: Annotated[bool, "True to overwrite"] = False,
-) -> str:
-    import json
+) -> dict:
     session = planning_engine.get_session(session_id)
     if not session:
         return _planning_session_error(session_id)
@@ -3400,12 +3409,12 @@ async def plan_complexity(
         )
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid complexity input.", _format_validation_details(exc))
-    return json.dumps(planning_engine.process_phase(
+    return planning_engine.process_phase(
         phase="complexity_assessment", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence,
         phase_data={"level": level, "estimated_sub_queries": estimated_sub_queries,
                      "estimated_tool_calls": estimated_tool_calls, "justification": justification},
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
@@ -3424,9 +3433,9 @@ async def plan_sub_query(
     depends_on: Annotated[str, "Comma-separated prerequisite IDs"] = "",
     tool_hint: Annotated[Optional[Literal["web_search", "web_fetch", "web_map"]], "web_search | web_fetch | web_map"] = None,
     is_revision: Annotated[bool, "True to replace all sub-queries"] = False,
-) -> str:
-    import json
-    if not planning_engine.get_session(session_id):
+) -> dict:
+    session = planning_engine.get_session(session_id)
+    if not session:
         return _planning_session_error(session_id)
     normalized_id = id.strip()
     item = {"id": normalized_id, "goal": goal, "expected_output": expected_output, "boundary": boundary}
@@ -3438,13 +3447,14 @@ async def plan_sub_query(
         SubQuery(**item)
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid sub-query input.", _format_validation_details(exc))
-    validation_error = _validate_sub_query_item(planning_engine.get_session(session_id), item, is_revision)
-    if validation_error:
-        return validation_error
-    return json.dumps(planning_engine.process_phase(
+    if "complexity_assessment" in session.phases:
+        validation_error = _validate_sub_query_item(session, item, is_revision)
+        if validation_error:
+            return validation_error
+    return planning_engine.process_phase(
         phase="query_decomposition", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=item,
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
@@ -3462,8 +3472,7 @@ async def plan_search_term(
     approach: Annotated[str, "broad_first | narrow_first | targeted (required on first call)"] = "",
     fallback_plan: Annotated[str, "Fallback if primary searches fail"] = "",
     is_revision: Annotated[bool, "True to replace all search terms"] = False,
-) -> str:
-    import json
+) -> dict:
     session = planning_engine.get_session(session_id)
     if not session:
         return _planning_session_error(session_id)
@@ -3494,10 +3503,10 @@ async def plan_search_term(
     validation_error = _validate_sub_query_reference(session, normalized_purpose, "purpose")
     if validation_error:
         return validation_error
-    return json.dumps(planning_engine.process_phase(
+    return planning_engine.process_phase(
         phase="search_strategy", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=data,
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
@@ -3514,8 +3523,7 @@ async def plan_tool_mapping(
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
     params_json: Annotated[str, "Optional JSON string for tool-specific params"] = "",
     is_revision: Annotated[bool, "True to replace all mappings"] = False,
-) -> str:
-    import json
+) -> dict:
     session = planning_engine.get_session(session_id)
     if not session:
         return _planning_session_error(session_id)
@@ -3557,10 +3565,10 @@ async def plan_tool_mapping(
     validation_error = _validate_tool_mapping_item(session, normalized_sub_query_id, is_revision=is_revision)
     if validation_error:
         return validation_error
-    return json.dumps(planning_engine.process_phase(
+    return planning_engine.process_phase(
         phase="tool_selection", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=item,
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
@@ -3576,8 +3584,7 @@ async def plan_execution(
     estimated_rounds: Annotated[int, "Estimated execution rounds"],
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
     is_revision: Annotated[bool, "True to overwrite"] = False,
-) -> str:
-    import json
+) -> dict:
     if not planning_engine.get_session(session_id):
         return _planning_session_error(session_id)
     parallel = [_split_csv(g) for g in parallel_groups.split(";") if g.strip()] if parallel_groups else []
@@ -3600,11 +3607,11 @@ async def plan_execution(
         validation_error = _validate_execution_plan(session, parallel, seq)
         if validation_error:
             return validation_error
-    return json.dumps(planning_engine.process_phase(
+    return planning_engine.process_phase(
         phase="execution_order", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence,
         phase_data={"parallel": parallel, "sequential": seq, "estimated_rounds": estimated_rounds},
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
