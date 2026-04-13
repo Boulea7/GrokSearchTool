@@ -1,3 +1,5 @@
+import pytest
+
 from grok_search.config import Config
 
 
@@ -147,6 +149,30 @@ def test_process_env_takes_precedence_over_project_env_files(monkeypatch, tmp_pa
     assert config.grok_api_url == "https://env.example.com/v1"
 
 
+def test_primary_provider_does_not_mix_env_url_with_project_key(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("GROK_API_URL", "https://env.example.com/v1")
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text("GROK_API_KEY=project-key\n", encoding="utf-8")
+    config.reset_runtime_state()
+
+    with pytest.raises(ValueError, match="Grok API Key 未配置"):
+        _ = config.grok_api_key
+
+
+def test_primary_provider_does_not_mix_env_key_with_project_url(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("GROK_API_URL", raising=False)
+    monkeypatch.setenv("GROK_API_KEY", "env-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text("GROK_API_URL=https://project.example.com/v1\n", encoding="utf-8")
+    config.reset_runtime_state()
+
+    with pytest.raises(ValueError, match="Grok API URL 未配置"):
+        _ = config.grok_api_url
+
+
 def test_grok_provider_chain_includes_numbered_fallback_providers(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
@@ -178,6 +204,21 @@ def test_grok_provider_chain_includes_numbered_fallback_providers(monkeypatch, t
         "grok-4.20-0309",
     ]
     assert chain[1]["name"] == "provider_2"
+
+
+def test_grok_provider_chain_skips_numbered_provider_when_url_and_key_cross_layers(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setenv("GROK_API_URL_2", "https://secondary.example.com/v1")
+    monkeypatch.delenv("GROK_API_KEY_2", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text("GROK_API_KEY_2=secondary-key\n", encoding="utf-8")
+    config.reset_runtime_state()
+
+    chain = config.grok_provider_chain()
+
+    assert [item["name"] for item in chain] == ["primary"]
 
 
 def test_grok_provider_chain_does_not_change_base_config_snapshot(monkeypatch, tmp_path):
