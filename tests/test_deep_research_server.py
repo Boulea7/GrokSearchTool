@@ -90,7 +90,7 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
     assert [event["seq"] for event in events["events"]] == [1, 2, 3, 4]
     assert result["final_report"].startswith("# Final Report")
     assert result["partial_report"].startswith("# Partial Report")
-    assert result["citations"]["R1"]["url"] == "https://example.com"
+    assert result["citations"]["source_registry"]["R1"]["url"] == "https://example.com"
     assert listing["jobs"][0]["job_id"] == response["job_id"]
 
 

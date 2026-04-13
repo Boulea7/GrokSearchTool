@@ -240,7 +240,7 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_DEEP_RESEARCH_DIR` | 否 | `~/.config/grok-search/deep-research` | deep research SQLite 状态与 artifacts 根目录 |
 | `GROK_DEEP_RESEARCH_DEFAULT_BUDGET_SECONDS` | 否 | `240` | deep research 默认目标预算秒数 |
 | `GROK_DEEP_RESEARCH_HARD_TIMEOUT_SECONDS` | 否 | `600` | deep research 硬超时上限 |
-| `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | 否 | `3` | 默认 deep research runtime 的最大并发 research unit 数 |
+| `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | 否 | `3` | 默认 deep research runtime 同一轮 ready research unit 的最大并发执行数 |
 | `GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS` | 否 | `1800` | 已完成 deep research job 按 `finished_at` 参与复用的时间窗口 |
 | `PYTHONIOENCODING` | 否 | `utf-8` | 建议显式设为 UTF-8，减少 Windows / 中转站日志乱码 |
 | `PYTHONUNBUFFERED` | 否 | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
@@ -474,12 +474,15 @@ claude mcp list
 说明：
 - 这是高于 `plan_* -> web_search` 的高级层，不替代默认轻路径。
 - `deep_research_start` 会创建 job，并立即生成结构化 `plan.json`；其中至少包含 `brief`、`sub_questions`、`search_strategy`、`report_outline`、`research_units`，并在 continuation 场景下额外写出 `continuation.json`。非 `plan_only` 场景下，任务会异步推进并逐步产出 `partial_report.md`、`final_report.md`、`sources.json`、`citations.json`、`report.json`。
+- `force_new` 用于控制 `deep_research_start` 是否必须创建全新 job。
+- 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。
 - `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要。
 - `deep_research_events` 返回有序事件流，支持 `after_seq` 增量读取。
-- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。
+- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化。
 - `deep_research_resume` 目前支持从 `draft`、`failed`、`interrupted` job 继续，并优先从最新的 completed research-unit checkpoint 续跑，而不是整 job 从头执行。
 - `deep_research_cancel` 只负责发起取消请求；运行中的 job 会在阶段边界或下一次检查点更新时收口。
 - `deep_research_list` 提供最近 job 列表，适合 CLI 或宿主做结果检索。
+- 最终 artifacts 当前按同一 `batch_id` 原子发布；调用方如需确认 `sources.json`、`citations.json`、`report.json`、`final_report.md` 来自同一批结果，可读取 artifact metadata 里的 `batch_id`。
 </details>
 
 ## 四、常见问题

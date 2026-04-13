@@ -142,6 +142,7 @@ async def test_continue_plan_uses_previous_artifacts(tmp_path):
     assert continuation["carry_forward_sources"][0]["source_id"] == "R1"
     assert continuation["carry_forward_sections"][0]["title"] == "Resume"
     assert response["plan"]["planner_metadata"]["used_fallback"] is False
+    assert "checkpoint checkpoint" not in json.dumps(response["plan"]).lower()
 
 
 @pytest.mark.asyncio
@@ -404,6 +405,38 @@ async def test_result_returns_citations_artifact_shape_without_flattening(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_result_normalizes_legacy_flat_citations_shape(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Legacy citations shape",
+        request_fingerprint="fp-legacy-citations-shape",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "citations.json",
+        json.dumps({"R1": {"source_id": "R1", "url": "https://example.com/source"}}),
+        "application/json",
+    )
+
+    result = await runtime.result(job.job_id)
+
+    assert result["citations"] == {
+        "source_registry": {"R1": {"source_id": "R1", "url": "https://example.com/source"}},
+        "sections": [],
+    }
+
+
+@pytest.mark.asyncio
 async def test_resume_continues_from_completed_unit_checkpoint(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     executed_units = []
@@ -620,6 +653,58 @@ async def test_checkpoint_fallback_records_explicit_event(monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_continue_uses_latest_usable_checkpoint_when_latest_is_broken(tmp_path):
+    runtime = build_runtime(tmp_path)
+    original = runtime.store.create_job(
+        query="Interrupted source job",
+        request_fingerprint="fp-interrupted-source",
+        status="interrupted",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(original.job_id, current_checkpoint="researching-bad")
+    runtime.store.save_checkpoint(
+        original.job_id,
+        phase="researching",
+        checkpoint_key="researching-good",
+        state={
+            "plan": structured_plan_payload(original, {"mode": "fresh", "source_job_id": "", "previous_summary": "", "prior_plan_summary": "", "source_count": 0}),
+            "sources": [{"source_id": "R1", "url": "https://example.com/checkpoint"}],
+            "sections": [],
+            "unit_results": {},
+            "evidence_items": [],
+        },
+    )
+    runtime.store.save_checkpoint(
+        original.job_id,
+        phase="researching",
+        checkpoint_key="researching-bad",
+        state={"plan": {"query": "broken"}},
+    )
+
+    response = await runtime.start(
+        query="Continue from usable checkpoint",
+        continue_from_job_id=original.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    continuation = response["plan"]["continuation"]
+
+    assert continuation["checkpoint_key"] == "researching-good"
+    assert continuation["source_count"] == 1
+    assert continuation["carry_forward_sources"][0]["source_id"] == "R1"
+
+
+@pytest.mark.asyncio
 async def test_run_job_executes_independent_units_concurrently(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     started = []
@@ -676,6 +761,77 @@ async def test_run_job_executes_independent_units_concurrently(monkeypatch, tmp_
 
     assert started == ["one", "two"]
     assert elapsed < 0.09
+
+
+@pytest.mark.asyncio
+async def test_concurrent_batch_persists_successful_units_before_failure(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    executed = []
+
+    async def fake_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "First unit",
+                "goal": "First",
+                "query": "one",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-search-2",
+                "unit_type": "search",
+                "title": "Second unit",
+                "goal": "Second",
+                "query": "two",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        payload["search_strategy"]["search_queries"] = ["one", "two"]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    async def flaky_search(query):
+        executed.append(query)
+        if query == "two":
+            raise RuntimeError("boom")
+        return ("Answer for one", [{"url": "https://example.com/one", "title": "one"}])
+
+    async def recovered_search(query):
+        executed.append(f"retry:{query}")
+        return (f"Answer for {query}", [{"url": f"https://example.com/{query}", "title": query}])
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", fake_planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", flaky_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_MAX_CONCURRENCY", "2")
+
+    response = await runtime.start(query="Concurrent failure", force_new=True, schedule=False)
+    failed = await runtime.run_job(response["job_id"])
+    events = await runtime.events(response["job_id"])
+
+    assert failed["status"] == "failed"
+    assert any(event["type"] == "research_unit_completed" and "unit-search-1" in event["message"] for event in events["events"])
+    assert any(event["type"] == "research_unit_failed" and "unit-search-2" in event["message"] for event in events["events"])
+
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", recovered_search)
+    resumed = await runtime.resume(response["job_id"], schedule=False)
+    await runtime.run_job(response["job_id"])
+
+    assert resumed["status"] == "queued"
+    assert executed.count("one") == 1
+    assert "retry:two" in executed
 
 
 @pytest.mark.asyncio

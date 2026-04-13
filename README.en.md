@@ -164,7 +164,7 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `GROK_DEEP_RESEARCH_DIR` | No | Root directory for deep research SQLite state and artifacts |
 | `GROK_DEEP_RESEARCH_DEFAULT_BUDGET_SECONDS` | No | Default target budget for deep research jobs |
 | `GROK_DEEP_RESEARCH_HARD_TIMEOUT_SECONDS` | No | Hard upper timeout for a deep research job |
-| `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | No | Max concurrently executed research units in the default runtime |
+| `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | No | Max concurrently executed ready research units in the default runtime |
 | `GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS` | No | Reuse window for completed deep research jobs, evaluated against `finished_at` |
 
 Notes:
@@ -304,6 +304,9 @@ PYTHONPATH=src uv run python -m grok_search.server
 Use `grok-search-research` when you want richer local interaction around the advanced deep research job layer.
 
 The current deep research runtime now centers on a structured `plan.json` with `brief`, `sub_questions`, `search_strategy`, `report_outline`, and `research_units`. `resume` continues the same job from its latest completed checkpoint boundary, while `continue` opens a new follow-up job that consumes the previous job's artifacts and findings.
+
+The `force_new` flag controls whether `deep_research_start` must create a brand-new job.
+When `force_new=false`, `deep_research_start` may reuse a matching in-flight job or a recently completed job and will surface that via the `reused` field. Set `force_new=true` when you require a brand-new job. Completed final artifacts are published with a shared `batch_id`, and `deep_research_result.citations` now uses the same structure as `citations.json`.
 
 ```bash
 grok-search-research start "Compare open-source deep research frameworks" --watch
