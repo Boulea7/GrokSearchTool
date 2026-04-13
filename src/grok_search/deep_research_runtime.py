@@ -6,6 +6,7 @@ import re
 import secrets
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlsplit
 
 from .config import config
 from .deep_research_store import DeepResearchStore

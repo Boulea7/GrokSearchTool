@@ -473,12 +473,12 @@ claude mcp list
 
 说明：
 - 这是高于 `plan_* -> web_search` 的高级层，不替代默认轻路径。
-- `deep_research_start` 会创建 job，并立即生成结构化 `plan.json`；其中至少包含 `brief`、`sub_questions`、`search_strategy`、`report_outline`、`research_units`，并在 continuation 场景下额外写出 `continuation.json`。非 `plan_only` 场景下，任务会异步推进并逐步产出 `partial_report.md`、`final_report.md`、`sources.json`、`citations.json`、`report.json`。
+- `deep_research_start` 会创建 job，并立即生成结构化 `plan.json`；其中至少包含 `brief`、`sub_questions`、`search_strategy`、`report_outline`、`research_units`。在 continuation 场景下，`plan.json` 里的 `continuation` 当前只保留 compact 摘要视图，完整 carry-forward state 会额外写到 `continuation.json`。非 `plan_only` 场景下，任务会异步推进并逐步产出 `partial_report.md`、`final_report.md`、`sources.json`、`citations.json`、`report.json`。
 - `force_new` 用于控制 `deep_research_start` 是否必须创建全新 job。
-- 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。
+- 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；这条规则当前同样适用于带 `continue_from_job_id` 的 follow-up job，返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。
 - `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要。
 - `deep_research_events` 返回有序事件流，支持 `after_seq` 增量读取。
-- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化。
+- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化；若某个 JSON artifact 不可读，结果会在 `artifact_errors` 里返回稳定错误码，而不是直接让整次读取失败。
 - `deep_research_resume` 目前支持从 `draft`、`failed`、`interrupted` job 继续，并优先从最新的 completed research-unit checkpoint 续跑，而不是整 job 从头执行。
 - `deep_research_cancel` 只负责发起取消请求；运行中的 job 会在阶段边界或下一次检查点更新时收口。
 - `deep_research_list` 提供最近 job 列表，适合 CLI 或宿主做结果检索。

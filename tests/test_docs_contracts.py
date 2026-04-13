@@ -841,3 +841,21 @@ def test_ja_and_ru_readmes_enumerate_public_tool_surface():
         assert "- `plan_intent`" in text
         assert "- `plan_execution`" in text
         assert "- `web_search`" in text
+
+
+def test_docs_explain_compact_continuation_and_artifact_error_contract():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "compact 摘要视图" in readme
+    assert "`continuation.json`" in readme
+    assert "`artifact_errors`" in readme
+    assert "follow-up job" in readme
+    assert "the `continuation` object inside `plan.json` now stays compact" in readme_en
+    assert "full carry-forward state is written separately to `continuation.json`" in readme_en
+    assert "`artifact_errors`" in readme_en
+    assert "follow-up jobs keyed by `continue_from_job_id`" in readme_en
+    assert "compact 摘要视图" in agents
+    assert "`continuation.json`" in agents
+    assert "`artifact_errors`" in agents
