@@ -159,7 +159,7 @@ async def _handle_continue(args: argparse.Namespace) -> int:
 async def _handle_worker(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
     result = await runtime.run_job(args.job_id)
-    return 1 if result.get("status") == "failed" else 0
+    return 0 if result.get("status") in {"completed", "canceled", "draft"} else 1
 
 
 def build_parser() -> argparse.ArgumentParser:

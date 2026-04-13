@@ -166,3 +166,15 @@ def test_cli_worker_returns_nonzero_when_job_fails(monkeypatch, tmp_path):
     exit_code = deep_research_cli.main(["_worker", "job-123"])
 
     assert exit_code == 1
+
+
+def test_cli_worker_returns_nonzero_when_job_is_interrupted(monkeypatch, tmp_path):
+    class InterruptedRuntime:
+        async def run_job(self, job_id):
+            return {"status": "interrupted"}
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: InterruptedRuntime())
+
+    exit_code = deep_research_cli.main(["_worker", "job-123"])
+
+    assert exit_code == 1
