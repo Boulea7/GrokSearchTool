@@ -2381,16 +2381,37 @@ def _build_feature_readiness(
         "grok_config",
         "grok_provider_chain",
         "grok_models",
+        "grok_model_selection",
+        "grok_model_runtime_fallback",
         "grok_search_probe",
     ]
     deep_research_degraded_by = [
         _readiness_cause_from_check(check)
-        for check in (grok_config, grok_provider_chain, grok_models, grok_search_probe)
+        for check in (
+            grok_config,
+            grok_provider_chain,
+            grok_models,
+            grok_model_selection,
+            grok_model_runtime_fallback,
+            grok_search_probe,
+        )
         if check and check["status"] in {"warning", "error"}
     ]
     if grok_config["status"] != "ok":
         deep_research_status = "not_ready"
         deep_research_message = grok_config["message"]
+    elif (
+        grok_model_runtime_fallback
+        and grok_model_runtime_fallback["status"] == "warning"
+    ):
+        deep_research_status = "degraded"
+        deep_research_message = grok_model_runtime_fallback["message"]
+    elif (
+        grok_model_selection
+        and grok_model_selection["status"] == "warning"
+    ):
+        deep_research_status = "degraded"
+        deep_research_message = grok_model_selection["message"]
     elif grok_search_probe["status"] == "ok":
         deep_research_status = "ready"
         deep_research_message = "Deep research planner/runtime 已共享 Grok provider chain readiness。"

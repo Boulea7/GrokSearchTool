@@ -417,9 +417,12 @@ def _merge_source_metadata(existing: dict[str, Any], candidate: dict[str, Any]) 
     for key, value in candidate.items():
         if key == "rank":
             continue
+        current = merged.get(key)
+        if key in {"description", "snippet"} and value == "" and _is_noisy_text(str(current or "")):
+            merged[key] = ""
+            continue
         if value in ("", None, []):
             continue
-        current = merged.get(key)
         if current in ("", None, []):
             if key not in {"description", "snippet"} or not _is_noisy_text(str(value)):
                 merged[key] = value
@@ -692,24 +695,24 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
 async def _build_runtime_grok_provider(current_model: str) -> tuple[GrokSearchProvider, dict[str, Any]]:
     from . import server as server_module
 
-    initial_chain = config.grok_provider_chain(model_override=current_model)
-    primary = initial_chain[0]
+    provider_chain = config.grok_provider_chain(model_override=current_model)
+    primary = dict(provider_chain[0])
     available_models = await server_module._get_available_models_cached(primary["api_url"], primary["api_key"])
     resolved_model, resolution = server_module._resolve_model_against_available_models(
         primary["model"],
         available_models,
     )
-    effective_model = resolved_model or primary["model"]
-    provider_chain = config.grok_provider_chain(model_override=effective_model)
+    if resolved_model:
+        primary["model"] = resolved_model
     provider = GrokSearchProvider(
-        provider_chain[0]["api_url"],
-        provider_chain[0]["api_key"],
-        provider_chain[0]["model"],
+        primary["api_url"],
+        primary["api_key"],
+        primary["model"],
         fallback_providers=provider_chain[1:],
     )
     return provider, {
-        "requested_model": primary["model"],
-        "effective_model": provider_chain[0]["model"],
+        "requested_model": provider_chain[0]["model"],
+        "effective_model": primary["model"],
         "available_models": available_models,
         "resolution": resolution,
     }

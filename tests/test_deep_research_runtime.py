@@ -212,6 +212,49 @@ async def test_search_query_preselects_available_grok_model_for_deep_research(mo
 
 
 @pytest.mark.asyncio
+async def test_search_query_keeps_fallback_provider_model_when_primary_is_preselected(monkeypatch, tmp_path):
+    observed = []
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309-non-reasoning"]
+
+    async def fake_search_with_sources(self, query, **kwargs):
+        observed.append(
+            {
+                "primary_model": self.model,
+                "fallback_model": self._provider_chain[1]["model"],
+            }
+        )
+        return ("Answer", [{"url": "https://docs.example.com/runtime", "title": "Runtime docs"}])
+
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setenv("GROK_API_URL_2", "https://secondary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY_2", "secondary-key")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.delenv("GROK_MODEL_2", raising=False)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "search_with_sources", fake_search_with_sources)
+
+    answer, sources = await runtime_module_search_query()
+
+    assert answer == "Answer"
+    assert sources
+    assert observed == [
+        {
+            "primary_model": "grok-4.20-0309-non-reasoning",
+            "fallback_model": "grok-4.20-0309",
+        }
+    ]
+
+
+async def runtime_module_search_query():
+    from grok_search.deep_research_runtime import _search_query
+
+    return await _search_query("Search preselection")
+
+
+@pytest.mark.asyncio
 async def test_continue_plan_uses_previous_artifacts(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
