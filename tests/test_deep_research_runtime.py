@@ -4,6 +4,7 @@ import json
 import pytest
 
 from grok_search.deep_research_runtime import DeepResearchRuntime
+from grok_search.deep_research_types import utc_now_iso
 
 
 def build_runtime(tmp_path):
@@ -1119,6 +1120,101 @@ async def test_fetch_and_map_units_skip_placeholder_claims_when_empty(monkeypatc
 
     assert "No content fetched." not in result["final_report"]
     assert "No site map returned." not in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path):
+    runtime = build_runtime(tmp_path)
+    original = runtime.store.create_job(
+        query="Original research",
+        request_fingerprint="fp-original-source",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    fingerprint = runtime._request_fingerprint(
+        query="Follow up query",
+        context="Stay technical.",
+        effort="standard",
+        include_domains=[],
+        exclude_domains=[],
+        continue_from_job_id=original.job_id,
+    )
+    follow_up = runtime.store.create_job(
+        query="Follow up query",
+        request_fingerprint=fingerprint,
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="Stay technical.",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id=original.job_id,
+    )
+    runtime.store.update_job(follow_up.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(
+        follow_up.job_id,
+        "plan.json",
+        json.dumps(structured_plan_payload(follow_up, {"mode": "continue"})),
+        "application/json",
+    )
+
+    response = await runtime.start(
+        query="Follow up query",
+        context="Stay technical.",
+        continue_from_job_id=original.job_id,
+        force_new=False,
+        schedule=False,
+    )
+
+    assert response["reused"] is True
+    assert response["job_id"] == follow_up.job_id
+
+
+@pytest.mark.asyncio
+async def test_result_returns_artifact_errors_instead_of_raising_for_corrupt_json(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Corrupt artifact handling",
+        request_fingerprint="fp-corrupt-artifacts",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", "{bad-json", "application/json")
+    runtime.write_artifact(job.job_id, "report.json", "{bad-json", "application/json")
+    runtime.write_artifact(job.job_id, "sources.json", "{bad-json", "application/json")
+    runtime.write_artifact(job.job_id, "citations.json", "{bad-json", "application/json")
+
+    result = await runtime.result(job.job_id)
+
+    assert result["plan"] is None
+    assert result["report"] is None
+    assert result["sources"] is None
+    assert result["citations"] is None
+    assert result["artifact_errors"] == {
+        "plan.json": "invalid_json",
+        "report.json": "invalid_json",
+        "sources.json": "invalid_json",
+        "citations.json": "invalid_json",
+    }
 
 
 @pytest.mark.asyncio

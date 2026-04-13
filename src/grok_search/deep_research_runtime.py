@@ -280,6 +280,15 @@ def _parse_json_object(value: str) -> dict[str, Any]:
     return json.loads(text)
 
 
+def _safe_load_json_artifact(value: str | None) -> tuple[Any | None, str | None]:
+    if value is None:
+        return None, None
+    try:
+        return json.loads(value), None
+    except Exception:
+        return None, "invalid_json"
+
+
 def _normalize_depends_on(value: Any) -> list[str]:
     if value is None:
         return []
@@ -492,7 +501,7 @@ class DeepResearchRuntime:
         )
 
         reused_job = None
-        if not force_new and not continue_from_job_id:
+        if not force_new:
             reused_job = self.store.find_reusable_job(
                 request_fingerprint,
                 recent_reuse_seconds=config.deep_research_recent_reuse_seconds,
@@ -575,17 +584,31 @@ class DeepResearchRuntime:
         citations_text = self.store.read_artifact_text(job_id, "citations.json")
         report_text = self.store.read_artifact_text(job_id, "report.json")
         sources_text = self.store.read_artifact_text(job_id, "sources.json")
-        citations = _normalize_citations_payload(json.loads(citations_text) if citations_text else None)
+        artifact_errors: dict[str, str] = {}
+        plan_value, plan_error = _safe_load_json_artifact(plan_text)
+        report_value, report_error = _safe_load_json_artifact(report_text)
+        sources_value, sources_error = _safe_load_json_artifact(sources_text)
+        citations_value, citations_error = _safe_load_json_artifact(citations_text)
+        if plan_error:
+            artifact_errors["plan.json"] = plan_error
+        if report_error:
+            artifact_errors["report.json"] = report_error
+        if sources_error:
+            artifact_errors["sources.json"] = sources_error
+        if citations_error:
+            artifact_errors["citations.json"] = citations_error
+        citations = _normalize_citations_payload(citations_value)
         return {
             "job_id": job_id,
             "status": job.status,
             "phase": job.phase,
-            "plan": json.loads(plan_text) if plan_text else None,
+            "plan": plan_value,
             "partial_report": partial_text,
             "final_report": final_text,
-            "sources": json.loads(sources_text) if sources_text else None,
+            "sources": sources_value,
             "citations": citations,
-            "report": json.loads(report_text) if report_text else None,
+            "report": report_value,
+            "artifact_errors": artifact_errors,
             "artifacts": [artifact.model_dump() for artifact in self.store.list_artifacts(job_id)],
         }
 

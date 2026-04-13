@@ -57,7 +57,7 @@ async def _handle_start(args: argparse.Namespace) -> int:
         force_new=args.force_new,
         schedule=False,
     )
-    if not args.plan_only:
+    if not args.plan_only and not response.get("reused") and response.get("status") == "queued":
         _spawn_worker(response["job_id"])
     _print_json(response)
     if args.watch and not args.plan_only:
@@ -144,7 +144,8 @@ async def _handle_continue(args: argparse.Namespace) -> int:
         force_new=args.force_new,
         schedule=False,
     )
-    _spawn_worker(response["job_id"])
+    if not response.get("reused") and response.get("status") == "queued":
+        _spawn_worker(response["job_id"])
     _print_json(response)
     if args.watch:
         await _watch_job(runtime, response["job_id"], interval_seconds=args.interval_seconds)
