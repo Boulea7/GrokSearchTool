@@ -21,7 +21,7 @@ if str(src_dir) not in sys.path:
 try:
     from grok_search.providers.grok import GrokSearchProvider
     from grok_search.providers.base import _filter_supported_search_kwargs
-    from grok_search.logger import log_info, log_warning
+    from grok_search.logger import log_info
     from grok_search.config import config
     from grok_search.sources import (
         SourcesCache,
@@ -48,7 +48,7 @@ try:
 except ImportError:
     from .providers.grok import GrokSearchProvider
     from .providers.base import _filter_supported_search_kwargs
-    from .logger import log_info, log_warning
+    from .logger import log_info
     from .config import config
     from .sources import (
         SourcesCache,
