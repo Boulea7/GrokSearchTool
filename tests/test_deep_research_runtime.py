@@ -3,7 +3,9 @@ import json
 
 import pytest
 
+from grok_search import server
 from grok_search.deep_research_runtime import DeepResearchRuntime
+from grok_search.providers.grok import GrokSearchProvider
 from grok_search.deep_research_types import utc_now_iso
 
 
@@ -109,6 +111,82 @@ async def test_plan_only_does_not_schedule_execution(tmp_path):
     assert status["status"] == "draft"
     assert [event["type"] for event in events["events"]] == ["job_created"]
     assert status["artifact_kinds"] == ["plan.json"]
+
+
+@pytest.mark.asyncio
+async def test_planner_preselects_available_grok_model_for_deep_research(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    observed_models = []
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309-non-reasoning"]
+
+    async def fake_execute(self, headers, payload, ctx=None, render_sources=False):
+        observed_models.append(payload["model"])
+        return json.dumps(
+            {
+                "brief": {"objective": "Planner preselection", "deliverable": "A cited report.", "success_criteria": ["Produce a structured report."]},
+                "sub_questions": [{"id": "sq1", "question": "Planner preselection", "reason": "Cover the primary question."}],
+                "search_strategy": {
+                    "approach": "targeted",
+                    "search_queries": ["Planner preselection"],
+                    "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+                },
+                "report_outline": [{"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."}],
+                "research_units": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "unit_type": "search",
+                        "title": "Primary search",
+                        "goal": "Planner preselection",
+                        "query": "Planner preselection",
+                        "depends_on": [],
+                        "status": "pending",
+                        "notes": "",
+                    }
+                ],
+                "planner_metadata": {"planner": "test", "used_fallback": False},
+            }
+        ), []
+
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
+
+    await runtime.start(query="Planner preselection", plan_only=True, force_new=True, schedule=False)
+
+    assert observed_models == ["grok-4.20-0309-non-reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_search_query_preselects_available_grok_model_for_deep_research(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    observed_models = []
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309-non-reasoning"]
+
+    async def fake_search_with_sources(self, query, **kwargs):
+        observed_models.append(self.model)
+        return ("Answer", [{"url": "https://docs.example.com/runtime", "title": "Runtime docs"}])
+
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "search_with_sources", fake_search_with_sources)
+
+    async def planner(job, continuation):
+        return structured_plan_payload(job, continuation)
+
+    runtime._generate_plan_with_model = planner
+
+    response = await runtime.start(query="Search preselection", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+
+    assert observed_models == ["grok-4.20-0309-non-reasoning"]
 
 
 @pytest.mark.asyncio

@@ -651,6 +651,32 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
     return 0
 
 
+async def _build_runtime_grok_provider(current_model: str) -> tuple[GrokSearchProvider, dict[str, Any]]:
+    from . import server as server_module
+
+    initial_chain = config.grok_provider_chain(model_override=current_model)
+    primary = initial_chain[0]
+    available_models = await server_module._get_available_models_cached(primary["api_url"], primary["api_key"])
+    resolved_model, resolution = server_module._resolve_model_against_available_models(
+        primary["model"],
+        available_models,
+    )
+    effective_model = resolved_model or primary["model"]
+    provider_chain = config.grok_provider_chain(model_override=effective_model)
+    provider = GrokSearchProvider(
+        provider_chain[0]["api_url"],
+        provider_chain[0]["api_key"],
+        provider_chain[0]["model"],
+        fallback_providers=provider_chain[1:],
+    )
+    return provider, {
+        "requested_model": primary["model"],
+        "effective_model": provider_chain[0]["model"],
+        "available_models": available_models,
+        "resolution": resolution,
+    }
+
+
 class DeepResearchRuntime:
     def __init__(self, root_dir: Path, *, runner: Runner | None = None):
         self.store = DeepResearchStore(root_dir)
@@ -961,13 +987,7 @@ class DeepResearchRuntime:
         job: DeepResearchJob,
         continuation: DeepResearchContinuationState,
     ) -> dict[str, Any]:
-        provider_chain = config.grok_provider_chain(model_override=config.grok_model)
-        provider = GrokSearchProvider(
-            provider_chain[0]["api_url"],
-            provider_chain[0]["api_key"],
-            provider_chain[0]["model"],
-            fallback_providers=provider_chain[1:],
-        )
+        provider, _ = await _build_runtime_grok_provider(config.grok_model)
         planner_prompt = (
             "You are planning a deep research job.\n"
             "Return valid JSON only with keys: brief, sub_questions, search_strategy, report_outline, research_units, planner_metadata.\n"
@@ -2039,13 +2059,7 @@ def _build_final_report(
 
 
 async def _search_query(query: str) -> tuple[str, list[dict]]:
-    provider_chain = config.grok_provider_chain(model_override=config.grok_model)
-    provider = GrokSearchProvider(
-        provider_chain[0]["api_url"],
-        provider_chain[0]["api_key"],
-        provider_chain[0]["model"],
-        fallback_providers=provider_chain[1:],
-    )
+    provider, _ = await _build_runtime_grok_provider(config.grok_model)
     content, sources = await _provider_search_with_sources(provider, query, min_results=3, max_results=8)
     answer, extracted_sources = split_answer_and_sources(content)
     merged = standardize_sources(merge_sources(sources, extracted_sources))
