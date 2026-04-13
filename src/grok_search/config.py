@@ -44,6 +44,7 @@ class Config:
             cls._instance._cached_model = None
             cls._instance._project_env_cache = None
             cls._instance._project_env_source_cache = None
+            cls._instance._project_env_layers_cache = None
         return cls._instance
 
     def _project_root(self) -> Path:
@@ -116,6 +117,18 @@ class Config:
         self._project_env_source_cache = sources
         return merged, sources
 
+    def _load_project_env_layers(self) -> list[tuple[str, dict[str, str]]]:
+        if self._project_env_layers_cache is not None:
+            return self._project_env_layers_cache
+
+        project_root = self._project_root()
+        layers = [
+            ("project_env_local", self._parse_env_file(project_root / ".env.local")),
+            ("project_env", self._parse_env_file(project_root / ".env")),
+        ]
+        self._project_env_layers_cache = layers
+        return layers
+
     def _load_project_env(self) -> dict[str, str]:
         merged, _ = self._load_project_env_with_sources()
         return merged
@@ -133,6 +146,33 @@ class Config:
             return "process_env"
         _, project_sources = self._load_project_env_with_sources()
         return project_sources.get(key)
+
+    @staticmethod
+    def _provider_env_keys(suffix: int | None = None) -> tuple[str, str, str]:
+        suffix_text = f"_{suffix}" if suffix is not None else ""
+        return (
+            f"GROK_API_URL{suffix_text}",
+            f"GROK_API_KEY{suffix_text}",
+            f"GROK_MODEL{suffix_text}",
+        )
+
+    def _resolve_provider_credentials(self, suffix: int | None = None) -> dict[str, str] | None:
+        url_key, key_key, _ = self._provider_env_keys(suffix)
+        if url_key in os.environ or key_key in os.environ:
+            return {
+                "source": "process_env",
+                "api_url": os.environ.get(url_key, ""),
+                "api_key": os.environ.get(key_key, ""),
+            }
+
+        for source, values in self._load_project_env_layers():
+            if url_key in values or key_key in values:
+                return {
+                    "source": source,
+                    "api_url": values.get(url_key, ""),
+                    "api_key": values.get(key_key, ""),
+                }
+        return None
 
     @property
     def config_file(self) -> Path:
@@ -231,7 +271,8 @@ class Config:
 
     @property
     def grok_api_url(self) -> str:
-        url = self._get_env_value("GROK_API_URL")
+        provider = self._resolve_provider_credentials()
+        url = provider["api_url"] if provider is not None else None
         if not url:
             raise ValueError(
                 f"Grok API URL 未配置！\n"
@@ -241,7 +282,8 @@ class Config:
 
     @property
     def grok_api_key(self) -> str:
-        key = self._get_env_value("GROK_API_KEY")
+        provider = self._resolve_provider_credentials()
+        key = provider["api_key"] if provider is not None else None
         if not key:
             raise ValueError(
                 f"Grok API Key 未配置！\n"
@@ -359,8 +401,9 @@ class Config:
             }
         )
         for suffix in suffixes:
-            provider_url = self._get_env_value(f"GROK_API_URL_{suffix}")
-            provider_key = self._get_env_value(f"GROK_API_KEY_{suffix}")
+            provider = self._resolve_provider_credentials(suffix)
+            provider_url = provider["api_url"] if provider is not None else None
+            provider_key = provider["api_key"] if provider is not None else None
             if not provider_url or not provider_key:
                 continue
             provider_model = self._get_env_value(f"GROK_MODEL_{suffix}")
@@ -375,7 +418,7 @@ class Config:
                     "api_url": provider_url,
                     "api_key": provider_key,
                     "model": resolved_model,
-                    "source": self._get_env_value_source(f"GROK_API_URL_{suffix}") or "project_env",
+                    "source": provider["source"],
                 }
             )
         return chain
@@ -412,6 +455,7 @@ class Config:
         self._cached_model = None
         self._project_env_cache = None
         self._project_env_source_cache = None
+        self._project_env_layers_cache = None
 
     @staticmethod
     def _mask_api_key(key: str) -> str:
