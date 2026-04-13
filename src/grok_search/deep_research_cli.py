@@ -21,10 +21,14 @@ def _print_json(payload: dict[str, Any]) -> None:
 
 
 def _spawn_worker(job_id: str) -> None:
+    log_dir = config.deep_research_dir / "worker-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = log_dir / f"{job_id}.stdout.log"
+    stderr_path = log_dir / f"{job_id}.stderr.log"
     subprocess.Popen(
         [sys.executable, "-m", "grok_search.deep_research_cli", "_worker", job_id],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=stdout_path.open("ab"),
+        stderr=stderr_path.open("ab"),
         start_new_session=True,
     )
 
@@ -154,8 +158,8 @@ async def _handle_continue(args: argparse.Namespace) -> int:
 
 async def _handle_worker(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
-    await runtime.run_job(args.job_id)
-    return 0
+    result = await runtime.run_job(args.job_id)
+    return 1 if result.get("status") == "failed" else 0
 
 
 def build_parser() -> argparse.ArgumentParser:

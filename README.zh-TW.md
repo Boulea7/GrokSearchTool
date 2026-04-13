@@ -181,8 +181,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - 對通過靜態檢查的目標，`web_fetch` / `web_map` 還會在真正呼叫 provider 前繼續複檢可見的 redirect 目標。
 - 目前這層可見 redirect 複檢使用 `GET` 而非 `HEAD`；對 presigned URL、one-shot token 或具有副作用的讀取型連結，可能存在額外一次預檢讀取，應視為已知邊界。
 - 目前可見 redirect 複檢最多只會發起 `5` 次預檢；如果到第 `5` 次預檢時仍然看到新的可見重定向，就會直接以「目標 URL 重定向次數過多」硬拒絕，不再繼續呼叫下游 provider。
-- 若 redirect 預檢發生 timeout 或 request-level error，當前實作會將該步驟標記為 `skipped_due_to_error`；`web_fetch` / `web_map` 目前仍會繼續執行下游 provider 呼叫。
-- 這層邊界目前不會只因本機 DNS 將某個看似公開的 hostname 解析到私網就直接拒絕，因此應被理解成 `best-effort safety boundary`，而不是對 split-horizon / 本地 DNS 私有解析的 hard-stop 強保證。
+- 若 redirect 預檢發生 timeout 或 request-level error，當前實作會直接 fail-closed，並阻斷 `web_fetch` / `web_map` 的下游 provider 呼叫；`skipped_due_to_error` 僅保留為內部診斷 reason code。
+- 這層邊界目前仍不會只因本機 DNS 將某個看似公開的 hostname 解析到私網就直接拒絕，因此不應被理解成對 split-horizon / 本地 DNS 私有解析的 hard-stop 強保證；但對可見 redirect 失敗路徑已改成 hard-stop。
 
 ### 最小 smoke check
 

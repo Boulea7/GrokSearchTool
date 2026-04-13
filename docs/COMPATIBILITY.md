@@ -66,17 +66,20 @@ These hosts remain planned targets until remote transport and host-specific veri
 - Tavily-backed supplemental search currently clamps `max_results` to Tavily's documented upper bound of `20`
 - `Config.get_config_info()` returns only the base config snapshot; the MCP tool `get_config_info` keeps that snapshot and adds `connection_test`, `doctor`, `feature_readiness`, and minimal real `search/fetch` probes
 - `get_config_info` now also supports additive `detail=full|summary` output levels; `full` remains the default and preserves the current payload shape
+- `get_config_info` and `plan_*` now return structured objects directly rather than JSON strings; callers should not apply an extra JSON decode layer
 - `detail=summary` is currently a compact projection of the same diagnostic run, not a separate lightweight execution path
 - `connection_test` reflects `/models` reachability only; use `doctor` and `feature_readiness` to judge runtime readiness
 - `grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage and runtime will preselect a better Grok candidate before the real request
 - `grok_model_runtime_fallback` means the current probe model still succeeded on the real `/chat/completions` path only after a runtime retry against another Grok candidate; both checks may appear in the same diagnostic run
+- successful `grok_search_probe` results now also report the actual `provider_name` / `provider_model` that satisfied the probe
+- `grok_provider_chain` exposes the currently resolved Grok provider count and provider names so diagnostics can distinguish single-provider from numbered-provider setups
 - runtime model fallback is currently a best-effort compatibility path: it depends on `/models` returning candidate models and on the upstream error text matching the current “model unavailable” heuristics
 - when diagnosing degraded `web_search`, treat `GROK_MODEL_SOURCE` as part of the root-cause contract: a model mismatch caused by process env or project `.env.local` / `.env` overrides is different from a persisted-config mismatch
 - `doctor.recommendations_detail` is an additive structured hint layer; clients that only read `recommendations` remain compatible
 - `feature_readiness.web_fetch.providers.verified_path` identifies the backend that passed the real fetch probe; provider entries also carry stable `check_id`, derived `reason_code` when available, and may include `skipped_reason`
 - `get_config_info` is still not a full end-to-end compatibility guarantee
 - `GROK_DEBUG=false` suppresses helper progress logs entirely, including `ctx.info()` forwarding; these signals are intentionally debug-only
-- redirect-preflight skips caused by timeouts or request-level errors now also emit a caller-visible warning through MCP context, but this does not change successful tool payloads
+- redirect-preflight timeouts and request-level failures now fail closed before downstream provider dispatch; `skipped_due_to_error` remains only as an internal diagnostic reason code
 - `grok_search.mcp` is an access-time lazy export; importing the root package does not require `fastmcp` until that export is actually accessed
 - `grok_search.providers.GrokSearchProvider` is also an access-time lazy export; non-provider imports should not fail early because Grok-provider dependencies are missing
 - this lazy-export boundary only narrows import-time behavior and does not change the install-time dependency declaration; it should not be read as turning package dependencies into optional extras
@@ -87,7 +90,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - after static URL validation passes, `web_fetch` / `web_map` also re-check visible redirect targets before dispatching the provider call
 - visible redirect re-checks currently use GET rather than `HEAD`, so presigned URLs, one-shot tokens, or read-side-effect links may incur an extra preflight read
 - redirect preflight currently makes at most 5 visible preflight requests; if the fifth preflight still encounters a new redirect, it returns the current hard-reject contract (`目标 URL 重定向次数过多`) before any downstream provider call
-- redirect preflight timeouts and request-level failures are currently surfaced as `skipped_due_to_error`; `web_fetch` / `web_map` still continue to the downstream provider path in that case
+- redirect preflight timeouts and request-level failures now hard-stop `web_fetch` / `web_map` before downstream provider dispatch; `skipped_due_to_error` remains diagnostic-only
 - this boundary does not provide a strong guarantee against split-horizon or locally poisoned DNS that resolves a public-looking hostname to a private target
 
 ## Feature Dependencies
@@ -106,6 +109,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 `feature_readiness.get_sources` reports `ready` only when the running process already holds at least one readable non-error source session; failed-search-only cache entries keep it at `partial_ready`. If the process still reports a readable session, it still reports `ready` even when `web_search` is currently not ready, and exposes the upstream configuration problem through `degraded_by`. It now also carries an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, `partial_sessions`, and `unreadable_sessions`. This is still a `transient` readiness signal and does not lower the overall doctor status by itself.
 
 `feature_readiness` now also exposes summary-safe machine fields: `based_on_checks`, `probe_scope`, and `degraded_by`. For `get_sources`, cache-side degradation currently uses the synthetic cause `source_cache_state`; for `web_search`, the payload additionally includes `runtime_override_active` and `runtime_model_source`, so callers can tell whether the current runtime behavior is still pinned by a higher-priority env/file override.
+`feature_readiness.deep_research_planner` and `feature_readiness.deep_research_runtime` now expose the shared Grok readiness surface used by deep research planner/runtime calls.
 
 `get_sources.rank` currently follows `score`, source identity quality, and stable dedupe order without a Grok-specific boost. `standardize_sources` also canonicalizes scheme/host casing during dedupe, so mixed-case variants of the same page may collapse into one returned source.
 

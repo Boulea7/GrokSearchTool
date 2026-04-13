@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from grok_search import deep_research_cli
 from grok_search.deep_research_runtime import DeepResearchRuntime
@@ -128,3 +129,40 @@ def test_cli_start_does_not_spawn_worker_for_reused_completed_job(monkeypatch, t
     assert payload["reused"] is True
     assert payload["status"] == "completed"
     assert spawned == []
+
+
+def test_spawn_worker_writes_logs_to_worker_log_dir(monkeypatch, tmp_path):
+    captured = {}
+    runtime_dir = tmp_path / "deep-research"
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_DIR", str(runtime_dir))
+
+    def fake_popen(cmd, stdout=None, stderr=None, start_new_session=None):
+        captured["cmd"] = cmd
+        captured["stdout"] = stdout
+        captured["stderr"] = stderr
+        captured["start_new_session"] = start_new_session
+        return object()
+
+    monkeypatch.setattr(deep_research_cli.subprocess, "Popen", fake_popen)
+
+    deep_research_cli._spawn_worker("job-123")
+
+    assert captured["cmd"][-2:] == ["_worker", "job-123"]
+    assert captured["start_new_session"] is True
+    assert Path(captured["stdout"].name).name == "job-123.stdout.log"
+    assert Path(captured["stderr"].name).name == "job-123.stderr.log"
+    assert Path(captured["stdout"].name).parent == runtime_dir / "worker-logs"
+    captured["stdout"].close()
+    captured["stderr"].close()
+
+
+def test_cli_worker_returns_nonzero_when_job_fails(monkeypatch, tmp_path):
+    class FailingRuntime:
+        async def run_job(self, job_id):
+            return {"status": "failed"}
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FailingRuntime())
+
+    exit_code = deep_research_cli.main(["_worker", "job-123"])
+
+    assert exit_code == 1

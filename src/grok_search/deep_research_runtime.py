@@ -76,6 +76,9 @@ _NOISY_EVIDENCE_MARKERS = (
     "español",
     "privacy policy",
     "cookie policy",
+    "integrated platform for monitoring",
+    "visibility into your stack",
+    "observability end-to-end",
 )
 _PREFERRED_TECHNICAL_TERMS = (
     "checkpoint",
@@ -223,6 +226,14 @@ def _count_keyword_overlap(text: str, keywords: list[str]) -> int:
     return sum(1 for keyword in keywords if keyword in lowered)
 
 
+def _has_noisy_source_metadata(source: dict[str, Any]) -> bool:
+    for key in ("title", "description", "snippet"):
+        value = source.get(key)
+        if isinstance(value, str) and value.strip() and _is_noisy_text(value):
+            return True
+    return False
+
+
 def _continuation_anchor_terms(continuation: DeepResearchContinuationState) -> list[str]:
     texts = [
         continuation.continuation_goal,
@@ -346,7 +357,9 @@ def _source_sort_tuple(item: dict[str, Any]) -> tuple:
     if not isinstance(rank_hint, int):
         rank_hint = 10_000
     score = item.get("score")
+    quality_score = _source_quality_score(item)
     return (
+        -quality_score,
         -_source_quality_bias(item),
         0 if item.get("title") else 1,
         0 if item.get("snippet") or item.get("description") else 1,
@@ -371,6 +384,8 @@ def _source_quality_score(item: dict[str, Any]) -> int:
         score += 1
     if item.get("provider"):
         score += 1
+    if _has_noisy_source_metadata(item):
+        score -= 20
     return score
 
 
@@ -406,9 +421,10 @@ def _merge_source_metadata(existing: dict[str, Any], candidate: dict[str, Any]) 
             continue
         current = merged.get(key)
         if current in ("", None, []):
-            merged[key] = value
+            if key not in {"description", "snippet"} or not _is_noisy_text(str(value)):
+                merged[key] = value
             continue
-        if key in {"description", "snippet"} and len(str(value)) > len(str(current)):
+        if key in {"description", "snippet"} and not _is_noisy_text(str(value)) and len(str(value)) > len(str(current)):
             merged[key] = value
             continue
         if key == "title" and len(str(value)) > len(str(current)):
@@ -433,9 +449,31 @@ def _enrich_source_from_fetched_text(source: dict[str, Any], fetched_text: str) 
             enriched["snippet"] = summary
         if not enriched.get("description"):
             enriched["description"] = summary
+    if _has_noisy_source_metadata(enriched):
+        for key in ("description", "snippet"):
+            value = enriched.get(key)
+            if isinstance(value, str) and _is_noisy_text(value):
+                enriched[key] = ""
     if not enriched.get("domain") and enriched.get("url"):
         enriched["domain"] = urlsplit(enriched["url"]).netloc.lower()
     return enriched
+
+
+def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]) -> str:
+    claim_texts: list[str] = []
+    for section in sections:
+        for claim in section.get("claims", []):
+            text = _summarize_evidence_text(str(claim.get("text", "")), limit=180)
+            if not text or _is_noisy_text(text):
+                continue
+            if text not in claim_texts:
+                claim_texts.append(text)
+    if not claim_texts:
+        return _trim_text(plan.brief.objective, limit=220)
+    summary = " ".join(claim_texts[:2])
+    if len(claim_texts) == 1:
+        summary = f"{plan.brief.objective}: {summary}"
+    return _trim_text(summary, limit=320)
 
 
 def _report_artifact_contract_error(job: DeepResearchJob) -> dict[str, str]:
@@ -831,6 +869,15 @@ class DeepResearchRuntime:
 
     async def resume(self, job_id: str, *, schedule: bool = True) -> dict[str, Any]:
         job = self.store.get_job(job_id)
+        if job.plan_only:
+            self.store.append_event(
+                job_id,
+                type="plan_only_execution_blocked",
+                phase=job.phase,
+                message="Plan-only jobs cannot be resumed into execution.",
+                data={},
+            )
+            return self._job_payload(job, reused=False)
         if job.status not in {"draft", "failed", "interrupted"}:
             return self._job_payload(job, reused=False)
         job = self.store.update_job(
@@ -886,6 +933,16 @@ class DeepResearchRuntime:
         }
 
     async def run_job(self, job_id: str) -> dict[str, Any]:
+        job = self.store.get_job(job_id)
+        if job.plan_only:
+            self.store.append_event(
+                job_id,
+                type="plan_only_execution_blocked",
+                phase=job.phase,
+                message="Plan-only jobs cannot be executed.",
+                data={},
+            )
+            return await self.result(job_id)
         await self._run(job_id)
         return await self.result(job_id)
 
@@ -1694,14 +1751,15 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "source_registry": {item["source_id"]: item for item in source_registry},
         "sections": _sanitize_sections(sections, source_registry),
     }
+    report_summary = _build_report_summary(plan, citations["sections"])
     report = {
         "query": plan.query,
-        "summary": citations["sections"][0]["claims"][0]["text"] if citations["sections"] and citations["sections"][0]["claims"] else "",
+        "summary": report_summary,
         "status": "completed",
         "sections": citations["sections"],
         "unit_results": unit_results,
     }
-    final_report = _build_final_report(plan, sections, citations["source_registry"])
+    final_report = _build_final_report(plan, citations["sections"], citations["source_registry"], report_summary)
     runtime.store.update_job(job_id, phase="finalizing", progress_pct=94.0, heartbeat_at=utc_now_iso())
     runtime.store.append_event(
         job_id,
@@ -2042,8 +2100,11 @@ def _build_final_report(
     plan: DeepResearchPlan,
     sections: list[dict[str, Any]],
     source_registry: dict[str, dict[str, Any]],
+    summary: str,
 ) -> str:
     lines = [f"# {plan.query}", ""]
+    if summary:
+        lines.extend(["## Summary", "", summary, ""])
     for section in sections:
         lines.append(f"## {section['title']}")
         lines.append("")

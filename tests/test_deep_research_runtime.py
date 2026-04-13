@@ -114,6 +114,28 @@ async def test_plan_only_does_not_schedule_execution(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_plan_only_job_cannot_be_run_or_resumed(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+
+    response = await runtime.start(
+        query="Plan only guardrail",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    run_result = await runtime.run_job(response["job_id"])
+    resume_result = await runtime.resume(response["job_id"], schedule=False)
+    events = await runtime.events(response["job_id"])
+
+    assert run_result["status"] == "draft"
+    assert resume_result["status"] == "draft"
+    assert runtime.store.read_artifact_text(response["job_id"], "final_report.md") is None
+    assert any(event["type"] == "plan_only_execution_blocked" for event in events["events"])
+
+
+@pytest.mark.asyncio
 async def test_planner_preselects_available_grok_model_for_deep_research(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     observed_models = []
@@ -1825,6 +1847,59 @@ async def test_final_report_omits_remaining_gaps_without_real_gap_and_claims_sta
 
 
 @pytest.mark.asyncio
+async def test_report_summary_is_synthesized_instead_of_reusing_first_claim(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the operational tradeoff.",
+            },
+            {
+                "section_id": "key-findings",
+                "title": "Key Findings",
+                "goal": "Compare resume and restart behavior.",
+            },
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume continues from checkpoints without replaying completed work. Restart replays the task from a fresh starting point.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Official docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nResume continues from checkpoints without replaying completed work. Restart replays the task from a fresh starting point."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Summarize restart tradeoffs", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    first_claim = result["report"]["sections"][0]["claims"][0]["text"]
+
+    assert result["report"]["summary"] != first_claim
+    assert "Resume continues" in result["report"]["summary"]
+    assert "Restart replays" in result["report"]["summary"]
+
+
+@pytest.mark.asyncio
 async def test_completed_claims_include_provenance_fields_and_final_sources_follow_rank(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -1872,6 +1947,62 @@ async def test_completed_claims_include_provenance_fields_and_final_sources_foll
     assert first_claim["evidence_ids"]
     assert "docs.example.com/runtime/checkpoints" in source_lines[0]
     assert "stackoverflow.com" in source_lines[-1]
+
+
+@pytest.mark.asyncio
+async def test_noisy_marketing_fetch_is_filtered_and_official_docs_rank_first(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 2,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "AWS DMS resume relies on checkpoints.",
+            [
+                {
+                    "url": "https://docs.datadoghq.com/infrastructure/resource_catalog/aws_dms_replication_task/",
+                    "title": "Aws dms replication task",
+                    "description": "The integrated platform for monitoring & security Observability End-to-end, simplified visibility into your stack’s health & performance Infrastructure",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                    "title": "CHAP Task.CDC",
+                    "description": "",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "datadoghq.com" in url:
+            return (
+                "# Aws dms replication task\n\n"
+                "The integrated platform for monitoring & security Observability End-to-end, simplified visibility into your stack’s health & performance Infrastructure\n"
+                "Sign up or log in.\n"
+            )
+        return "# CHAP Task.CDC\n\nResume continues from the last recovery checkpoint when source logs remain available."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="checkpoint resume semantics in aws dms", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    source_lines = [line for line in result["final_report"].splitlines() if line.startswith("- [R")]
+
+    assert "The integrated platform for monitoring" not in result["final_report"]
+    assert "Sign up or log in." not in result["final_report"]
+    assert "Resume continues from the last recovery checkpoint" in result["final_report"]
+    assert "docs.aws.amazon.com" in source_lines[0]
+    assert "docs.datadoghq.com" in source_lines[-1]
 
 
 @pytest.mark.asyncio

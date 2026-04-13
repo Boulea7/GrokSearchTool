@@ -269,7 +269,7 @@ claude mcp add-json grok-search --scope user '{
 - `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
 - 如需更省上下文，可将 `GROK_TIME_CONTEXT_MODE` 设为 `auto`（只在明显时效查询或显式时效控制下注入）或 `never`
 - `GROK_DEBUG=false` 时，`log_info()` 不会写入这类 helper 日志，也不会通过 `ctx.info()` 暴露中间进度；仅在 `GROK_DEBUG=true` 时转发 debug-only progress
-- redirect preflight 若因超时或请求级错误被标记为 `skipped_due_to_error`，当前实现还会通过 MCP context 发出 caller-visible warning，但不会改写成功返回体
+- redirect preflight 若因超时或请求级错误失败，`web_fetch` / `web_map` 当前会直接 fail-closed 并阻断下游 provider 调用；`skipped_due_to_error` 仅保留为内部诊断 / 兼容性 reason code，不再作为继续执行路径
 - 若 `content` 为空，先检查中转站是否真的返回了正文；若 `sources_count=0`，再检查是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
 - 若上游 endpoint 指向 `localhost` / `127.x` 等 loopback 地址，运行时会对该请求强制 `trust_env=False`，因此会一并绕过 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 以及 `SSL_CERT_FILE` / `SSL_CERT_DIR`
 
@@ -378,8 +378,8 @@ claude mcp list
 - 对通过静态校验的目标，`web_fetch` / `web_map` 还会在真正调用 provider 前继续复检可见的 redirect 目标。
 - 当前可见 redirect 复检使用 `GET` 请求而不是 `HEAD`；对 presigned URL、one-shot token 或有副作用的读取型链接，这意味着可能存在额外一次预检读取，应视为已知边界。
 - 当前可见 redirect 复检最多会发起 `5` 次预检请求；如果到第 `5` 次预检时仍然看到新的可见重定向，就会直接返回“目标 URL 重定向次数过多”并拒绝继续调用下游 provider。
-- 若 redirect 预检发生超时或请求级错误，当前实现会把该步骤标记为 `skipped_due_to_error`；`web_fetch` / `web_map` 目前仍会继续执行下游 provider 调用，因此这条边界当前应视为 best-effort safety boundary，而不是 hard-stop guarantee。
-- 上述 `skipped_due_to_error` 当前还会通过 MCP context 发出 caller-visible warning，但不会改写成功返回体；因此宿主若订阅上下文消息，可能在正文成功返回之外额外看到 warning 事件。
+- 若 redirect 预检发生超时或请求级错误，当前实现会直接返回失败并阻断下游 provider 调用；`skipped_due_to_error` 仅作为内部诊断 reason code 保留，不再代表“继续执行下游 provider”。
+- 当前这层边界依然不会仅因本机 DNS 把某个看似公网的 hostname 解析到私网就直接拒绝请求，因此它仍不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证；但对可见 redirect 失败路径已经收紧为 hard-stop。
 - 当前实现为了避免误杀普通公网 hostname，不会因为本机 DNS 把某个公网域名解析到私网结果就直接拒绝请求；因此这层边界不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证。
 
 | 参数 | 类型 | 必填 | 说明 |
@@ -394,7 +394,7 @@ claude mcp list
 - Tavily Map 默认可能返回外部域名链接；若你需要更接近站内 sitemap 的结果，请结合 `instructions` 收紧范围，并按返回结果自行过滤。当前文档中的这条说明对应 Tavily 文档中 `allow_external=true` 的默认行为，本封装暂未直接暴露该开关。
 - 默认会拒绝非 `http/https`、loopback、明显私有网络目标、单标签主机名、常见私网后缀主机、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把私网 IP 编进公网 DNS 名的 alias 形态，并在调用 Tavily 前继续做可见 redirect 目标复检。
 - 上述边界同样覆盖明显的 private / 私有网络目标；当前策略优先阻断这类目标，再决定是否继续调用下游 provider。
-- 可见 redirect 复检当前使用 `GET` 而不是 `HEAD`；最多会发起 `5` 次预检请求，如果到第 `5` 次预检时仍然看到新的可见重定向，就会返回“目标 URL 重定向次数过多”并拒绝继续执行下游 provider。若预检超时或发生请求级错误，则会标记为 `skipped_due_to_error`，并继续执行下游 provider；因此该边界当前应被理解为 best-effort safety boundary，而不是对 split-horizon / 本地 DNS 私有解析的强保证。
+- 可见 redirect 复检当前使用 `GET` 而不是 `HEAD`；最多会发起 `5` 次预检请求，如果到第 `5` 次预检时仍然看到新的可见重定向，就会返回“目标 URL 重定向次数过多”并拒绝继续执行下游 provider。若预检超时或发生请求级错误，当前也会直接 fail-closed；`skipped_due_to_error` 仅保留为内部 reason code，不再继续执行下游 provider。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -418,10 +418,11 @@ claude mcp list
 - Grok `/models` 连通性与可用模型
 - Tavily / Firecrawl 的只读探测结果（仅在已配置时执行）
 - 默认最小真实 `web_search` / `web_fetch` 探针结果
-- `web_search` / `get_sources` / `web_fetch` / `web_map` / `toggle_builtin_tools` 的 readiness 汇总
+- `web_search` / `get_sources` / `web_fetch` / `web_map` / `toggle_builtin_tools` / `deep_research_planner` / `deep_research_runtime` 的 readiness 汇总
 - 修复建议列表（API Key 自动脱敏）
 - `doctor.recommendations_detail`：与 `check_id` / `feature` 关联的结构化修复建议
 - `feature_readiness.web_fetch.providers`：provider 级状态，稳定包含 `check_id`；`verified_path` 表示真实抓取探针实际打通的后端；未执行或退化的 provider 会在可判定时附带 `reason_code`，并可能补充 `skipped_reason`
+- `grok_provider_chain`：当前解析到的 Grok provider 数量与命名摘要，便于判断 diagnostics 是否仅在 primary 配置下运行
 - 基础快照里的 `GROK_MODEL_SOURCE`：当前活动模型的来源层，便于区分是进程 env、项目 `.env.local` / `.env`、持久化配置还是代码默认值在生效
 
 注意：
@@ -430,10 +431,12 @@ claude mcp list
 - `connection_test` 当前只反映 `/models` 连通性，不代表当前活动模型一定能通过真实 `chat/completions` 路径；判断 `web_search` 是否真可用时，应结合 `doctor`、`feature_readiness`、`GROK_MODEL_SOURCE` 与 `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` 结果一起看。
 - `grok_model_selection` 表示 `/models` 列表阶段就已发现当前模型不可直接使用，并会在运行前预选到更合适的 Grok 候选模型；`grok_model_runtime_fallback` 表示当前 probe model 在真实 `chat/completions` 路径上仍只能靠运行时二次回退才成功。这两个 check 可能同时出现。
 - `grok_search_probe` 当前除了 `ok` / `error` 之外，也可能返回正文质量降级类 `warning`；例如探针只拿到信源列表、没有可用正文，或正文疑似截断时，`feature_readiness.web_search` 会相应显示为 `degraded`。
+- `grok_search_probe` 当前在成功时还会附带实际命中的 `provider_name` / `provider_model`；当 secondary provider 接住请求时，diagnostics 会按真实 winner 回显，而不是只停留在 primary 静态配置层。
 - 运行时模型回退当前属于 best-effort 兼容路径：它依赖 `/models` 能返回可选候选列表，且上游错误摘要命中“模型不可用”类文案；如果 `/models` 不可用，或错误类型不属于该类信号，就不保证会自动继续回退。
 - `feature_readiness.get_sources` 只有在当前进程内至少存在一个非 error 的可读取 source session 时才会显示 `ready`；如果只有失败搜索留下的 session，状态会保持 `partial_ready`。即使 `web_search` 当前尚未 ready，只要当前进程里仍保有可读取 session，`get_sources` 也会继续显示 `ready`，同时通过 `degraded_by` 暴露上游配置问题。
 - `feature_readiness.get_sources` 当前会附带 `cache_summary`，至少包含 `total_sessions`、`readable_sessions`、`error_sessions`、`partial_sessions`、`unreadable_sessions`，用于快速判断当前 source cache 的可读性与退化面。
 - `feature_readiness` 当前还会提供一组 summary-safe 机器字段：`based_on_checks` 表示该能力主要参考了哪些 doctor checks，`probe_scope` 表示结论属于哪类探针/状态面，`degraded_by` 用 `check_id/status/reason_code` 描述当前退化来源。对 `get_sources`，cache 侧退化当前会使用 synthetic cause `source_cache_state`；对 `web_search` 还会额外返回 `runtime_override_active` 与 `runtime_model_source`，用于标记当前退化是否受进程 env / 项目 `.env.local` / `.env` 覆盖层影响。
+- `feature_readiness.deep_research_planner` 与 `feature_readiness.deep_research_runtime` 当前共享 Grok provider chain 与真实搜索探针的 readiness 结论，用于区分“默认轻路径正常”与“deep research 也能在相同运行时下工作”。
 - `feature_readiness` / `doctor` 的状态语义当前可按以下方式理解：`ready`=当前能力已验证可用，`degraded`=能力存在但探针或局部依赖异常，`not_ready`=配置或前置条件不足，`partial_ready`=接口存在但仍缺少运行中瞬时条件；其中 `transient` 和 `client_specific` 项默认不拉低 overall doctor。
 - 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query、常见 OAuth/OIDC credential 参数，以及高置信度 cloud-signed credential 键（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）也会做遮罩。但诊断结果仍可能包含本机绝对路径、endpoint/主机名或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
 
@@ -470,6 +473,8 @@ claude mcp list
 - 推荐阶段顺序为 `plan_intent -> plan_complexity -> plan_sub_query -> plan_search_term -> plan_tool_mapping -> plan_execution`。
 - Level 1 planning 在 `query_decomposition` 后结束，Level 2 planning 在 `tool_selection` 后结束，Level 3 才会继续到 `execution_order`。
 - `plan_*` wrapper 当前采用标量输入形态，例如 `depends_on` 使用 CSV、`parallel_groups` 使用分号分组的 CSV、`params_json` 使用字符串化 JSON；返回值会提供 `plan_complete`、`phases_remaining` 与 `executable_plan`，便于调用方直接承接下一步执行。
+- `plan_*` 当前直接返回结构化对象，而不是 JSON 字符串；调用方不应再对工具返回值额外做一次 `json.loads(...)`。
+- `plan_sub_query.boundary` 当前除了必填外，还会做最小机器校验：必须显式写出排除/不包含的边界语义，纯空泛描述不会通过。
 - planning `session_id` 当前是进程内的 transient handle，默认 TTL 约 1 小时、LRU 上限 256；进程重启、TTL 到期或缓存淘汰后，应从新的 `plan_intent` session 重新开始。
 - 首次建立 `search_strategy` 时必须提供 `approach`；只有在 strategy 已建立后，后续非 `is_revision` 调用才允许只追加 `search_terms`。
 - 当 session 缺失、阶段顺序错误，或 revision 会破坏下游阶段时，当前会返回结构化错误，并明确要求从新 session 重新开始相应 planning 流程。
