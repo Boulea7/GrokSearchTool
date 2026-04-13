@@ -211,14 +211,14 @@ def test_readme_does_not_treat_uv_tool_install_as_public_release_contract():
     assert 'uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"' not in text
 
 
-def test_security_policy_mentions_redirect_preflight_degraded_boundary():
+def test_security_policy_mentions_redirect_preflight_fail_closed_boundary():
     text = SECURITY.read_text(encoding="utf-8")
 
     assert "redirect preflight" in text
     assert "skipped_due_to_error" in text
     assert "timeout" in text
-    assert "continue downstream provider calls" in text
-    assert "best-effort safety boundary" in text
+    assert "fail closed" in text
+    assert "internal diagnostic reason code" in text
 
 
 def test_docs_pin_release_repo_and_stdio_first_host_story():
@@ -814,20 +814,20 @@ def test_docs_explain_redirect_preflight_timeout_and_redirect_limit_contract():
     assert "fifth preflight still encounters a new redirect" in security
 
 
-def test_docs_explain_preflight_warning_side_channel_without_payload_shape_change():
+def test_docs_explain_preflight_fail_closed_contract():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
     agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
 
-    assert "caller-visible warning" in readme
-    assert "不会改写成功返回体" in readme
-    assert "caller-visible warning" in readme_en
-    assert "does not rewrite successful return payloads" in readme_en
-    assert "caller-visible warning" in compatibility
-    assert "does not change successful tool payloads" in compatibility
-    assert "caller-visible warning" in agents
-    assert "不会改写成功返回体" in agents
+    assert "fail-closed" in readme
+    assert "不再代表“继续执行下游 provider”" in readme
+    assert "fail closed" in readme_en
+    assert "continue-execution path" in readme_en
+    assert "hard-stop" in compatibility
+    assert "diagnostic reason code" in compatibility
+    assert "fail-closed" in agents
+    assert "不再作为继续执行路径" in agents
 
 
 def test_docs_explain_web_fetch_and_web_map_preflight_contract():
@@ -836,12 +836,12 @@ def test_docs_explain_web_fetch_and_web_map_preflight_contract():
 
     assert "`GET` 而不是 `HEAD`" in readme
     assert "`5` 次预检请求" in readme
-    assert "skipped_due_to_error" in readme
+    assert "fail-closed" in readme
     assert "loopback" in readme
     assert "private" in readme
     assert "GET rather than `HEAD`" in compatibility
     assert "fifth preflight still encounters a new redirect" in compatibility
-    assert "skipped_due_to_error" in compatibility
+    assert "hard-stop" in compatibility
 
 
 def test_docs_explain_toggle_builtin_tools_stable_error_contract():
@@ -858,9 +858,9 @@ def test_docs_explain_toggle_builtin_tools_stable_error_contract():
 
 def test_localized_readmes_explain_redirect_preflight_contract():
     localized_expectations = {
-        README_ZH_TW: ["第 `5` 次預檢", "skipped_due_to_error", "best-effort safety boundary"],
-        README_JA: ["`5` 回", "skipped_due_to_error", "best-effort safety boundary"],
-        README_RU: ["`5`", "skipped_due_to_error", "best-effort safety boundary"],
+        README_ZH_TW: ["第 `5` 次預檢", "skipped_due_to_error", "fail-closed"],
+        README_JA: ["`5` 回", "skipped_due_to_error", "fail-closed"],
+        README_RU: ["`5`", "skipped_due_to_error", "fail-closed"],
     }
 
     for path, expected_fragments in localized_expectations.items():

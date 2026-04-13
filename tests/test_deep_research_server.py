@@ -112,7 +112,7 @@ async def test_deep_research_cancel_updates_job_state(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_deep_research_resume_from_draft_uses_existing_plan(tmp_path):
+async def test_deep_research_resume_from_draft_preserves_plan_only_job(tmp_path):
     response = await server.deep_research_start(
         query="Plan first, run later",
         context="Need a visible plan before execution.",
@@ -127,9 +127,12 @@ async def test_deep_research_resume_from_draft_uses_existing_plan(tmp_path):
     resumed = await server.deep_research_resume(response["job_id"])
     await asyncio.sleep(0.01)
     status = await server.deep_research_status(response["job_id"])
+    events = await server.deep_research_events(response["job_id"])
 
     assert resumed["job_id"] == response["job_id"]
-    assert status["status"] == "completed"
+    assert resumed["status"] == "draft"
+    assert status["status"] == "draft"
+    assert any(event["type"] == "plan_only_execution_blocked" for event in events["events"])
 
 
 @pytest.mark.asyncio

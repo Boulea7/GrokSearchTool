@@ -48,6 +48,8 @@ The public MCP surface currently includes `20` tools:
 `plan_search_term` sets `approach` / `fallback_plan` when `search_strategy` is first created; later non-revision calls append `search_terms` only and do not implicitly rewrite existing strategy metadata.
 planning `session_id` values are in-process transient handles with about a 1-hour TTL and a 256-session LRU cap, so restart / expiry / eviction requires starting again from a fresh `plan_intent`.
 The wrappers intentionally keep scalar shim inputs such as CSV `depends_on`, semicolon-grouped `parallel_groups`, and stringified `params_json`; the first `plan_search_term` call must provide `approach`.
+`plan_*` now returns structured objects directly rather than JSON strings, so callers should not wrap the result in an extra `json.loads(...)`.
+`plan_sub_query.boundary` now enforces a minimum machine-checkable exclusion contract; vague “focus on X” wording without an explicit exclusion boundary is rejected.
 
 ## Installation
 
@@ -181,7 +183,7 @@ Notes:
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` defaults to `always`, which preserves the current behavior of always injecting local time context
 - `GROK_DEBUG=false` suppresses these helper progress logs entirely, including `ctx.info()` forwarding; they are intentionally debug-only progress/debug signals
-- when redirect preflight falls back to `skipped_due_to_error`, the implementation now emits a caller-visible warning through MCP context, but does not rewrite successful return payloads
+- when redirect preflight hits a timeout or request-level error, `web_fetch` / `web_map` now fail closed before downstream provider dispatch; `skipped_due_to_error` remains an internal diagnostic reason code rather than a continue-execution path
 - the recommended core path is `plan_* -> web_search`
 - direct `web_search` is still allowed for clear single-hop lookups when planning adds little value
 - advanced `deep research` is now exposed as a non-interactive MCP job surface plus a richer CLI workflow
@@ -194,8 +196,7 @@ Notes:
 - after the static URL check passes, `web_fetch` and `web_map` also re-check visible redirect targets before dispatching the provider call
 - visible redirect re-checks currently use `GET` rather than `HEAD`, so presigned URLs, one-shot tokens, or read-side-effect links may incur an extra preflight read
 - redirect preflight currently makes at most 5 visible preflight requests; if the fifth preflight still encounters a new redirect, it returns the current hard-reject contract (`目标 URL 重定向次数过多`) before any downstream provider call
-- if redirect preflight times out or hits a request-level error, the current implementation marks that step as `skipped_due_to_error`; `web_fetch` / `web_map` currently still continue to the downstream provider call
-- that `skipped_due_to_error` path also emits a caller-visible warning through MCP context, but does not rewrite successful return payloads
+- if redirect preflight times out or hits a request-level error, the current implementation now hard-stops the request before downstream provider dispatch; `skipped_due_to_error` remains available as an internal diagnostic reason code only
 - this boundary intentionally does not hard-block ordinary public-looking hostnames based only on local DNS answers, so it should not be treated as a strong guarantee against split-horizon or locally poisoned DNS resolution
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` expose a curated subset of provider options rather than the providers' full native API surfaces.
@@ -217,9 +218,10 @@ For any local `stdio` host, start with this lightweight verification flow:
 
 - optional `detail="full" | "summary"` output levels; `full` remains the default and preserves the current payload shape
 - `doctor`: overall doctor status, structured checks, and repair recommendations
-- `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, and `toggle_builtin_tools`
+- `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, `toggle_builtin_tools`, `deep_research_planner`, and `deep_research_runtime`
 - `doctor.recommendations_detail`: additive structured repair hints linked to `check_id` and feature scope
 - `feature_readiness.web_fetch.providers`: provider-level readiness details with stable `check_id`; `verified_path` shows which real fetch probe succeeded, and degraded or skipped providers include `reason_code` when it can be derived and may also include `skipped_reason`
+- `grok_provider_chain`: a structured summary of the currently resolved Grok provider count and provider names
 - `GROK_MODEL_SOURCE` in the base snapshot: the active model source, so callers can tell whether runtime behavior comes from process env, project env files, persisted config, or code defaults
 - minimal real `web_search` / `web_fetch` probe results
 
@@ -230,9 +232,11 @@ The `/models` connection test uses a 10-second timeout; additional real `web_sea
 `connection_test` only reflects `/models` reachability; if `web_search` is degraded, combine `doctor`, `feature_readiness`, `GROK_MODEL_SOURCE`, and the `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` checks before concluding the root cause.
 `grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage, while `grok_model_runtime_fallback` means the real `/chat/completions` path only succeeded after a runtime retry against another Grok candidate; both checks may appear in the same diagnostic run.
 `grok_search_probe` may now return a body-quality `warning` as well as `ok` or `error`; for example, a sources-only probe or a probably truncated probe body degrades `feature_readiness.web_search` even though the endpoint itself still responded successfully.
+Successful `grok_search_probe` results now also report the actual `provider_name` / `provider_model` that satisfied the probe, so diagnostics can distinguish primary success from numbered-provider failover.
 `feature_readiness.get_sources` only reports `ready` when the current process already holds at least one readable non-error source session; error-only cached sessions keep it at `partial_ready`. Even if `web_search` is currently not ready, `get_sources` can still report `ready` when the running process still holds a readable session, while surfacing the upstream config problem through `degraded_by`.
 `feature_readiness.get_sources` now also includes an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, `partial_sessions`, and `unreadable_sessions`.
 `feature_readiness` now also carries summary-safe machine fields: `based_on_checks`, `probe_scope`, and `degraded_by`. For `web_search`, it additionally returns `runtime_override_active` and `runtime_model_source` so callers can tell when a higher-priority runtime override is still in effect.
+`feature_readiness.deep_research_planner` and `feature_readiness.deep_research_runtime` now mirror the shared Grok provider-chain readiness used by deep research planner/runtime calls.
 `ready` means the capability is verified, `degraded` means it exists but probes or partial dependencies are unhealthy, `not_ready` means prerequisites are missing, and `partial_ready` means the interface exists but still depends on transient runtime state; `transient` and `client_specific` items do not lower the overall doctor status on their own.
 
 If `GROK_MODEL_SOURCE` comes back as `process_env`, `project_env_local`, or `project_env`, calling `switch_model` alone does not change the current process; update or remove that higher-priority override first.

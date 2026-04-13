@@ -34,7 +34,7 @@ Current runtime note:
 - `web_fetch` / `web_map` perform a redirect preflight before dispatching provider calls
 - private or loopback redirect targets are hard-rejected before provider dispatch
 - redirect preflight currently makes at most 5 visible preflight requests; if the fifth preflight still encounters a new redirect, it is hard-rejected before provider dispatch
-- redirect preflight request-level failures and timeout failures currently degrade to `skipped_due_to_error` and continue downstream provider calls, so this path should be treated as a best-effort safety boundary rather than a hard-stop guarantee
+- redirect preflight request-level failures and timeout failures now fail closed before downstream provider dispatch; `skipped_due_to_error` remains an internal diagnostic reason code rather than a continue-execution path
 
 ## Response Goals
 

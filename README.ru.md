@@ -181,8 +181,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - После статической проверки URL `web_fetch` / `web_map` также перепроверяют видимые redirect-цели до вызова provider.
 - Сейчас эта видимая redirect-проверка использует `GET`, а не `HEAD`; для presigned URL, one-shot token или ссылок, где даже чтение может иметь побочный эффект, это означает возможный дополнительный preflight-read и должно рассматриваться как известная граница.
 - Сейчас видимая redirect-проверка выполняется не более `5` раз; если на `5`-й проверке всё ещё появляется новый видимый redirect, запрос жёстко отклоняется с текущим контрактом `目标 URL 重定向次数过多`, и до downstream provider дело не доходит.
-- Если redirect-preflight завершается timeout'ом или request-level ошибкой, текущая реализация помечает этот шаг как `skipped_due_to_error`; `web_fetch` / `web_map` сейчас всё ещё продолжают downstream-вызов provider.
-- Эту границу сейчас следует понимать как `best-effort safety boundary`, а не как hard-stop гарантию против split-horizon или локально отравленного DNS, который резолвит публично выглядящий hostname в приватную цель.
+- Если redirect-preflight завершается timeout'ом или request-level ошибкой, текущая реализация теперь fail-closed и останавливает downstream-вызов provider для `web_fetch` / `web_map`; `skipped_due_to_error` остаётся только внутренним diagnostic reason code.
+- Эта граница по-прежнему не даёт hard-stop гарантии против split-horizon или локально отравленного DNS, который резолвит публично выглядящий hostname в приватную цель, но для видимых redirect-ошибок путь теперь закрывается жёстко.
 
 ### Минимальный smoke check
 

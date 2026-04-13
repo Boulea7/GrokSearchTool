@@ -181,8 +181,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - 静的な URL 検査を通過した後も、`web_fetch` / `web_map` は provider 呼び出し前に可視な redirect 先を再検査します。
 - 現在この可視 redirect 再検査は `HEAD` ではなく `GET` を使います。presigned URL、one-shot token、読み取り自体に副作用があるリンクでは、追加の事前取得が起き得る点を既知の境界として扱ってください。
 - 現在の可視 redirect 再検査は最大 `5` 回までです。第 `5` 回の事前検査時点でも新しい可視 redirect が続く場合は、`目標 URL 重定向次数过多` として hard reject され、下流 provider 呼び出しへは進みません。
-- redirect の事前検査で timeout または request-level error が起きた場合、現在の実装はその段階を `skipped_due_to_error` として扱います。`web_fetch` / `web_map` は現状では下流 provider 呼び出しを継続します。
-- この境界は、ローカル DNS が公開ホスト風の名前を私用アドレスへ解決した場合まで強制的には拒否しないため、`best-effort safety boundary` として理解すべきであり、split-horizon やローカル DNS 汚染に対する hard-stop 保証ではありません。
+- redirect の事前検査で timeout または request-level error が起きた場合、現在の実装は fail-closed し、`web_fetch` / `web_map` の下流 provider 呼び出しを止めます。`skipped_due_to_error` は内部診断用 reason code としてのみ残ります。
+- この境界は、ローカル DNS が公開ホスト風の名前を私用アドレスへ解決した場合まで強制的には拒否しないため、split-horizon やローカル DNS 汚染に対する hard-stop 保証そのものではありません。ただし可視 redirect の失敗経路は hard-stop になりました。
 
 ### 最小 smoke check
 
