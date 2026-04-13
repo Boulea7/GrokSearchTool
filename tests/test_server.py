@@ -550,8 +550,12 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     assert payload["doctor"]["status"] == "ok"
     assert payload["doctor"]["checks"]
     assert checks["grok_search_probe"]["status"] == "ok"
+    assert checks["grok_provider_chain"]["status"] == "ok"
+    assert checks["grok_provider_chain"]["provider_count"] == 1
     assert checks["web_fetch_probe"]["status"] == "ok"
     assert payload["feature_readiness"]["web_search"]["status"] == "ready"
+    assert payload["feature_readiness"]["deep_research_planner"]["status"] == "ready"
+    assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "ready"
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "ready"
     assert payload["feature_readiness"]["web_fetch"]["providers"]["verified_path"] == "tavily"

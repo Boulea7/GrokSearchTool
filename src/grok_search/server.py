@@ -2007,7 +2007,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
     import time
 
     start_time = time.perf_counter()
-    provider = GrokSearchProvider(api_url, api_key, model)
+    provider = _instantiate_grok_provider(model)
     try:
         content, structured_sources = await _provider_search_with_sources(provider, _SEARCH_PROBE_QUERY)
     except Exception as exc:
@@ -2052,8 +2052,10 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
         "grok_search_probe",
         "ok",
         "真实搜索探针成功。",
-        endpoint=f"{api_url.rstrip('/')}/chat/completions",
+        endpoint=f"{provider._last_success_provider_api_url.rstrip('/')}/chat/completions",
         response_time_ms=(time.perf_counter() - start_time) * 1000,
+        provider_name=provider._last_success_provider_name,
+        provider_model=provider._last_success_provider_model,
     )
 
 
@@ -2252,6 +2254,7 @@ def _build_feature_readiness(
 ) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
+    grok_provider_chain = checks_by_id.get("grok_provider_chain")
     grok_models = checks_by_id["grok_models"]
     grok_model_selection = checks_by_id.get("grok_model_selection")
     grok_model_runtime_fallback = checks_by_id.get("grok_model_runtime_fallback")
@@ -2374,6 +2377,26 @@ def _build_feature_readiness(
         if toggle_status != "ready"
         else []
     )
+    deep_research_check_ids = [
+        "grok_config",
+        "grok_provider_chain",
+        "grok_models",
+        "grok_search_probe",
+    ]
+    deep_research_degraded_by = [
+        _readiness_cause_from_check(check)
+        for check in (grok_config, grok_provider_chain, grok_models, grok_search_probe)
+        if check and check["status"] in {"warning", "error"}
+    ]
+    if grok_config["status"] != "ok":
+        deep_research_status = "not_ready"
+        deep_research_message = grok_config["message"]
+    elif grok_search_probe["status"] == "ok":
+        deep_research_status = "ready"
+        deep_research_message = "Deep research planner/runtime 已共享 Grok provider chain readiness。"
+    else:
+        deep_research_status = "degraded"
+        deep_research_message = grok_search_probe["message"]
 
     return {
         "web_search": {
@@ -2414,6 +2437,20 @@ def _build_feature_readiness(
             "based_on_checks": ["claude_code_project"],
             "probe_scope": "client_context",
             "degraded_by": toggle_degraded_by,
+        },
+        "deep_research_planner": {
+            "status": deep_research_status,
+            "message": deep_research_message,
+            "based_on_checks": deep_research_check_ids,
+            "probe_scope": "deep_research_planner",
+            "degraded_by": deep_research_degraded_by,
+        },
+        "deep_research_runtime": {
+            "status": deep_research_status,
+            "message": deep_research_message,
+            "based_on_checks": deep_research_check_ids,
+            "probe_scope": "deep_research_runtime",
+            "degraded_by": deep_research_degraded_by,
         },
     }
 
@@ -2521,9 +2558,20 @@ async def get_config_info(
         api_url = config.grok_api_url
         api_key = config.grok_api_key
         checks.append(_build_doctor_check("grok_config", "ok", "Grok 核心配置已提供。"))
+        provider_chain = config.grok_provider_chain()
+        checks.append(
+            _build_doctor_check(
+                "grok_provider_chain",
+                "ok",
+                f"已检测到 {len(provider_chain)} 个 Grok provider。",
+                provider_count=len(provider_chain),
+                provider_names=[item["name"] for item in provider_chain],
+            )
+        )
     except ValueError as exc:
         api_url = ""
         api_key = ""
+        provider_chain = []
         checks.append(_build_doctor_check("grok_config", "error", str(exc), error_kind="config_error"))
         _append_recommendation(
             recommendations,

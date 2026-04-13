@@ -324,6 +324,9 @@ class GrokSearchProvider(BaseSearchProvider):
         super().__init__(api_url, api_key)
         self.model = model
         self._last_completion_sources: list[dict] = []
+        self._last_success_provider_name: str = "primary"
+        self._last_success_provider_model: str = model
+        self._last_success_provider_api_url: str = api_url.rstrip("/")
         self._provider_chain = [
             {"name": "primary", "api_url": api_url, "api_key": api_key, "model": model},
             *[
@@ -849,6 +852,9 @@ class GrokSearchProvider(BaseSearchProvider):
                                         json=attempt_payload,
                                     ) as response:
                                         response.raise_for_status()
+                                        self._last_success_provider_name = provider_config["name"]
+                                        self._last_success_provider_model = candidate_model
+                                        self._last_success_provider_api_url = provider_config["api_url"]
                                         return await self._parse_streaming_response(response, ctx, render_sources=render_sources)
                         except Exception as exc:
                             last_exc = exc
@@ -918,6 +924,9 @@ class GrokSearchProvider(BaseSearchProvider):
                                         json=attempt_payload,
                                     )
                                     response.raise_for_status()
+                                    self._last_success_provider_name = provider_config["name"]
+                                    self._last_success_provider_model = candidate_model
+                                    self._last_success_provider_api_url = provider_config["api_url"]
                                     return await self._parse_completion_response_result(
                                         response,
                                         ctx,
