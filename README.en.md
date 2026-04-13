@@ -303,10 +303,10 @@ PYTHONPATH=src uv run python -m grok_search.server
 
 Use `grok-search-research` when you want richer local interaction around the advanced deep research job layer.
 
-The current deep research runtime now centers on a structured `plan.json` with `brief`, `sub_questions`, `search_strategy`, `report_outline`, and `research_units`. `resume` continues the same job from its latest completed checkpoint boundary, while `continue` opens a new follow-up job that consumes the previous job's artifacts and findings.
+The current deep research runtime now centers on a structured `plan.json` with `brief`, `sub_questions`, `search_strategy`, `report_outline`, and `research_units`. In continuation mode, the `continuation` object inside `plan.json` now stays compact, while the full carry-forward state is written separately to `continuation.json`. `resume` continues the same job from its latest completed checkpoint boundary, while `continue` opens a new follow-up job that consumes the previous job's artifacts and findings.
 
 The `force_new` flag controls whether `deep_research_start` must create a brand-new job.
-When `force_new=false`, `deep_research_start` may reuse a matching in-flight job or a recently completed job and will surface that via the `reused` field. Set `force_new=true` when you require a brand-new job. Completed final artifacts are published with a shared `batch_id`, and `deep_research_result.citations` now uses the same structure as `citations.json`.
+When `force_new=false`, `deep_research_start` may reuse a matching in-flight job or a recently completed job and will surface that via the `reused` field. That reuse rule now also applies to follow-up jobs keyed by `continue_from_job_id`. Set `force_new=true` when you require a brand-new job. Completed final artifacts are published with a shared `batch_id`, `deep_research_result.citations` now uses the same structure as `citations.json`, and unreadable JSON artifacts are surfaced through `artifact_errors` instead of failing the whole result read.
 
 ```bash
 grok-search-research start "Compare open-source deep research frameworks" --watch
