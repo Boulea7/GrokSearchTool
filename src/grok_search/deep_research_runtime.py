@@ -59,7 +59,13 @@ _STOPWORDS = {
 _NOISY_EVIDENCE_MARKERS = (
     "sitemap",
     "open in app",
+    "communities for your favorite technologies",
+    "your communities",
     "dev community",
+    "collectives",
+    "stack overflow for teams",
+    "hot network questions",
+    "site design / logo",
     "sign in",
     "sign up",
     "skip to content",
@@ -180,13 +186,25 @@ def _continuation_anchor_terms(continuation: DeepResearchContinuation) -> list[s
     return anchors[:4]
 
 
+def _should_apply_continuation_rewrite(query: str, continuation: DeepResearchContinuation) -> bool:
+    if continuation.mode != "continue":
+        return False
+    lowered = (query or "").lower()
+    if not re.search(r"\b(resume|continue)\b", lowered):
+        return False
+    query_terms = set(_tokenize_keywords(query))
+    anchor_terms = set(_continuation_anchor_terms(continuation))
+    technical_terms = set(_PREFERRED_TECHNICAL_TERMS)
+    return bool(query_terms & technical_terms) or bool(anchor_terms & technical_terms)
+
+
 def _rewrite_research_query(query: str, continuation: DeepResearchContinuation) -> str:
     text = _normalize_whitespace(query)
-    if not text or continuation.mode != "continue":
+    if not text or not _should_apply_continuation_rewrite(text, continuation):
         return text
 
-    if re.search(r"\bresume\b", text, flags=re.IGNORECASE):
-        text = re.sub(r"\bresume\b", "checkpoint resume", text, flags=re.IGNORECASE)
+    if re.search(r"(?<!checkpoint )\bresume\b", text, flags=re.IGNORECASE):
+        text = re.sub(r"(?<!checkpoint )\bresume\b", "checkpoint resume", text, flags=re.IGNORECASE)
     if re.search(r"\bcontinue\b", text, flags=re.IGNORECASE):
         text = re.sub(r"\bcontinue\b", "continuation workflow", text, flags=re.IGNORECASE)
 
@@ -204,6 +222,18 @@ def _best_text_claim(lines: list[str], fallback: str) -> str:
         if not _is_noisy_text(line):
             return line
     return _normalize_whitespace(fallback)
+
+
+def _normalize_citations_payload(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return None
+    if "source_registry" in value:
+        return value
+    if value and all(isinstance(item, dict) and "url" in item for item in value.values()):
+        return {"source_registry": value, "sections": []}
+    return value
 
 
 def _parse_utc_iso(value: str) -> dt.datetime | None:
@@ -288,7 +318,11 @@ def _sanitize_evidence_items(
     sanitized: list[dict[str, Any]] = []
     for item in evidence_items:
         normalized = dict(item)
+        summary = _summarize_evidence_text(normalized.get("summary") or normalized.get("detail") or "")
+        if not summary or _is_noisy_text(summary):
+            continue
         normalized["source_ids"] = _sanitize_source_id_list(list(normalized.get("source_ids", [])), source_registry)
+        normalized["summary"] = summary
         sanitized.append(normalized)
     return sanitized
 
@@ -477,7 +511,7 @@ class DeepResearchRuntime:
         citations_text = self.store.read_artifact_text(job_id, "citations.json")
         report_text = self.store.read_artifact_text(job_id, "report.json")
         sources_text = self.store.read_artifact_text(job_id, "sources.json")
-        citations = json.loads(citations_text) if citations_text else None
+        citations = _normalize_citations_payload(json.loads(citations_text) if citations_text else None)
         return {
             "job_id": job_id,
             "status": job.status,
@@ -905,6 +939,7 @@ class DeepResearchRuntime:
         plan_text = self.store.read_artifact_text(continue_from_job_id, "plan.json") or ""
         sources_text = self.store.read_artifact_text(continue_from_job_id, "sources.json") or "[]"
         checkpoints = self.store.list_checkpoints(continue_from_job_id)
+        checkpoint_state, checkpoint_meta = self._load_checkpoint_state(job)
         report: dict[str, Any] = {}
         if report_text:
             try:
@@ -949,25 +984,36 @@ class DeepResearchRuntime:
             carry_forward_sources = []
 
         latest_state = checkpoints[-1].state or {} if checkpoints else {}
-        if not carry_forward_sources and isinstance(latest_state, dict):
+        if not carry_forward_sources and checkpoint_state:
+            carry_forward_sources = list(checkpoint_state.sources)
+        elif not carry_forward_sources and isinstance(latest_state, dict):
             carry_forward_sources = list(latest_state.get("sources") or [])
         source_count = len(carry_forward_sources)
 
         carry_forward_sections = list(report.get("sections") or [])
-        if not carry_forward_sections and isinstance(latest_state, dict):
+        if not carry_forward_sections and checkpoint_state:
+            carry_forward_sections = list(checkpoint_state.sections)
+        elif not carry_forward_sections and isinstance(latest_state, dict):
             carry_forward_sections = list(latest_state.get("sections") or [])
 
         carry_forward_unit_results = dict(report.get("unit_results") or {})
-        if not carry_forward_unit_results and isinstance(latest_state, dict):
+        if not carry_forward_unit_results and checkpoint_state:
+            carry_forward_unit_results = dict(checkpoint_state.unit_results)
+        elif not carry_forward_unit_results and isinstance(latest_state, dict):
             carry_forward_unit_results = dict(latest_state.get("unit_results") or {})
 
         carry_forward_evidence = []
-        if isinstance(latest_state, dict):
+        if checkpoint_state:
+            carry_forward_evidence = list(checkpoint_state.evidence_items)
+        elif isinstance(latest_state, dict):
             carry_forward_evidence = list(latest_state.get("evidence_items") or [])
         if not carry_forward_evidence:
             carry_forward_evidence = _build_carry_forward_evidence(carry_forward_unit_results, carry_forward_sections)
+        carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
 
-        checkpoint_key = job.current_checkpoint or (checkpoints[-1].checkpoint_key if checkpoints else "")
+        checkpoint_key = (
+            checkpoint_meta.get("fallback_to", "") if checkpoint_meta else ""
+        ) or job.current_checkpoint or (checkpoints[-1].checkpoint_key if checkpoints else "")
         continuation_goal = plan_payload.get("query") or job.query
 
         return DeepResearchContinuation(
@@ -1187,8 +1233,24 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             return
 
         batch_units = ready_units[: max(1, config.deep_research_max_concurrency)]
-        batch_results = await asyncio.gather(*[_execute_research_unit(runtime, plan, unit) for unit in batch_units])
-        for unit, (unit_result, new_sources, new_evidence) in zip(batch_units, batch_results, strict=False):
+        batch_results = await asyncio.gather(
+            *[_execute_research_unit(runtime, plan, unit) for unit in batch_units],
+            return_exceptions=True,
+        )
+        batch_error: Exception | None = None
+        for unit, batch_result in zip(batch_units, batch_results, strict=False):
+            if isinstance(batch_result, Exception):
+                runtime.store.append_event(
+                    job_id,
+                    type="research_unit_failed",
+                    phase="researching",
+                    message=f"Failed {unit.unit_id}.",
+                    data={"unit_type": unit.unit_type, "error": str(batch_result)},
+                )
+                if batch_error is None:
+                    batch_error = batch_result
+                continue
+            unit_result, new_sources, new_evidence = batch_result
             source_registry, source_ids = _merge_source_registry(source_registry, new_sources)
             for evidence in new_evidence:
                 evidence["source_ids"] = [source_id for source_id in evidence.get("source_ids", []) if source_id in source_ids] or source_ids
@@ -1227,6 +1289,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             )
             progress = 20.0 + (len(completed_unit_ids) / unit_total) * 50.0
             runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
+        if batch_error is not None:
+            raise batch_error
 
     sections = _build_section_citations(plan.report_outline, evidence_items, source_registry)
     unit_results = _sanitize_unit_results(unit_results, source_registry)

@@ -475,6 +475,35 @@ def test_docs_explain_checkpoint_resume_continuation_and_structured_artifacts():
     assert "previous artifacts and findings" in skill
 
 
+def test_docs_explain_deep_research_reuse_batch_and_citations_contract():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "`reused`" in readme
+    assert "`force_new`" in readme
+    assert "`batch_id`" in readme
+    assert "`citations.json`" in readme
+    assert "完全同构" in readme
+    assert "`reused`" in readme_en
+    assert "`force_new`" in readme_en
+    assert "`batch_id`" in readme_en
+    assert "`citations.json`" in readme_en
+    assert "same structure" in readme_en
+    assert "`reused`" in agents
+    assert "`batch_id`" in agents
+
+
+def test_docs_explain_runtime_concurrency_as_ready_unit_parallelism():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "同一轮 ready research unit 的最大并发执行数" in readme
+    assert "ready research units" in readme_en
+    assert "最大并发执行数" in agents
+
+
 def test_docs_lock_finance_topic_and_diagnostic_detail_contracts():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
