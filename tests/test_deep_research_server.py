@@ -148,3 +148,36 @@ async def test_search_query_falls_back_to_extracting_inline_urls(monkeypatch):
 
     assert "SQLite is simple" in answer
     assert sources[0]["url"] == "https://example.com/sqlite"
+
+
+@pytest.mark.asyncio
+async def test_deep_research_result_surfaces_artifact_errors(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    job = runtime.store.create_job(
+        query="Corrupt artifact result",
+        request_fingerprint="fp-server-corrupt-artifact",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", "{bad-json", "application/json")
+    runtime.write_artifact(job.job_id, "report.json", "{bad-json", "application/json")
+    runtime.write_artifact(job.job_id, "sources.json", "{bad-json", "application/json")
+    runtime.write_artifact(job.job_id, "citations.json", "{bad-json", "application/json")
+
+    result = await server.deep_research_result(job.job_id)
+
+    assert result["artifact_errors"] == {
+        "plan.json": "invalid_json",
+        "report.json": "invalid_json",
+        "sources.json": "invalid_json",
+        "citations.json": "invalid_json",
+    }
