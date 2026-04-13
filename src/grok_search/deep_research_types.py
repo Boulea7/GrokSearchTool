@@ -115,9 +115,16 @@ class DeepResearchReportSection(BaseModel):
 class DeepResearchContinuation(BaseModel):
     mode: Literal["fresh", "continue"] = "fresh"
     source_job_id: str = ""
+    source_job_status: str = ""
     previous_summary: str = ""
     prior_plan_summary: str = ""
+    continuation_goal: str = ""
     source_count: int = 0
+    checkpoint_key: str = ""
+    carry_forward_sources: list[dict[str, Any]] = Field(default_factory=list)
+    carry_forward_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    carry_forward_sections: list[dict[str, Any]] = Field(default_factory=list)
+    carry_forward_unit_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class DeepResearchResearchUnit(BaseModel):

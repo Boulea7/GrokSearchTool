@@ -3,6 +3,7 @@ import datetime as dt
 import hashlib
 import json
 import re
+import secrets
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -29,6 +30,52 @@ from .utils import extract_unique_urls
 Runner = Callable[["DeepResearchRuntime", str], Awaitable[None]]
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 _MAX_CLAIM_LENGTH = 220
+_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "how",
+    "in",
+    "into",
+    "is",
+    "it",
+    "later",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "up",
+    "use",
+    "with",
+}
+_NOISY_EVIDENCE_MARKERS = (
+    "sitemap",
+    "open in app",
+    "dev community",
+    "sign in",
+    "sign up",
+    "skip to content",
+)
+_PREFERRED_TECHNICAL_TERMS = (
+    "checkpoint",
+    "recovery",
+    "runtime",
+    "migration",
+    "database",
+    "sqlite",
+    "postgresql",
+    "resumability",
+    "continuation",
+    "state",
+)
 
 
 def _json_markdown_block(data: Any) -> str:
@@ -49,6 +96,114 @@ def _trim_text(value: str, *, limit: int = 400) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for item in items:
+        normalized = _normalize_whitespace(item)
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        unique.append(normalized)
+    return unique
+
+
+def _tokenize_keywords(value: str) -> list[str]:
+    tokens = re.findall(r"[a-z0-9][a-z0-9+.-]*", (value or "").lower())
+    return [token for token in tokens if len(token) > 2 and token not in _STOPWORDS and not token.isdigit()]
+
+
+def _is_noisy_text(value: str) -> bool:
+    text = (value or "").strip()
+    lowered = text.lower()
+    if not text:
+        return True
+    if "![" in text:
+        return True
+    if any(marker in lowered for marker in _NOISY_EVIDENCE_MARKERS):
+        return True
+    if lowered.startswith("[") and "](" in lowered:
+        return True
+    if len(re.findall(r"https?://", lowered)) >= 3 and len(text) < 500:
+        return True
+    return False
+
+
+def _extract_meaningful_lines(value: str) -> list[str]:
+    meaningful: list[str] = []
+    for raw_line in (value or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            continue
+        if _is_noisy_text(line):
+            continue
+        meaningful.append(line)
+    return meaningful
+
+
+def _summarize_evidence_text(value: str, *, limit: int = _MAX_CLAIM_LENGTH) -> str:
+    lines = _extract_meaningful_lines(value)
+    text = " ".join(lines[:4]) if lines else _normalize_whitespace(value)
+    return _trim_text(text, limit=limit)
+
+
+def _count_keyword_overlap(text: str, keywords: list[str]) -> int:
+    lowered = (text or "").lower()
+    return sum(1 for keyword in keywords if keyword in lowered)
+
+
+def _continuation_anchor_terms(continuation: DeepResearchContinuation) -> list[str]:
+    texts = [
+        continuation.continuation_goal,
+        continuation.prior_plan_summary,
+        continuation.previous_summary,
+        " ".join(section.get("title", "") for section in continuation.carry_forward_sections),
+    ]
+    keyword_counts: dict[str, int] = {}
+    for text in texts:
+        for token in _tokenize_keywords(text):
+            keyword_counts[token] = keyword_counts.get(token, 0) + 1
+
+    anchors: list[str] = []
+    for preferred in _PREFERRED_TECHNICAL_TERMS:
+        if keyword_counts.get(preferred, 0) > 0:
+            anchors.append(preferred)
+    if not anchors:
+        anchors = sorted(keyword_counts, key=lambda token: (-keyword_counts[token], token))
+    return anchors[:4]
+
+
+def _rewrite_research_query(query: str, continuation: DeepResearchContinuation) -> str:
+    text = _normalize_whitespace(query)
+    if not text or continuation.mode != "continue":
+        return text
+
+    if re.search(r"\bresume\b", text, flags=re.IGNORECASE):
+        text = re.sub(r"\bresume\b", "checkpoint resume", text, flags=re.IGNORECASE)
+    if re.search(r"\bcontinue\b", text, flags=re.IGNORECASE):
+        text = re.sub(r"\bcontinue\b", "continuation workflow", text, flags=re.IGNORECASE)
+
+    anchors = _continuation_anchor_terms(continuation)
+    if anchors:
+        lowered = text.lower()
+        missing = [anchor for anchor in anchors if anchor not in lowered]
+        if missing:
+            text = f"{text} {' '.join(missing[:2])}"
+    return _normalize_whitespace(text)
+
+
+def _best_text_claim(lines: list[str], fallback: str) -> str:
+    for line in lines:
+        if not _is_noisy_text(line):
+            return line
+    return _normalize_whitespace(fallback)
 
 
 def _parse_utc_iso(value: str) -> dt.datetime | None:
@@ -158,6 +313,51 @@ def _sanitize_sections(
     return sanitized
 
 
+def _artifact_metadata(content: str, *, batch_id: str = "") -> dict[str, Any]:
+    metadata = {"bytes": len(content.encode("utf-8"))}
+    if batch_id:
+        metadata["batch_id"] = batch_id
+    return metadata
+
+
+def _build_carry_forward_evidence(
+    unit_results: dict[str, dict[str, Any]],
+    sections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    evidence_items: list[dict[str, Any]] = []
+    for unit_id, result in unit_results.items():
+        summary = _summarize_evidence_text(result.get("summary") or result.get("detail") or "")
+        if not summary:
+            continue
+        evidence_items.append(
+            DeepResearchEvidenceItem(
+                evidence_id=f"carry-forward-{unit_id}",
+                unit_id=unit_id,
+                source_ids=list(result.get("source_ids") or result.get("citations") or []),
+                summary=summary,
+                detail=result.get("detail", ""),
+            ).model_dump()
+        )
+    if evidence_items:
+        return evidence_items
+
+    for section in sections:
+        for index, claim in enumerate(section.get("claims", []), start=1):
+            text = _summarize_evidence_text(claim.get("text", ""))
+            if not text:
+                continue
+            evidence_items.append(
+                DeepResearchEvidenceItem(
+                    evidence_id=f"carry-forward-{section.get('section_id', 'section')}-{index}",
+                    unit_id=section.get("section_id", "section"),
+                    source_ids=list(claim.get("citations", [])),
+                    summary=text,
+                    detail=claim.get("text", ""),
+                ).model_dump()
+            )
+    return evidence_items
+
+
 class DeepResearchRuntime:
     def __init__(self, root_dir: Path, *, runner: Runner | None = None):
         self.store = DeepResearchStore(root_dir)
@@ -224,7 +424,13 @@ class DeepResearchRuntime:
             job.job_id,
             phase="planning",
             checkpoint_key="planning",
-            state=DeepResearchCheckpointState(plan=plan).model_dump(),
+            state=DeepResearchCheckpointState(
+                plan=plan,
+                unit_results=dict(continuation.carry_forward_unit_results),
+                sources=list(continuation.carry_forward_sources),
+                evidence_items=list(continuation.carry_forward_evidence),
+                sections=list(continuation.carry_forward_sections),
+            ).model_dump(),
         )
         if continuation.mode == "continue":
             self.write_artifact(
@@ -272,8 +478,6 @@ class DeepResearchRuntime:
         report_text = self.store.read_artifact_text(job_id, "report.json")
         sources_text = self.store.read_artifact_text(job_id, "sources.json")
         citations = json.loads(citations_text) if citations_text else None
-        if isinstance(citations, dict) and "source_registry" in citations:
-            citations = {**citations["source_registry"], **citations}
         return {
             "job_id": job_id,
             "status": job.status,
@@ -347,16 +551,45 @@ class DeepResearchRuntime:
     def write_artifact(self, job_id: str, kind: str, content: str, content_type: str) -> dict[str, Any]:
         path = self.store.artifact_abspath(job_id, kind)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        temp_path = path.with_name(f".{kind}.{secrets.token_hex(4)}.tmp")
+        temp_path.write_text(content, encoding="utf-8")
+        temp_path.replace(path)
         relative_path = str(path.relative_to(self.store.root_dir))
         artifact = self.store.upsert_artifact(
             job_id,
             kind=kind,
             path=relative_path,
             content_type=content_type,
-            metadata={"bytes": len(content.encode("utf-8"))},
+            metadata=_artifact_metadata(content),
         )
         return artifact.model_dump()
+
+    def write_artifact_batch(self, job_id: str, artifacts: list[dict[str, str]]) -> list[dict[str, Any]]:
+        batch_id = utc_now_iso().replace(":", "").replace("-", "").replace("Z", "") + "-" + secrets.token_hex(4)
+        persisted: list[dict[str, Any]] = []
+        payloads: list[dict[str, Any]] = []
+        batch_dir = self.store.artifacts_dir / job_id / "batches" / batch_id
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        for item in artifacts:
+            kind = item["kind"]
+            content = item["content"]
+            content_type = item["content_type"]
+            path = batch_dir / kind
+            temp_path = path.with_name(f".{kind}.{secrets.token_hex(4)}.tmp")
+            temp_path.write_text(content, encoding="utf-8")
+            temp_path.replace(path)
+            payloads.append(
+                {
+                    "kind": kind,
+                    "path": str(path.relative_to(self.store.root_dir)),
+                    "content_type": content_type,
+                    "metadata": _artifact_metadata(content, batch_id=batch_id),
+                }
+            )
+        persisted_artifacts = self.store.upsert_artifact_batch(job_id, artifacts=payloads)
+        for artifact in persisted_artifacts:
+            persisted.append(artifact.model_dump())
+        return persisted
 
     async def _ensure_startup_reconciled(self) -> None:
         if self._startup_reconciled:
@@ -426,6 +659,8 @@ class DeepResearchRuntime:
             "research_units must be an array of objects with unit_id, unit_type, title, goal, query/url/instructions, depends_on, status, notes.\n"
             "Prefer search units, and only include fetch/map units when clearly justified.\n"
             "Keep report_outline concise and aligned with the research goal.\n"
+            "When continuation.mode=continue, treat ambiguous terms like resume/continue as technical workflow concepts unless the prior job is explicitly career-related.\n"
+            "Reuse the previous job's evidence and unfinished angles when refining search queries and outline.\n"
         )
         user_prompt = _json_markdown_block(
             {
@@ -474,13 +709,13 @@ class DeepResearchRuntime:
         job: DeepResearchJob,
         continuation: DeepResearchContinuation,
     ) -> DeepResearchPlan:
-        query = job.query.strip()
-        context = job.context.strip()
+        query = _rewrite_research_query(job.query.strip(), continuation)
+        context = _rewrite_research_query(job.context.strip(), continuation)
         search_queries = [query]
         if context:
             search_queries.append(f"{query} {context}".strip())
         if continuation.previous_summary:
-            search_queries.append(f"{query} follow up findings".strip())
+            search_queries.append(f"{query} follow up findings checkpoint recovery".strip())
         if job.effort == "deep":
             search_queries.append(f"{query} tradeoffs")
         unique_queries: list[str] = []
@@ -559,7 +794,17 @@ class DeepResearchRuntime:
             }
         sub_questions = raw_plan.get("sub_questions") or []
         if not sub_questions:
-            sub_questions = [{"id": "sq1", "question": job.query, "reason": "Cover the primary question."}]
+            sub_questions = [{"id": "sq1", "question": _rewrite_research_query(job.query, continuation), "reason": "Cover the primary question."}]
+        else:
+            normalized_sub_questions: list[dict[str, Any]] = []
+            for item in sub_questions:
+                normalized_sub_questions.append(
+                    {
+                        **item,
+                        "question": _rewrite_research_query(str(item.get("question", "")), continuation),
+                    }
+                )
+            sub_questions = normalized_sub_questions
 
         report_outline = raw_plan.get("report_outline") or [
             {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
@@ -585,13 +830,16 @@ class DeepResearchRuntime:
         normalized_units: list[dict[str, Any]] = []
         for index, item in enumerate(research_units, start=1):
             unit_id = item.get("unit_id") or f"unit-{item.get('unit_type', 'search')}-{index}"
+            unit_query = item.get("query", "")
+            if item.get("unit_type", "search") == "search":
+                unit_query = _rewrite_research_query(str(unit_query), continuation)
             normalized_units.append(
                 {
                     "unit_id": unit_id,
                     "unit_type": item.get("unit_type", "search"),
                     "title": item.get("title") or f"Unit {index}",
-                    "goal": item.get("goal") or item.get("query") or item.get("url") or f"Unit {index}",
-                    "query": item.get("query", ""),
+                    "goal": item.get("goal") or unit_query or item.get("url") or f"Unit {index}",
+                    "query": unit_query,
                     "url": item.get("url", ""),
                     "instructions": item.get("instructions", ""),
                     "depends_on": _normalize_depends_on(item.get("depends_on")),
@@ -616,6 +864,9 @@ class DeepResearchRuntime:
             strategy["search_queries"] = [
                 unit["query"] for unit in normalized_units if unit["unit_type"] == "search" and unit["query"]
             ] or [job.query]
+        strategy["search_queries"] = _dedupe_preserve_order(
+            [_rewrite_research_query(str(query), continuation) for query in strategy.get("search_queries") or [job.query]]
+        )
         strategy.setdefault("approach", "targeted")
         strategy.setdefault("selective_fetch", {"max_urls_per_search": 1, "prefer_titles_matching_outline": True})
 
@@ -654,14 +905,16 @@ class DeepResearchRuntime:
         plan_text = self.store.read_artifact_text(continue_from_job_id, "plan.json") or ""
         sources_text = self.store.read_artifact_text(continue_from_job_id, "sources.json") or "[]"
         checkpoints = self.store.list_checkpoints(continue_from_job_id)
-
-        previous_summary = ""
+        report: dict[str, Any] = {}
         if report_text:
             try:
                 report = json.loads(report_text)
-                previous_summary = report.get("summary") or ""
             except Exception:
-                previous_summary = ""
+                report = {}
+
+        previous_summary = ""
+        if report:
+            previous_summary = report.get("summary") or ""
         if not previous_summary:
             lines = [line.strip() for line in final_report.splitlines() if line.strip() and not line.startswith("#")]
             previous_summary = lines[0] if lines else ""
@@ -670,10 +923,11 @@ class DeepResearchRuntime:
             previous_summary = lines[0] if lines else ""
 
         prior_plan_summary = ""
+        plan_payload: dict[str, Any] = {}
         if plan_text:
             try:
-                plan = json.loads(plan_text)
-                sub_questions = plan.get("sub_questions") or []
+                plan_payload = json.loads(plan_text)
+                sub_questions = plan_payload.get("sub_questions") or []
                 prior_plan_summary = "; ".join(
                     item.get("question", "").strip() for item in sub_questions if item.get("question", "").strip()
                 )
@@ -690,19 +944,45 @@ class DeepResearchRuntime:
                 )
 
         try:
-            source_count = len(json.loads(sources_text))
+            carry_forward_sources = list(json.loads(sources_text))
         except Exception:
-            source_count = 0
-        if source_count == 0 and checkpoints:
-            latest_state = checkpoints[-1].state or {}
-            source_count = len((latest_state.get("sources") or [])) if isinstance(latest_state, dict) else 0
+            carry_forward_sources = []
+
+        latest_state = checkpoints[-1].state or {} if checkpoints else {}
+        if not carry_forward_sources and isinstance(latest_state, dict):
+            carry_forward_sources = list(latest_state.get("sources") or [])
+        source_count = len(carry_forward_sources)
+
+        carry_forward_sections = list(report.get("sections") or [])
+        if not carry_forward_sections and isinstance(latest_state, dict):
+            carry_forward_sections = list(latest_state.get("sections") or [])
+
+        carry_forward_unit_results = dict(report.get("unit_results") or {})
+        if not carry_forward_unit_results and isinstance(latest_state, dict):
+            carry_forward_unit_results = dict(latest_state.get("unit_results") or {})
+
+        carry_forward_evidence = []
+        if isinstance(latest_state, dict):
+            carry_forward_evidence = list(latest_state.get("evidence_items") or [])
+        if not carry_forward_evidence:
+            carry_forward_evidence = _build_carry_forward_evidence(carry_forward_unit_results, carry_forward_sections)
+
+        checkpoint_key = job.current_checkpoint or (checkpoints[-1].checkpoint_key if checkpoints else "")
+        continuation_goal = plan_payload.get("query") or job.query
 
         return DeepResearchContinuation(
             mode="continue",
             source_job_id=continue_from_job_id,
+            source_job_status=job.status,
             previous_summary=_trim_text(previous_summary or f"Continuation from {job.status} job {continue_from_job_id}.", limit=400),
             prior_plan_summary=_trim_text(prior_plan_summary, limit=400),
+            continuation_goal=_trim_text(continuation_goal, limit=200),
             source_count=source_count,
+            checkpoint_key=checkpoint_key,
+            carry_forward_sources=carry_forward_sources,
+            carry_forward_evidence=carry_forward_evidence,
+            carry_forward_sections=carry_forward_sections,
+            carry_forward_unit_results=carry_forward_unit_results,
         )
 
     def _request_fingerprint(
@@ -760,11 +1040,12 @@ class DeepResearchRuntime:
         continuation = self._build_continuation_context(job.continued_from_job_id)
         return self._build_fallback_plan(job, continuation)
 
-    def _load_checkpoint_state(self, job: DeepResearchJob) -> DeepResearchCheckpointState | None:
+    def _load_checkpoint_state(self, job: DeepResearchJob) -> tuple[DeepResearchCheckpointState | None, dict[str, Any] | None]:
         checkpoints = self.store.list_checkpoints(job.job_id)
         if not checkpoints:
-            return None
+            return None, None
         candidates: list[Any] = []
+        invalid_checkpoint_keys: list[str] = []
         if job.current_checkpoint:
             candidates.extend(
                 checkpoint
@@ -781,8 +1062,13 @@ class DeepResearchRuntime:
             if "plan" not in raw_state and isinstance(raw_state, dict) and raw_state.get("query"):
                 raw_state = {"plan": raw_state}
             if "plan" not in raw_state:
+                invalid_checkpoint_keys.append(checkpoint.checkpoint_key)
                 continue
             try:
+                if checkpoint.phase != "planning" and not any(
+                    key in raw_state for key in ("completed_unit_ids", "unit_results", "sources", "evidence_items", "sections")
+                ):
+                    raise ValueError("checkpoint missing runtime state")
                 if isinstance(raw_state.get("plan"), dict):
                     raw_state = {
                         **raw_state,
@@ -792,10 +1078,21 @@ class DeepResearchRuntime:
                             self._build_continuation_context(job.continued_from_job_id),
                         ).model_dump(),
                     }
-                return DeepResearchCheckpointState.model_validate(raw_state)
+                state = DeepResearchCheckpointState.model_validate(raw_state)
+                if job.current_checkpoint and checkpoint.checkpoint_key != job.current_checkpoint:
+                    return (
+                        state,
+                        {
+                            "fallback_from": job.current_checkpoint,
+                            "fallback_to": checkpoint.checkpoint_key,
+                            "invalid_checkpoint_keys": invalid_checkpoint_keys,
+                        },
+                    )
+                return state, None
             except Exception:
+                invalid_checkpoint_keys.append(checkpoint.checkpoint_key)
                 continue
-        return None
+        return None, None
 
 
 async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
@@ -810,9 +1107,18 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         attempt_count=job.attempt_count + 1,
         last_error="",
     )
-    checkpoint_state = runtime._load_checkpoint_state(job)
+    checkpoint_state, checkpoint_meta = runtime._load_checkpoint_state(job)
     plan = checkpoint_state.plan if checkpoint_state else runtime._read_plan(job_id, job)
     runtime.write_artifact(job_id, "plan.json", _json_markdown_block(plan.model_dump()), "application/json")
+    if checkpoint_meta:
+        runtime.store.update_job(job_id, current_checkpoint=checkpoint_meta["fallback_to"])
+        runtime.store.append_event(
+            job_id,
+            type="checkpoint_fallback",
+            phase=job.phase,
+            message="Latest checkpoint was not readable; resumed from an earlier checkpoint.",
+            data=checkpoint_meta,
+        )
 
     runtime.store.append_event(
         job_id,
@@ -827,11 +1133,12 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         _mark_canceled(runtime, job_id, "planning")
         return
 
+    continuation = plan.continuation
     completed_unit_ids = list(checkpoint_state.completed_unit_ids) if checkpoint_state else []
-    unit_results = dict(checkpoint_state.unit_results) if checkpoint_state else {}
-    source_registry = list(checkpoint_state.sources) if checkpoint_state else []
-    evidence_items = list(checkpoint_state.evidence_items) if checkpoint_state else []
-    sections = list(checkpoint_state.sections) if checkpoint_state else []
+    unit_results = dict(checkpoint_state.unit_results) if checkpoint_state else dict(continuation.carry_forward_unit_results)
+    source_registry = list(checkpoint_state.sources) if checkpoint_state else list(continuation.carry_forward_sources)
+    evidence_items = list(checkpoint_state.evidence_items) if checkpoint_state else list(continuation.carry_forward_evidence)
+    sections = list(checkpoint_state.sections) if checkpoint_state else list(continuation.carry_forward_sections)
     unit_results = _sanitize_unit_results(unit_results, source_registry)
     evidence_items = _sanitize_evidence_items(evidence_items, source_registry)
     sections = _sanitize_sections(sections, source_registry)
@@ -848,36 +1155,40 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
 
     unit_total = max(len(plan.research_units), 1)
     while len(completed_unit_ids) < len(plan.research_units):
-        progressed = False
-        for unit in plan.research_units:
-            if unit.unit_id in completed_unit_ids:
-                continue
-            if any(dep not in completed_unit_ids for dep in unit.depends_on):
-                continue
-            if runtime.store.get_job(job_id).cancel_requested:
-                _mark_canceled(runtime, job_id, "researching")
-                return
-            elapsed_seconds = (dt.datetime.now(dt.UTC) - started_at_dt).total_seconds()
-            if elapsed_seconds >= job.resolved_budget_seconds:
-                _write_partial_outputs(runtime, job_id, plan, completed_unit_ids, unit_results, sections)
-                runtime.store.update_job(
-                    job_id,
-                    status="interrupted",
-                    phase="researching",
-                    last_error="time_budget_exceeded",
-                    finished_at=utc_now_iso(),
-                    heartbeat_at=utc_now_iso(),
-                )
-                runtime.store.append_event(
-                    job_id,
-                    type="job_interrupted",
-                    phase="researching",
-                    message="Deep research paused after reaching the time budget.",
-                    data={"completed_units": len(completed_unit_ids)},
-                )
-                return
+        ready_units = [
+            unit
+            for unit in plan.research_units
+            if unit.unit_id not in completed_unit_ids and all(dep in completed_unit_ids for dep in unit.depends_on)
+        ]
+        if not ready_units:
+            remaining_units = [unit.unit_id for unit in plan.research_units if unit.unit_id not in completed_unit_ids]
+            raise ValueError(f"research_plan_blocked: unresolved dependencies for {', '.join(remaining_units)}")
+        if runtime.store.get_job(job_id).cancel_requested:
+            _mark_canceled(runtime, job_id, "researching")
+            return
+        elapsed_seconds = (dt.datetime.now(dt.UTC) - started_at_dt).total_seconds()
+        if elapsed_seconds >= job.resolved_budget_seconds:
+            _write_partial_outputs(runtime, job_id, plan, completed_unit_ids, unit_results, sections)
+            runtime.store.update_job(
+                job_id,
+                status="interrupted",
+                phase="researching",
+                last_error="time_budget_exceeded",
+                finished_at=utc_now_iso(),
+                heartbeat_at=utc_now_iso(),
+            )
+            runtime.store.append_event(
+                job_id,
+                type="job_interrupted",
+                phase="researching",
+                message="Deep research paused after reaching the time budget.",
+                data={"completed_units": len(completed_unit_ids)},
+            )
+            return
 
-            unit_result, new_sources, new_evidence = await _execute_research_unit(runtime, plan, unit)
+        batch_units = ready_units[: max(1, config.deep_research_max_concurrency)]
+        batch_results = await asyncio.gather(*[_execute_research_unit(runtime, plan, unit) for unit in batch_units])
+        for unit, (unit_result, new_sources, new_evidence) in zip(batch_units, batch_results, strict=False):
             source_registry, source_ids = _merge_source_registry(source_registry, new_sources)
             for evidence in new_evidence:
                 evidence["source_ids"] = [source_id for source_id in evidence.get("source_ids", []) if source_id in source_ids] or source_ids
@@ -916,10 +1227,6 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             )
             progress = 20.0 + (len(completed_unit_ids) / unit_total) * 50.0
             runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
-            progressed = True
-        if not progressed:
-            remaining_units = [unit.unit_id for unit in plan.research_units if unit.unit_id not in completed_unit_ids]
-            raise ValueError(f"research_plan_blocked: unresolved dependencies for {', '.join(remaining_units)}")
 
     sections = _build_section_citations(plan.report_outline, evidence_items, source_registry)
     unit_results = _sanitize_unit_results(unit_results, source_registry)
@@ -971,10 +1278,19 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         message="Finalizing report.",
         data={},
     )
-    runtime.write_artifact(job_id, "sources.json", _json_markdown_block(source_registry), "application/json")
-    runtime.write_artifact(job_id, "citations.json", _json_markdown_block(citations), "application/json")
-    runtime.write_artifact(job_id, "report.json", _json_markdown_block(report), "application/json")
-    runtime.write_artifact(job_id, "final_report.md", final_report, "text/markdown")
+    persisted_artifacts = runtime.write_artifact_batch(
+        job_id,
+        [
+            {"kind": "sources.json", "content": _json_markdown_block(source_registry), "content_type": "application/json"},
+            {"kind": "citations.json", "content": _json_markdown_block(citations), "content_type": "application/json"},
+            {"kind": "report.json", "content": _json_markdown_block(report), "content_type": "application/json"},
+            {"kind": "final_report.md", "content": final_report, "content_type": "text/markdown"},
+        ],
+    )
+    artifact_batch_id = next(
+        (artifact.get("metadata", {}).get("batch_id", "") for artifact in persisted_artifacts if artifact.get("metadata")),
+        "",
+    )
     runtime.store.save_checkpoint(
         job_id,
         phase="finalizing",
@@ -1001,7 +1317,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         type="job_completed",
         phase="finalizing",
         message="Deep research completed.",
-        data={"sources_count": len(source_registry)},
+        data={"sources_count": len(source_registry), "artifact_batch_id": artifact_batch_id},
     )
 
 
@@ -1032,13 +1348,13 @@ async def _execute_research_unit(
         detail = fetched or "No content fetched."
         source = {"url": unit.url, "title": unit.title}
         return (
-            {"summary": _trim_text(detail, limit=180), "detail": detail},
+            {"summary": _summarize_evidence_text(detail, limit=180), "detail": detail},
             [source],
             [
                 DeepResearchEvidenceItem(
                     evidence_id=f"evidence-{unit.unit_id}",
                     unit_id=unit.unit_id,
-                    summary=_trim_text(detail, limit=_MAX_CLAIM_LENGTH),
+                    summary=_summarize_evidence_text(detail, limit=_MAX_CLAIM_LENGTH),
                     detail=detail,
                 ).model_dump()
             ],
@@ -1048,13 +1364,13 @@ async def _execute_research_unit(
         mapped = await _map_url(unit.url, unit.instructions)
         detail = mapped or "No site map returned."
         return (
-            {"summary": _trim_text(detail, limit=180), "detail": detail},
+            {"summary": _summarize_evidence_text(detail, limit=180), "detail": detail},
             [{"url": unit.url, "title": unit.title}],
             [
                 DeepResearchEvidenceItem(
                     evidence_id=f"evidence-{unit.unit_id}",
                     unit_id=unit.unit_id,
-                    summary=_trim_text(detail, limit=_MAX_CLAIM_LENGTH),
+                    summary=_summarize_evidence_text(detail, limit=_MAX_CLAIM_LENGTH),
                     detail=detail,
                 ).model_dump()
             ],
@@ -1065,13 +1381,13 @@ async def _execute_research_unit(
         DeepResearchEvidenceItem(
             evidence_id=f"evidence-{unit.unit_id}-search",
             unit_id=unit.unit_id,
-            summary=_trim_text(answer, limit=_MAX_CLAIM_LENGTH),
+            summary=_summarize_evidence_text(answer, limit=_MAX_CLAIM_LENGTH),
             detail=answer,
         ).model_dump()
     ]
     selective_fetch = plan.search_strategy.selective_fetch
     fetch_limit = max(0, selective_fetch.max_urls_per_search)
-    for source in sources[:fetch_limit]:
+    for source in _select_fetch_sources(sources, plan, unit)[:fetch_limit]:
         fetched = await _fetch_url(source["url"])
         if not fetched:
             continue
@@ -1079,12 +1395,12 @@ async def _execute_research_unit(
             DeepResearchEvidenceItem(
                 evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
                 unit_id=unit.unit_id,
-                summary=_trim_text(fetched, limit=_MAX_CLAIM_LENGTH),
+                summary=_summarize_evidence_text(fetched, limit=_MAX_CLAIM_LENGTH),
                 detail=fetched,
             ).model_dump()
         )
     return (
-        {"summary": _trim_text(answer, limit=180), "detail": answer},
+        {"summary": _summarize_evidence_text(answer, limit=180), "detail": answer},
         sources,
         evidence_items,
     )
@@ -1119,6 +1435,28 @@ def _merge_source_registry(
     return merged_sources, merged_ids
 
 
+def _select_fetch_sources(
+    sources: list[dict[str, Any]],
+    plan: DeepResearchPlan,
+    unit: DeepResearchResearchUnit,
+) -> list[dict[str, Any]]:
+    outline_keywords = _tokenize_keywords(" ".join(f"{section.title} {section.goal}" for section in plan.report_outline))
+    query_keywords = _tokenize_keywords(f"{unit.title} {unit.goal} {unit.query}")
+
+    def score(source: dict[str, Any]) -> tuple[int, int, str]:
+        title = f"{source.get('title', '')} {source.get('description', '')}"
+        return (
+            _count_keyword_overlap(title, outline_keywords),
+            _count_keyword_overlap(title, query_keywords),
+            source.get("url", ""),
+        )
+
+    ranked = sorted(sources, key=score, reverse=True)
+    if plan.search_strategy.selective_fetch.prefer_titles_matching_outline:
+        return ranked
+    return sources
+
+
 def _build_section_citations(
     outline: list[DeepResearchReportSection],
     evidence_items: list[dict[str, Any]],
@@ -1128,7 +1466,7 @@ def _build_section_citations(
     claims_pool = [
         DeepResearchEvidenceItem.model_validate(item)
         for item in evidence_items
-        if item.get("summary")
+        if item.get("summary") and not _is_noisy_text(item.get("summary", ""))
     ]
     if not claims_pool:
         claims_pool = [
@@ -1142,15 +1480,31 @@ def _build_section_citations(
 
     sections: list[dict[str, Any]] = []
     claim_index = 1
+    used_evidence_ids: set[str] = set()
     for section in outline:
+        section_keywords = _tokenize_keywords(f"{section.title} {section.goal}")
         section_claims: list[dict[str, Any]] = []
-        for evidence in claims_pool:
+        ranked_pool = sorted(
+            claims_pool,
+            key=lambda evidence: (
+                _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords),
+                0 if evidence.evidence_id in used_evidence_ids else 1,
+                len(evidence.source_ids),
+                evidence.evidence_id,
+            ),
+            reverse=True,
+        )
+        for evidence in ranked_pool:
+            claim_text = _summarize_evidence_text(evidence.summary or evidence.detail, limit=_MAX_CLAIM_LENGTH)
+            if not claim_text or _is_noisy_text(claim_text):
+                continue
             claim = DeepResearchClaim(
                 claim_id=f"{section.section_id}-claim-{claim_index}",
-                text=_trim_text(evidence.summary, limit=_MAX_CLAIM_LENGTH),
+                text=claim_text,
                 citations=evidence.source_ids or all_source_ids[:1],
             )
             section_claims.append(claim.model_dump())
+            used_evidence_ids.add(evidence.evidence_id)
             claim_index += 1
             if len(section_claims) >= 2:
                 break
