@@ -695,6 +695,130 @@ def _normalize_string_list(value: Any) -> list[str]:
     return []
 
 
+def _append_unique(items: list[str], value: str) -> None:
+    if value and value not in items:
+        items.append(value)
+
+
+def _first_url_from_texts(*values: str) -> str:
+    for value in values:
+        urls = extract_unique_urls(value or "")
+        if urls:
+            return urls[0]
+    return ""
+
+
+def _unit_query_fallback(
+    unit: dict[str, Any],
+    *,
+    sub_questions: list[dict[str, Any]],
+    job_query: str,
+    continuation: DeepResearchContinuationState,
+) -> str:
+    candidates = [
+        str(unit.get("query", "")),
+        str(unit.get("goal", "")),
+        str(unit.get("title", "")),
+        str(unit.get("notes", "")),
+        str(unit.get("instructions", "")),
+    ]
+    candidates.extend(str(item.get("question", "")) for item in sub_questions)
+    candidates.append(job_query)
+    for candidate in candidates:
+        normalized = _normalize_whitespace(candidate)
+        if normalized:
+            return _rewrite_research_query(_trim_text(normalized, limit=220), continuation)
+    return _rewrite_research_query(job_query, continuation)
+
+
+def _repair_research_units(
+    units: list[dict[str, Any]],
+    *,
+    sub_questions: list[dict[str, Any]],
+    job_query: str,
+    continuation: DeepResearchContinuationState,
+    normalize_actions: list[str],
+    validation_issues: list[str],
+    blocked_reasons: list[str],
+) -> list[dict[str, Any]]:
+    repaired: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+    duplicate_counts: dict[str, int] = {}
+    for unit in units:
+        normalized = dict(unit)
+        base_unit_id = _normalize_whitespace(str(normalized.get("unit_id", ""))) or "unit"
+        unit_id = base_unit_id
+        if unit_id in used_ids:
+            duplicate_counts[base_unit_id] = duplicate_counts.get(base_unit_id, 1) + 1
+            unit_id = f"{base_unit_id}-{duplicate_counts[base_unit_id]}"
+            _append_unique(validation_issues, "duplicate_unit_id")
+            _append_unique(normalize_actions, f"renamed_duplicate_unit_id:{base_unit_id}->{unit_id}")
+        else:
+            duplicate_counts.setdefault(base_unit_id, 1)
+        normalized["unit_id"] = unit_id
+        used_ids.add(unit_id)
+
+        unit_type = str(normalized.get("unit_type", "search") or "search").strip()
+        normalized["unit_type"] = unit_type
+        if unit_type == "search":
+            if not _normalize_whitespace(str(normalized.get("query", ""))):
+                normalized["query"] = _unit_query_fallback(
+                    normalized,
+                    sub_questions=sub_questions,
+                    job_query=job_query,
+                    continuation=continuation,
+                )
+                _append_unique(validation_issues, "missing_search_query")
+                _append_unique(normalize_actions, f"filled_search_query:{unit_id}")
+        elif unit_type in {"fetch", "map"}:
+            url = _normalize_whitespace(str(normalized.get("url", "")))
+            if not url:
+                url = _first_url_from_texts(
+                    str(normalized.get("instructions", "")),
+                    str(normalized.get("notes", "")),
+                    str(normalized.get("goal", "")),
+                    str(normalized.get("title", "")),
+                )
+            if url:
+                normalized["url"] = url
+                _append_unique(normalize_actions, f"filled_{unit_type}_url:{unit_id}")
+            else:
+                normalized["unit_type"] = "search"
+                normalized["query"] = _unit_query_fallback(
+                    normalized,
+                    sub_questions=sub_questions,
+                    job_query=job_query,
+                    continuation=continuation,
+                )
+                _append_unique(validation_issues, f"missing_{unit_type}_url")
+                _append_unique(normalize_actions, f"degraded_{unit_type}_without_url_to_search:{unit_id}")
+        repaired.append(normalized)
+
+    index_by_id = {unit["unit_id"]: index for index, unit in enumerate(repaired)}
+    for index, unit in enumerate(repaired):
+        repaired_deps: list[str] = []
+        for dependency in _dedupe_preserve_order(_normalize_depends_on(unit.get("depends_on"))):
+            if dependency == unit["unit_id"]:
+                _append_unique(validation_issues, "self_dependency")
+                _append_unique(blocked_reasons, f"self_dependency:{unit['unit_id']}")
+                _append_unique(normalize_actions, f"dropped_self_dependency:{unit['unit_id']}")
+                continue
+            dep_index = index_by_id.get(dependency)
+            if dep_index is None:
+                _append_unique(validation_issues, "unknown_dependency")
+                _append_unique(blocked_reasons, f"unknown_dependency:{unit['unit_id']}->{dependency}")
+                _append_unique(normalize_actions, f"dropped_unknown_dependency:{unit['unit_id']}->{dependency}")
+                continue
+            if dep_index >= index:
+                _append_unique(validation_issues, "forward_or_cyclic_dependency")
+                _append_unique(blocked_reasons, f"forward_or_cyclic_dependency:{unit['unit_id']}->{dependency}")
+                _append_unique(normalize_actions, f"dropped_forward_or_cyclic_dependency:{unit['unit_id']}->{dependency}")
+                continue
+            repaired_deps.append(dependency)
+        unit["depends_on"] = repaired_deps
+    return repaired
+
+
 def _dedupe_sub_questions(sub_questions: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
     deduped: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1802,7 +1926,15 @@ class DeepResearchRuntime:
             if continuation.mode == "continue" and re.match(r"^(search|research query)\b", unit["title"].lower()):
                 unit["title"] = f"Follow-up {unit['unit_type']} {index}"
             deduped_units.append(unit)
-        normalized_units = deduped_units or normalized_units
+        normalized_units = _repair_research_units(
+            deduped_units or normalized_units,
+            sub_questions=sub_questions,
+            job_query=job.query,
+            continuation=continuation,
+            normalize_actions=normalize_actions,
+            validation_issues=validation_issues,
+            blocked_reasons=planner_trace["blocked_reasons"],
+        )
 
         normalized_outline: list[dict[str, Any]] = []
         saw_string_report_outline = False
@@ -1859,11 +1991,12 @@ class DeepResearchRuntime:
         planner_metadata = dict(raw_planner_metadata)
         if validation_issues:
             planner_metadata["validation"] = {
-                "issues": validation_issues,
+                "issues": _dedupe_preserve_order(validation_issues),
                 "repaired": True,
             }
         planner_trace["normalize_actions"] = _dedupe_preserve_order(normalize_actions)
-        planner_trace["validation_issues"] = validation_issues
+        planner_trace["validation_issues"] = _dedupe_preserve_order(validation_issues)
+        planner_trace["blocked_reasons"] = _dedupe_preserve_order(list(planner_trace.get("blocked_reasons") or []))
         planner_trace["fallback_used"] = bool(planner_metadata.get("used_fallback"))
         planner_trace["fallback_reason"] = planner_metadata.get("fallback_reason")
         planner_trace["final_status"] = "fallback" if planner_metadata.get("used_fallback") else "normalized"
