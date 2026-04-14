@@ -105,6 +105,63 @@ def test_cli_result_artifact_prefers_resolved_final_batch(monkeypatch, tmp_path,
     assert capsys.readouterr().out == '[{"source_id": "R1", "url": "https://good.example.com"}]\n'
 
 
+def test_cli_result_artifact_reads_resolved_final_batch_for_interrupted_finalizing_job(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="Interrupted artifact batch job",
+        request_fingerprint="fp-interrupted-artifact-batch",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Interrupted artifact batch job"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "final_report.md",
+        "# Final Report\n\nStale current report.\n",
+        "text/markdown",
+    )
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--artifact", "final_report.md"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "# Final Report\n\nRecovered report.\n\n"
+
+
 def test_cli_start_spawns_worker_for_background_job(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     spawned = []
@@ -160,6 +217,7 @@ def test_cli_start_does_not_spawn_worker_for_reused_completed_job(monkeypatch, t
         include_domains=[],
         exclude_domains=[],
         continue_from_job_id="",
+        plan_only=False,
     )
     job = runtime.store.create_job(
         query="Reuse me",

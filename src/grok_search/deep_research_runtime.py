@@ -235,6 +235,34 @@ def _sanitize_detail_text(value: str, *, limit: int = 1200) -> str:
     return _trim_text(text, limit=limit)
 
 
+def _extract_relevant_excerpt(
+    value: str,
+    *,
+    reference_texts: list[str],
+    line_limit: int,
+    char_limit: int,
+    multiline: bool = False,
+) -> str:
+    lines = _extract_meaningful_lines(value)
+    if not lines:
+        if multiline:
+            return _sanitize_detail_text(value, limit=char_limit)
+        return _summarize_evidence_text(value, limit=char_limit)
+    keywords = _dedupe_preserve_order(
+        [token for text in reference_texts for token in _tokenize_keywords(text)]
+    )
+    ranked: list[tuple[int, int, str]] = []
+    for line in lines:
+        overlap = _count_keyword_overlap(line, keywords) if keywords else 0
+        ranked.append((overlap, len(line), line))
+    ranked.sort(reverse=True)
+    selected = [line for overlap, _, line in ranked if overlap > 0][:line_limit]
+    if not selected:
+        selected = [line for _, _, line in ranked[:line_limit]]
+    separator = "\n" if multiline else " "
+    return _trim_text(separator.join(selected), limit=char_limit)
+
+
 def _extract_markdown_title(value: str) -> str:
     for raw_line in (value or "").splitlines():
         line = raw_line.strip()
@@ -396,6 +424,7 @@ def _source_sort_tuple(item: dict[str, Any]) -> tuple:
     quality_score = _source_quality_score(item)
     return (
         -quality_score,
+        -(item.get("topic_match_score") if isinstance(item.get("topic_match_score"), int) else 0),
         -_source_quality_bias(item),
         -(item.get("citation_count") if isinstance(item.get("citation_count"), int) else 0),
         -(item.get("section_count") if isinstance(item.get("section_count"), int) else 0),
@@ -703,26 +732,41 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
     return True
 
 
-def _latest_complete_batch_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
+def _complete_batch_bundles(store: DeepResearchStore, job_id: str) -> list[dict[str, Any]]:
     batches_dir = store.artifacts_dir / job_id / "batches"
     if not batches_dir.exists():
-        return None
-    candidates = sorted((path for path in batches_dir.iterdir() if path.is_dir()), key=lambda path: path.name, reverse=True)
+        return []
+    candidates = sorted(
+        (path for path in batches_dir.iterdir() if path.is_dir()),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+        reverse=True,
+    )
+    bundles: list[dict[str, Any]] = []
     for batch_dir in candidates:
         paths = {kind: batch_dir / kind for kind in _FINAL_ARTIFACT_KINDS}
         if all(_read_text_if_exists(path) is not None for path in paths.values()):
-            return {"batch_id": batch_dir.name, "paths": paths}
-    return None
+            bundles.append({"batch_id": batch_dir.name, "paths": paths})
+    return bundles
+
+
+def _latest_complete_batch_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
+    candidates = _complete_batch_bundles(store, job_id)
+    return candidates[0] if candidates else None
 
 
 def _resolve_final_artifact_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
     current_bundle = _current_final_artifact_bundle(store, job_id)
     if _artifact_bundle_is_usable(current_bundle):
         return current_bundle
-    candidate = _latest_complete_batch_bundle(store, job_id)
-    if _artifact_bundle_is_usable(candidate):
-        return candidate
-    return current_bundle or candidate
+    first_candidate: dict[str, Any] | None = None
+    for candidate in _complete_batch_bundles(store, job_id):
+        if first_candidate is None:
+            first_candidate = candidate
+        if current_bundle is not None and candidate.get("batch_id") == current_bundle.get("batch_id"):
+            continue
+        if _artifact_bundle_is_usable(candidate):
+            return candidate
+    return current_bundle or first_candidate
 
 
 def _final_artifact_bundle_is_usable(store: DeepResearchStore, job_id: str) -> bool:
@@ -737,6 +781,12 @@ def _artifact_bundle_differs_from_current(store: DeepResearchStore, job_id: str,
     if current_bundle is None:
         return True
     return current_bundle.get("batch_id") != bundle.get("batch_id")
+
+
+def _job_prefers_resolved_final_bundle(job: DeepResearchJob) -> bool:
+    if job.status == "completed":
+        return True
+    return job.status == "interrupted" and (job.current_checkpoint == "finalizing" or job.phase == "finalizing")
 
 
 def _normalize_depends_on(value: Any) -> list[str]:
@@ -1324,6 +1374,17 @@ def _source_ranking_reasons(
     return reasons
 
 
+def _source_topic_match_score(source: dict[str, Any], reference_texts: list[str] | None = None) -> int:
+    text = " ".join(
+        str(source.get(key, ""))
+        for key in ("title", "description", "snippet", "url", "domain")
+    )
+    keywords = _dedupe_preserve_order(
+        [token for value in (reference_texts or []) for token in _tokenize_keywords(value)]
+    )
+    return _count_keyword_overlap(text, keywords) if keywords else 0
+
+
 def _domain_matches(domain: str, candidates: list[str]) -> bool:
     return any(domain == candidate or domain.endswith(f".{candidate}") for candidate in candidates)
 
@@ -1410,6 +1471,8 @@ class DeepResearchRuntime:
         schedule: bool = True,
     ) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
+        if continue_from_job_id:
+            self.store.get_job(continue_from_job_id)
         normalized_include_domains = list(include_domains or [])
         normalized_exclude_domains = list(exclude_domains or [])
         resolved_budget_seconds = self._resolve_budget_seconds(time_budget_seconds, effort)
@@ -1420,6 +1483,7 @@ class DeepResearchRuntime:
             include_domains=normalized_include_domains,
             exclude_domains=normalized_exclude_domains,
             continue_from_job_id=continue_from_job_id,
+            plan_only=plan_only,
         )
 
         reused_job = None
@@ -1428,7 +1492,7 @@ class DeepResearchRuntime:
                 request_fingerprint,
                 recent_reuse_seconds=config.deep_research_recent_reuse_seconds,
             )
-            if reused_job is not None and reused_job.status == "draft" and bool(reused_job.plan_only) != bool(plan_only):
+            if reused_job is not None and bool(reused_job.plan_only) != bool(plan_only):
                 reused_job = None
             if reused_job is not None and reused_job.status == "completed":
                 if not _final_artifact_bundle_is_usable(self.store, reused_job.job_id):
@@ -1511,7 +1575,7 @@ class DeepResearchRuntime:
         payload = self._serialize_job(job)
         payload["artifact_kinds"] = [artifact["kind"] for artifact in artifacts]
         payload["artifacts"] = artifacts
-        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if job.status == "completed" else None
+        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
         payload["artifact_fallback_used"] = _artifact_bundle_differs_from_current(self.store, job_id, final_bundle)
         payload["resolved_artifact_batch_id"] = final_bundle["batch_id"] if final_bundle is not None else ""
         return payload
@@ -1530,7 +1594,7 @@ class DeepResearchRuntime:
         job = self.store.get_job(job_id)
         plan_text = self.store.read_artifact_text(job_id, "plan.json")
         partial_text = self.store.read_artifact_text(job_id, "partial_report.md") if include_partial else None
-        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if job.status == "completed" else None
+        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
         final_text = (
             _read_text_if_exists(final_bundle["paths"]["final_report.md"])
             if final_bundle is not None
@@ -1605,7 +1669,7 @@ class DeepResearchRuntime:
 
     def read_artifact_text(self, job_id: str, kind: str) -> str | None:
         job = self.store.get_job(job_id)
-        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if job.status == "completed" else None
+        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
         if final_bundle is not None and kind in final_bundle["paths"]:
             return _read_text_if_exists(final_bundle["paths"][kind])
         return self.store.read_artifact_text(job_id, kind)
@@ -1789,7 +1853,34 @@ class DeepResearchRuntime:
             try:
                 return self._normalize_plan_payload(job, raw_plan, continuation, planner_trace=planner_trace)
             except Exception as exc:
-                raise PlannerGenerationError("normalize", str(exc), trace=planner_trace) from exc
+                planner_trace["repair_attempted"] = True
+                planner_trace["repair_stage"] = "normalize"
+                try:
+                    repaired_plan = await self._repair_plan_after_normalize_failure(
+                        job,
+                        continuation,
+                        raw_plan,
+                        planner_trace,
+                        exc,
+                    )
+                    normalized = self._normalize_plan_payload(
+                        job,
+                        repaired_plan,
+                        continuation,
+                        planner_trace=planner_trace,
+                    )
+                    normalized.planner_metadata.setdefault("trace", {}).update(
+                        {
+                            "repair_attempted": True,
+                            "repair_succeeded": True,
+                            "repair_stage": "normalize",
+                        }
+                    )
+                    return normalized
+                except Exception as repair_exc:
+                    planner_trace["repair_succeeded"] = False
+                    planner_trace["repair_error"] = _trim_text(str(repair_exc), limit=200)
+                    raise PlannerGenerationError("normalize", str(exc), trace=planner_trace) from exc
         except Exception as exc:
             stage = exc.stage if isinstance(exc, PlannerGenerationError) else "generation"
             return self._build_fallback_plan(
@@ -1888,6 +1979,56 @@ class DeepResearchRuntime:
                 planner_trace["repair_error"] = _trim_text(str(repair_exc), limit=200)
                 planner_trace["final_status"] = "repair_failed"
                 raise PlannerGenerationError("repair", str(repair_exc), trace=planner_trace) from exc
+
+    async def _repair_plan_after_normalize_failure(
+        self,
+        job: DeepResearchJob,
+        continuation: DeepResearchContinuationState,
+        raw_plan: dict[str, Any],
+        planner_trace: dict[str, Any],
+        error: Exception,
+    ) -> dict[str, Any]:
+        provider, provider_meta = await _build_runtime_grok_provider(config.grok_model)
+        planner_trace["repair_requested_model"] = provider_meta.get("requested_model")
+        planner_trace["repair_effective_model"] = provider_meta.get("effective_model")
+        planner_trace["repair_model_resolution"] = provider_meta.get("resolution")
+        headers = provider._build_api_headers()
+        payload = {
+            "model": provider.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Repair the deep research plan into valid JSON only. "
+                        "Use keys: brief, sub_questions, search_strategy, report_outline, research_units, planner_metadata. "
+                        "Ensure brief.success_criteria is a list of strings; research_units only use unit_type search/fetch/map; "
+                        "unknown statuses become pending; each sub_question has coverage; dependencies must be acyclic and only point backward; "
+                        "report_outline must be concise and aligned with the query."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": _json_markdown_block(
+                        {
+                            "query": job.query,
+                            "context": job.context,
+                            "continuation": _planner_continuation_payload(continuation),
+                            "validation_error": _trim_text(str(error), limit=400),
+                            "raw_plan": raw_plan,
+                        }
+                    ),
+                },
+            ],
+            "stream": False,
+        }
+        repaired, _ = await provider._execute_completion_with_retry_result(headers, payload, render_sources=False)
+        repaired_plan, parse_trace = _parse_json_object_with_trace(repaired)
+        planner_trace["repair_succeeded"] = True
+        planner_trace["repair_provider_name"] = provider._last_success_provider_name
+        planner_trace["repair_provider_model"] = provider._last_success_provider_model
+        planner_trace["repair_provider_api_url"] = provider._last_success_provider_api_url
+        planner_trace.update({f"repair_{key}": value for key, value in parse_trace.items()})
+        return repaired_plan
 
     def _build_fallback_plan(
         self,
@@ -2015,6 +2156,15 @@ class DeepResearchRuntime:
                     "success_criteria": ["Answer the query with source-backed sections."],
                 },
             }
+        elif not isinstance(brief_value.get("success_criteria"), list):
+            normalize_actions.append("string_success_criteria")
+            raw_plan = {
+                **raw_plan,
+                "brief": {
+                    **brief_value,
+                    "success_criteria": _normalize_string_list(brief_value.get("success_criteria")),
+                },
+            }
         sub_questions = raw_plan.get("sub_questions") or []
         if isinstance(sub_questions, dict):
             normalize_actions.append("dict_sub_questions_wrapped")
@@ -2131,6 +2281,10 @@ class DeepResearchRuntime:
             normalized_unit_type = unit_type_aliases.get(unit_type, unit_type)
             if normalized_unit_type != unit_type:
                 normalize_actions.append(f"aliased_unit_type:{unit_type}->{normalized_unit_type}")
+            if normalized_unit_type not in {"search", "fetch", "map"}:
+                inferred_unit_type = "fetch" if _normalize_whitespace(str(item.get("url", ""))) else "search"
+                normalize_actions.append(f"inferred_unknown_unit_type:{unit_type}->{inferred_unit_type}")
+                normalized_unit_type = inferred_unit_type
             raw_status = str(item.get("status", "pending") or "pending").strip()
             status_aliases = {
                 "ready": "pending",
@@ -2138,6 +2292,9 @@ class DeepResearchRuntime:
             normalized_status = status_aliases.get(raw_status, raw_status)
             if normalized_status != raw_status:
                 normalize_actions.append(f"aliased_unit_status:{raw_status}->{normalized_status}")
+            if normalized_status not in {"pending", "running", "completed", "failed", "skipped"}:
+                normalize_actions.append(f"defaulted_unknown_unit_status:{raw_status}->pending")
+                normalized_status = "pending"
             if normalized_unit_type == "search":
                 unit_query = _rewrite_research_query(str(unit_query), continuation)
             normalized_units.append(
@@ -2315,10 +2472,9 @@ class DeepResearchRuntime:
         checkpoint_state, checkpoint_meta = self._load_checkpoint_state(job)
         report: dict[str, Any] = {}
         if report_text:
-            try:
-                report = json.loads(report_text)
-            except Exception:
-                report = {}
+            report_value, _ = _safe_load_json_artifact(report_text)
+            if _validate_json_artifact_shape("report.json", report_value) is None and isinstance(report_value, dict):
+                report = report_value
 
         previous_summary = ""
         if report:
@@ -2335,7 +2491,9 @@ class DeepResearchRuntime:
         plan_payload: dict[str, Any] = {}
         if plan_text:
             try:
-                plan_payload = json.loads(plan_text)
+                parsed_plan = json.loads(plan_text)
+                if isinstance(parsed_plan, dict):
+                    plan_payload = parsed_plan
                 sub_questions = plan_payload.get("sub_questions") or []
                 prior_plan_summary = "; ".join(
                     item.get("question", "").strip() for item in sub_questions if item.get("question", "").strip()
@@ -2352,14 +2510,19 @@ class DeepResearchRuntime:
                     if item.get("question", "").strip()
                 )
 
-        try:
-            carry_forward_sources = list(json.loads(sources_text))
-        except Exception:
-            carry_forward_sources = []
+        carry_forward_sources: list[dict[str, Any]] = []
+        if sources_text:
+            sources_value, _ = _safe_load_json_artifact(sources_text)
+            if _validate_json_artifact_shape("sources.json", sources_value) is None and isinstance(sources_value, list):
+                carry_forward_sources = list(sources_value)
         if not carry_forward_sources and citations_text:
             citations_value, _ = _safe_load_json_artifact(citations_text)
             normalized_citations = _normalize_citations_payload(citations_value)
-            if normalized_citations and isinstance(normalized_citations.get("source_registry"), dict):
+            if (
+                _validate_json_artifact_shape("citations.json", normalized_citations) is None
+                and normalized_citations
+                and isinstance(normalized_citations.get("source_registry"), dict)
+            ):
                 carry_forward_sources = list(normalized_citations["source_registry"].values())
 
         latest_state = checkpoints[-1].state or {} if checkpoints else {}
@@ -2369,13 +2532,14 @@ class DeepResearchRuntime:
             carry_forward_sources = list(latest_state.get("sources") or [])
         source_count = len(carry_forward_sources)
 
-        carry_forward_sections = list(report.get("sections") or [])
+        carry_forward_sections = list(report.get("sections") or []) if isinstance(report.get("sections"), list) else []
         if not carry_forward_sections and checkpoint_state:
             carry_forward_sections = list(checkpoint_state.sections)
         elif not carry_forward_sections and isinstance(latest_state, dict):
             carry_forward_sections = list(latest_state.get("sections") or [])
 
-        carry_forward_unit_results = dict(report.get("unit_results") or {})
+        report_unit_results = report.get("unit_results") if isinstance(report.get("unit_results"), dict) else {}
+        carry_forward_unit_results = dict(report_unit_results or {})
         if not carry_forward_unit_results and checkpoint_state:
             carry_forward_unit_results = dict(checkpoint_state.unit_results)
         elif not carry_forward_unit_results and isinstance(latest_state, dict):
@@ -2421,6 +2585,7 @@ class DeepResearchRuntime:
         include_domains: list[str],
         exclude_domains: list[str],
         continue_from_job_id: str,
+        plan_only: bool,
     ) -> str:
         payload = {
             "query": query.strip(),
@@ -2429,6 +2594,7 @@ class DeepResearchRuntime:
             "include_domains": include_domains,
             "exclude_domains": exclude_domains,
             "continue_from_job_id": continue_from_job_id.strip(),
+            "plan_only": bool(plan_only),
         }
         return hashlib.sha256(_json_markdown_block(payload).encode("utf-8")).hexdigest()
 
@@ -2574,6 +2740,10 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
 
     continuation = runtime._read_runtime_continuation(job)
     completed_unit_ids = list(checkpoint_state.completed_unit_ids) if checkpoint_state else []
+    failed_unit_ids: list[str] = []
+    failed_units: list[dict[str, Any]] = []
+    skipped_unit_ids: list[str] = []
+    skipped_units: list[dict[str, Any]] = []
     unit_results = dict(checkpoint_state.unit_results) if checkpoint_state else dict(continuation.carry_forward_unit_results)
     source_registry = list(checkpoint_state.sources) if checkpoint_state else list(continuation.carry_forward_sources)
     source_registry = _apply_domain_constraints(
@@ -2598,14 +2768,52 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     )
 
     unit_total = max(len(plan.research_units), 1)
-    while len(completed_unit_ids) < len(plan.research_units):
+    while len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids) < len(plan.research_units):
         ready_units = [
             unit
             for unit in plan.research_units
-            if unit.unit_id not in completed_unit_ids and all(dep in completed_unit_ids for dep in unit.depends_on)
+            if unit.unit_id not in completed_unit_ids
+            and unit.unit_id not in failed_unit_ids
+            and unit.unit_id not in skipped_unit_ids
+            and all(dep in completed_unit_ids for dep in unit.depends_on)
         ]
         if not ready_units:
-            remaining_units = [unit.unit_id for unit in plan.research_units if unit.unit_id not in completed_unit_ids]
+            skipped_any = False
+            for unit in plan.research_units:
+                if (
+                    unit.unit_id in completed_unit_ids
+                    or unit.unit_id in failed_unit_ids
+                    or unit.unit_id in skipped_unit_ids
+                ):
+                    continue
+                if any(dep in failed_unit_ids or dep in skipped_unit_ids for dep in unit.depends_on):
+                    skipped_unit_ids.append(unit.unit_id)
+                    skipped_units.append(
+                        {
+                            "unit_id": unit.unit_id,
+                            "unit_type": unit.unit_type,
+                            "reason": "dependency_failed",
+                        }
+                    )
+                    runtime.store.append_event(
+                        job_id,
+                        type="research_unit_skipped",
+                        phase="researching",
+                        message=f"Skipped {unit.unit_id}.",
+                        data={"unit_type": unit.unit_type, "reason": "dependency_failed"},
+                    )
+                    skipped_any = True
+            if skipped_any:
+                progress = 20.0 + ((len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids)) / unit_total) * 50.0
+                runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
+                continue
+            remaining_units = [
+                unit.unit_id
+                for unit in plan.research_units
+                if unit.unit_id not in completed_unit_ids
+                and unit.unit_id not in failed_unit_ids
+                and unit.unit_id not in skipped_unit_ids
+            ]
             raise ValueError(f"research_plan_blocked: unresolved dependencies for {', '.join(remaining_units)}")
         if runtime.store.get_job(job_id).cancel_requested:
             _mark_canceled(runtime, job_id, "researching")
@@ -2639,6 +2847,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         batch_error: Exception | None = None
         for unit, batch_result in zip(batch_units, batch_results, strict=False):
             if isinstance(batch_result, Exception):
+                failed_unit_ids.append(unit.unit_id)
+                failed_units.append({"unit_id": unit.unit_id, "unit_type": unit.unit_type, "reason": "execution_error"})
                 runtime.store.append_event(
                     job_id,
                     type="research_unit_failed",
@@ -2655,6 +2865,25 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 include_domains=plan.include_domains,
                 exclude_domains=plan.exclude_domains,
             )
+            if unit.unit_type in {"fetch", "map"} and not unit_result.get("summary") and not constrained_sources and not new_evidence:
+                failed_unit_ids.append(unit.unit_id)
+                failed_units.append(
+                    {
+                        "unit_id": unit.unit_id,
+                        "unit_type": unit.unit_type,
+                        "reason": f"empty_{unit.unit_type}_result",
+                    }
+                )
+                runtime.store.append_event(
+                    job_id,
+                    type="research_unit_failed",
+                    phase="researching",
+                    message=f"Failed {unit.unit_id}.",
+                    data={"unit_type": unit.unit_type, "error": f"empty_{unit.unit_type}_result"},
+                )
+                progress = 20.0 + ((len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids)) / unit_total) * 50.0
+                runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
+                continue
             source_registry, source_ids = _merge_source_registry(
                 source_registry,
                 constrained_sources,
@@ -2709,7 +2938,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     "effective_model": unit_result.get("effective_model", ""),
                 },
             )
-            progress = 20.0 + (len(completed_unit_ids) / unit_total) * 50.0
+            progress = 20.0 + ((len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids)) / unit_total) * 50.0
             runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
         if batch_error is not None:
             if runtime.store.get_job(job_id).cancel_requested:
@@ -2726,6 +2955,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     source_registry = _annotate_source_usage(
         source_registry,
         sections,
+        reference_texts=[plan.query, *(f"{section.title} {section.goal}" for section in plan.report_outline)],
         include_domains=plan.include_domains,
         exclude_domains=plan.exclude_domains,
     )
@@ -2764,7 +2994,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     }
     report_summary = _build_report_summary(plan, citations["sections"])
     runtime_warnings = sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])})
-    report_status = "degraded" if runtime_warnings or not citations["sections"] else "completed"
+    report_status = "degraded" if runtime_warnings or not citations["sections"] or failed_units else "completed"
     report_confidence = _cluster_confidence(
         source_count=len({citation for section in citations["sections"] for citation in section.get("citations", [])}),
         evidence_count=sum(len(section.get("claims", [])) for section in citations["sections"]),
@@ -2778,6 +3008,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "unit_results": unit_results,
         "runtime": {
             "warnings": runtime_warnings,
+            "failed_units": failed_units,
+            "skipped_units": skipped_units,
             "provider_winners": [
                 {
                     "unit_id": result.get("unit_id", ""),
@@ -2849,6 +3081,9 @@ def _mark_canceled(
     *,
     data: dict[str, Any] | None = None,
 ) -> None:
+    current_job = runtime.store.get_job(job_id)
+    if current_job.status == "canceled" and current_job.finished_at:
+        return
     runtime.store.update_job(job_id, status="canceled", finished_at=utc_now_iso(), heartbeat_at=utc_now_iso())
     runtime.store.append_event(job_id, type="job_canceled", phase=phase, message="Canceled.", data=data or {})
 
@@ -2870,6 +3105,7 @@ async def _execute_research_unit(
     plan: DeepResearchPlan,
     unit: DeepResearchResearchUnit,
 ) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
+    reference_texts = [plan.query, unit.title, unit.goal, unit.query, unit.instructions]
     if unit.unit_type == "fetch":
         fetched = await _fetch_url(unit.url)
         if not fetched:
@@ -2878,17 +3114,34 @@ async def _execute_research_unit(
                 [],
                 [],
             )
-        detail = fetched
+        detail = _extract_relevant_excerpt(
+            fetched,
+            reference_texts=reference_texts,
+            line_limit=8,
+            char_limit=1200,
+            multiline=True,
+        )
+        summary = _extract_relevant_excerpt(
+            fetched,
+            reference_texts=reference_texts,
+            line_limit=3,
+            char_limit=180,
+        )
         source = {"url": unit.url, "title": unit.title}
         return (
-            {"summary": _summarize_evidence_text(detail, limit=180), "detail": detail},
+            {"summary": summary, "detail": detail},
             [source],
             [
                 DeepResearchEvidenceItem(
                     evidence_id=f"evidence-{unit.unit_id}",
                     unit_id=unit.unit_id,
                     source_urls=[unit.url] if unit.url else [],
-                    summary=_summarize_evidence_text(detail, limit=_MAX_CLAIM_LENGTH),
+                    summary=_extract_relevant_excerpt(
+                        fetched,
+                        reference_texts=reference_texts,
+                        line_limit=4,
+                        char_limit=_MAX_CLAIM_LENGTH,
+                    ),
                     detail=detail,
                     evidence_kind="fetch",
                     weight=1.0,
@@ -2905,14 +3158,26 @@ async def _execute_research_unit(
                 [],
                 [],
             )
-        detail = mapped
+        mapped_raw = mapped
+        detail = _extract_relevant_excerpt(
+            mapped,
+            reference_texts=reference_texts,
+            line_limit=8,
+            char_limit=1200,
+            multiline=True,
+        )
         sources = [{"url": unit.url, "title": unit.title}]
         evidence_items = [
             DeepResearchEvidenceItem(
                 evidence_id=f"evidence-{unit.unit_id}-map",
                 unit_id=unit.unit_id,
                 source_urls=[unit.url] if unit.url else [],
-                summary=_summarize_evidence_text(detail, limit=_MAX_CLAIM_LENGTH),
+                summary=_extract_relevant_excerpt(
+                    mapped,
+                    reference_texts=reference_texts,
+                    line_limit=4,
+                    char_limit=_MAX_CLAIM_LENGTH,
+                ),
                 detail=detail,
                 evidence_kind="map",
                 weight=0.6,
@@ -2921,7 +3186,7 @@ async def _execute_research_unit(
         ]
         candidate_urls = [
             candidate
-            for candidate in extract_unique_urls(detail)
+            for candidate in extract_unique_urls(mapped_raw)
             if candidate and candidate != unit.url
         ]
         fetch_limit = max(0, plan.search_strategy.selective_fetch.max_urls_per_search)
@@ -2939,15 +3204,34 @@ async def _execute_research_unit(
                     evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
                     unit_id=unit.unit_id,
                     source_urls=[candidate_url],
-                    summary=_summarize_evidence_text(fetched, limit=_MAX_CLAIM_LENGTH),
-                    detail=fetched,
+                    summary=_extract_relevant_excerpt(
+                        fetched,
+                        reference_texts=reference_texts + [candidate_url, fetched_source.get("title", "")],
+                        line_limit=4,
+                        char_limit=_MAX_CLAIM_LENGTH,
+                    ),
+                    detail=_extract_relevant_excerpt(
+                        fetched,
+                        reference_texts=reference_texts + [candidate_url, fetched_source.get("title", "")],
+                        line_limit=8,
+                        char_limit=1200,
+                        multiline=True,
+                    ),
                     evidence_kind="fetch",
                     weight=1.0,
                     derived_from_source_url=candidate_url,
                 ).model_dump()
             )
         return (
-            {"summary": _summarize_evidence_text(detail, limit=180), "detail": detail},
+            {
+                "summary": _extract_relevant_excerpt(
+                    mapped,
+                    reference_texts=reference_texts,
+                    line_limit=3,
+                    char_limit=180,
+                ),
+                "detail": detail,
+            },
             sources,
             evidence_items,
         )
@@ -2968,23 +3252,41 @@ async def _execute_research_unit(
             "provider_model": "",
             "provider_api_url": "",
         }
+    answer_summary = _extract_relevant_excerpt(
+        search_result["answer"],
+        reference_texts=reference_texts,
+        line_limit=4,
+        char_limit=_MAX_CLAIM_LENGTH,
+    )
+    answer_detail = _extract_relevant_excerpt(
+        search_result["answer"],
+        reference_texts=reference_texts,
+        line_limit=8,
+        char_limit=1200,
+        multiline=True,
+    )
+    selective_fetch = plan.search_strategy.selective_fetch
+    fetch_limit = max(0, selective_fetch.max_urls_per_search)
+    selected_sources_for_grounding = _select_fetch_sources(sources, plan, unit)
+    if fetch_limit == 0:
+        search_support_sources = list(selected_sources_for_grounding)
+    else:
+        search_support_sources = selected_sources_for_grounding[: max(1, min(len(selected_sources_for_grounding), fetch_limit))]
     evidence_items: list[dict[str, Any]] = []
     if not search_result.get("warning_code"):
         evidence_items.append(
             DeepResearchEvidenceItem(
                 evidence_id=f"evidence-{unit.unit_id}-search",
                 unit_id=unit.unit_id,
-                source_urls=[source.get("url", "") for source in sources if source.get("url")],
-                summary=_summarize_evidence_text(answer, limit=_MAX_CLAIM_LENGTH),
-                detail=answer,
+                source_urls=[source.get("url", "") for source in search_support_sources if source.get("url")],
+                summary=answer_summary,
+                detail=answer_detail,
                 evidence_kind="search",
                 weight=0.9,
             ).model_dump()
         )
-    selective_fetch = plan.search_strategy.selective_fetch
-    fetch_limit = max(0, selective_fetch.max_urls_per_search)
     fetched_evidence_items: list[dict[str, Any]] = []
-    for source in _select_fetch_sources(sources, plan, unit)[:fetch_limit]:
+    for source in selected_sources_for_grounding[:fetch_limit]:
         fetched = await _fetch_url(source["url"])
         if not fetched:
             continue
@@ -3008,8 +3310,8 @@ async def _execute_research_unit(
     evidence_items.extend(fetched_evidence_items)
     return (
         {
-            "summary": _summarize_evidence_text(answer, limit=180),
-            "detail": answer,
+            "summary": _trim_text(answer_summary, limit=180),
+            "detail": answer_detail,
             "warnings": [search_result["warning_code"]] if search_result.get("warning_code") else [],
             "requested_model": search_result.get("requested_model", ""),
             "effective_model": search_result.get("effective_model", ""),
@@ -3073,6 +3375,7 @@ def _annotate_source_usage(
     source_registry: list[dict[str, Any]],
     sections: list[dict[str, Any]],
     *,
+    reference_texts: list[str] | None = None,
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
 ) -> list[dict[str, Any]]:
@@ -3092,13 +3395,40 @@ def _annotate_source_usage(
         normalized["citation_count"] = citation_count.get(source_id, 0)
         normalized["section_count"] = section_count.get(source_id, 0)
         normalized["winner_provider"] = normalized.get("winner_provider") or normalized.get("provider", "")
+        normalized["topic_match_score"] = _source_topic_match_score(normalized, reference_texts)
         normalized["ranking_reasons"] = _source_ranking_reasons(
             normalized,
             include_domains=include_domains,
             exclude_domains=exclude_domains,
         )
+        normalized["ranking_penalties"] = []
         annotated.append(normalized)
-    annotated = sorted(annotated, key=_source_sort_tuple)
+    strongest_used_topic_by_domain: dict[str, int] = {}
+    for item in annotated:
+        domain = str(item.get("domain", "") or "").strip().lower()
+        if not domain:
+            continue
+        if item.get("citation_count", 0) <= 0 and item.get("section_count", 0) <= 0:
+            continue
+        strongest_used_topic_by_domain[domain] = max(
+            strongest_used_topic_by_domain.get(domain, 0),
+            int(item.get("topic_match_score", 0) or 0),
+        )
+    filtered: list[dict[str, Any]] = []
+    for item in annotated:
+        domain = str(item.get("domain", "") or "").strip().lower()
+        topic_match_score = int(item.get("topic_match_score", 0) or 0)
+        if (
+            domain
+            and domain in strongest_used_topic_by_domain
+            and item.get("citation_count", 0) <= 0
+            and item.get("section_count", 0) <= 0
+            and strongest_used_topic_by_domain.get(domain, 0) >= topic_match_score
+        ):
+            item["ranking_penalties"].append("same_domain_off_topic")
+            continue
+        filtered.append(item)
+    annotated = sorted(filtered, key=_source_sort_tuple)
     for rank, item in enumerate(annotated, start=1):
         item["rank"] = rank
     return annotated
@@ -3110,18 +3440,24 @@ def _select_fetch_sources(
     unit: DeepResearchResearchUnit,
 ) -> list[dict[str, Any]]:
     outline_keywords = _tokenize_keywords(" ".join(f"{section.title} {section.goal}" for section in plan.report_outline))
-    query_keywords = _tokenize_keywords(f"{unit.title} {unit.goal} {unit.query}")
+    query_keywords = _tokenize_keywords(f"{plan.query} {unit.title} {unit.goal} {unit.query}")
 
-    def score(source: dict[str, Any]) -> tuple[int, int, str]:
-        title = f"{source.get('title', '')} {source.get('description', '')}"
+    def score(source: dict[str, Any]) -> tuple[int, int, int, str]:
+        title = f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
         return (
-            _source_quality_bias(source),
-            _count_keyword_overlap(title, outline_keywords),
             _count_keyword_overlap(title, query_keywords),
+            _count_keyword_overlap(title, outline_keywords),
+            _source_quality_bias(source),
             source.get("url", ""),
         )
 
     ranked = sorted(sources, key=score, reverse=True)
+    if any(_count_keyword_overlap(f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}", query_keywords) > 0 for source in ranked):
+        ranked = [
+            source
+            for source in ranked
+            if _count_keyword_overlap(f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}", query_keywords) > 0
+        ]
     if plan.search_strategy.selective_fetch.prefer_titles_matching_outline:
         return ranked
     return sources
