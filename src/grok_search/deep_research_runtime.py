@@ -635,6 +635,7 @@ def _sanitize_sections(
             normalized_claim["citations"] = _sanitize_source_id_list(list(normalized_claim.get("citations", [])), source_registry)
             normalized_claims.append(normalized_claim)
         normalized_section["claims"] = normalized_claims
+        normalized_section["summary"] = _summarize_evidence_text(str(normalized_section.get("summary", "")), limit=260)
         normalized_section["citations"] = sorted(
             {citation for claim in normalized_claims for citation in claim.get("citations", [])}
         )
@@ -2185,14 +2186,34 @@ def _build_section_citations(
                 break
         if not section_claims:
             continue
+        section_summary = _build_section_summary(section_claims)
         section_model = DeepResearchSectionCitations(
             section_id=section.section_id,
             title=section.title,
+            summary=section_summary,
             claims=section_claims,
             citations=sorted({citation for claim in section_claims for citation in claim.get("citations", [])}),
         )
         sections.append(section_model.model_dump())
     return sections
+
+
+def _build_section_summary(section_claims: list[dict[str, Any]]) -> str:
+    summary_parts: list[str] = []
+    for claim in section_claims:
+        text = _summarize_evidence_text(str(claim.get("text", "")), limit=180)
+        if not text:
+            continue
+        if text in summary_parts:
+            continue
+        summary_parts.append(text)
+        if len(summary_parts) >= 2:
+            break
+    if not summary_parts:
+        return ""
+    if len(summary_parts) == 1:
+        return _trim_text(f"Key point: {summary_parts[0]}", limit=260)
+    return _trim_text(" ".join(summary_parts), limit=260)
 
 
 def _build_partial_report(
@@ -2224,6 +2245,9 @@ def _build_partial_report(
         for section in sections:
             lines.append(f"### {section['title']}")
             lines.append("")
+            if section.get("summary"):
+                lines.append(section["summary"])
+                lines.append("")
             for claim in section.get("claims", []):
                 refs = ", ".join(claim.get("citations", []))
                 lines.append(f"- {claim['text']} [{refs}]".rstrip())
@@ -2247,6 +2271,9 @@ def _build_final_report(
     for section in sections:
         lines.append(f"## {section['title']}")
         lines.append("")
+        if section.get("summary"):
+            lines.append(section["summary"])
+            lines.append("")
         for claim in section.get("claims", []):
             refs = ", ".join(claim.get("citations", []))
             lines.append(f"- {claim['text']} [{refs}]".rstrip())
@@ -2254,7 +2281,15 @@ def _build_final_report(
     lines.extend(["## Sources", ""])
     for source_id, item in source_registry.items():
         title = item.get("title") or item["url"]
-        lines.append(f"- [{source_id}] {title} - {item['url']}")
+        descriptors = [value for value in (item.get("source_type"), item.get("domain")) if value]
+        reasons = ", ".join(item.get("ranking_reasons") or [])
+        meta = "; ".join(descriptors)
+        if reasons:
+            meta = f"{meta}; reasons: {reasons}" if meta else f"reasons: {reasons}"
+        if meta:
+            lines.append(f"- [{source_id}] {title} ({meta}) - {item['url']}")
+        else:
+            lines.append(f"- [{source_id}] {title} - {item['url']}")
     return "\n".join(lines).strip() + "\n"
 
 

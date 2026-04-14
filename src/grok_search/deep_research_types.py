@@ -162,6 +162,7 @@ class DeepResearchClaim(BaseModel):
 class DeepResearchSectionCitations(BaseModel):
     section_id: str
     title: str
+    summary: str = ""
     claims: list[DeepResearchClaim] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
 
