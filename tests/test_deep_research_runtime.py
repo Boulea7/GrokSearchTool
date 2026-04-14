@@ -1093,6 +1093,42 @@ async def test_continuation_plan_repairs_duplicate_sub_questions_and_generic_out
 
 
 @pytest.mark.asyncio
+async def test_plan_normalization_repairs_string_shaped_sub_questions_and_outline(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def stringy_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            "Compare resume behavior",
+            "Compare restart behavior",
+        ]
+        payload["report_outline"] = [
+            "Executive Summary",
+            "Operational Impact",
+        ]
+        payload["research_units"] = []
+        return payload
+
+    runtime._generate_plan_with_model = stringy_planner
+
+    response = await runtime.start(
+        query="Repair string plan fields",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    validation = response["plan"]["planner_metadata"]["validation"]
+
+    assert response["plan"]["planner_metadata"]["used_fallback"] is False
+    assert response["plan"]["sub_questions"][0]["question"] == "Compare resume behavior"
+    assert response["plan"]["report_outline"][0]["title"] == "Executive Summary"
+    assert validation["repaired"] is True
+    assert "string_sub_question_items" in validation["issues"]
+    assert "string_report_outline_items" in validation["issues"]
+
+
+@pytest.mark.asyncio
 async def test_selective_fetch_prefers_official_docs_over_community_pages(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     fetched_urls = []
