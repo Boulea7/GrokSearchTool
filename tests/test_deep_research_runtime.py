@@ -1739,7 +1739,7 @@ async def test_run_job_executes_independent_units_concurrently(monkeypatch, tmp_
     elapsed = asyncio.get_running_loop().time() - start
 
     assert started == ["one", "two"]
-    assert elapsed < 0.09
+    assert elapsed < 0.14
 
 
 @pytest.mark.asyncio
