@@ -626,7 +626,12 @@ def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
             if not isinstance(section, dict):
                 return "invalid_shape"
             claims = section.get("claims", [])
-            if not isinstance(claims, list) or not all(isinstance(claim, dict) and isinstance(claim.get("text", ""), str) for claim in claims):
+            if not isinstance(claims, list) or not all(
+                isinstance(claim, dict)
+                and isinstance(claim.get("text"), str)
+                and bool(_normalize_whitespace(claim.get("text", "")))
+                for claim in claims
+            ):
                 return "invalid_shape"
         return None
     if kind == "citations.json":
@@ -641,7 +646,12 @@ def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
             if not isinstance(section, dict):
                 return "invalid_shape"
             claims = section.get("claims", [])
-            if not isinstance(claims, list) or not all(isinstance(claim, dict) and isinstance(claim.get("text", ""), str) for claim in claims):
+            if not isinstance(claims, list) or not all(
+                isinstance(claim, dict)
+                and isinstance(claim.get("text"), str)
+                and bool(_normalize_whitespace(claim.get("text", "")))
+                for claim in claims
+            ):
                 return "invalid_shape"
         return None
     return None
@@ -672,6 +682,21 @@ def _current_final_artifact_bundle(store: DeepResearchStore, job_id: str) -> dic
     return {"batch_id": batch_id, "paths": paths}
 
 
+def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
+    if bundle is None:
+        return False
+    paths = bundle.get("paths") or {}
+    for kind in _FINAL_ARTIFACT_KINDS:
+        text = _read_text_if_exists(paths.get(kind))
+        if text is None:
+            return False
+        if kind.endswith(".json"):
+            value, error = _safe_load_json_artifact(text)
+            if error is not None or _validate_json_artifact_shape(kind, value) is not None:
+                return False
+    return True
+
+
 def _latest_complete_batch_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
     batches_dir = store.artifacts_dir / job_id / "batches"
     if not batches_dir.exists():
@@ -686,21 +711,26 @@ def _latest_complete_batch_bundle(store: DeepResearchStore, job_id: str) -> dict
 
 def _resolve_final_artifact_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
     current_bundle = _current_final_artifact_bundle(store, job_id)
-    if current_bundle is not None:
+    if _artifact_bundle_is_usable(current_bundle):
         return current_bundle
-    return _latest_complete_batch_bundle(store, job_id)
+    candidate = _latest_complete_batch_bundle(store, job_id)
+    if _artifact_bundle_is_usable(candidate):
+        return candidate
+    return current_bundle or candidate
 
 
 def _final_artifact_bundle_is_usable(store: DeepResearchStore, job_id: str) -> bool:
     bundle = _resolve_final_artifact_bundle(store, job_id)
+    return _artifact_bundle_is_usable(bundle)
+
+
+def _artifact_bundle_differs_from_current(store: DeepResearchStore, job_id: str, bundle: dict[str, Any] | None) -> bool:
     if bundle is None:
         return False
-    for kind in ("sources.json", "citations.json", "report.json"):
-        text = _read_text_if_exists(bundle["paths"][kind])
-        value, error = _safe_load_json_artifact(text)
-        if error is not None or _validate_json_artifact_shape(kind, value) is not None:
-            return False
-    return True
+    current_bundle = _current_final_artifact_bundle(store, job_id)
+    if current_bundle is None:
+        return True
+    return current_bundle.get("batch_id") != bundle.get("batch_id")
 
 
 def _normalize_depends_on(value: Any) -> list[str]:
@@ -878,6 +908,8 @@ def _ensure_sub_question_unit_coverage(
     normalize_actions: list[str],
     validation_issues: list[str],
 ) -> list[dict[str, Any]]:
+    if len(sub_questions) <= 1:
+        return list(units)
     covered_units = list(units)
     used_ids = {str(unit.get("unit_id", "")).strip() for unit in covered_units}
     auto_index = 1
@@ -1181,7 +1213,7 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
     if url.startswith("https://docs.") or url.startswith("http://docs.") or domain.startswith("docs.") or "/docs/" in url or "/documentation/" in url:
         return 3
     if domain.startswith("standards.") or "standards." in domain or "/rfc" in url or "/spec" in url or "/standard" in url:
-        return 2
+        return 3
     if domain == "arxiv.org" or domain.endswith(".arxiv.org") or domain.endswith(".acm.org") or domain.endswith(".ieee.org") or url.endswith(".pdf"):
         return 2
     if domain.startswith("blog.") or "/blog/" in url:
@@ -1430,11 +1462,7 @@ class DeepResearchRuntime:
         payload["artifact_kinds"] = [artifact["kind"] for artifact in artifacts]
         payload["artifacts"] = artifacts
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if job.status == "completed" else None
-        payload["artifact_fallback_used"] = final_bundle is not None and any(
-            str(artifact.get("path", "")) not in {str(path.relative_to(self.store.root_dir)) for path in final_bundle["paths"].values()}
-            for artifact in artifacts
-            if artifact.get("kind") in _FINAL_ARTIFACT_KINDS
-        )
+        payload["artifact_fallback_used"] = _artifact_bundle_differs_from_current(self.store, job_id, final_bundle)
         payload["resolved_artifact_batch_id"] = final_bundle["batch_id"] if final_bundle is not None else ""
         return payload
 
@@ -1521,7 +1549,7 @@ class DeepResearchRuntime:
             "citations": citations,
             "report": report_value,
             "artifact_errors": artifact_errors,
-            "artifact_fallback_used": final_bundle is not None,
+            "artifact_fallback_used": _artifact_bundle_differs_from_current(self.store, job_id, final_bundle),
             "artifacts": [artifact.model_dump() for artifact in self.store.list_artifacts(job_id)],
         }
 
@@ -3153,18 +3181,30 @@ def _build_section_citations(
             relevant_evidence.append(evidence)
         section_claims: list[dict[str, Any]] = []
         clusters: list[list[DeepResearchEvidenceItem]] = []
-        for evidence in relevant_evidence:
+        cluster_seed_items = [evidence for evidence in relevant_evidence if evidence.evidence_kind != "search"] or relevant_evidence
+        supplemental_items = [evidence for evidence in relevant_evidence if evidence not in cluster_seed_items]
+        for evidence in cluster_seed_items:
             placed = False
             for cluster in clusters:
-                if any(
-                    _evidence_similarity(evidence, existing) >= 0.55
-                    or set(evidence.source_ids) & set(existing.source_ids)
-                    for existing in cluster
-                ):
+                if any(_evidence_similarity(evidence, existing) >= 0.55 for existing in cluster):
                     cluster.append(evidence)
                     placed = True
                     break
             if not placed:
+                clusters.append([evidence])
+        for evidence in supplemental_items:
+            best_cluster: list[DeepResearchEvidenceItem] | None = None
+            best_similarity = 0.0
+            for cluster in clusters:
+                similarity = max(_evidence_similarity(evidence, existing) for existing in cluster)
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_cluster = cluster
+            cluster_source_ids = {source_id for item in (best_cluster or []) for source_id in item.source_ids}
+            single_source_match = len(set(evidence.source_ids)) == 1 and bool(set(evidence.source_ids) & cluster_source_ids)
+            if best_cluster is not None and (best_similarity >= 0.35 or single_source_match):
+                best_cluster.append(evidence)
+            else:
                 clusters.append([evidence])
         ranked_clusters = sorted(
             clusters,
