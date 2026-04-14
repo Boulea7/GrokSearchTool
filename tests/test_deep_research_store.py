@@ -261,3 +261,47 @@ def test_store_marks_inflight_jobs_as_interrupted_during_recovery(tmp_path):
     assert running_events[-1].type == "job_interrupted"
     assert queued_events[-1].data["reason"] == "worker_restarted"
     assert store.get_job(draft.job_id).status == "draft"
+
+
+def test_store_reconcile_incomplete_jobs_skips_recent_heartbeats_when_threshold_applies(tmp_path):
+    store = make_store(tmp_path)
+    running = store.create_job(
+        query="Fresh running job",
+        request_fingerprint="fp-fresh-running",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    stale = store.create_job(
+        query="Stale running job",
+        request_fingerprint="fp-stale-running",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    store.update_job(running.job_id, heartbeat_at=utc_now_iso())
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET heartbeat_at = ?, updated_at = ?, started_at = ?, created_at = ? WHERE job_id = ?",
+            ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", stale.job_id),
+        )
+
+    recovered = store.reconcile_incomplete_jobs(stale_after_seconds=30)
+
+    assert [job.job_id for job in recovered] == [stale.job_id]
+    assert store.get_job(running.job_id).status == "running"
+    assert store.get_job(stale.job_id).status == "interrupted"
