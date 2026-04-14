@@ -819,6 +819,104 @@ def _repair_research_units(
     return repaired
 
 
+def _unit_covers_sub_question(unit: dict[str, Any], sub_question: dict[str, Any]) -> bool:
+    question = _normalize_whitespace(str(sub_question.get("question", "")))
+    if not question:
+        return False
+    haystack = " ".join(
+        _normalize_whitespace(str(unit.get(key, "")))
+        for key in ("title", "goal", "query", "notes", "instructions")
+    )
+    if not haystack:
+        return False
+    question_key = _stable_text_key(question)
+    haystack_key = _stable_text_key(haystack)
+    if question_key and question_key in haystack_key:
+        return True
+    question_tokens = _tokenize_keywords(question)
+    if not question_tokens:
+        return False
+    overlap = _count_keyword_overlap(haystack, question_tokens)
+    return overlap >= max(1, min(2, len(question_tokens)))
+
+
+def _ensure_sub_question_unit_coverage(
+    units: list[dict[str, Any]],
+    *,
+    sub_questions: list[dict[str, Any]],
+    continuation: DeepResearchContinuationState,
+    normalize_actions: list[str],
+    validation_issues: list[str],
+) -> list[dict[str, Any]]:
+    covered_units = list(units)
+    used_ids = {str(unit.get("unit_id", "")).strip() for unit in covered_units}
+    auto_index = 1
+    for sub_question in sub_questions:
+        if any(_unit_covers_sub_question(unit, sub_question) for unit in covered_units):
+            continue
+        while f"unit-search-auto-{auto_index}" in used_ids:
+            auto_index += 1
+        unit_id = f"unit-search-auto-{auto_index}"
+        used_ids.add(unit_id)
+        query = _rewrite_research_query(str(sub_question.get("question", "")), continuation)
+        covered_units.append(
+            {
+                "unit_id": unit_id,
+                "unit_type": "search",
+                "title": _trim_text(query, limit=96),
+                "goal": query,
+                "query": query,
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        )
+        _append_unique(validation_issues, "missing_sub_question_unit_coverage")
+        _append_unique(normalize_actions, f"added_sub_question_search_unit:{sub_question.get('id', unit_id)}")
+    return covered_units
+
+
+def _outline_from_sub_questions(
+    outline: list[dict[str, Any]],
+    *,
+    sub_questions: list[dict[str, Any]],
+    continuation: DeepResearchContinuationState,
+    normalize_actions: list[str],
+    validation_issues: list[str],
+) -> list[dict[str, Any]]:
+    if continuation.mode == "continue" or len(sub_questions) <= 1:
+        return outline
+    generic_titles = {"executive summary", "key findings", "open questions", "summary"}
+    if not outline:
+        return outline
+    first_title = str(outline[0].get("title", "")).strip()
+    remainder = outline[1:]
+    if remainder and not all(str(item.get("title", "")).strip().lower() in generic_titles for item in remainder):
+        return outline
+    summary_section = outline[0] if first_title.lower() == "executive summary" else {
+        "section_id": "executive-summary",
+        "title": "Executive Summary",
+        "goal": "Summarize the answer.",
+    }
+    expanded = [summary_section]
+    for item in sub_questions:
+        title = _trim_text(_normalize_whitespace(str(item.get("question", "")).rstrip(" ?")), limit=96)
+        if not title:
+            continue
+        expanded.append(
+            {
+                "section_id": _slugify(title),
+                "title": title,
+                "goal": title,
+            }
+        )
+    if len(expanded) <= len(outline):
+        return outline
+    _append_unique(validation_issues, "generic_outline_for_sub_questions")
+    _append_unique(normalize_actions, "expanded_outline_from_sub_questions")
+    return expanded
+
+
 def _dedupe_sub_questions(sub_questions: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
     deduped: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1955,6 +2053,20 @@ class DeepResearchRuntime:
             )
         if saw_string_report_outline:
             validation_issues.append("string_report_outline_items")
+        normalized_units = _ensure_sub_question_unit_coverage(
+            normalized_units,
+            sub_questions=sub_questions,
+            continuation=continuation,
+            normalize_actions=normalize_actions,
+            validation_issues=validation_issues,
+        )
+        normalized_outline = _outline_from_sub_questions(
+            normalized_outline,
+            sub_questions=sub_questions,
+            continuation=continuation,
+            normalize_actions=normalize_actions,
+            validation_issues=validation_issues,
+        )
 
         strategy = raw_plan.get("search_strategy") or {}
         if not isinstance(strategy, dict):
@@ -1979,7 +2091,13 @@ class DeepResearchRuntime:
                 unit["query"] for unit in normalized_units if unit["unit_type"] == "search" and unit["query"]
             ] or [job.query]
         strategy["search_queries"] = _dedupe_preserve_order(
-            [_rewrite_research_query(str(query), continuation) for query in strategy.get("search_queries") or [job.query]]
+            [
+                _rewrite_research_query(str(query), continuation)
+                for query in [
+                    *(strategy.get("search_queries") or [job.query]),
+                    *[unit["query"] for unit in normalized_units if unit["unit_type"] == "search" and unit["query"]],
+                ]
+            ]
         )
         strategy.setdefault("approach", "targeted")
         strategy.setdefault("selective_fetch", {"max_urls_per_search": 1, "prefer_titles_matching_outline": True})

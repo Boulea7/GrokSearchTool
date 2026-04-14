@@ -112,7 +112,8 @@ async def test_plan_normalization_repairs_string_shaped_strategy_and_writes_plan
     trace = json.loads(runtime.store.read_artifact_text(response["job_id"], "planner_trace.json"))
 
     assert plan["brief"]["objective"] == "Repair strategy shape"
-    assert plan["search_strategy"]["search_queries"] == ["runtime resume checkpoints"]
+    assert plan["search_strategy"]["search_queries"][0] == "runtime resume checkpoints"
+    assert "Repair strategy shape" in plan["search_strategy"]["search_queries"]
     assert plan["planner_metadata"]["planner"] == "model"
     assert plan["planner_metadata"]["trace"]["repair_attempted"] is False
     assert "non_dict_search_strategy" in plan["planner_metadata"]["trace"]["normalize_actions"]
@@ -1987,6 +1988,95 @@ async def test_plan_normalization_repairs_round6c_style_payload_without_fallback
     assert "missing_search_query" in validation["issues"]
     assert "missing_fetch_url" in validation["issues"]
 
+
+@pytest.mark.asyncio
+async def test_plan_normalization_adds_missing_search_units_for_uncovered_sub_questions(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def sparse_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "Compare checkpoint resume semantics", "reason": "Primary axis."},
+            {"id": "sq2", "question": "Compare restart trade-offs", "reason": "Secondary axis."},
+            {"id": "sq3", "question": "Explain operational recovery risks", "reason": "Operational axis."},
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Checkpoint resume search",
+                "goal": "Compare checkpoint resume semantics",
+                "query": "Compare checkpoint resume semantics",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"]["search_queries"] = ["Compare checkpoint resume semantics"]
+        return payload
+
+    runtime._generate_plan_with_model = sparse_planner
+
+    response = await runtime.start(
+        query="Expand planner coverage",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    trace = plan["planner_metadata"]["trace"]
+    validation = plan["planner_metadata"]["validation"]
+
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert len(plan["research_units"]) == 3
+    assert [unit["query"] for unit in plan["research_units"]] == [
+        "Compare checkpoint resume semantics",
+        "Compare restart trade-offs",
+        "Explain operational recovery risks",
+    ]
+    assert len(plan["search_strategy"]["search_queries"]) == 3
+    assert "added_sub_question_search_unit:sq2" in trace["normalize_actions"]
+    assert "added_sub_question_search_unit:sq3" in trace["normalize_actions"]
+    assert "missing_sub_question_unit_coverage" in validation["issues"]
+
+
+@pytest.mark.asyncio
+async def test_plan_normalization_expands_generic_outline_from_sub_questions(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def generic_outline_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "Compare checkpoint resume semantics", "reason": "Primary axis."},
+            {"id": "sq2", "question": "Compare restart trade-offs", "reason": "Secondary axis."},
+            {"id": "sq3", "question": "Explain operational recovery risks", "reason": "Operational axis."},
+        ]
+        payload["report_outline"] = [
+            {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+            {"section_id": "key-findings", "title": "Key Findings", "goal": "Present the main evidence."},
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = generic_outline_planner
+
+    response = await runtime.start(
+        query="Expand outline coverage",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    outline_titles = [section["title"] for section in response["plan"]["report_outline"]]
+    trace = response["plan"]["planner_metadata"]["trace"]
+    validation = response["plan"]["planner_metadata"]["validation"]
+
+    assert outline_titles[0] == "Executive Summary"
+    assert "Compare checkpoint resume semantics" in outline_titles
+    assert "Compare restart trade-offs" in outline_titles
+    assert "Explain operational recovery risks" in outline_titles
+    assert "expanded_outline_from_sub_questions" in trace["normalize_actions"]
+    assert "generic_outline_for_sub_questions" in validation["issues"]
 
 
 @pytest.mark.asyncio
