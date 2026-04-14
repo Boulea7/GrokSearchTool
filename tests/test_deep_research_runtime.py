@@ -1311,6 +1311,31 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
         json.dumps(structured_plan_payload(follow_up, {"mode": "continue"})),
         "application/json",
     )
+    runtime.write_artifact_batch(
+        follow_up.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Checkpoint resume summary.", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nCheckpoint resume summary.",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
 
     response = await runtime.start(
         query="Follow up query",
@@ -1322,6 +1347,51 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
 
     assert response["reused"] is True
     assert response["job_id"] == follow_up.job_id
+
+
+@pytest.mark.asyncio
+async def test_start_does_not_reuse_completed_job_with_incomplete_final_artifact_batch(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    fingerprint = runtime._request_fingerprint(
+        query="Follow up query",
+        context="Stay technical.",
+        effort="standard",
+        include_domains=[],
+        exclude_domains=[],
+        continue_from_job_id="",
+    )
+    completed = runtime.store.create_job(
+        query="Follow up query",
+        request_fingerprint=fingerprint,
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="Stay technical.",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(completed.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(
+        completed.job_id,
+        "final_report.md",
+        "# Final Report\n\nStale final report.",
+        "text/markdown",
+    )
+
+    response = await runtime.start(
+        query="Follow up query",
+        context="Stay technical.",
+        force_new=False,
+        schedule=False,
+    )
+
+    assert response["reused"] is False
+    assert response["job_id"] != completed.job_id
 
 
 @pytest.mark.asyncio
@@ -1730,6 +1800,74 @@ async def test_continuation_uses_citations_registry_when_sources_artifact_missin
             "provider": "grok",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_continuation_prefers_consistent_final_artifact_batch_over_mixed_current_artifacts(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    original = runtime.store.create_job(
+        query="Consistent batch continuation source",
+        request_fingerprint="fp-consistent-batch-continuation",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact_batch(
+        original.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Checkpoint resume summary.", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nCheckpoint resume summary.",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R999", "url": "https://stale.example.com/mixed"}]),
+        "application/json",
+    )
+
+    response = await runtime.start(
+        query="Continue from consistent batch source",
+        continue_from_job_id=original.job_id,
+        force_new=True,
+        plan_only=True,
+        schedule=False,
+    )
+    continuation_payload = json.loads(runtime.store.read_artifact_text(response["job_id"], "continuation.json"))
+
+    assert continuation_payload["carry_forward_sources"] == [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/checkpoints",
+        }
+    ]
+    assert continuation_payload["previous_summary"] == "Checkpoint resume summary."
 
 
 @pytest.mark.asyncio
@@ -2298,6 +2436,31 @@ async def test_reused_job_payload_tolerates_invalid_plan_json(tmp_path):
     )
     runtime.store.update_job(job.job_id, finished_at=utc_now_iso())
     runtime.write_artifact(job.job_id, "plan.json", "{bad-json", "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Checkpoint resume summary.", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nCheckpoint resume summary.",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
 
     response = await runtime.start(query="Reuse invalid plan", force_new=False, schedule=False)
 

@@ -118,6 +118,7 @@ _GAP_EVIDENCE_MARKERS = (
     "remaining gap",
     "open question",
 )
+_FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 
 
 class PlannerGenerationError(RuntimeError):
@@ -528,6 +529,50 @@ def _safe_load_json_artifact(value: str | None) -> tuple[Any | None, str | None]
         return None, "invalid_json"
 
 
+def _read_text_if_exists(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def _current_final_artifact_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
+    artifacts = [artifact for artifact in store.list_artifacts(job_id) if artifact.kind in _FINAL_ARTIFACT_KINDS]
+    if len(artifacts) != len(_FINAL_ARTIFACT_KINDS):
+        return None
+    batch_ids = {str(artifact.metadata.get("batch_id", "")).strip() for artifact in artifacts}
+    if len(batch_ids) != 1:
+        return None
+    batch_id = next(iter(batch_ids))
+    if not batch_id:
+        return None
+    paths: dict[str, Path] = {}
+    for artifact in artifacts:
+        path = store.root_dir / artifact.path
+        if _read_text_if_exists(path) is None:
+            return None
+        paths[artifact.kind] = path
+    return {"batch_id": batch_id, "paths": paths}
+
+
+def _latest_complete_batch_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
+    batches_dir = store.artifacts_dir / job_id / "batches"
+    if not batches_dir.exists():
+        return None
+    candidates = sorted((path for path in batches_dir.iterdir() if path.is_dir()), key=lambda path: path.name, reverse=True)
+    for batch_dir in candidates:
+        paths = {kind: batch_dir / kind for kind in _FINAL_ARTIFACT_KINDS}
+        if all(_read_text_if_exists(path) is not None for path in paths.values()):
+            return {"batch_id": batch_dir.name, "paths": paths}
+    return None
+
+
+def _resolve_final_artifact_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
+    current_bundle = _current_final_artifact_bundle(store, job_id)
+    if current_bundle is not None:
+        return current_bundle
+    return _latest_complete_batch_bundle(store, job_id)
+
+
 def _normalize_depends_on(value: Any) -> list[str]:
     if value is None:
         return []
@@ -849,6 +894,9 @@ class DeepResearchRuntime:
                 request_fingerprint,
                 recent_reuse_seconds=config.deep_research_recent_reuse_seconds,
             )
+            if reused_job is not None and reused_job.status == "completed":
+                if _resolve_final_artifact_bundle(self.store, reused_job.job_id) is None:
+                    reused_job = None
         if reused_job is not None:
             return self._job_payload(reused_job, reused=True)
 
@@ -1443,12 +1491,29 @@ class DeepResearchRuntime:
             return DeepResearchContinuationState(mode="fresh")
         job = self.store.get_job(continue_from_job_id)
 
-        report_text = self.store.read_artifact_text(continue_from_job_id, "report.json")
-        final_report = self.store.read_artifact_text(continue_from_job_id, "final_report.md") or ""
+        final_bundle = _resolve_final_artifact_bundle(self.store, continue_from_job_id)
+        report_text = (
+            _read_text_if_exists(final_bundle["paths"]["report.json"])
+            if final_bundle is not None
+            else self.store.read_artifact_text(continue_from_job_id, "report.json")
+        )
+        final_report = (
+            _read_text_if_exists(final_bundle["paths"]["final_report.md"])
+            if final_bundle is not None
+            else self.store.read_artifact_text(continue_from_job_id, "final_report.md")
+        ) or ""
         partial_report = self.store.read_artifact_text(continue_from_job_id, "partial_report.md") or ""
         plan_text = self.store.read_artifact_text(continue_from_job_id, "plan.json") or ""
-        sources_text = self.store.read_artifact_text(continue_from_job_id, "sources.json") or "[]"
-        citations_text = self.store.read_artifact_text(continue_from_job_id, "citations.json") or ""
+        sources_text = (
+            _read_text_if_exists(final_bundle["paths"]["sources.json"])
+            if final_bundle is not None
+            else self.store.read_artifact_text(continue_from_job_id, "sources.json")
+        ) or "[]"
+        citations_text = (
+            _read_text_if_exists(final_bundle["paths"]["citations.json"])
+            if final_bundle is not None
+            else self.store.read_artifact_text(continue_from_job_id, "citations.json")
+        ) or ""
         checkpoints = self.store.list_checkpoints(continue_from_job_id)
         checkpoint_state, checkpoint_meta = self._load_checkpoint_state(job)
         report: dict[str, Any] = {}
