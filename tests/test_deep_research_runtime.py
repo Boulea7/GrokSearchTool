@@ -184,6 +184,75 @@ async def test_plan_normalization_repairs_ready_status_alias(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_planner_repair_recovers_invalid_json_and_records_trace(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    observed_models = []
+    call_count = {"value": 0}
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309"]
+
+    async def fake_execute(self, headers, payload, ctx=None, render_sources=False):
+        observed_models.append(payload["model"])
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            return "```json\n{\"brief\": \"broken\"\n```", []
+        return (
+            json.dumps(
+                {
+                    "brief": {"objective": "Repair from retry", "deliverable": "A cited report.", "success_criteria": ["Produce a structured report."]},
+                    "sub_questions": [{"id": "sq1", "question": "Repair from retry", "reason": "Cover the primary question."}],
+                    "search_strategy": {
+                        "approach": "targeted",
+                        "search_queries": ["Repair from retry"],
+                        "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+                    },
+                    "report_outline": [{"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."}],
+                    "research_units": [
+                        {
+                            "unit_id": "unit-search-1",
+                            "unit_type": "search",
+                            "title": "Primary search",
+                            "goal": "Repair from retry",
+                            "query": "Repair from retry",
+                            "depends_on": [],
+                            "status": "pending",
+                            "notes": "",
+                        }
+                    ],
+                    "planner_metadata": {"planner": "model", "used_fallback": False},
+                }
+            ),
+            [],
+        )
+
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
+
+    response = await runtime.start(
+        query="Repair planner json",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    trace = json.loads(runtime.store.read_artifact_text(response["job_id"], "planner_trace.json"))
+
+    assert response["plan"]["planner_metadata"]["used_fallback"] is False
+    assert response["plan"]["brief"]["objective"] == "Repair from retry"
+    assert call_count["value"] == 2
+    assert observed_models == ["grok-4.20-0309", "grok-4.20-0309"]
+    assert trace["repair_attempted"] is True
+    assert trace["repair_succeeded"] is True
+    assert trace["initial_parse_error"]
+    assert trace["repair_parse_path"] == "direct_json"
+    assert trace["final_status"] == "normalized"
+
+
+@pytest.mark.asyncio
 async def test_plan_only_does_not_schedule_execution(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -1829,8 +1898,95 @@ async def test_invalid_depends_on_falls_back_to_valid_plan(tmp_path):
     finally:
         monkeypatch.undo()
 
-    assert response["plan"]["planner_metadata"]["planner"] == "fallback"
-    assert response["plan"]["planner_metadata"]["used_fallback"] is True
+    trace = response["plan"]["planner_metadata"]["trace"]
+
+    assert response["plan"]["planner_metadata"]["planner"] == "test"
+    assert response["plan"]["planner_metadata"]["used_fallback"] is False
+    assert response["plan"]["research_units"][0]["depends_on"] == []
+    assert "dropped_unknown_dependency:unit-search-1->unknown-unit" in trace["normalize_actions"]
+    assert "unknown_dependency:unit-search-1->unknown-unit" in trace["blocked_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_plan_normalization_repairs_round6c_style_payload_without_fallback(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def round6c_style_planner(job, continuation):
+        return {
+            "brief": "Compare checkpoint, resume, and restart semantics in AWS DMS tasks.",
+            "sub_questions": [
+                "What are the definitions and mechanics of resume-processing and restart?",
+                "How does recovery differ between full load and CDC tasks?",
+            ],
+            "search_strategy": "Targeted searches on docs.aws.amazon.com only",
+            "report_outline": [
+                "Executive Summary",
+                "Behavior by Task Type",
+            ],
+            "research_units": [
+                {
+                    "unit_id": "u1",
+                    "unit_type": "search",
+                    "title": "Core Task Management and Start/Resume/Restart",
+                    "goal": "Extract official definitions and mechanics.",
+                    "query": "",
+                    "depends_on": ["u6", "missing-unit"],
+                    "status": "ready",
+                    "notes": "",
+                },
+                {
+                    "unit_id": "u1",
+                    "unit_type": "browse_page",
+                    "title": "Browse Key Task Page",
+                    "goal": "Deep extract on task states and monitoring.",
+                    "url": "",
+                    "depends_on": ["u1"],
+                    "status": "pending",
+                    "notes": "Summarize all sections on starting, stopping, resuming, restarting tasks, recovery, and checkpoint mentions.",
+                },
+            ],
+            "planner_metadata": {
+                "planner": "model",
+                "used_fallback": False,
+            },
+        }
+
+    runtime._generate_plan_with_model = round6c_style_planner
+
+    response = await runtime.start(
+        query="Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+        context="Prefer official docs and focus on recovery behavior and restart trade-offs.",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    trace = plan["planner_metadata"]["trace"]
+    validation = plan["planner_metadata"]["validation"]
+
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert [unit["unit_id"] for unit in plan["research_units"]] == ["u1", "u1-2"]
+    assert plan["research_units"][0]["query"]
+    assert plan["research_units"][0]["status"] == "pending"
+    assert plan["research_units"][0]["depends_on"] == []
+    assert plan["research_units"][1]["unit_type"] == "search"
+    assert plan["research_units"][1]["query"]
+    assert plan["research_units"][1]["depends_on"] == ["u1"]
+    assert "aliased_unit_type:browse_page->fetch" in trace["normalize_actions"]
+    assert "aliased_unit_status:ready->pending" in trace["normalize_actions"]
+    assert "renamed_duplicate_unit_id:u1->u1-2" in trace["normalize_actions"]
+    assert "filled_search_query:u1" in trace["normalize_actions"]
+    assert "degraded_fetch_without_url_to_search:u1-2" in trace["normalize_actions"]
+    assert "dropped_unknown_dependency:u1->missing-unit" in trace["normalize_actions"]
+    assert "dropped_unknown_dependency:u1->u6" in trace["normalize_actions"]
+    assert "unknown_dependency:u1->missing-unit" in trace["blocked_reasons"]
+    assert "unknown_dependency:u1->u6" in trace["blocked_reasons"]
+    assert validation["repaired"] is True
+    assert "duplicate_unit_id" in validation["issues"]
+    assert "missing_search_query" in validation["issues"]
+    assert "missing_fetch_url" in validation["issues"]
+
 
 
 @pytest.mark.asyncio
