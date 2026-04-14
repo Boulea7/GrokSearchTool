@@ -1442,6 +1442,57 @@ Resume continues from the last checkpoint.
 
 
 @pytest.mark.asyncio
+async def test_search_unit_preserves_search_evidence_alongside_fetched_evidence(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def fake_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "checkpoint-analysis",
+                "title": "Checkpoint Analysis",
+                "goal": "Compare abstract search findings with fetched document details.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def fake_search(query):
+        return (
+            "Search synthesis: checkpoint resume preserves prior progress while restart replays work from scratch.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoint guide",
+                    "description": "Official checkpoint documentation.",
+                }
+            ],
+        )
+
+    async def fake_fetch(url):
+        return "# Runtime checkpoint guide\n\nFetched details: RecoveryCheckpoint is reused when resume-processing continues from the last durable point."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", fake_planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", fake_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fake_fetch)
+
+    response = await runtime.start(query="Preserve search evidence", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    claim_texts = [
+        claim["text"]
+        for section in result["report"]["sections"]
+        for claim in section["claims"]
+    ]
+
+    assert any("preserves prior progress" in text for text in claim_texts)
+    assert any("RecoveryCheckpoint is reused" in text for text in claim_texts)
+
+
+@pytest.mark.asyncio
 async def test_fetch_and_map_units_skip_placeholder_claims_when_empty(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -1499,6 +1550,66 @@ async def test_fetch_and_map_units_skip_placeholder_claims_when_empty(monkeypatc
 
     assert "No content fetched." not in result["final_report"]
     assert "No site map returned." not in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_map_unit_fetches_discovered_urls_into_final_evidence(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fetched_urls = []
+
+    async def fake_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "mapped-docs",
+                "title": "Mapped Docs",
+                "goal": "Use mapped runtime docs pages as concrete evidence for resume and restart semantics.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-map-1",
+                "unit_type": "map",
+                "title": "Map runtime docs",
+                "goal": "Discover runtime docs.",
+                "url": "https://docs.example.com/runtime",
+                "instructions": "Find docs about resume and restart semantics.",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 2,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def fake_map(url, instructions=""):
+        return """
+- https://docs.example.com/runtime/resume
+- https://docs.example.com/runtime/restart
+"""
+
+    async def fake_fetch(url):
+        fetched_urls.append(url)
+        if url.endswith("/resume"):
+            return "# Resume docs\n\nResume-processing continues from the last checkpoint."
+        return "# Restart docs\n\nRestart replays the task from a fresh starting point."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", fake_planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._map_url", fake_map)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fake_fetch)
+
+    response = await runtime.start(query="Map then fetch docs", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert fetched_urls == [
+        "https://docs.example.com/runtime/resume",
+        "https://docs.example.com/runtime/restart",
+    ]
+    assert "Resume-processing continues from the last checkpoint" in result["final_report"]
+    assert "Restart replays the task from a fresh starting point" in result["final_report"]
 
 
 @pytest.mark.asyncio
