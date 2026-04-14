@@ -1865,6 +1865,50 @@ async def test_result_surfaces_invalid_shape_errors_for_sources_and_report(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_result_surfaces_invalid_nested_claim_shape_errors(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Nested invalid shape",
+        request_fingerprint="fp-nested-invalid-shape",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Nested invalid shape"}), "application/json")
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime"}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "citations.json",
+        json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://docs.example.com/runtime"}}, "sections": [{"section_id": "s1", "claims": ["bad-claim"]}]}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "report.json",
+        json.dumps({"summary": "Bad nested report", "sections": [{"section_id": "s1", "claims": ["bad-claim"]}], "unit_results": {}}),
+        "application/json",
+    )
+    runtime.write_artifact(job.job_id, "final_report.md", "# Final Report\n\nBad nested report.", "text/markdown")
+
+    result = await runtime.result(job.job_id)
+
+    assert result["artifact_errors"]["report.json"] == "invalid_shape"
+    assert result["artifact_errors"]["citations.json"] == "invalid_shape"
+
+
+@pytest.mark.asyncio
 async def test_run_job_executes_independent_units_concurrently(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     started = []
@@ -3181,6 +3225,69 @@ async def test_domain_constraints_filter_deep_research_sources_and_expose_rankin
     assert "official_docs" in first_source["ranking_reasons"]
     assert "repost.aws" not in result["final_report"]
     assert "example.com/aws-dms-blog" not in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_source_ranking_prefers_standards_and_papers_over_generic_blog(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 3,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume has strong support in standards and papers.",
+            [
+                {
+                    "url": "https://blog.example.com/runtime-checkpoint-post",
+                    "title": "Runtime checkpoint blog",
+                    "description": "Generic blog summary.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://standards.example.org/runtime/recovery",
+                    "title": "Runtime recovery standard",
+                    "description": "Normative runtime recovery guidance.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://arxiv.org/abs/2404.12345",
+                    "title": "Checkpoint Recovery for Distributed Runtimes",
+                    "description": "Research paper.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "standards.example.org" in url:
+            return "# Runtime recovery standard\n\nResume-processing continues from the last durable checkpoint."
+        if "arxiv.org" in url:
+            return "# Checkpoint Recovery for Distributed Runtimes\n\nThe paper shows resumable checkpoint recovery reduces replay cost."
+        return "# Blog\n\nA generic blog summary."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Rank standards and papers", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    sources = list(result["citations"]["source_registry"].values())
+    urls = [item["url"] for item in sources]
+
+    assert urls[0] == "https://standards.example.org/runtime/recovery"
+    assert "arxiv.org/abs/2404.12345" in urls[1]
+    assert urls[-1] == "https://blog.example.com/runtime-checkpoint-post"
+    assert sources[0]["winner_provider"] == "grok"
+    assert sources[0]["citation_count"] >= 1
+    assert "standard" in sources[0]["ranking_reasons"]
+    assert "paper" in sources[1]["ranking_reasons"]
 
 
 @pytest.mark.asyncio

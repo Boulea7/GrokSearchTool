@@ -391,6 +391,8 @@ def _source_sort_tuple(item: dict[str, Any]) -> tuple:
     return (
         -quality_score,
         -_source_quality_bias(item),
+        -(item.get("citation_count") if isinstance(item.get("citation_count"), int) else 0),
+        -(item.get("section_count") if isinstance(item.get("section_count"), int) else 0),
         0 if item.get("title") else 1,
         0 if item.get("snippet") or item.get("description") else 1,
         0 if item.get("provider") else 1,
@@ -617,6 +619,15 @@ def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
     if kind == "report.json":
         if not isinstance(value, dict):
             return "invalid_shape"
+        sections = value.get("sections", [])
+        if not isinstance(sections, list):
+            return "invalid_shape"
+        for section in sections:
+            if not isinstance(section, dict):
+                return "invalid_shape"
+            claims = section.get("claims", [])
+            if not isinstance(claims, list) or not all(isinstance(claim, dict) and isinstance(claim.get("text", ""), str) for claim in claims):
+                return "invalid_shape"
         return None
     if kind == "citations.json":
         normalized = _normalize_citations_payload(value)
@@ -626,6 +637,12 @@ def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
             return "invalid_shape"
         if not isinstance(normalized.get("sections"), list):
             return "invalid_shape"
+        for section in normalized.get("sections", []):
+            if not isinstance(section, dict):
+                return "invalid_shape"
+            claims = section.get("claims", [])
+            if not isinstance(claims, list) or not all(isinstance(claim, dict) and isinstance(claim.get("text", ""), str) for claim in claims):
+                return "invalid_shape"
         return None
     return None
 
@@ -1163,6 +1180,12 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
 
     if url.startswith("https://docs.") or url.startswith("http://docs.") or domain.startswith("docs.") or "/docs/" in url or "/documentation/" in url:
         return 3
+    if domain.startswith("standards.") or "standards." in domain or "/rfc" in url or "/spec" in url or "/standard" in url:
+        return 2
+    if domain == "arxiv.org" or domain.endswith(".arxiv.org") or domain.endswith(".acm.org") or domain.endswith(".ieee.org") or url.endswith(".pdf"):
+        return 2
+    if domain.startswith("blog.") or "/blog/" in url:
+        return -1
     for community in _COMMUNITY_SOURCE_DOMAINS:
         if community in url or domain == community or domain.endswith(f".{community}"):
             return -2
@@ -1179,6 +1202,10 @@ def _source_type(source: dict[str, Any]) -> str:
             domain = ""
     if url.startswith("https://docs.") or url.startswith("http://docs.") or domain.startswith("docs.") or "/docs/" in url:
         return "official_docs"
+    if domain.startswith("standards.") or "standards." in domain or "/rfc" in url or "/spec" in url or "/standard" in url:
+        return "standard"
+    if domain == "arxiv.org" or domain.endswith(".arxiv.org") or domain.endswith(".acm.org") or domain.endswith(".ieee.org") or url.endswith(".pdf"):
+        return "paper"
     if domain in _COMMUNITY_SOURCE_DOMAINS or any(domain.endswith(f".{item}") for item in _COMMUNITY_SOURCE_DOMAINS):
         return "community"
     return "third_party"
@@ -1204,6 +1231,8 @@ def _source_ranking_reasons(
     source_type = _source_type(source)
     if source_type:
         reasons.append(source_type)
+    if source.get("winner_provider"):
+        reasons.append("winner_provider")
     if source.get("title"):
         reasons.append("has_title")
     if source.get("snippet") or source.get("description"):
@@ -2590,6 +2619,12 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             raise batch_error
 
     sections = _build_section_citations(plan, evidence_items, source_registry)
+    source_registry = _annotate_source_usage(
+        source_registry,
+        sections,
+        include_domains=plan.include_domains,
+        exclude_domains=plan.exclude_domains,
+    )
     unit_results = _sanitize_unit_results(unit_results, source_registry)
     runtime.store.update_job(job_id, phase="synthesizing", progress_pct=82.0, heartbeat_at=utc_now_iso())
     runtime.store.append_event(
@@ -2914,6 +2949,7 @@ def _merge_source_registry(
         current["quality_score"] = _source_quality_score(current)
         current["quality_tier"] = _source_quality_tier(current)
         current["source_type"] = _source_type(current)
+        current["winner_provider"] = current.get("provider", "")
         current["ranking_reasons"] = _source_ranking_reasons(
             current,
             include_domains=include_domains,
@@ -2925,6 +2961,41 @@ def _merge_source_registry(
     for rank, item in enumerate(merged_sources, start=1):
         item["rank"] = rank
     return merged_sources, merged_ids
+
+
+def _annotate_source_usage(
+    source_registry: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+    *,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    citation_count: dict[str, int] = {}
+    section_count: dict[str, int] = {}
+    for section in sections:
+        section_citations = {citation for citation in section.get("citations", []) if citation}
+        for citation in section_citations:
+            section_count[citation] = section_count.get(citation, 0) + 1
+        for claim in section.get("claims", []):
+            for citation in claim.get("citations", []):
+                citation_count[citation] = citation_count.get(citation, 0) + 1
+    annotated: list[dict[str, Any]] = []
+    for item in source_registry:
+        normalized = dict(item)
+        source_id = str(normalized.get("source_id", ""))
+        normalized["citation_count"] = citation_count.get(source_id, 0)
+        normalized["section_count"] = section_count.get(source_id, 0)
+        normalized["winner_provider"] = normalized.get("winner_provider") or normalized.get("provider", "")
+        normalized["ranking_reasons"] = _source_ranking_reasons(
+            normalized,
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+        )
+        annotated.append(normalized)
+    annotated = sorted(annotated, key=_source_sort_tuple)
+    for rank, item in enumerate(annotated, start=1):
+        item["rank"] = rank
+    return annotated
 
 
 def _select_fetch_sources(
