@@ -618,18 +618,64 @@ async def test_get_config_info_get_sources_requires_readable_session_not_error_o
     payload = await load_config_info()
 
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_deep_research_runtime_degrades_on_body_quality_warning_but_planner_can_stay_ready(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        return server._build_doctor_check(
+            "grok_search_probe",
+            "warning",
+            "真实搜索探针成功，但正文只有来源列表。",
+            warning_code="body_missing_sources_only",
+        )
+
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["deep_research_planner"]["status"] == "ready"
+    assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_deep_research_runtime_and_planner_degrade_when_models_probe_unhealthy(monkeypatch):
+    async def fake_fetch_available_models(api_url, api_key):
+        return []
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        return server._build_doctor_check("grok_search_probe", "ok", "真实搜索探针成功。")
+
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_fetch_available_models)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+    patch_async_client(monkeypatch, {})
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert payload["feature_readiness"]["deep_research_planner"]["status"] == "degraded"
+    assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "degraded"
     assert "尚无可读取的 source session" in payload["feature_readiness"]["get_sources"]["message"]
     assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
         {
             "check_id": "source_cache_state",
             "status": "degraded",
-            "reason_code": "error_only_source_cache",
+            "reason_code": "empty_source_cache",
         }
     ]
     assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
-        "total_sessions": 1,
+        "total_sessions": 0,
         "readable_sessions": 0,
-        "error_sessions": 1,
+        "error_sessions": 0,
         "partial_sessions": 0,
         "unreadable_sessions": 0,
     }

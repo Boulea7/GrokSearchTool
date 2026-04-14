@@ -86,7 +86,7 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
     listing = await server.deep_research_list()
 
     assert status["status"] == "completed"
-    assert status["artifact_kinds"] == ["citations.json", "final_report.md", "partial_report.md", "plan.json"]
+    assert status["artifact_kinds"] == ["citations.json", "final_report.md", "partial_report.md", "plan.json", "planner_trace.json"]
     assert [event["seq"] for event in events["events"]] == list(range(1, len(events["events"]) + 1))
     assert events["events"][0]["type"] in {"planner_fallback", "job_created"}
     assert events["events"][-1]["type"] == "job_completed"
@@ -185,4 +185,61 @@ async def test_deep_research_result_surfaces_artifact_errors(monkeypatch, tmp_pa
         "report.json": "invalid_json",
         "sources.json": "invalid_json",
         "citations.json": "invalid_json",
+        "final_report.md": "missing_required_artifact",
     }
+
+
+@pytest.mark.asyncio
+async def test_deep_research_result_prefers_resolved_final_batch_over_current_mixed_artifacts(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    job = runtime.store.create_job(
+        query="Mixed artifact server result",
+        request_fingerprint="fp-server-mixed-artifact",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", '{"query": "Mixed artifact server result"}', "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": '[{"source_id":"R1","url":"https://good.example.com"}]',
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": '{"source_registry":{"R1":{"source_id":"R1","url":"https://good.example.com"}},"sections":[]}',
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": '{"summary":"Good report","sections":[],"unit_results":{}}',
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nGood report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        '[{"source_id":"R9","url":"https://stale.example.com"}]',
+        "application/json",
+    )
+
+    result = await server.deep_research_result(job.job_id)
+
+    assert result["sources"][0]["url"] == "https://good.example.com"
