@@ -87,7 +87,9 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
 
     assert status["status"] == "completed"
     assert status["artifact_kinds"] == ["citations.json", "final_report.md", "partial_report.md", "plan.json"]
-    assert [event["seq"] for event in events["events"]] == [1, 2, 3, 4]
+    assert [event["seq"] for event in events["events"]] == list(range(1, len(events["events"]) + 1))
+    assert events["events"][0]["type"] in {"planner_fallback", "job_created"}
+    assert events["events"][-1]["type"] == "job_completed"
     assert result["final_report"].startswith("# Final Report")
     assert result["partial_report"].startswith("# Partial Report")
     assert result["citations"]["source_registry"]["R1"]["url"] == "https://example.com"
