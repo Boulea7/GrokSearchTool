@@ -303,6 +303,41 @@ async def test_plan_only_job_cannot_be_run_or_resumed(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_status_reconciles_stale_running_job_before_read(tmp_path):
+    runtime = build_runtime(tmp_path)
+    stale_job = runtime.store.create_job(
+        query="Stale running job",
+        request_fingerprint="fp-stale-running-read",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        stale_job.job_id,
+        heartbeat_at="2000-01-01T00:00:00Z",
+        started_at="2000-01-01T00:00:00Z",
+    )
+    with runtime.store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ? WHERE job_id = ?",
+            ("2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", stale_job.job_id),
+        )
+
+    status = await runtime.status(stale_job.job_id)
+    events = await runtime.events(stale_job.job_id)
+
+    assert status["status"] == "interrupted"
+    assert any(event["type"] == "job_interrupted" for event in events["events"])
+
+
+@pytest.mark.asyncio
 async def test_planner_preselects_available_grok_model_for_deep_research(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     observed_models = []
@@ -409,6 +444,36 @@ async def test_search_query_details_surfaces_body_quality_warning_and_runtime_me
     assert result["provider_model"] == "grok-4.20-0309-non-reasoning"
     assert result["provider_api_url"] == "https://secondary.example.com/v1"
     assert result["sources"][0]["url"] == "https://docs.example.com/a"
+
+
+@pytest.mark.asyncio
+async def test_completed_report_with_only_runtime_warning_is_marked_degraded(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        return structured_plan_payload(job, continuation)
+
+    async def warned_search(query):
+        return {
+            "answer": "",
+            "sources": [{"url": "https://docs.example.com/runtime", "title": "Runtime docs"}],
+            "warning_code": "body_missing_sources_only",
+            "requested_model": "grok-4.20-0309",
+            "effective_model": "grok-4.20-0309",
+            "provider_name": "primary",
+            "provider_model": "grok-4.20-0309",
+            "provider_api_url": "https://primary.example.com/v1",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query_with_details", warned_search)
+
+    response = await runtime.start(query="Degraded runtime warning", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert result["status"] == "completed"
+    assert result["report"]["status"] == "degraded"
+    assert "body_missing_sources_only" in result["report"]["runtime"]["warnings"]
 
 
 @pytest.mark.asyncio
@@ -1906,6 +1971,44 @@ async def test_result_surfaces_invalid_nested_claim_shape_errors(tmp_path):
 
     assert result["artifact_errors"]["report.json"] == "invalid_shape"
     assert result["artifact_errors"]["citations.json"] == "invalid_shape"
+
+
+@pytest.mark.asyncio
+async def test_status_exposes_resolved_artifact_batch_when_current_artifacts_are_mixed(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    job = runtime.store.create_job(
+        query="Artifact status fallback",
+        request_fingerprint="fp-artifact-status-fallback",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {"kind": "sources.json", "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]), "content_type": "application/json"},
+            {"kind": "citations.json", "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}), "content_type": "application/json"},
+            {"kind": "report.json", "content": json.dumps({"summary": "Good batch", "sections": [], "unit_results": {}}), "content_type": "application/json"},
+            {"kind": "final_report.md", "content": "# Final Report\n\nGood batch.", "content_type": "text/markdown"},
+        ],
+    )
+    runtime.write_artifact(job.job_id, "sources.json", json.dumps([{"source_id": "R999", "url": "https://stale.example.com"}]), "application/json")
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+
+    assert status["artifact_fallback_used"] is True
+    assert status["resolved_artifact_batch_id"]
+    assert result["artifact_fallback_used"] is True
+    assert result["sources"][0]["url"] == "https://good.example.com"
 
 
 @pytest.mark.asyncio

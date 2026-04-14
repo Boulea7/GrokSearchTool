@@ -1423,14 +1423,23 @@ class DeepResearchRuntime:
         return self._job_payload(job, reused=False)
 
     async def status(self, job_id: str) -> dict[str, Any]:
+        await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
         artifacts = [artifact.model_dump() for artifact in self.store.list_artifacts(job_id)]
         payload = self._serialize_job(job)
         payload["artifact_kinds"] = [artifact["kind"] for artifact in artifacts]
         payload["artifacts"] = artifacts
+        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if job.status == "completed" else None
+        payload["artifact_fallback_used"] = final_bundle is not None and any(
+            str(artifact.get("path", "")) not in {str(path.relative_to(self.store.root_dir)) for path in final_bundle["paths"].values()}
+            for artifact in artifacts
+            if artifact.get("kind") in _FINAL_ARTIFACT_KINDS
+        )
+        payload["resolved_artifact_batch_id"] = final_bundle["batch_id"] if final_bundle is not None else ""
         return payload
 
     async def events(self, job_id: str, *, after_seq: int = 0, limit: int = 100) -> dict[str, Any]:
+        await self._ensure_startup_reconciled()
         events = self.store.list_events(job_id, after_seq=after_seq, limit=limit)
         return {
             "job_id": job_id,
@@ -1439,6 +1448,7 @@ class DeepResearchRuntime:
         }
 
     async def result(self, job_id: str, *, include_partial: bool = True) -> dict[str, Any]:
+        await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
         plan_text = self.store.read_artifact_text(job_id, "plan.json")
         partial_text = self.store.read_artifact_text(job_id, "partial_report.md") if include_partial else None
@@ -1516,6 +1526,7 @@ class DeepResearchRuntime:
         }
 
     async def resume(self, job_id: str, *, schedule: bool = True) -> dict[str, Any]:
+        await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
         if job.plan_only:
             self.store.append_event(
@@ -1550,6 +1561,7 @@ class DeepResearchRuntime:
         return self._job_payload(job, reused=False)
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
+        await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
         job = self.store.update_job(job_id, cancel_requested=True)
         self.store.append_event(
@@ -1575,12 +1587,14 @@ class DeepResearchRuntime:
         }
 
     async def list_jobs(self, *, status: str = "", limit: int = 50) -> dict[str, Any]:
+        await self._ensure_startup_reconciled()
         jobs = self.store.list_jobs(status=status, limit=limit)
         return {
             "jobs": [self._serialize_job(job) for job in jobs],
         }
 
     async def run_job(self, job_id: str) -> dict[str, Any]:
+        await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
         if job.plan_only:
             self.store.append_event(
@@ -2659,6 +2673,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "sections": _sanitize_sections(sections, source_registry),
     }
     report_summary = _build_report_summary(plan, citations["sections"])
+    runtime_warnings = sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])})
+    report_status = "degraded" if runtime_warnings or not citations["sections"] else "completed"
     report_confidence = _cluster_confidence(
         source_count=len({citation for section in citations["sections"] for citation in section.get("citations", [])}),
         evidence_count=sum(len(section.get("claims", [])) for section in citations["sections"]),
@@ -2667,11 +2683,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "query": plan.query,
         "summary": report_summary,
         "confidence": report_confidence,
-        "status": "completed",
+        "status": report_status,
         "sections": citations["sections"],
         "unit_results": unit_results,
         "runtime": {
-            "warnings": sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])}),
+            "warnings": runtime_warnings,
             "provider_winners": [
                 {
                     "unit_id": result.get("unit_id", ""),
