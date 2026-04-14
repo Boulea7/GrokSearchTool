@@ -479,8 +479,9 @@ class DeepResearchStore:
                     return job
         return None
 
-    def reconcile_incomplete_jobs(self) -> list[DeepResearchJob]:
+    def reconcile_incomplete_jobs(self, *, stale_after_seconds: int = 0) -> list[DeepResearchJob]:
         interrupted_at = utc_now_iso()
+        now = dt.datetime.now(dt.UTC)
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -491,6 +492,19 @@ class DeepResearchStore:
             ).fetchall()
         recovered: list[DeepResearchJob] = []
         for row in rows:
+            if stale_after_seconds > 0:
+                candidate_times = [
+                    _parse_utc_iso(row["heartbeat_at"]),
+                    _parse_utc_iso(row["updated_at"]),
+                    _parse_utc_iso(row["started_at"]),
+                    _parse_utc_iso(row["created_at"]),
+                ]
+                visible_times = [item.astimezone(dt.UTC) for item in candidate_times if item is not None]
+                if visible_times:
+                    newest = max(visible_times)
+                    age_seconds = (now - newest).total_seconds()
+                    if age_seconds < stale_after_seconds:
+                        continue
             job = self.update_job(
                 row["job_id"],
                 status="interrupted",

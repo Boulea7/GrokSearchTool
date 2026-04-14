@@ -122,6 +122,7 @@ _GAP_EVIDENCE_MARKERS = (
 )
 _FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 _DEFAULT_SEARCH_QUERY_FN = None
+_RUNTIME_RECONCILE_STALE_SECONDS = 30
 
 
 class PlannerGenerationError(RuntimeError):
@@ -1375,7 +1376,7 @@ class DeepResearchRuntime:
     async def _ensure_startup_reconciled(self) -> None:
         if self._startup_reconciled:
             return
-        self.store.reconcile_incomplete_jobs()
+        self.store.reconcile_incomplete_jobs(stale_after_seconds=_RUNTIME_RECONCILE_STALE_SECONDS)
         self._startup_reconciled = True
 
     async def _schedule(self, job_id: str) -> None:
