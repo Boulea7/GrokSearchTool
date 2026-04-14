@@ -212,7 +212,7 @@ async def test_search_query_preselects_available_grok_model_for_deep_research(mo
 
 
 @pytest.mark.asyncio
-async def test_search_query_keeps_fallback_provider_model_when_primary_is_preselected(monkeypatch, tmp_path):
+async def test_search_query_propagates_preselected_model_to_fallback_provider(monkeypatch, tmp_path):
     observed = []
 
     async def fake_models(api_url, api_key):
@@ -243,7 +243,7 @@ async def test_search_query_keeps_fallback_provider_model_when_primary_is_presel
     assert observed == [
         {
             "primary_model": "grok-4.20-0309-non-reasoning",
-            "fallback_model": "grok-4.20-0309",
+            "fallback_model": "grok-4.20-0309-non-reasoning",
         }
     ]
 

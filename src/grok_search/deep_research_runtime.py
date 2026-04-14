@@ -833,12 +833,16 @@ async def _build_runtime_grok_provider(current_model: str) -> tuple[GrokSearchPr
     provider_chain = config.grok_provider_chain(model_override=current_model)
     primary = dict(provider_chain[0])
     available_models = await server_module._get_available_models_cached(primary["api_url"], primary["api_key"])
+    requested_model = primary["model"]
     resolved_model, resolution = server_module._resolve_model_against_available_models(
-        primary["model"],
+        requested_model,
         available_models,
     )
     if resolved_model:
         primary["model"] = resolved_model
+        for fallback_provider in provider_chain[1:]:
+            if fallback_provider.get("model") == requested_model:
+                fallback_provider["model"] = config._apply_model_suffix_for_url(resolved_model, fallback_provider["api_url"])
     provider = GrokSearchProvider(
         primary["api_url"],
         primary["api_key"],
@@ -846,7 +850,7 @@ async def _build_runtime_grok_provider(current_model: str) -> tuple[GrokSearchPr
         fallback_providers=provider_chain[1:],
     )
     return provider, {
-        "requested_model": provider_chain[0]["model"],
+        "requested_model": requested_model,
         "effective_model": primary["model"],
         "available_models": available_models,
         "resolution": resolution,
