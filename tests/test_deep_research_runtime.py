@@ -1993,6 +1993,75 @@ async def test_completed_claims_include_provenance_fields_and_final_sources_foll
 
 
 @pytest.mark.asyncio
+async def test_domain_constraints_filter_deep_research_sources_and_expose_ranking_reason(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 2,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "AWS DMS resume relies on checkpoints documented in official docs.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                    "title": "Creating tasks for ongoing replication using AWS DMS",
+                    "description": "Official user guide.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://repost.aws/questions/example",
+                    "title": "AWS re:Post answer",
+                    "description": "Community answer.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://example.com/aws-dms-blog",
+                    "title": "AWS DMS blog summary",
+                    "description": "Third-party write-up.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "docs.aws.amazon.com" in url:
+            return "# AWS DMS user guide\n\nResume continues from the last recovery checkpoint when source logs remain available."
+        if "repost.aws" in url:
+            return "# AWS re:Post\n\nCommunity answer."
+        return "# Blog\n\nThird-party write-up."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(
+        query="checkpoint resume semantics in aws dms",
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+
+    source_registry = result["citations"]["source_registry"]
+    source_urls = {item["url"] for item in source_registry.values()}
+    first_source = next(iter(source_registry.values()))
+
+    assert source_urls == {"https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html"}
+    assert first_source["source_type"] == "official_docs"
+    assert "allowlisted_domain" in first_source["ranking_reasons"]
+    assert "official_docs" in first_source["ranking_reasons"]
+    assert "repost.aws" not in result["final_report"]
+    assert "example.com/aws-dms-blog" not in result["final_report"]
+
+
+@pytest.mark.asyncio
 async def test_noisy_marketing_fetch_is_filtered_and_official_docs_rank_first(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -2175,3 +2244,30 @@ async def test_reused_job_payload_tolerates_invalid_plan_json(tmp_path):
     assert response["reused"] is True
     assert response["job_id"] == job.job_id
     assert response["plan"] is None
+
+
+@pytest.mark.asyncio
+async def test_fallback_plan_records_generation_failure_in_metadata_and_events(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def broken_planner(job, continuation):
+        raise RuntimeError("planner exploded")
+
+    runtime._generate_plan_with_model = broken_planner
+
+    response = await runtime.start(
+        query="Observe planner fallback",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+    events = await runtime.events(response["job_id"])
+
+    assert response["plan"]["planner_metadata"]["planner"] == "fallback"
+    assert response["plan"]["planner_metadata"]["used_fallback"] is True
+    assert response["plan"]["planner_metadata"]["fallback_reason"]["stage"] == "generation"
+    assert "planner exploded" in response["plan"]["planner_metadata"]["fallback_reason"]["error"]
+    assert any(
+        event["type"] == "planner_fallback" and event["data"]["stage"] == "generation"
+        for event in events["events"]
+    )
