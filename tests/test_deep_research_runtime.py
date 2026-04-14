@@ -1943,6 +1943,63 @@ async def test_report_summary_is_synthesized_instead_of_reusing_first_claim(monk
 
 
 @pytest.mark.asyncio
+async def test_section_summary_flows_into_report_and_final_report(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the recovery tradeoff.",
+            },
+            {
+                "section_id": "operational-impact",
+                "title": "Operational Impact",
+                "goal": "Explain runtime recovery behavior.",
+            },
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume continues from the last completed checkpoint. Restart replays the task from a fresh starting point and increases recovery time.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Official docs.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nResume continues from the last completed checkpoint. Restart replays the task from a fresh starting point and increases recovery time."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="section summary probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    first_section = result["report"]["sections"][0]
+    first_claim = first_section["claims"][0]["text"]
+
+    assert first_section["summary"]
+    assert first_section["summary"] != first_claim
+    assert "Resume continues" in first_section["summary"]
+    assert "Restart replays" in first_section["summary"]
+    assert f"## {first_section['title']}\n\n{first_section['summary']}\n" in result["final_report"]
+
+
+@pytest.mark.asyncio
 async def test_completed_claims_include_provenance_fields_and_final_sources_follow_rank(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -1990,6 +2047,9 @@ async def test_completed_claims_include_provenance_fields_and_final_sources_foll
     assert first_claim["evidence_ids"]
     assert "docs.example.com/runtime/checkpoints" in source_lines[0]
     assert "stackoverflow.com" in source_lines[-1]
+    assert "official_docs" in source_lines[0]
+    assert "community" in source_lines[-1]
+    assert "reasons:" in source_lines[0]
 
 
 @pytest.mark.asyncio
