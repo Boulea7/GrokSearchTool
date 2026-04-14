@@ -101,7 +101,7 @@ async def _handle_events(args: argparse.Namespace) -> int:
 async def _handle_result(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
     if args.artifact:
-        content = runtime.store.read_artifact_text(args.job_id, args.artifact)
+        content = runtime.read_artifact_text(args.job_id, args.artifact)
         if content is None:
             print(f"artifact_not_found: {args.artifact}", file=sys.stderr)
             return 1
