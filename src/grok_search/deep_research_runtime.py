@@ -2628,7 +2628,6 @@ def _build_section_citations(
     source_registry: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     outline = plan.report_outline
-    all_source_ids = [item["source_id"] for item in source_registry]
     registry_by_id = {item["source_id"]: item for item in source_registry if item.get("source_id")}
     claims_pool = [
         DeepResearchEvidenceItem.model_validate(item)
