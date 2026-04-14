@@ -1423,7 +1423,10 @@ class DeepResearchRuntime:
             raw_plan = generated
             if isinstance(generated, tuple) and len(generated) == 2:
                 raw_plan, planner_trace = generated
-            return self._normalize_plan_payload(job, raw_plan, continuation, planner_trace=planner_trace)
+            try:
+                return self._normalize_plan_payload(job, raw_plan, continuation, planner_trace=planner_trace)
+            except Exception as exc:
+                raise PlannerGenerationError("normalize", str(exc), trace=planner_trace) from exc
         except Exception as exc:
             stage = exc.stage if isinstance(exc, PlannerGenerationError) else "generation"
             return self._build_fallback_plan(
@@ -1748,19 +1751,36 @@ class DeepResearchRuntime:
                 continue
             unit_id = item.get("unit_id") or f"unit-{item.get('unit_type', 'search')}-{index}"
             unit_query = item.get("query", "")
-            if item.get("unit_type", "search") == "search":
+            unit_type = str(item.get("unit_type", "search") or "search").strip()
+            unit_type_aliases = {
+                "browse_page": "fetch",
+                "web_fetch": "fetch",
+                "web_map": "map",
+                "search_web": "search",
+            }
+            normalized_unit_type = unit_type_aliases.get(unit_type, unit_type)
+            if normalized_unit_type != unit_type:
+                normalize_actions.append(f"aliased_unit_type:{unit_type}->{normalized_unit_type}")
+            raw_status = str(item.get("status", "pending") or "pending").strip()
+            status_aliases = {
+                "ready": "pending",
+            }
+            normalized_status = status_aliases.get(raw_status, raw_status)
+            if normalized_status != raw_status:
+                normalize_actions.append(f"aliased_unit_status:{raw_status}->{normalized_status}")
+            if normalized_unit_type == "search":
                 unit_query = _rewrite_research_query(str(unit_query), continuation)
             normalized_units.append(
                 {
                     "unit_id": unit_id,
-                    "unit_type": item.get("unit_type", "search"),
+                    "unit_type": normalized_unit_type,
                     "title": item.get("title") or f"Unit {index}",
                     "goal": item.get("goal") or unit_query or item.get("url") or f"Unit {index}",
                     "query": unit_query,
                     "url": item.get("url", ""),
                     "instructions": item.get("instructions", ""),
                     "depends_on": _normalize_depends_on(item.get("depends_on")),
-                    "status": item.get("status", "pending"),
+                    "status": normalized_status,
                     "notes": item.get("notes", ""),
                 }
             )
