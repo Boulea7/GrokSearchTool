@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,11 @@ from grok_search.deep_research_types import utc_now_iso
 
 def build_runtime(tmp_path):
     return DeepResearchRuntime(tmp_path / "deep-research")
+
+
+def load_deep_research_fixture(name: str) -> dict:
+    fixture_path = Path(__file__).parent / "fixtures" / "deep_research" / name
+    return json.loads(fixture_path.read_text())
 
 
 def structured_plan_payload(job, continuation):
@@ -156,6 +162,42 @@ async def test_plan_normalization_repairs_browse_page_unit_type_alias(tmp_path):
     assert plan["planner_metadata"]["used_fallback"] is False
     assert plan["research_units"][0]["unit_type"] == "fetch"
     assert "aliased_unit_type:browse_page->fetch" in plan["planner_metadata"]["trace"]["normalize_actions"]
+
+
+@pytest.mark.asyncio
+async def test_plan_normalization_repairs_browse_unit_type_alias(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-browse-1",
+                "unit_type": "browse",
+                "title": "Browse docs",
+                "goal": "Read the primary docs page",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = planner
+
+    response = await runtime.start(
+        query="Repair browse alias",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert plan["research_units"][0]["unit_type"] == "fetch"
+    assert "aliased_unit_type:browse->fetch" in plan["planner_metadata"]["trace"]["normalize_actions"]
 
 
 @pytest.mark.asyncio
@@ -381,6 +423,66 @@ async def test_planner_preselects_available_grok_model_for_deep_research(monkeyp
     await runtime.start(query="Planner preselection", plan_only=True, force_new=True, schedule=False)
 
     assert observed_models == ["grok-4.20-0309-non-reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_plan_normalization_replays_round7_probe_shape_without_fallback(tmp_path):
+    runtime = build_runtime(tmp_path)
+    original = runtime.store.create_job(
+        query="Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+        request_fingerprint="fp-round7-replay",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": "Checkpoint resume semantics and restart trade-offs were already covered once.",
+                "sections": [],
+                "unit_results": {},
+            }
+        ),
+        "application/json",
+    )
+    fixture = load_deep_research_fixture("round7_planner_replay.json")
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = fixture["sub_questions"]
+        payload["report_outline"] = fixture["report_outline"]
+        payload["research_units"] = fixture["research_units"]
+        payload["search_strategy"]["search_queries"] = [fixture["query"]]
+        return payload
+
+    runtime._generate_plan_with_model = planner
+
+    response = await runtime.start(
+        query=fixture["query"],
+        context=fixture["context"],
+        continue_from_job_id=original.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    plan_json = json.dumps(plan).lower()
+
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert plan["research_units"][0]["unit_type"] == "fetch"
+    assert plan["research_units"][0]["status"] == "pending"
+    assert "continuation workflow" not in plan_json
+    assert "generic_continuation_outline" in plan["planner_metadata"]["validation"]["issues"]
 
 
 @pytest.mark.asyncio
@@ -1283,6 +1385,78 @@ async def test_continuation_query_rewrite_does_not_repeat_technical_terms(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_continuation_query_rewrite_avoids_generic_workflow_language(tmp_path):
+    runtime = build_runtime(tmp_path)
+    original = runtime.store.create_job(
+        query="Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+        request_fingerprint="fp-continuation-language",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": "Checkpoint resume semantics and restart trade-offs were already covered once.",
+                "sections": [],
+                "unit_results": {},
+            }
+        ),
+        "application/json",
+    )
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {
+                "id": "sq1",
+                "question": "Continue from previous findings with focus on operational trade-offs and restart risk",
+                "reason": "Extend the prior research.",
+            }
+        ]
+        payload["search_strategy"]["search_queries"] = [
+            "Continue from previous findings with focus on operational trade-offs and restart risk"
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Continue from previous findings",
+                "goal": "Continue from previous findings with focus on operational trade-offs and restart risk",
+                "query": "Continue from previous findings with focus on operational trade-offs and restart risk",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = planner
+
+    response = await runtime.start(
+        query="Continue from previous findings with focus on operational trade-offs and restart risk",
+        continue_from_job_id=original.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan_json = json.dumps(response["plan"]).lower()
+
+    assert "continuation workflow" not in plan_json
+    assert "checkpoint resume" in plan_json
+
+
+@pytest.mark.asyncio
 async def test_continuation_plan_repairs_duplicate_sub_questions_and_generic_outline(tmp_path):
     runtime = build_runtime(tmp_path)
     original = runtime.store.create_job(
@@ -1353,6 +1527,66 @@ async def test_continuation_plan_repairs_duplicate_sub_questions_and_generic_out
     assert outline_titles == ["Executive Summary", "Follow-up Findings", "Remaining Gaps"]
     assert validation["repaired"] is True
     assert "duplicate_sub_questions" in validation["issues"]
+    assert "generic_continuation_outline" in validation["issues"]
+
+
+@pytest.mark.asyncio
+async def test_continuation_plan_repairs_string_outline_before_generic_outline_detection(tmp_path):
+    runtime = build_runtime(tmp_path)
+    original = runtime.store.create_job(
+        query="Compare checkpoint resume semantics in migration runtimes",
+        request_fingerprint="fp-string-outline-repair",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": "Checkpoint resume has already been covered once.",
+                "sections": [],
+                "unit_results": {},
+            }
+        ),
+        "application/json",
+    )
+
+    async def string_outline_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            "Executive Summary",
+            "Key Findings",
+            "Open Questions",
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = string_outline_planner
+
+    response = await runtime.start(
+        query="Follow up on migration and resume tradeoffs",
+        context="Stay in migration runtime semantics.",
+        continue_from_job_id=original.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    outline_titles = [item["title"] for item in response["plan"]["report_outline"]]
+    validation = response["plan"]["planner_metadata"]["validation"]
+
+    assert response["plan"]["planner_metadata"]["used_fallback"] is False
+    assert outline_titles == ["Executive Summary", "Follow-up Findings", "Remaining Gaps"]
+    assert validation["repaired"] is True
+    assert "string_report_outline_items" in validation["issues"]
     assert "generic_continuation_outline" in validation["issues"]
 
 
@@ -2871,6 +3105,97 @@ async def test_completed_claims_bind_only_to_supporting_source_ids(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_same_domain_corroboration_does_not_escalate_claim_confidence_to_high(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "key-findings",
+                "title": "Key Findings",
+                "goal": "Compare resume and restart behavior.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "AWS DMS guide",
+                "goal": "Use official docs only.",
+                "query": "aws dms checkpoint resume restart",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-search-2",
+                "unit_type": "search",
+                "title": "AWS DMS troubleshooting",
+                "goal": "Use official docs only.",
+                "query": "aws dms troubleshooting restart",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        payload["search_strategy"]["search_queries"] = [
+            "aws dms checkpoint resume restart",
+            "aws dms troubleshooting restart",
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        if "troubleshooting" in query:
+            return (
+                "Resume-processing continues from the last checkpoint, but troubleshooting guidance also discusses support cases.",
+                [
+                    {
+                        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Troubleshooting.html",
+                        "title": "Troubleshooting migration tasks in AWS Database Migration Service",
+                        "description": "Official troubleshooting docs.",
+                    }
+                ],
+            )
+        return (
+            "Resume-processing continues from the last checkpoint while restart replays work from the beginning.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                    "title": "CHAP Task.CDC",
+                    "description": "Official CDC docs.",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "API StartReplicationTask",
+                    "description": "Official API docs.",
+                },
+            ],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query="AWS DMS confidence probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    claim = result["report"]["sections"][0]["claims"][0]
+    section = result["report"]["sections"][0]
+
+    assert claim["cluster_type"] == "consensus"
+    assert claim["confidence"] != "high"
+    assert section["confidence"] != "high"
+
+
+@pytest.mark.asyncio
 async def test_unmatched_outline_section_is_omitted_when_evidence_overlap_is_below_threshold(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -2966,6 +3291,61 @@ async def test_continue_plan_sanitizes_previous_summary_before_persisting_contin
     assert "topics can help you to resolve common issues" not in response["plan"]["continuation"]["previous_summary"].lower()
     assert "topics can help you to resolve common issues" not in continuation_payload["previous_summary"].lower()
     assert "resume continues from the last completed checkpoint" in continuation_payload["previous_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_continuation_artifact_omits_troubleshooting_shell_text_from_carry_forward_state(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume-processing continues from the last checkpoint for previously executed tasks.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Troubleshooting.html",
+                    "title": "Troubleshooting migration tasks in AWS Database Migration Service",
+                    "description": "Following, you can find topics about troubleshooting issues with AWS Database Migration Service (AWS DMS).",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return (
+            "# Troubleshooting migration tasks in AWS Database Migration Service\n\n"
+            "Following, you can find topics about troubleshooting issues with AWS Database Migration Service (AWS DMS).\n"
+            "These topics can help you to resolve common issues using both AWS DMS and selected endpoint databases.\n"
+            "Resume-processing continues from the last checkpoint for previously executed tasks.\n"
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="continuation shell filter probe", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+
+    continued = await runtime.start(
+        query="Follow up on continuation shell filter probe",
+        continue_from_job_id=response["job_id"],
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+    continuation_payload = json.loads(runtime.store.read_artifact_text(continued["job_id"], "continuation.json"))
+    continuation_json = json.dumps(continuation_payload).lower()
+
+    assert "following, you can find topics about troubleshooting issues" not in continuation_json
+    assert "these topics can help you to resolve common issues" not in continuation_json
+    assert "resume-processing continues from the last checkpoint" in continuation_json
 
 
 @pytest.mark.asyncio

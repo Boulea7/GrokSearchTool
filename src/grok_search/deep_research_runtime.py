@@ -227,6 +227,14 @@ def _summarize_evidence_text(value: str, *, limit: int = _MAX_CLAIM_LENGTH) -> s
     return _trim_text(text, limit=limit)
 
 
+def _sanitize_detail_text(value: str, *, limit: int = 1200) -> str:
+    lines = _extract_meaningful_lines(value)
+    if not lines:
+        return _summarize_evidence_text(value, limit=min(limit, _MAX_CLAIM_LENGTH))
+    text = "\n".join(lines[:8])
+    return _trim_text(text, limit=limit)
+
+
 def _extract_markdown_title(value: str) -> str:
     for raw_line in (value or "").splitlines():
         line = raw_line.strip()
@@ -319,8 +327,6 @@ def _rewrite_research_query(query: str, continuation: DeepResearchContinuationSt
 
     if re.search(r"(?<!checkpoint )\bresume\b", text, flags=re.IGNORECASE):
         text = re.sub(r"(?<!checkpoint )\bresume\b", "checkpoint resume", text, flags=re.IGNORECASE)
-    if re.search(r"\bcontinue\b", text, flags=re.IGNORECASE):
-        text = re.sub(r"\bcontinue\b", "continuation workflow", text, flags=re.IGNORECASE)
 
     anchors = _continuation_anchor_terms(continuation)
     if anchors:
@@ -998,7 +1004,14 @@ def _dedupe_sub_questions(sub_questions: list[dict[str, Any]]) -> tuple[list[dic
 
 
 def _is_generic_outline(report_outline: list[dict[str, Any]]) -> bool:
-    titles = [str(item.get("title", "")).strip().lower() for item in report_outline]
+    titles: list[str] = []
+    for item in report_outline:
+        if isinstance(item, dict):
+            title = str(item.get("title", "")).strip().lower()
+        else:
+            title = str(item).strip().lower()
+        if title:
+            titles.append(title)
     return titles == ["executive summary", "key findings", "open questions"]
 
 
@@ -1042,6 +1055,11 @@ def _sanitize_unit_results(
         normalized = dict(result)
         normalized["source_ids"] = _sanitize_source_id_list(list(normalized.get("source_ids", [])), source_registry)
         normalized["citations"] = _sanitize_source_id_list(list(normalized.get("citations", [])), source_registry)
+        normalized["summary"] = _summarize_evidence_text(
+            str(normalized.get("summary") or normalized.get("detail") or ""),
+            limit=180,
+        )
+        normalized["detail"] = _sanitize_detail_text(str(normalized.get("detail") or normalized.get("summary") or ""))
         sanitized[unit_id] = normalized
     return sanitized
 
@@ -1061,6 +1079,7 @@ def _sanitize_evidence_items(
             [str(url) for url in normalized.get("source_urls", []) if str(url).strip()]
         )
         normalized["summary"] = summary
+        normalized["detail"] = _sanitize_detail_text(str(normalized.get("detail") or normalized.get("summary") or ""))
         sanitized.append(normalized)
     return sanitized
 
@@ -1076,7 +1095,8 @@ def _sanitize_sections(
         for claim in section.get("claims", []):
             normalized_claim = dict(claim)
             normalized_claim["citations"] = _sanitize_source_id_list(list(normalized_claim.get("citations", [])), source_registry)
-            if not normalized_claim["citations"]:
+            normalized_claim["text"] = _summarize_evidence_text(str(normalized_claim.get("text", "")), limit=_MAX_CLAIM_LENGTH)
+            if not normalized_claim["citations"] or not normalized_claim["text"] or _is_noisy_text(normalized_claim["text"]):
                 continue
             normalized_claims.append(normalized_claim)
         normalized_section["claims"] = normalized_claims
@@ -1087,6 +1107,36 @@ def _sanitize_sections(
         if not normalized_claims:
             continue
         sanitized.append(normalized_section)
+    return sanitized
+
+
+def _sanitize_continuation_sections(
+    sections: list[dict[str, Any]],
+    source_registry: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for section in sections:
+        normalized_section = dict(section)
+        title = str(normalized_section.get("title", "")).strip()
+        if not title:
+            continue
+        normalized_section["summary"] = _summarize_evidence_text(str(normalized_section.get("summary", "")), limit=260)
+        normalized_claims: list[dict[str, Any]] = []
+        for claim in section.get("claims", []):
+            normalized_claim = dict(claim)
+            normalized_claim["citations"] = _sanitize_source_id_list(list(normalized_claim.get("citations", [])), source_registry)
+            normalized_claim["text"] = _summarize_evidence_text(str(normalized_claim.get("text", "")), limit=_MAX_CLAIM_LENGTH)
+            if not normalized_claim["text"] or _is_noisy_text(normalized_claim["text"]):
+                continue
+            normalized_claims.append(normalized_claim)
+        normalized_section["claims"] = normalized_claims
+        normalized_section["citations"] = sorted(
+            {citation for claim in normalized_claims for citation in claim.get("citations", [])}
+        )
+        if not normalized_section["summary"] and normalized_claims:
+            normalized_section["summary"] = _build_section_summary(normalized_claims)
+        if normalized_section["summary"] or normalized_claims:
+            sanitized.append(normalized_section)
     return sanitized
 
 
@@ -1553,6 +1603,13 @@ class DeepResearchRuntime:
             "artifacts": [artifact.model_dump() for artifact in self.store.list_artifacts(job_id)],
         }
 
+    def read_artifact_text(self, job_id: str, kind: str) -> str | None:
+        job = self.store.get_job(job_id)
+        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if job.status == "completed" else None
+        if final_bundle is not None and kind in final_bundle["paths"]:
+            return _read_text_if_exists(final_bundle["paths"][kind])
+        return self.store.read_artifact_text(job_id, kind)
+
     async def resume(self, job_id: str, *, schedule: bool = True) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
@@ -2001,12 +2058,18 @@ class DeepResearchRuntime:
             {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
             {"section_id": "key-findings", "title": "Key Findings", "goal": "Present the main evidence."},
         ]
+        saw_string_report_outline = False
         if isinstance(report_outline, dict):
             normalize_actions.append("dict_report_outline_wrapped")
             report_outline = [report_outline]
         elif isinstance(report_outline, str):
             normalize_actions.append("string_report_outline_wrapped")
             report_outline = [report_outline]
+            saw_string_report_outline = True
+        elif isinstance(report_outline, list):
+            saw_string_report_outline = any(isinstance(item, str) for item in report_outline)
+        if saw_string_report_outline:
+            validation_issues.append("string_report_outline_items")
         if continuation.mode == "continue" and _is_generic_outline(report_outline):
             report_outline = [
                 {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the follow-up answer."},
@@ -2059,6 +2122,7 @@ class DeepResearchRuntime:
             unit_query = item.get("query", "")
             unit_type = str(item.get("unit_type", "search") or "search").strip()
             unit_type_aliases = {
+                "browse": "fetch",
                 "browse_page": "fetch",
                 "web_fetch": "fetch",
                 "web_map": "map",
@@ -2119,10 +2183,8 @@ class DeepResearchRuntime:
         )
 
         normalized_outline: list[dict[str, Any]] = []
-        saw_string_report_outline = False
         for index, item in enumerate(report_outline, start=1):
             if isinstance(item, str):
-                saw_string_report_outline = True
                 item = {"section_id": _slugify(item), "title": item, "goal": item}
             if not isinstance(item, dict):
                 validation_issues.append("invalid_report_outline_items")
@@ -2135,8 +2197,6 @@ class DeepResearchRuntime:
                     "goal": item.get("goal") or title,
                 }
             )
-        if saw_string_report_outline:
-            validation_issues.append("string_report_outline_items")
         normalized_units = _ensure_sub_question_unit_coverage(
             normalized_units,
             sub_questions=sub_questions,
@@ -2328,6 +2388,8 @@ class DeepResearchRuntime:
             carry_forward_evidence = list(latest_state.get("evidence_items") or [])
         if not carry_forward_evidence:
             carry_forward_evidence = _build_carry_forward_evidence(carry_forward_unit_results, carry_forward_sections)
+        carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
+        carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
 
         checkpoint_key = (
@@ -3085,10 +3147,25 @@ def _evidence_similarity(left: DeepResearchEvidenceItem, right: DeepResearchEvid
     return intersection / union
 
 
-def _cluster_confidence(*, source_count: int, evidence_count: int, cluster_type: str = "") -> str:
+def _supporting_domain_count(source_ids: list[str], source_registry: dict[str, dict[str, Any]]) -> int:
+    domains: set[str] = set()
+    for source_id in source_ids:
+        source = source_registry.get(source_id, {})
+        domain = str(source.get("domain", "") or "").strip().lower()
+        if not domain and source.get("url"):
+            try:
+                domain = urlsplit(str(source["url"])).netloc.lower()
+            except Exception:
+                domain = ""
+        if domain:
+            domains.add(domain)
+    return len(domains)
+
+
+def _cluster_confidence(*, source_count: int, evidence_count: int, cluster_type: str = "", domain_count: int = 0) -> str:
     if cluster_type == "gap":
         return "low"
-    if source_count >= 2 and evidence_count >= 2:
+    if domain_count >= 2 and source_count >= 2 and evidence_count >= 2:
         return "high"
     if source_count >= 1:
         return "medium"
@@ -3224,6 +3301,7 @@ def _build_section_citations(
             if claim_key in used_claim_keys:
                 continue
             cluster_source_ids = _dedupe_preserve_order([source_id for item in cluster for source_id in item.source_ids])
+            supporting_domain_count = _supporting_domain_count(cluster_source_ids, registry_by_id)
             cluster_type = _cluster_type_for_items(cluster)
             claim = DeepResearchClaim(
                 claim_id=f"{section.section_id}-claim-{claim_index}",
@@ -3233,10 +3311,12 @@ def _build_section_citations(
                 evidence_ids=_dedupe_preserve_order([item.evidence_id for item in cluster]),
                 cluster_type=cluster_type,
                 supporting_source_count=len(set(cluster_source_ids)),
+                supporting_domain_count=supporting_domain_count,
                 confidence=_cluster_confidence(
                     source_count=len(set(cluster_source_ids)),
                     evidence_count=len(cluster),
                     cluster_type=cluster_type,
+                    domain_count=supporting_domain_count,
                 ),
             )
             section_claims.append(claim.model_dump())
@@ -3250,6 +3330,10 @@ def _build_section_citations(
             continue
         section_summary = _build_section_summary(section_claims)
         section_source_count = len({citation for claim in section_claims for citation in claim.get("citations", [])})
+        section_domain_count = _supporting_domain_count(
+            [citation for claim in section_claims for citation in claim.get("citations", [])],
+            registry_by_id,
+        )
         section_model = DeepResearchSectionCitations(
             section_id=section.section_id,
             title=section.title,
@@ -3259,9 +3343,11 @@ def _build_section_citations(
             confidence=_cluster_confidence(
                 source_count=section_source_count,
                 evidence_count=sum(len(claim.get("evidence_ids", [])) for claim in section_claims),
+                domain_count=section_domain_count,
             ),
             claim_cluster_count=len(section_claims),
             supporting_source_count=section_source_count,
+            supporting_domain_count=section_domain_count,
         )
         sections.append(section_model.model_dump())
     return sections

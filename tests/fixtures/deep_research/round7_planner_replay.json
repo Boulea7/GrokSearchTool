@@ -1,0 +1,28 @@
+{
+  "query": "Continue from previous findings with focus on operational trade-offs and restart risk",
+  "context": "Stay in AWS DMS runtime recovery semantics.",
+  "sub_questions": [
+    {
+      "id": "sq1",
+      "question": "Continue from previous findings with focus on operational trade-offs and restart risk",
+      "reason": "Extend the prior research."
+    }
+  ],
+  "report_outline": [
+    "Executive Summary",
+    "Key Findings",
+    "Open Questions"
+  ],
+  "research_units": [
+    {
+      "unit_id": "u1",
+      "unit_type": "browse",
+      "title": "Browse AWS docs",
+      "goal": "Read the primary docs page for restart and resume semantics.",
+      "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+      "depends_on": [],
+      "status": "ready",
+      "notes": ""
+    }
+  ]
+}

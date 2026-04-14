@@ -163,6 +163,7 @@ class DeepResearchClaim(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
     cluster_type: str = ""
     supporting_source_count: int = 0
+    supporting_domain_count: int = 0
     confidence: str = ""
 
 
@@ -175,6 +176,7 @@ class DeepResearchSectionCitations(BaseModel):
     confidence: str = ""
     claim_cluster_count: int = 0
     supporting_source_count: int = 0
+    supporting_domain_count: int = 0
 
 
 class DeepResearchPlan(BaseModel):
