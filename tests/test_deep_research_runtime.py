@@ -1482,14 +1482,14 @@ async def test_search_unit_preserves_search_evidence_alongside_fetched_evidence(
     response = await runtime.start(query="Preserve search evidence", force_new=True, schedule=False)
     result = await runtime.run_job(response["job_id"])
 
-    claim_texts = [
-        claim["text"]
-        for section in result["report"]["sections"]
-        for claim in section["claims"]
-    ]
+    first_claim = result["report"]["sections"][0]["claims"][0]
 
-    assert any("preserves prior progress" in text for text in claim_texts)
-    assert any("RecoveryCheckpoint is reused" in text for text in claim_texts)
+    assert "preserves prior progress" in result["report"]["unit_results"]["unit-search-1"]["summary"]
+    assert "RecoveryCheckpoint is reused" in first_claim["text"]
+    assert sorted(first_claim["evidence_ids"]) == [
+        "evidence-unit-search-1-fetch-1",
+        "evidence-unit-search-1-search",
+    ]
 
 
 @pytest.mark.asyncio
@@ -2941,6 +2941,67 @@ async def test_report_summary_is_synthesized_instead_of_reusing_first_claim(monk
     assert result["report"]["summary"] != first_claim
     assert "Resume continues" in result["report"]["summary"]
     assert "Restart replays" in result["report"]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_section_clustering_merges_reinforcing_claims_and_sets_confidence(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "checkpoint-resume",
+                "title": "Checkpoint Resume",
+                "goal": "Explain how resume-processing continues from checkpoints.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 2,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume-processing continues from the last completed checkpoint when recovery metadata is still available.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Official docs.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://standards.example.org/runtime/recovery",
+                    "title": "Runtime recovery standard",
+                    "description": "Standards guidance.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "standards.example.org" in url:
+            return "# Runtime recovery standard\n\nResume-processing continues from the last completed checkpoint when recovery metadata is still available."
+        return "# Runtime checkpoints\n\nResume-processing continues from the last completed checkpoint when recovery metadata is still available."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Cluster reinforcing resume evidence", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    first_section = result["report"]["sections"][0]
+
+    assert len(first_section["claims"]) == 1
+    assert first_section["confidence"] in {"high", "medium"}
+    assert first_section["claim_cluster_count"] == 1
+    assert first_section["claims"][0]["cluster_type"] == "consensus"
+    assert first_section["claims"][0]["supporting_source_count"] >= 2
+    assert len(first_section["claims"][0]["citations"]) >= 2
+    assert result["report"]["confidence"] in {"high", "medium"}
 
 
 @pytest.mark.asyncio

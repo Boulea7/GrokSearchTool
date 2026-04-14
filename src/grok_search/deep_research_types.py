@@ -161,6 +161,9 @@ class DeepResearchClaim(BaseModel):
     citations: list[str] = Field(default_factory=list)
     unit_id: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
+    cluster_type: str = ""
+    supporting_source_count: int = 0
+    confidence: str = ""
 
 
 class DeepResearchSectionCitations(BaseModel):
@@ -169,6 +172,9 @@ class DeepResearchSectionCitations(BaseModel):
     summary: str = ""
     claims: list[DeepResearchClaim] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
+    confidence: str = ""
+    claim_cluster_count: int = 0
+    supporting_source_count: int = 0
 
 
 class DeepResearchPlan(BaseModel):
