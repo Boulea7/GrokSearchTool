@@ -1359,13 +1359,29 @@ class DeepResearchRuntime:
             sub_questions = [{"id": "sq1", "question": _rewrite_research_query(job.query, continuation), "reason": "Cover the primary question."}]
         else:
             normalized_sub_questions: list[dict[str, Any]] = []
-            for item in sub_questions:
+            saw_string_sub_questions = False
+            for index, item in enumerate(sub_questions, start=1):
+                if isinstance(item, str):
+                    saw_string_sub_questions = True
+                    normalized_sub_questions.append(
+                        {
+                            "id": f"sq{index}",
+                            "question": _rewrite_research_query(item, continuation),
+                            "reason": "Cover the primary question.",
+                        }
+                    )
+                    continue
+                if not isinstance(item, dict):
+                    validation_issues.append("invalid_sub_question_items")
+                    continue
                 normalized_sub_questions.append(
                     {
                         **item,
                         "question": _rewrite_research_query(str(item.get("question", "")), continuation),
                     }
                 )
+            if saw_string_sub_questions:
+                validation_issues.append("string_sub_question_items")
             sub_questions = normalized_sub_questions
         sub_questions, deduped_sub_questions = _dedupe_sub_questions(sub_questions)
         if deduped_sub_questions:
@@ -1400,7 +1416,23 @@ class DeepResearchRuntime:
             ]
 
         normalized_units: list[dict[str, Any]] = []
+        saw_string_research_units = False
         for index, item in enumerate(research_units, start=1):
+            if isinstance(item, str):
+                saw_string_research_units = True
+                item = {
+                    "unit_id": f"unit-search-{index}",
+                    "unit_type": "search",
+                    "title": f"Research query {index}",
+                    "goal": f"Investigate: {item}",
+                    "query": item,
+                    "depends_on": [],
+                    "status": "pending",
+                    "notes": "",
+                }
+            if not isinstance(item, dict):
+                validation_issues.append("invalid_research_unit_items")
+                continue
             unit_id = item.get("unit_id") or f"unit-{item.get('unit_type', 'search')}-{index}"
             unit_query = item.get("query", "")
             if item.get("unit_type", "search") == "search":
@@ -1419,6 +1451,8 @@ class DeepResearchRuntime:
                     "notes": item.get("notes", ""),
                 }
             )
+        if saw_string_research_units:
+            validation_issues.append("string_research_unit_items")
         deduped_units: list[dict[str, Any]] = []
         seen_unit_keys: set[tuple[str, str, str, str]] = set()
         for index, unit in enumerate(normalized_units, start=1):
@@ -1438,7 +1472,14 @@ class DeepResearchRuntime:
         normalized_units = deduped_units or normalized_units
 
         normalized_outline: list[dict[str, Any]] = []
+        saw_string_report_outline = False
         for index, item in enumerate(report_outline, start=1):
+            if isinstance(item, str):
+                saw_string_report_outline = True
+                item = {"section_id": _slugify(item), "title": item, "goal": item}
+            if not isinstance(item, dict):
+                validation_issues.append("invalid_report_outline_items")
+                continue
             title = item.get("title") or f"Section {index}"
             normalized_outline.append(
                 {
@@ -1447,6 +1488,8 @@ class DeepResearchRuntime:
                     "goal": item.get("goal") or title,
                 }
             )
+        if saw_string_report_outline:
+            validation_issues.append("string_report_outline_items")
 
         strategy = raw_plan.get("search_strategy") or {}
         if not strategy.get("search_queries"):
