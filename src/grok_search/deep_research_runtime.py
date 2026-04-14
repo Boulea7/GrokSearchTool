@@ -522,9 +522,17 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
     if not claim_texts:
         return _trim_text(plan.brief.objective, limit=220)
     summary = " ".join(claim_texts[:2])
+    section_confidences = {str(section.get("confidence", "")) for section in sections if section.get("confidence")}
+    confidence_prefix = ""
+    if "high" in section_confidences:
+        confidence_prefix = "High confidence: "
+    elif "medium" in section_confidences:
+        confidence_prefix = "Medium confidence: "
+    elif "low" in section_confidences:
+        confidence_prefix = "Low confidence: "
     if len(claim_texts) == 1:
         summary = f"{plan.brief.objective}: {summary}"
-    return _trim_text(summary, limit=320)
+    return _trim_text(f"{confidence_prefix}{summary}".strip(), limit=320)
 
 
 def _report_artifact_contract_error(job: DeepResearchJob) -> dict[str, str]:
@@ -2616,9 +2624,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "sections": _sanitize_sections(sections, source_registry),
     }
     report_summary = _build_report_summary(plan, citations["sections"])
+    report_confidence = _cluster_confidence(
+        source_count=len({citation for section in citations["sections"] for citation in section.get("citations", [])}),
+        evidence_count=sum(len(section.get("claims", [])) for section in citations["sections"]),
+    )
     report = {
         "query": plan.query,
         "summary": report_summary,
+        "confidence": report_confidence,
         "status": "completed",
         "sections": citations["sections"],
         "unit_results": unit_results,
@@ -2937,6 +2950,62 @@ def _select_fetch_sources(
     return sources
 
 
+def _evidence_similarity(left: DeepResearchEvidenceItem, right: DeepResearchEvidenceItem) -> float:
+    left_text = _summarize_evidence_text(left.summary or left.detail, limit=_MAX_CLAIM_LENGTH)
+    right_text = _summarize_evidence_text(right.summary or right.detail, limit=_MAX_CLAIM_LENGTH)
+    if not left_text or not right_text:
+        return 0.0
+    left_key = _stable_text_key(left_text)
+    right_key = _stable_text_key(right_text)
+    if left_key and right_key and (left_key in right_key or right_key in left_key):
+        return 1.0
+    left_tokens = set(_tokenize_keywords(left_text))
+    right_tokens = set(_tokenize_keywords(right_text))
+    if not left_tokens or not right_tokens:
+        return 0.0
+    intersection = len(left_tokens & right_tokens)
+    union = len(left_tokens | right_tokens)
+    if union == 0:
+        return 0.0
+    return intersection / union
+
+
+def _cluster_confidence(*, source_count: int, evidence_count: int, cluster_type: str = "") -> str:
+    if cluster_type == "gap":
+        return "low"
+    if source_count >= 2 and evidence_count >= 2:
+        return "high"
+    if source_count >= 1:
+        return "medium"
+    return "low"
+
+
+def _cluster_type_for_items(items: list[DeepResearchEvidenceItem]) -> str:
+    if any(_has_gap_signal(item.summary) or _has_gap_signal(item.detail) for item in items):
+        return "gap"
+    source_ids = {source_id for item in items for source_id in item.source_ids}
+    if len(source_ids) >= 2:
+        return "consensus"
+    return "single_source"
+
+
+def _best_cluster_claim_text(items: list[DeepResearchEvidenceItem]) -> str:
+    ranked = sorted(
+        items,
+        key=lambda item: (
+            item.weight,
+            len(item.source_ids),
+            len(_summarize_evidence_text(item.summary or item.detail, limit=_MAX_CLAIM_LENGTH)),
+        ),
+        reverse=True,
+    )
+    for item in ranked:
+        text = _summarize_evidence_text(item.summary or item.detail, limit=_MAX_CLAIM_LENGTH)
+        if text and not _is_noisy_text(text):
+            return text
+    return ""
+
+
 def _build_section_citations(
     plan: DeepResearchPlan,
     evidence_items: list[dict[str, Any]],
@@ -2975,7 +3044,6 @@ def _build_section_citations(
             section_keywords = query_keywords
         if not section_keywords:
             section_keywords = query_keywords
-        section_claims: list[dict[str, Any]] = []
         ranked_pool = sorted(
             claims_pool,
             key=lambda evidence: (
@@ -2988,27 +3056,65 @@ def _build_section_citations(
             ),
             reverse=True,
         )
+        relevant_evidence: list[DeepResearchEvidenceItem] = []
         for evidence in ranked_pool:
             overlap_score = _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords)
             if not evidence.source_ids:
                 continue
             if overlap_score <= 0 and section_keywords and not is_generic_section:
                 continue
-            claim_text = _summarize_evidence_text(evidence.summary or evidence.detail, limit=_MAX_CLAIM_LENGTH)
+            relevant_evidence.append(evidence)
+        section_claims: list[dict[str, Any]] = []
+        clusters: list[list[DeepResearchEvidenceItem]] = []
+        for evidence in relevant_evidence:
+            placed = False
+            for cluster in clusters:
+                if any(
+                    _evidence_similarity(evidence, existing) >= 0.55
+                    or set(evidence.source_ids) & set(existing.source_ids)
+                    for existing in cluster
+                ):
+                    cluster.append(evidence)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append([evidence])
+        ranked_clusters = sorted(
+            clusters,
+            key=lambda cluster: (
+                max(_count_keyword_overlap(f"{item.summary} {item.detail}", section_keywords) for item in cluster),
+                sum(item.weight for item in cluster),
+                len({source_id for item in cluster for source_id in item.source_ids}),
+                len(cluster),
+            ),
+            reverse=True,
+        )
+        for cluster in ranked_clusters:
+            claim_text = _best_cluster_claim_text(cluster)
             if not claim_text or _is_noisy_text(claim_text):
                 continue
             claim_key = _stable_text_key(claim_text)
             if claim_key in used_claim_keys:
                 continue
+            cluster_source_ids = _dedupe_preserve_order([source_id for item in cluster for source_id in item.source_ids])
+            cluster_type = _cluster_type_for_items(cluster)
             claim = DeepResearchClaim(
                 claim_id=f"{section.section_id}-claim-{claim_index}",
                 text=claim_text,
-                citations=_preferred_citation_ids(evidence.source_ids, source_registry, limit=2),
-                unit_id=evidence.unit_id,
-                evidence_ids=[evidence.evidence_id],
+                citations=_preferred_citation_ids(cluster_source_ids, source_registry, limit=3),
+                unit_id=cluster[0].unit_id,
+                evidence_ids=_dedupe_preserve_order([item.evidence_id for item in cluster]),
+                cluster_type=cluster_type,
+                supporting_source_count=len(set(cluster_source_ids)),
+                confidence=_cluster_confidence(
+                    source_count=len(set(cluster_source_ids)),
+                    evidence_count=len(cluster),
+                    cluster_type=cluster_type,
+                ),
             )
             section_claims.append(claim.model_dump())
-            used_evidence_ids.add(evidence.evidence_id)
+            for item in cluster:
+                used_evidence_ids.add(item.evidence_id)
             used_claim_keys.add(claim_key)
             claim_index += 1
             if len(section_claims) >= 2:
@@ -3016,12 +3122,19 @@ def _build_section_citations(
         if not section_claims:
             continue
         section_summary = _build_section_summary(section_claims)
+        section_source_count = len({citation for claim in section_claims for citation in claim.get("citations", [])})
         section_model = DeepResearchSectionCitations(
             section_id=section.section_id,
             title=section.title,
             summary=section_summary,
             claims=section_claims,
             citations=sorted({citation for claim in section_claims for citation in claim.get("citations", [])}),
+            confidence=_cluster_confidence(
+                source_count=section_source_count,
+                evidence_count=sum(len(claim.get("evidence_ids", [])) for claim in section_claims),
+            ),
+            claim_cluster_count=len(section_claims),
+            supporting_source_count=section_source_count,
         )
         sections.append(section_model.model_dump())
     return sections
@@ -3040,9 +3153,17 @@ def _build_section_summary(section_claims: list[dict[str, Any]]) -> str:
             break
     if not summary_parts:
         return ""
+    claim_confidences = {str(claim.get("confidence", "")) for claim in section_claims if claim.get("confidence")}
+    confidence_prefix = ""
+    if "high" in claim_confidences:
+        confidence_prefix = "High confidence: "
+    elif "medium" in claim_confidences:
+        confidence_prefix = "Medium confidence: "
+    elif "low" in claim_confidences:
+        confidence_prefix = "Low confidence: "
     if len(summary_parts) == 1:
-        return _trim_text(f"Key point: {summary_parts[0]}", limit=260)
-    return _trim_text(" ".join(summary_parts), limit=260)
+        return _trim_text(f"{confidence_prefix}Key point: {summary_parts[0]}", limit=260)
+    return _trim_text(f"{confidence_prefix}{' '.join(summary_parts)}", limit=260)
 
 
 def _build_partial_report(
