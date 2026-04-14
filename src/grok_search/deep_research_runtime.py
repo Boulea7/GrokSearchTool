@@ -120,6 +120,13 @@ _GAP_EVIDENCE_MARKERS = (
 )
 
 
+class PlannerGenerationError(RuntimeError):
+    def __init__(self, stage: str, message: str):
+        super().__init__(message)
+        self.stage = stage
+        self.message = message
+
+
 def _json_markdown_block(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
 
@@ -697,6 +704,83 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
     return 0
 
 
+def _source_type(source: dict[str, Any]) -> str:
+    url = str(source.get("url", "")).lower()
+    domain = str(source.get("domain", "") or "").lower()
+    if not domain and "://" in url:
+        try:
+            domain = urlsplit(url).netloc.lower()
+        except Exception:
+            domain = ""
+    if url.startswith("https://docs.") or url.startswith("http://docs.") or domain.startswith("docs.") or "/docs/" in url:
+        return "official_docs"
+    if domain in _COMMUNITY_SOURCE_DOMAINS or any(domain.endswith(f".{item}") for item in _COMMUNITY_SOURCE_DOMAINS):
+        return "community"
+    return "third_party"
+
+
+def _source_ranking_reasons(
+    source: dict[str, Any],
+    *,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> list[str]:
+    reasons: list[str] = []
+    domain = str(source.get("domain", "") or "").lower()
+    if not domain and source.get("url"):
+        try:
+            domain = urlsplit(str(source["url"])).netloc.lower()
+        except Exception:
+            domain = ""
+    if include_domains and any(domain == item or domain.endswith(f".{item}") for item in include_domains):
+        reasons.append("allowlisted_domain")
+    if exclude_domains and any(domain == item or domain.endswith(f".{item}") for item in exclude_domains):
+        reasons.append("denylisted_domain")
+    source_type = _source_type(source)
+    if source_type:
+        reasons.append(source_type)
+    if source.get("title"):
+        reasons.append("has_title")
+    if source.get("snippet") or source.get("description"):
+        reasons.append("has_summary_text")
+    if _has_noisy_source_metadata(source):
+        reasons.append("noisy_metadata_penalty")
+    return reasons
+
+
+def _domain_matches(domain: str, candidates: list[str]) -> bool:
+    return any(domain == candidate or domain.endswith(f".{candidate}") for candidate in candidates)
+
+
+def _apply_domain_constraints(
+    sources: list[dict[str, Any]],
+    *,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    normalized_include = [item.lower() for item in include_domains or [] if item]
+    normalized_exclude = [item.lower() for item in exclude_domains or [] if item]
+    if not normalized_include and not normalized_exclude:
+        return list(sources)
+    filtered: list[dict[str, Any]] = []
+    for source in sources:
+        url = str(source.get("url", "")).strip()
+        if not url:
+            continue
+        domain = str(source.get("domain", "") or "").strip().lower()
+        if not domain:
+            try:
+                domain = urlsplit(url).netloc.lower()
+            except Exception:
+                domain = ""
+        if normalized_include and not _domain_matches(domain, normalized_include):
+            continue
+        if normalized_exclude and _domain_matches(domain, normalized_exclude):
+            continue
+        filtered.append(source)
+    return filtered
+
+
 async def _build_runtime_grok_provider(current_model: str) -> tuple[GrokSearchProvider, dict[str, Any]]:
     from . import server as server_module
 
@@ -803,6 +887,15 @@ class DeepResearchRuntime:
                 "continuation.json",
                 _json_markdown_block(continuation.model_dump()),
                 "application/json",
+            )
+        fallback_reason = plan.planner_metadata.get("fallback_reason")
+        if isinstance(fallback_reason, dict):
+            self.store.append_event(
+                job.job_id,
+                type="planner_fallback",
+                phase="planning",
+                message="Planner fell back to the deterministic backup plan.",
+                data=fallback_reason,
             )
         self.store.append_event(
             job.job_id,
@@ -1044,8 +1137,13 @@ class DeepResearchRuntime:
         try:
             raw_plan = await self._generate_plan_with_model(job, continuation)
             return self._normalize_plan_payload(job, raw_plan, continuation)
-        except Exception:
-            return self._build_fallback_plan(job, continuation)
+        except Exception as exc:
+            stage = exc.stage if isinstance(exc, PlannerGenerationError) else "generation"
+            return self._build_fallback_plan(
+                job,
+                continuation,
+                fallback_reason={"stage": stage, "error": _trim_text(str(exc), limit=280)},
+            )
 
     async def _generate_plan_with_model(
         self,
@@ -1086,7 +1184,7 @@ class DeepResearchRuntime:
         content, _ = await provider._execute_completion_with_retry_result(headers, payload, render_sources=False)
         try:
             return _parse_json_object(content)
-        except Exception:
+        except Exception as exc:
             repair_payload = {
                 "model": provider.model,
                 "messages": [
@@ -1103,12 +1201,17 @@ class DeepResearchRuntime:
                 repair_payload,
                 render_sources=False,
             )
-            return _parse_json_object(repaired)
+            try:
+                return _parse_json_object(repaired)
+            except Exception as repair_exc:
+                raise PlannerGenerationError("repair", str(repair_exc)) from exc
 
     def _build_fallback_plan(
         self,
         job: DeepResearchJob,
         continuation: DeepResearchContinuationState,
+        *,
+        fallback_reason: dict[str, Any] | None = None,
     ) -> DeepResearchPlan:
         query = _rewrite_research_query(job.query.strip(), continuation)
         context = _rewrite_research_query(job.context.strip(), continuation)
@@ -1166,7 +1269,11 @@ class DeepResearchRuntime:
                 }
                 for index, item in enumerate(unique_queries[: max(1, config.deep_research_max_concurrency)], start=1)
             ],
-            "planner_metadata": {"planner": "fallback", "used_fallback": True},
+            "planner_metadata": {
+                "planner": "fallback",
+                "used_fallback": True,
+                "fallback_reason": fallback_reason or {"stage": "generation", "error": "unknown_planner_failure"},
+            },
         }
         return self._normalize_plan_payload(job, raw_plan, continuation)
 
@@ -1603,6 +1710,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     completed_unit_ids = list(checkpoint_state.completed_unit_ids) if checkpoint_state else []
     unit_results = dict(checkpoint_state.unit_results) if checkpoint_state else dict(continuation.carry_forward_unit_results)
     source_registry = list(checkpoint_state.sources) if checkpoint_state else list(continuation.carry_forward_sources)
+    source_registry = _apply_domain_constraints(
+        source_registry,
+        include_domains=plan.include_domains,
+        exclude_domains=plan.exclude_domains,
+    )
     evidence_items = list(checkpoint_state.evidence_items) if checkpoint_state else list(continuation.carry_forward_evidence)
     sections = list(checkpoint_state.sections) if checkpoint_state else list(continuation.carry_forward_sections)
     unit_results = _sanitize_unit_results(unit_results, source_registry)
@@ -1672,7 +1784,17 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     batch_error = batch_result
                 continue
             unit_result, new_sources, new_evidence = batch_result
-            source_registry, source_ids = _merge_source_registry(source_registry, new_sources)
+            constrained_sources = _apply_domain_constraints(
+                new_sources,
+                include_domains=plan.include_domains,
+                exclude_domains=plan.exclude_domains,
+            )
+            source_registry, source_ids = _merge_source_registry(
+                source_registry,
+                constrained_sources,
+                include_domains=plan.include_domains,
+                exclude_domains=plan.exclude_domains,
+            )
             preferred_citations = _preferred_citation_ids(source_ids, source_registry)
             for evidence in new_evidence:
                 narrowed_source_ids = [
@@ -1931,6 +2053,9 @@ async def _execute_research_unit(
 def _merge_source_registry(
     existing_sources: list[dict[str, Any]],
     new_sources: list[dict[str, Any]],
+    *,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     existing_by_key: dict[str, dict[str, Any]] = {}
     for item in existing_sources:
@@ -1957,6 +2082,12 @@ def _merge_source_registry(
         current["source_key"] = key
         current["quality_score"] = _source_quality_score(current)
         current["quality_tier"] = _source_quality_tier(current)
+        current["source_type"] = _source_type(current)
+        current["ranking_reasons"] = _source_ranking_reasons(
+            current,
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+        )
         existing_by_key[key] = current
         merged_ids.append(current["source_id"])
     merged_sources = sorted(existing_by_key.values(), key=_source_sort_tuple)
