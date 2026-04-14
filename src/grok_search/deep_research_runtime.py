@@ -190,6 +190,11 @@ def _is_noisy_text(value: str) -> bool:
         return True
     if len(re.findall(r"https?://", lowered)) >= 3 and len(text) < 500:
         return True
+    if extract_unique_urls(text):
+        stripped = re.sub(r"https?://\S+", " ", text)
+        stripped = re.sub(r"[-*•`>#()\[\],.;:]+", " ", stripped)
+        if len(_normalize_whitespace(stripped)) < 12:
+            return True
     if len(text) <= 80 and sum(1 for marker in ("english", "deutsch", "español", "français") if marker in lowered) >= 2:
         return True
     return False
@@ -2731,6 +2736,9 @@ async def _execute_research_unit(
                     source_urls=[unit.url] if unit.url else [],
                     summary=_summarize_evidence_text(detail, limit=_MAX_CLAIM_LENGTH),
                     detail=detail,
+                    evidence_kind="fetch",
+                    weight=1.0,
+                    derived_from_source_url=unit.url,
                 ).model_dump()
             ],
         )
@@ -2744,18 +2752,50 @@ async def _execute_research_unit(
                 [],
             )
         detail = mapped
+        sources = [{"url": unit.url, "title": unit.title}]
+        evidence_items = [
+            DeepResearchEvidenceItem(
+                evidence_id=f"evidence-{unit.unit_id}-map",
+                unit_id=unit.unit_id,
+                source_urls=[unit.url] if unit.url else [],
+                summary=_summarize_evidence_text(detail, limit=_MAX_CLAIM_LENGTH),
+                detail=detail,
+                evidence_kind="map",
+                weight=0.6,
+                derived_from_source_url=unit.url,
+            ).model_dump()
+        ]
+        candidate_urls = [
+            candidate
+            for candidate in extract_unique_urls(detail)
+            if candidate and candidate != unit.url
+        ]
+        fetch_limit = max(0, plan.search_strategy.selective_fetch.max_urls_per_search)
+        for candidate_url in candidate_urls[:fetch_limit]:
+            fetched = await _fetch_url(candidate_url)
+            if not fetched:
+                continue
+            fetched_source = _enrich_source_from_fetched_text(
+                {"url": candidate_url, "title": _guess_title_from_url(candidate_url)},
+                fetched,
+            )
+            sources.append(fetched_source)
+            evidence_items.append(
+                DeepResearchEvidenceItem(
+                    evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
+                    unit_id=unit.unit_id,
+                    source_urls=[candidate_url],
+                    summary=_summarize_evidence_text(fetched, limit=_MAX_CLAIM_LENGTH),
+                    detail=fetched,
+                    evidence_kind="fetch",
+                    weight=1.0,
+                    derived_from_source_url=candidate_url,
+                ).model_dump()
+            )
         return (
             {"summary": _summarize_evidence_text(detail, limit=180), "detail": detail},
-            [{"url": unit.url, "title": unit.title}],
-            [
-                DeepResearchEvidenceItem(
-                    evidence_id=f"evidence-{unit.unit_id}",
-                    unit_id=unit.unit_id,
-                    source_urls=[unit.url] if unit.url else [],
-                    summary=_summarize_evidence_text(detail, limit=_MAX_CLAIM_LENGTH),
-                    detail=detail,
-                ).model_dump()
-            ],
+            sources,
+            evidence_items,
         )
 
     if _search_query is _DEFAULT_SEARCH_QUERY_FN:
@@ -2783,6 +2823,8 @@ async def _execute_research_unit(
                 source_urls=[source.get("url", "") for source in sources if source.get("url")],
                 summary=_summarize_evidence_text(answer, limit=_MAX_CLAIM_LENGTH),
                 detail=answer,
+                evidence_kind="search",
+                weight=0.9,
             ).model_dump()
         )
     selective_fetch = plan.search_strategy.selective_fetch
@@ -2804,10 +2846,12 @@ async def _execute_research_unit(
                 source_urls=[source["url"]],
                 summary=_summarize_evidence_text(fetched, limit=_MAX_CLAIM_LENGTH),
                 detail=fetched,
+                evidence_kind="fetch",
+                weight=1.0,
+                derived_from_source_url=source["url"],
             ).model_dump()
         )
-    if fetched_evidence_items:
-        evidence_items = fetched_evidence_items
+    evidence_items.extend(fetched_evidence_items)
     return (
         {
             "summary": _summarize_evidence_text(answer, limit=180),
@@ -2936,6 +2980,7 @@ def _build_section_citations(
             claims_pool,
             key=lambda evidence: (
                 _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords),
+                evidence.weight,
                 0 if evidence.evidence_id in used_evidence_ids else 1,
                 sum(_source_quality_score(registry_by_id.get(source_id, {})) for source_id in evidence.source_ids),
                 len(evidence.source_ids),

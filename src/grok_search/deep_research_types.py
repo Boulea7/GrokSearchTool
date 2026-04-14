@@ -150,6 +150,9 @@ class DeepResearchEvidenceItem(BaseModel):
     source_urls: list[str] = Field(default_factory=list)
     summary: str
     detail: str = ""
+    evidence_kind: str = "search"
+    weight: float = 1.0
+    derived_from_source_url: str = ""
 
 
 class DeepResearchClaim(BaseModel):
