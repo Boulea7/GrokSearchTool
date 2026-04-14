@@ -487,7 +487,7 @@ claude mcp list
 - 这是高于 `plan_* -> web_search` 的高级层，不替代默认轻路径。
 - `deep_research_start` 会创建 job，并立即生成结构化 `plan.json`；其中至少包含 `brief`、`sub_questions`、`search_strategy`、`report_outline`、`research_units`。在 continuation 场景下，`plan.json` 里的 `continuation` 当前只保留 compact 摘要视图，完整 carry-forward state 会额外写到 `continuation.json`。非 `plan_only` 场景下，任务会异步推进并逐步产出 `partial_report.md`、`final_report.md`、`sources.json`、`citations.json`、`report.json`。
 - `force_new` 用于控制 `deep_research_start` 是否必须创建全新 job。
-- 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；这条规则当前同样适用于带 `continue_from_job_id` 的 follow-up job，返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。
+- 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；这条规则当前同样适用于带 `continue_from_job_id` 的 follow-up job，返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。对 `completed` job，当前只有在最终四件套可读且来自一致 `batch_id` 时才应继续被视为可复用结果。
 - `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要。
 - `deep_research_events` 返回有序事件流，支持 `after_seq` 增量读取。
 - `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化；若某个 JSON artifact 不可读，结果会在 `artifact_errors` 里返回稳定错误码，而不是直接让整次读取失败。对 `completed` job，若最终四件套缺失，当前会通过 `artifact_errors` 暴露缺失项；对 `failed` / `canceled` / `interrupted` job，则以当前已落盘的 partial artifacts 与 checkpoint 为准。
@@ -495,8 +495,8 @@ claude mcp list
 - `deep_research_cancel` 只负责发起取消请求；运行中的 job 会在阶段边界或下一次检查点更新时收口。
 - `deep_research_list` 提供最近 job 列表，适合 CLI 或宿主做结果检索。
 - 最终 artifacts 当前按同一 `batch_id` 原子发布；调用方如需确认 `sources.json`、`citations.json`、`report.json`、`final_report.md` 来自同一批结果，可读取 artifact metadata 里的 `batch_id`。
-- `sources.json` 当前除 `source_id` 外，还会附带 additive `source_key`、`quality_score`、`quality_tier` 一类 source 质量元数据；`citations.json` 与 `report.json` 的 claim 当前也可能附带 additive `unit_id`、`evidence_ids`，用于回溯 claim 来自哪个 research unit / evidence。
-- continuation context 当前会优先复用 `sources.json`；若该 artifact 缺失或不可读，会回退到 `citations.json.source_registry` 重建 carry-forward sources。运行中的 `queued` / `running` job 在新进程启动时会被回收成 `interrupted`，并带上恢复原因。
+- `sources.json` 当前除 `source_id` 外，还会附带 additive `source_key`、`quality_score`、`quality_tier`、`source_type`、`ranking_reasons` 一类来源质量与排序解释元数据；`citations.json` 与 `report.json` 的 section 当前也可能带 `summary`，claim 当前也可能附带 additive `unit_id`、`evidence_ids`，用于回溯 claim 来自哪个 research unit / evidence。
+- continuation context 当前会优先复用 `sources.json`；若该 artifact 缺失或不可读，会回退到 `citations.json.source_registry` 重建 carry-forward sources。若已完成 job 的当前 artifact 指针混批或缺件，则会优先回退到最近的完整 final artifact batch，再回退到 checkpoint / partial artifacts。运行中的 `queued` / `running` job 在新进程启动时会被回收成 `interrupted`，并带上恢复原因。
 </details>
 
 ## 四、常见问题

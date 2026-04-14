@@ -121,6 +121,31 @@ def test_cli_start_does_not_spawn_worker_for_reused_completed_job(monkeypatch, t
     )
     runtime.store.update_job(job.job_id, finished_at=utc_now_iso())
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Reuse me"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Checkpoint resume summary.", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nCheckpoint resume summary.",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
 
     exit_code = deep_research_cli.main(["start", "Reuse me"])
 
