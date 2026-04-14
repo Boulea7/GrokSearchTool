@@ -87,6 +87,42 @@ async def test_plan_only_builds_structured_plan(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_plan_normalization_repairs_string_shaped_strategy_and_writes_planner_trace(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["brief"] = "Need a repaired brief"
+        payload["search_strategy"] = "runtime resume checkpoints"
+        payload["planner_metadata"] = "planner metadata as text"
+        payload["report_outline"] = "Executive Summary"
+        payload["research_units"] = "runtime resume checkpoints"
+        return payload
+
+    runtime._generate_plan_with_model = planner
+
+    response = await runtime.start(
+        query="Repair strategy shape",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    trace = json.loads(runtime.store.read_artifact_text(response["job_id"], "planner_trace.json"))
+
+    assert plan["brief"]["objective"] == "Repair strategy shape"
+    assert plan["search_strategy"]["search_queries"] == ["runtime resume checkpoints"]
+    assert plan["planner_metadata"]["planner"] == "model"
+    assert plan["planner_metadata"]["trace"]["repair_attempted"] is False
+    assert "non_dict_search_strategy" in plan["planner_metadata"]["trace"]["normalize_actions"]
+    assert "non_dict_brief" in plan["planner_metadata"]["trace"]["normalize_actions"]
+    assert "non_dict_planner_metadata" in plan["planner_metadata"]["trace"]["normalize_actions"]
+    assert trace["normalize_actions"] == plan["planner_metadata"]["trace"]["normalize_actions"]
+    assert trace["final_status"] == "normalized"
+
+
+@pytest.mark.asyncio
 async def test_plan_only_does_not_schedule_execution(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -110,7 +146,7 @@ async def test_plan_only_does_not_schedule_execution(tmp_path):
     assert executed == []
     assert status["status"] == "draft"
     assert [event["type"] for event in events["events"]] == ["job_created"]
-    assert status["artifact_kinds"] == ["plan.json"]
+    assert status["artifact_kinds"] == ["plan.json", "planner_trace.json"]
 
 
 @pytest.mark.asyncio
@@ -209,6 +245,39 @@ async def test_search_query_preselects_available_grok_model_for_deep_research(mo
     await runtime.run_job(response["job_id"])
 
     assert observed_models == ["grok-4.20-0309-non-reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_search_query_details_surfaces_body_quality_warning_and_runtime_metadata(monkeypatch, tmp_path):
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309-non-reasoning"]
+
+    async def fake_search_with_sources(self, query, **kwargs):
+        self._last_success_provider_name = "fallback_1"
+        self._last_success_provider_model = "grok-4.20-0309-non-reasoning"
+        self._last_success_provider_api_url = "https://secondary.example.com/v1"
+        return (
+            "",
+            [{"url": "https://docs.example.com/a", "title": "Doc A"}],
+        )
+
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "search_with_sources", fake_search_with_sources)
+
+    from grok_search.deep_research_runtime import _search_query_with_details
+
+    result = await _search_query_with_details("Search preselection")
+
+    assert result["warning_code"] == "body_missing_sources_only"
+    assert result["requested_model"] == "grok-4.20-0309"
+    assert result["effective_model"] == "grok-4.20-0309-non-reasoning"
+    assert result["provider_name"] == "fallback_1"
+    assert result["provider_model"] == "grok-4.20-0309-non-reasoning"
+    assert result["provider_api_url"] == "https://secondary.example.com/v1"
+    assert result["sources"][0]["url"] == "https://docs.example.com/a"
 
 
 @pytest.mark.asyncio
@@ -1463,7 +1532,94 @@ async def test_result_returns_artifact_errors_instead_of_raising_for_corrupt_jso
         "report.json": "invalid_json",
         "sources.json": "invalid_json",
         "citations.json": "invalid_json",
+        "final_report.md": "missing_required_artifact",
     }
+
+
+@pytest.mark.asyncio
+async def test_result_prefers_resolved_final_batch_over_current_mixed_artifacts(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Mixed final artifacts",
+        request_fingerprint="fp-mixed-final-artifacts",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Mixed final artifacts"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Good report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nGood report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]),
+        "application/json",
+    )
+
+    result = await runtime.result(job.job_id)
+
+    assert result["sources"][0]["url"] == "https://good.example.com"
+    assert result["artifact_errors"] == {}
+
+
+@pytest.mark.asyncio
+async def test_result_surfaces_invalid_shape_errors_for_sources_and_report(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Invalid shape artifact handling",
+        request_fingerprint="fp-invalid-shape-artifacts",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Invalid shape artifact handling"}), "application/json")
+    runtime.write_artifact(job.job_id, "report.json", json.dumps(["not", "an", "object"]), "application/json")
+    runtime.write_artifact(job.job_id, "sources.json", json.dumps({"url": "https://example.com"}), "application/json")
+    runtime.write_artifact(job.job_id, "citations.json", json.dumps({"source_registry": {}, "sections": []}), "application/json")
+
+    result = await runtime.result(job.job_id)
+
+    assert result["report"] is None
+    assert result["sources"] is None
+    assert result["artifact_errors"]["report.json"] == "invalid_shape"
+    assert result["artifact_errors"]["sources.json"] == "invalid_shape"
 
 
 @pytest.mark.asyncio
@@ -1907,6 +2063,111 @@ async def test_continuation_prefers_consistent_final_artifact_batch_over_mixed_c
 
 
 @pytest.mark.asyncio
+async def test_execute_start_does_not_reuse_plan_only_draft(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+
+    draft = await runtime.start(
+        query="Shared fingerprint query",
+        context="Same input",
+        plan_only=True,
+        force_new=False,
+        schedule=False,
+    )
+
+    execute = await runtime.start(
+        query="Shared fingerprint query",
+        context="Same input",
+        plan_only=False,
+        force_new=False,
+        schedule=False,
+    )
+
+    assert draft["status"] == "draft"
+    assert execute["reused"] is False
+    assert execute["job_id"] != draft["job_id"]
+
+
+@pytest.mark.asyncio
+async def test_completed_job_with_corrupt_final_json_is_not_reused(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    completed = runtime.store.create_job(
+        query="Corrupt completed reuse source",
+        request_fingerprint=runtime._request_fingerprint(
+            query="Corrupt completed reuse source",
+            context="",
+            effort="standard",
+            include_domains=[],
+            exclude_domains=[],
+            continue_from_job_id="",
+        ),
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(
+        completed.job_id,
+        "plan.json",
+        json.dumps({"query": "Corrupt completed reuse source"}),
+        "application/json",
+    )
+    runtime.write_artifact_batch(
+        completed.job_id,
+        [
+            {"kind": "sources.json", "content": "{bad-json", "content_type": "application/json"},
+            {"kind": "citations.json", "content": "{bad-json", "content_type": "application/json"},
+            {"kind": "report.json", "content": "{bad-json", "content_type": "application/json"},
+            {"kind": "final_report.md", "content": "# Final Report\n\nBad batch.\n", "content_type": "text/markdown"},
+        ],
+    )
+
+    response = await runtime.start(
+        query="Corrupt completed reuse source",
+        force_new=False,
+        schedule=False,
+    )
+
+    assert response["reused"] is False
+    assert response["job_id"] != completed.job_id
+
+
+@pytest.mark.asyncio
+async def test_result_reports_invalid_json_and_missing_required_artifacts_together(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Mixed artifact errors",
+        request_fingerprint="fp-mixed-artifact-errors",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", "{bad-json", "application/json")
+    runtime.write_artifact(job.job_id, "sources.json", json.dumps([{"source_id": "R1", "url": "https://ok.example.com"}]), "application/json")
+
+    result = await runtime.result(job.job_id)
+
+    assert result["artifact_errors"]["plan.json"] == "invalid_json"
+    assert result["artifact_errors"]["citations.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["report.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["final_report.md"] == "missing_required_artifact"
+
+
+@pytest.mark.asyncio
 async def test_source_registry_keeps_stable_ids_and_prefers_enriched_metadata(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     original = runtime.store.create_job(
@@ -1996,6 +2257,154 @@ async def test_source_registry_keeps_stable_ids_and_prefers_enriched_metadata(mo
     assert docs_source["title"] == "Runtime checkpoints"
     assert "Official checkpoint docs" in (docs_source.get("description") or docs_source.get("snippet") or "")
     assert docs_source["rank"] < community_source["rank"]
+
+
+@pytest.mark.asyncio
+async def test_completed_claims_bind_only_to_supporting_source_ids(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 2,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume continues from checkpoints without reloading completed work.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                },
+                {
+                    "url": "https://docs.example.com/runtime/restart",
+                    "title": "Runtime restart",
+                    "description": "Restart docs.",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "checkpoints" in url:
+            return "# Runtime checkpoints\n\nResume continues from the last completed checkpoint."
+        return "# Runtime restart\n\nRestart replays work from the beginning."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Checkpoint resume behavior", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    first_section = result["report"]["sections"][0]
+    first_claim = first_section["claims"][0]
+    citations = set(first_claim["citations"])
+    registry = result["citations"]["source_registry"]
+    cited_urls = {registry[source_id]["url"] for source_id in citations}
+
+    assert cited_urls == {"https://docs.example.com/runtime/checkpoints"}
+
+
+@pytest.mark.asyncio
+async def test_unmatched_outline_section_is_omitted_when_evidence_overlap_is_below_threshold(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume behavior.",
+            },
+            {
+                "section_id": "billing-impact",
+                "title": "Billing Impact",
+                "goal": "Explain invoice reconciliation behavior.",
+            },
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume continues from the last completed checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nResume continues from the last completed checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Checkpoint resume behavior", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    section_titles = [section["title"] for section in result["report"]["sections"]]
+
+    assert "Resume Semantics" in section_titles
+    assert "Billing Impact" not in section_titles
+    assert "## Billing Impact" not in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_continue_plan_sanitizes_previous_summary_before_persisting_continuation(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    original = runtime.store.create_job(
+        query="Original noisy summary source",
+        request_fingerprint="fp-original-noisy-summary",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": "Topics can help you to resolve common issues using both AWS DMS and selected endpoint databases. Resume continues from the last completed checkpoint.",
+                "sections": [],
+                "unit_results": {},
+            }
+        ),
+        "application/json",
+    )
+
+    response = await runtime.start(
+        query="Follow-up on checkpoint resume",
+        continue_from_job_id=original.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+    continuation_payload = json.loads(runtime.store.read_artifact_text(response["job_id"], "continuation.json"))
+
+    assert "topics can help you to resolve common issues" not in response["plan"]["continuation"]["previous_summary"].lower()
+    assert "topics can help you to resolve common issues" not in continuation_payload["previous_summary"].lower()
+    assert "resume continues from the last completed checkpoint" in continuation_payload["previous_summary"].lower()
 
 
 @pytest.mark.asyncio

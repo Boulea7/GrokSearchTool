@@ -147,6 +147,7 @@ class DeepResearchEvidenceItem(BaseModel):
     evidence_id: str
     unit_id: str
     source_ids: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list)
     summary: str
     detail: str = ""
 

@@ -2377,15 +2377,29 @@ def _build_feature_readiness(
         if toggle_status != "ready"
         else []
     )
-    deep_research_check_ids = [
+    deep_research_planner_check_ids = [
         "grok_config",
         "grok_provider_chain",
         "grok_models",
         "grok_model_selection",
         "grok_model_runtime_fallback",
+    ]
+    deep_research_runtime_check_ids = [
+        *deep_research_planner_check_ids,
         "grok_search_probe",
     ]
-    deep_research_degraded_by = [
+    deep_research_planner_degraded_by = [
+        _readiness_cause_from_check(check)
+        for check in (
+            grok_config,
+            grok_provider_chain,
+            grok_models,
+            grok_model_selection,
+            grok_model_runtime_fallback,
+        )
+        if check and check["status"] in {"warning", "error"}
+    ]
+    deep_research_runtime_degraded_by = [
         _readiness_cause_from_check(check)
         for check in (
             grok_config,
@@ -2398,26 +2412,51 @@ def _build_feature_readiness(
         if check and check["status"] in {"warning", "error"}
     ]
     if grok_config["status"] != "ok":
-        deep_research_status = "not_ready"
-        deep_research_message = grok_config["message"]
+        deep_research_planner_status = "not_ready"
+        deep_research_planner_message = grok_config["message"]
+    elif grok_models["status"] != "ok":
+        deep_research_planner_status = "degraded"
+        deep_research_planner_message = "Deep research planner 依赖的 /models 或模型可见性探测存在问题。"
     elif (
         grok_model_runtime_fallback
         and grok_model_runtime_fallback["status"] == "warning"
     ):
-        deep_research_status = "degraded"
-        deep_research_message = grok_model_runtime_fallback["message"]
+        deep_research_planner_status = "degraded"
+        deep_research_planner_message = grok_model_runtime_fallback["message"]
     elif (
         grok_model_selection
         and grok_model_selection["status"] == "warning"
     ):
-        deep_research_status = "degraded"
-        deep_research_message = grok_model_selection["message"]
-    elif grok_search_probe["status"] == "ok":
-        deep_research_status = "ready"
-        deep_research_message = "Deep research planner/runtime 已共享 Grok provider chain readiness。"
+        deep_research_planner_status = "degraded"
+        deep_research_planner_message = grok_model_selection["message"]
     else:
-        deep_research_status = "degraded"
-        deep_research_message = grok_search_probe["message"]
+        deep_research_planner_status = "ready"
+        deep_research_planner_message = "Deep research planner 共享 Grok provider chain readiness。"
+
+    if grok_config["status"] != "ok":
+        deep_research_runtime_status = "not_ready"
+        deep_research_runtime_message = grok_config["message"]
+    elif grok_models["status"] != "ok":
+        deep_research_runtime_status = "degraded"
+        deep_research_runtime_message = "Deep research runtime 依赖的 /models 或模型可见性探测存在问题。"
+    elif (
+        grok_model_runtime_fallback
+        and grok_model_runtime_fallback["status"] == "warning"
+    ):
+        deep_research_runtime_status = "degraded"
+        deep_research_runtime_message = grok_model_runtime_fallback["message"]
+    elif (
+        grok_model_selection
+        and grok_model_selection["status"] == "warning"
+    ):
+        deep_research_runtime_status = "degraded"
+        deep_research_runtime_message = grok_model_selection["message"]
+    elif grok_search_probe["status"] == "ok":
+        deep_research_runtime_status = "ready"
+        deep_research_runtime_message = "Deep research runtime 已共享 Grok provider chain readiness。"
+    else:
+        deep_research_runtime_status = "degraded"
+        deep_research_runtime_message = grok_search_probe["message"]
 
     return {
         "web_search": {
@@ -2460,18 +2499,22 @@ def _build_feature_readiness(
             "degraded_by": toggle_degraded_by,
         },
         "deep_research_planner": {
-            "status": deep_research_status,
-            "message": deep_research_message,
-            "based_on_checks": deep_research_check_ids,
+            "status": deep_research_planner_status,
+            "message": deep_research_planner_message,
+            "based_on_checks": deep_research_planner_check_ids,
             "probe_scope": "deep_research_planner",
-            "degraded_by": deep_research_degraded_by,
+            "degraded_by": deep_research_planner_degraded_by,
+            "runtime_override_active": _runtime_override_active(runtime_model_source),
+            "runtime_model_source": runtime_model_source,
         },
         "deep_research_runtime": {
-            "status": deep_research_status,
-            "message": deep_research_message,
-            "based_on_checks": deep_research_check_ids,
+            "status": deep_research_runtime_status,
+            "message": deep_research_runtime_message,
+            "based_on_checks": deep_research_runtime_check_ids,
             "probe_scope": "deep_research_runtime",
-            "degraded_by": deep_research_degraded_by,
+            "degraded_by": deep_research_runtime_degraded_by,
+            "runtime_override_active": _runtime_override_active(runtime_model_source),
+            "runtime_model_source": runtime_model_source,
         },
     }
 
