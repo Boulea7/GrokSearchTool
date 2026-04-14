@@ -123,6 +123,67 @@ async def test_plan_normalization_repairs_string_shaped_strategy_and_writes_plan
 
 
 @pytest.mark.asyncio
+async def test_plan_normalization_repairs_browse_page_unit_type_alias(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-browse-1",
+                "unit_type": "browse_page",
+                "title": "Browse docs",
+                "goal": "Read the primary docs page",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = planner
+
+    response = await runtime.start(
+        query="Repair browse page alias",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert plan["research_units"][0]["unit_type"] == "fetch"
+    assert "aliased_unit_type:browse_page->fetch" in plan["planner_metadata"]["trace"]["normalize_actions"]
+
+
+@pytest.mark.asyncio
+async def test_plan_normalization_repairs_ready_status_alias(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["research_units"][0]["status"] = "ready"
+        return payload
+
+    runtime._generate_plan_with_model = planner
+
+    response = await runtime.start(
+        query="Repair ready status alias",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert plan["research_units"][0]["status"] == "pending"
+    assert "aliased_unit_status:ready->pending" in plan["planner_metadata"]["trace"]["normalize_actions"]
+
+
+@pytest.mark.asyncio
 async def test_plan_only_does_not_schedule_execution(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
