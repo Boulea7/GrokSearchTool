@@ -130,6 +130,11 @@ class DeepResearchContinuation(BaseModel):
     continuation_goal: str = ""
     source_count: int = 0
     checkpoint_key: str = ""
+    state_version: int = 2
+    confirmed_claims: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    trusted_source_headers: list[str] = Field(default_factory=list)
+    carry_forward_constraints: dict[str, Any] = Field(default_factory=dict)
 
 
 class DeepResearchContinuationState(DeepResearchContinuation):

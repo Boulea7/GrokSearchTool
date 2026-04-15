@@ -346,8 +346,9 @@ def _has_noisy_source_metadata(source: dict[str, Any]) -> bool:
 def _continuation_anchor_terms(continuation: DeepResearchContinuationState) -> list[str]:
     texts = [
         continuation.continuation_goal,
-        continuation.prior_plan_summary,
-        continuation.previous_summary,
+        " ".join(continuation.confirmed_claims),
+        " ".join(continuation.open_questions),
+        " ".join(continuation.trusted_source_headers),
         " ".join(section.get("title", "") for section in continuation.carry_forward_sections),
     ]
     keyword_counts: dict[str, int] = {}
@@ -371,11 +372,17 @@ def _compact_continuation(continuation: DeepResearchContinuationState) -> DeepRe
         mode=continuation.mode,
         source_job_id=continuation.source_job_id,
         source_job_status=continuation.source_job_status,
+        continuation_identity=continuation.continuation_identity,
         previous_summary=continuation.previous_summary,
         prior_plan_summary=continuation.prior_plan_summary,
         continuation_goal=continuation.continuation_goal,
         source_count=continuation.source_count,
         checkpoint_key=continuation.checkpoint_key,
+        state_version=continuation.state_version,
+        confirmed_claims=list(continuation.confirmed_claims),
+        open_questions=list(continuation.open_questions),
+        trusted_source_headers=list(continuation.trusted_source_headers),
+        carry_forward_constraints=dict(continuation.carry_forward_constraints),
     )
 
 
@@ -1082,8 +1089,9 @@ def _finalize_brief_payload(
                 item
                 for item in (
                     continuation.continuation_goal,
-                    continuation.previous_summary,
-                    continuation.prior_plan_summary,
+                    *continuation.confirmed_claims,
+                    *continuation.open_questions,
+                    *continuation.trusted_source_headers,
                 )
                 if _normalize_whitespace(item)
             ]
@@ -1585,14 +1593,14 @@ def _best_continuation_summary(
     job: DeepResearchJob,
 ) -> str:
     candidates: list[str] = []
-    if report:
-        candidates.append(str(report.get("summary") or ""))
     for section in sections:
         candidates.append(str(section.get("summary") or ""))
         for claim in section.get("claims", []):
             candidates.append(str(claim.get("text") or ""))
     for result in unit_results.values():
         candidates.append(str(result.get("summary") or result.get("detail") or ""))
+    if report:
+        candidates.append(str(report.get("summary") or ""))
     for body in (final_report, partial_report):
         lines = [line.strip() for line in body.splitlines() if line.strip() and not line.startswith("#")]
         if lines:
@@ -1605,6 +1613,121 @@ def _best_continuation_summary(
         if summary and not _is_noisy_text(summary):
             return summary
     return _trim_text(job.query, limit=220)
+
+
+def _collect_continuation_open_questions(report: dict[str, Any]) -> list[str]:
+    coverage = report.get("coverage") if isinstance(report, dict) else {}
+    if not isinstance(coverage, dict):
+        return []
+    items: list[str] = []
+    for value in coverage.get("uncovered_sub_questions", []) or []:
+        normalized = _normalize_whitespace(str(value))
+        if normalized:
+            items.append(normalized)
+    for value in coverage.get("unanswered_sections", []) or []:
+        normalized = _normalize_whitespace(str(value))
+        if normalized:
+            items.append(normalized)
+    return _dedupe_preserve_order(items)
+
+
+def _collect_confirmed_claims(sections: list[dict[str, Any]], *, limit: int = 4) -> list[str]:
+    claims: list[str] = []
+    for section in sections:
+        for claim in section.get("claims", []):
+            text = _summarize_evidence_text(str(claim.get("text") or ""), limit=180)
+            if not text or _is_noisy_text(text):
+                continue
+            claims.append(text)
+            if len(claims) >= limit:
+                return _dedupe_preserve_order(claims)
+    return _dedupe_preserve_order(claims)
+
+
+def _trusted_source_headers(sources: list[dict[str, Any]], *, limit: int = 4) -> list[str]:
+    headers: list[str] = []
+    for source in sources:
+        if not _source_is_high_trust(source):
+            continue
+        title = _normalize_whitespace(str(source.get("title") or ""))
+        domain = _normalize_whitespace(str(source.get("domain") or ""))
+        header = title if not domain else f"{title} ({domain})" if title else domain
+        if header:
+            headers.append(header)
+        if len(headers) >= limit:
+            break
+    return _dedupe_preserve_order(headers)
+
+
+def _carry_forward_constraints(
+    *,
+    job: DeepResearchJob,
+    plan_payload: dict[str, Any],
+) -> dict[str, Any]:
+    plan_brief = plan_payload.get("brief") if isinstance(plan_payload, dict) else {}
+    if not isinstance(plan_brief, dict):
+        plan_brief = {}
+    plan_scope = plan_brief.get("scope") if isinstance(plan_brief.get("scope"), dict) else {}
+    preferred_sources = _normalize_string_list(plan_brief.get("preferred_sources"))
+    allowed_sources = _normalize_string_list(plan_scope.get("allowed_sources"))
+    return {
+        "include_domains": _dedupe_preserve_order(
+            _normalize_string_list(plan_scope.get("include_domains")) or list(job.include_domains)
+        ),
+        "exclude_domains": _dedupe_preserve_order(
+            _normalize_string_list(plan_scope.get("exclude_domains")) or list(job.exclude_domains)
+        ),
+        "preferred_sources": _dedupe_preserve_order(preferred_sources or allowed_sources),
+        "allowed_sources": _dedupe_preserve_order(allowed_sources or preferred_sources),
+    }
+
+
+def _result_text_covers_item(result: dict[str, Any], item: str) -> bool:
+    normalized_item = _normalize_whitespace(item)
+    if not normalized_item:
+        return False
+    tokens = _tokenize_keywords(normalized_item)
+    if not tokens:
+        return False
+    threshold = max(2, min(4, max(1, len(tokens) // 2)))
+    haystack = " ".join(
+        [
+            _normalize_whitespace(str(result.get("summary") or "")),
+            _normalize_whitespace(str(result.get("detail") or "")),
+        ]
+    )
+    if not haystack:
+        return False
+    return _count_keyword_overlap(haystack, tokens) >= threshold
+
+
+def _stop_policy_targets(plan: DeepResearchPlan) -> list[str]:
+    targets = _normalize_string_list(plan.brief.coverage_checklist)
+    if targets:
+        return targets
+    targets = _normalize_string_list(plan.brief.must_cover)
+    if targets:
+        return targets
+    return [item.question for item in plan.sub_questions if _normalize_whitespace(item.question)]
+
+
+def _has_sufficient_runtime_coverage(
+    plan: DeepResearchPlan,
+    unit_results: dict[str, dict[str, Any]],
+) -> bool:
+    targets = _stop_policy_targets(plan)
+    if not targets:
+        return False
+    if not unit_results:
+        return False
+    for target in targets:
+        if not any(
+            (result.get("source_ids") or result.get("citations"))
+            and _result_text_covers_item(result, target)
+            for result in unit_results.values()
+        ):
+            return False
+    return True
 
 
 def _artifact_metadata(content: str, *, batch_id: str = "") -> dict[str, Any]:
@@ -1715,6 +1838,12 @@ def _planner_continuation_payload(continuation: DeepResearchContinuationState) -
         for item in continuation.carry_forward_sections[:4]
         if item.get("title")
     ]
+    payload["confirmed_claims"] = list(continuation.confirmed_claims[:4])
+    payload["open_questions"] = list(continuation.open_questions[:4])
+    payload["trusted_source_headers"] = list(continuation.trusted_source_headers[:4])
+    payload["carry_forward_constraints"] = dict(continuation.carry_forward_constraints)
+    payload.pop("previous_summary", None)
+    payload.pop("prior_plan_summary", None)
     return payload
 
 
@@ -1901,14 +2030,21 @@ class DeepResearchRuntime:
         schedule: bool = True,
     ) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
+        source_job = None
         if continue_from_job_id:
             source_job = self.store.get_job(continue_from_job_id)
             if source_job.status not in {"completed", "failed", "interrupted", "canceled"}:
                 raise ValueError(
                     f"continue_from_job_id must reference a finished or recoverable job, got {source_job.status}"
                 )
-        normalized_include_domains = list(include_domains or [])
-        normalized_exclude_domains = list(exclude_domains or [])
+        if include_domains is None and source_job is not None:
+            normalized_include_domains = list(source_job.include_domains)
+        else:
+            normalized_include_domains = list(include_domains or [])
+        if exclude_domains is None and source_job is not None:
+            normalized_exclude_domains = list(source_job.exclude_domains)
+        else:
+            normalized_exclude_domains = list(exclude_domains or [])
         resolved_budget_seconds = self._resolve_budget_seconds(time_budget_seconds, effort)
         continuation = self._build_continuation_context(continue_from_job_id)
         request_fingerprint = self._request_fingerprint(
@@ -2528,8 +2664,7 @@ class DeepResearchRuntime:
         if continuation.mode == "continue":
             for candidate in (
                 continuation.continuation_goal,
-                continuation.prior_plan_summary,
-                continuation.previous_summary,
+                *continuation.open_questions,
             ):
                 normalized = _normalize_whitespace(candidate)
                 if normalized:
@@ -3114,6 +3249,7 @@ class DeepResearchRuntime:
         ) or job.current_checkpoint or (checkpoints[-1].checkpoint_key if checkpoints else "")
         continuation_goal = plan_payload.get("query") or job.query
         source_count = len(carry_forward_sources)
+        carry_forward_constraints = _carry_forward_constraints(job=job, plan_payload=plan_payload)
         continuation_identity = _continuation_identity_for_source_job(
             self.store,
             job,
@@ -3130,6 +3266,11 @@ class DeepResearchRuntime:
             continuation_goal=_trim_text(continuation_goal, limit=200),
             source_count=source_count,
             checkpoint_key=checkpoint_key,
+            state_version=2,
+            confirmed_claims=_collect_confirmed_claims(carry_forward_sections),
+            open_questions=_collect_continuation_open_questions(report),
+            trusted_source_headers=_trusted_source_headers(carry_forward_sources),
+            carry_forward_constraints=carry_forward_constraints,
             carry_forward_sources=carry_forward_sources,
             carry_forward_evidence=carry_forward_evidence,
             carry_forward_sections=carry_forward_sections,
@@ -3359,6 +3500,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     )
 
     unit_total = max(len(plan.research_units), 1)
+    stop_policy = dict(plan.brief.stop_policy or {})
+    max_search_queries = max(1, int(stop_policy.get("max_search_queries", len(plan.search_strategy.search_queries) or unit_total) or 1))
+    stop_on_sufficient_coverage = bool(stop_policy.get("stop_on_sufficient_coverage", True))
     while len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids) < len(plan.research_units):
         ready_units = [
             unit
@@ -3368,6 +3512,67 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             and unit.unit_id not in skipped_unit_ids
             and all(dep in completed_unit_ids for dep in unit.depends_on)
         ]
+        terminal_or_skipped_unit_ids = set(completed_unit_ids) | set(failed_unit_ids) | set(skipped_unit_ids)
+        executed_search_units = sum(
+            1
+            for unit in plan.research_units
+            if unit.unit_type == "search" and unit.unit_id in terminal_or_skipped_unit_ids
+        )
+        remaining_search_budget = max(0, max_search_queries - executed_search_units)
+        if remaining_search_budget == 0:
+            budget_ready_units: list[DeepResearchResearchUnit] = []
+        else:
+            budget_ready_units = []
+            consumed_search_budget = 0
+            for unit in ready_units:
+                if unit.unit_type != "search":
+                    budget_ready_units.append(unit)
+                    continue
+                if consumed_search_budget < remaining_search_budget:
+                    budget_ready_units.append(unit)
+                    consumed_search_budget += 1
+                    continue
+                skipped_unit_ids.append(unit.unit_id)
+                skipped_units.append(
+                    {
+                        "unit_id": unit.unit_id,
+                        "unit_type": unit.unit_type,
+                        "reason": "max_search_queries_reached",
+                    }
+                )
+                runtime.store.append_event(
+                    job_id,
+                    type="research_unit_skipped",
+                    phase="researching",
+                    message=f"Skipped {unit.unit_id}.",
+                    data={"unit_type": unit.unit_type, "reason": "max_search_queries_reached"},
+                )
+            ready_units = budget_ready_units
+        if executed_search_units >= max_search_queries:
+            skipped_any = False
+            for unit in ready_units:
+                if unit.unit_type != "search":
+                    continue
+                skipped_unit_ids.append(unit.unit_id)
+                skipped_units.append(
+                    {
+                        "unit_id": unit.unit_id,
+                        "unit_type": unit.unit_type,
+                        "reason": "max_search_queries_reached",
+                    }
+                )
+                runtime.store.append_event(
+                    job_id,
+                    type="research_unit_skipped",
+                    phase="researching",
+                    message=f"Skipped {unit.unit_id}.",
+                    data={"unit_type": unit.unit_type, "reason": "max_search_queries_reached"},
+                )
+                skipped_any = True
+            if skipped_any:
+                progress = 20.0 + ((len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids)) / unit_total) * 50.0
+                runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
+                continue
         if not ready_units:
             skipped_any = False
             for unit in plan.research_units:
@@ -3541,6 +3746,46 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 )
                 return
             raise batch_error
+        pending_units = [
+            unit
+            for unit in plan.research_units
+            if unit.unit_id not in completed_unit_ids
+            and unit.unit_id not in failed_unit_ids
+            and unit.unit_id not in skipped_unit_ids
+        ]
+        has_pending_dependency_chain = any(unit.depends_on for unit in pending_units)
+        if (
+            stop_on_sufficient_coverage
+            and not has_pending_dependency_chain
+            and _has_sufficient_runtime_coverage(plan, unit_results)
+        ):
+            skipped_any = False
+            for unit in plan.research_units:
+                if (
+                    unit.unit_id in completed_unit_ids
+                    or unit.unit_id in failed_unit_ids
+                    or unit.unit_id in skipped_unit_ids
+                ):
+                    continue
+                skipped_unit_ids.append(unit.unit_id)
+                skipped_units.append(
+                    {
+                        "unit_id": unit.unit_id,
+                        "unit_type": unit.unit_type,
+                        "reason": "sufficient_coverage_reached",
+                    }
+                )
+                runtime.store.append_event(
+                    job_id,
+                    type="research_unit_skipped",
+                    phase="researching",
+                    message=f"Skipped {unit.unit_id}.",
+                    data={"unit_type": unit.unit_type, "reason": "sufficient_coverage_reached"},
+                )
+                skipped_any = True
+            if skipped_any:
+                progress = 20.0 + ((len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids)) / unit_total) * 50.0
+                runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
 
     sections = _build_section_citations(plan, evidence_items, source_registry)
     source_registry = _annotate_source_usage(
