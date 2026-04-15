@@ -120,6 +120,7 @@ _GAP_EVIDENCE_MARKERS = (
     "remaining gap",
     "open question",
 )
+_VALID_SEARCH_STRATEGY_APPROACHES = {"targeted", "breadth_first", "depth_first"}
 _FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 _DEFAULT_SEARCH_QUERY_FN = None
 _RUNTIME_RECONCILE_STALE_SECONDS = 30
@@ -814,6 +815,73 @@ def _normalize_string_list(value: Any) -> list[str]:
 def _append_unique(items: list[str], value: str) -> None:
     if value and value not in items:
         items.append(value)
+
+
+def _normalize_search_strategy_approach(
+    value: Any,
+    *,
+    normalize_actions: list[str],
+    validation_issues: list[str],
+) -> str:
+    normalized = _normalize_whitespace(str(value or ""))
+    if normalized in _VALID_SEARCH_STRATEGY_APPROACHES:
+        return normalized
+    if normalized:
+        _append_unique(validation_issues, "invalid_search_strategy_approach")
+        _append_unique(
+            normalize_actions,
+            f"defaulted_invalid_search_strategy_approach:{normalized}->targeted",
+        )
+    else:
+        _append_unique(normalize_actions, "defaulted_missing_search_strategy_approach:targeted")
+    return "targeted"
+
+
+def _normalize_selective_fetch_config(
+    value: Any,
+    *,
+    normalize_actions: list[str],
+    validation_issues: list[str],
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        if value is not None:
+            _append_unique(normalize_actions, "non_dict_selective_fetch")
+        return {"max_urls_per_search": 1, "prefer_titles_matching_outline": True}
+
+    normalized = dict(value)
+    max_urls_raw = normalized.get("max_urls_per_search", 1)
+    try:
+        max_urls = int(max_urls_raw)
+    except (TypeError, ValueError):
+        max_urls = 1
+        _append_unique(validation_issues, "invalid_selective_fetch_max_urls")
+        _append_unique(
+            normalize_actions,
+            f"defaulted_invalid_selective_fetch_max_urls:{max_urls_raw!s}->1",
+        )
+    else:
+        if max_urls < 0:
+            _append_unique(validation_issues, "invalid_selective_fetch_max_urls")
+            _append_unique(normalize_actions, f"clamped_selective_fetch_max_urls:{max_urls}->1")
+            max_urls = 1
+        elif max_urls > 10:
+            _append_unique(validation_issues, "invalid_selective_fetch_max_urls")
+            _append_unique(normalize_actions, f"clamped_selective_fetch_max_urls:{max_urls}->10")
+            max_urls = 10
+
+    prefer_titles = normalized.get("prefer_titles_matching_outline", True)
+    if not isinstance(prefer_titles, bool):
+        _append_unique(validation_issues, "invalid_selective_fetch_prefer_titles_matching_outline")
+        _append_unique(
+            normalize_actions,
+            f"defaulted_invalid_selective_fetch_prefer_titles_matching_outline:{prefer_titles!s}->True",
+        )
+        prefer_titles = True
+
+    return {
+        "max_urls_per_search": max_urls,
+        "prefer_titles_matching_outline": prefer_titles,
+    }
 
 
 def _first_url_from_texts(*values: str) -> str:
@@ -2039,10 +2107,7 @@ class DeepResearchRuntime:
         planner_trace: dict[str, Any] | None = None,
     ) -> DeepResearchPlan:
         query = _rewrite_research_query(job.query.strip(), continuation)
-        context = _rewrite_research_query(job.context.strip(), continuation)
         search_queries = [query]
-        if context:
-            search_queries.append(f"{query} {context}".strip())
         if continuation.previous_summary:
             search_queries.append(f"{query} follow up findings checkpoint recovery".strip())
         if job.effort == "deep":
@@ -2340,6 +2405,7 @@ class DeepResearchRuntime:
         )
 
         normalized_outline: list[dict[str, Any]] = []
+        seen_outline_ids: dict[str, int] = {}
         for index, item in enumerate(report_outline, start=1):
             if isinstance(item, str):
                 item = {"section_id": _slugify(item), "title": item, "goal": item}
@@ -2347,9 +2413,23 @@ class DeepResearchRuntime:
                 validation_issues.append("invalid_report_outline_items")
                 continue
             title = item.get("title") or f"Section {index}"
+            base_section_id = _normalize_whitespace(
+                str(item.get("section_id") or _slugify(title) or f"section-{index}")
+            )
+            section_id = base_section_id
+            count = seen_outline_ids.get(base_section_id, 0)
+            if count > 0:
+                renamed_section_id = f"{base_section_id}-{count + 1}"
+                _append_unique(validation_issues, "duplicate_report_outline_section_id")
+                _append_unique(
+                    normalize_actions,
+                    f"renamed_duplicate_report_outline_section_id:{base_section_id}->{renamed_section_id}",
+                )
+                section_id = renamed_section_id
+            seen_outline_ids[base_section_id] = count + 1
             normalized_outline.append(
                 {
-                    "section_id": item.get("section_id") or _slugify(title),
+                    "section_id": section_id,
                     "title": title,
                     "goal": item.get("goal") or title,
                 }
@@ -2373,6 +2453,11 @@ class DeepResearchRuntime:
         if not isinstance(strategy, dict):
             normalize_actions.append("non_dict_search_strategy")
             strategy = {"search_queries": _normalize_string_list(strategy)}
+        strategy["approach"] = _normalize_search_strategy_approach(
+            strategy.get("approach"),
+            normalize_actions=normalize_actions,
+            validation_issues=validation_issues,
+        )
         search_queries = strategy.get("search_queries")
         if isinstance(search_queries, str):
             normalize_actions.append("string_search_queries")
@@ -2383,10 +2468,11 @@ class DeepResearchRuntime:
         elif search_queries is not None and not isinstance(search_queries, list):
             normalize_actions.append("non_list_search_queries")
             strategy["search_queries"] = _normalize_string_list(search_queries)
-        selective_fetch = strategy.get("selective_fetch")
-        if selective_fetch is not None and not isinstance(selective_fetch, dict):
-            normalize_actions.append("non_dict_selective_fetch")
-            strategy["selective_fetch"] = {"max_urls_per_search": 1, "prefer_titles_matching_outline": True}
+        strategy["selective_fetch"] = _normalize_selective_fetch_config(
+            strategy.get("selective_fetch"),
+            normalize_actions=normalize_actions,
+            validation_issues=validation_issues,
+        )
         if not strategy.get("search_queries"):
             strategy["search_queries"] = [
                 unit["query"] for unit in normalized_units if unit["unit_type"] == "search" and unit["query"]
@@ -2400,8 +2486,6 @@ class DeepResearchRuntime:
                 ]
             ]
         )
-        strategy.setdefault("approach", "targeted")
-        strategy.setdefault("selective_fetch", {"max_urls_per_search": 1, "prefer_titles_matching_outline": True})
 
         raw_planner_metadata = raw_plan.get("planner_metadata")
         if not isinstance(raw_planner_metadata, dict):
