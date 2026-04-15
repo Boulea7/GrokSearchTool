@@ -1775,7 +1775,7 @@ async def test_get_config_info_exposes_routing_diagnostics_and_provider_chain_de
             "name": "provider_2",
             "source": "process_env",
             "provider_family": "openrouter",
-            "resolved_model": "x-ai/grok-4.1-fast:online",
+            "resolved_model": "grok-4.20-auto:online",
             "preferred_endpoint_path": "/chat/completions",
             "multi_agent_family": False,
             "routing_signals": [
@@ -1855,6 +1855,36 @@ async def test_get_config_info_treats_models_listing_as_advisory_when_runtime_pr
     assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "ready"
     assert payload["feature_readiness"]["deep_research_runtime"]["supports_model_listing"] is False
     assert payload["feature_readiness"]["deep_research_runtime"]["single_model_mode"] is True
+
+
+@pytest.mark.asyncio
+async def test_probe_web_search_with_fallback_prefers_configured_web_search_fallback_order(monkeypatch):
+    attempts = []
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.20-auto")
+    monkeypatch.setenv("GROK_WEB_SEARCH_FALLBACK_MODELS", "grok-4.20-reasoning,grok-4.20-fast")
+
+    async def fake_probe(api_url, api_key, model):
+        attempts.append(model)
+        if model == "grok-4.20-reasoning":
+            return server._build_doctor_check("grok_search_probe", "ok", "probe ok")
+        return server._build_doctor_check(
+            "grok_search_probe",
+            "error",
+            "model unavailable",
+            reason_code="model_unavailable",
+        )
+
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe)
+
+    result = await server._probe_web_search_with_fallback(
+        "https://api.example.com/v1",
+        "test-key",
+        "grok-4.20-auto",
+        ["grok-4.20-auto", "grok-4.20-reasoning", "grok-4.20-fast"],
+    )
+
+    assert attempts == ["grok-4.20-auto", "grok-4.20-reasoning"]
+    assert result["fallback_model"] == "grok-4.20-reasoning"
 
 
 @pytest.mark.asyncio

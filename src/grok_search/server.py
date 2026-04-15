@@ -377,6 +377,35 @@ def _fallback_candidates_for_model(requested_model: str, current_model: str, ava
     return [model for model in _ordered_flexible_grok_models(available_models) if model != current_model]
 
 
+def _tool_fallback_candidates(
+    current_model: str,
+    available_models: list[str],
+    preferred_models: list[str],
+) -> list[str]:
+    available_by_core = {
+        _normalized_grok_model_core(model): model
+        for model in available_models
+    }
+    preferred: list[str] = []
+    seen: set[str] = set()
+    current_core = _normalized_grok_model_core(current_model)
+    for preferred_model in preferred_models:
+        normalized_preferred = preferred_model.strip()
+        if not normalized_preferred:
+            continue
+        candidate = available_by_core.get(_normalized_grok_model_core(normalized_preferred))
+        if not candidate:
+            continue
+        candidate_core = _normalized_grok_model_core(candidate)
+        if candidate_core == current_core or candidate in seen:
+            continue
+        seen.add(candidate)
+        preferred.append(candidate)
+    if preferred:
+        return preferred
+    return []
+
+
 def _is_grok_model_unavailable_message(message: str) -> bool:
     normalized = (message or "").strip().lower()
     if not normalized:
@@ -1386,7 +1415,11 @@ async def web_search(
         if not _is_grok_model_unavailable_message(error_message):
             return "", [], error_message, error_code, effective_model, False
 
-        for candidate in _fallback_candidates_for_model(requested_model, effective_model, available_models):
+        preferred_models = config.preferred_web_search_models_for_url(config.grok_api_url)
+        candidates = _tool_fallback_candidates(effective_model, available_models, preferred_models)
+        if not candidates:
+            candidates = _fallback_candidates_for_model(requested_model, effective_model, available_models)
+        for candidate in candidates:
             retry_result, retry_sources, retry_error_message, retry_error_code = await _run_grok_with_model(candidate)
             if retry_error_message is None:
                 return retry_result, retry_sources, None, None, candidate, True
@@ -2278,6 +2311,7 @@ async def _probe_web_search_with_fallback(
     requested_model: str,
     available_models: list[str],
 ) -> dict:
+    preferred_models = config.preferred_web_search_models_for_url(api_url)
     resolved_model, resolution = _resolve_model_against_available_models(requested_model, available_models)
     current_model = resolved_model or requested_model
     probe_result = await _probe_web_search(api_url, api_key, current_model)
@@ -2291,7 +2325,10 @@ async def _probe_web_search_with_fallback(
     if not _is_model_unavailable_check(probe_result):
         return probe_result
 
-    for candidate in _fallback_candidates_for_model(requested_model, current_model, available_models):
+    candidates = _tool_fallback_candidates(current_model, available_models, preferred_models)
+    if not candidates:
+        candidates = _fallback_candidates_for_model(requested_model, current_model, available_models)
+    for candidate in candidates:
         retry_result = await _probe_web_search(api_url, api_key, candidate)
         if retry_result["status"] == "ok":
             retry_result["fallback_model"] = candidate
