@@ -1494,6 +1494,144 @@ async def test_resume_continues_from_completed_unit_checkpoint(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_resume_preserves_skipped_and_constraint_state_from_checkpoint(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    executed_units = []
+
+    async def fake_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "One?", "reason": "first"},
+            {"id": "sq2", "question": "Two?", "reason": "second"},
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["one", "two"],
+            "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": False},
+        }
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "First unit",
+                "goal": "First",
+                "query": "one",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-search-2",
+                "unit_type": "search",
+                "title": "Second unit",
+                "goal": "Second",
+                "query": "two",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        return payload
+
+    async def fake_search(query):
+        executed_units.append(query)
+        return (
+            f"Answer for {query}",
+            [{"url": f"https://example.com/{query}", "title": f"Source {query}"}],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", fake_planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", fake_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query="Resume runtime with skipped state", force_new=True, schedule=False)
+    plan = response["plan"]
+    runtime.store.update_job(
+        response["job_id"],
+        status="interrupted",
+        phase="researching",
+        current_checkpoint="researching-unit-search-1",
+    )
+    runtime.store.save_checkpoint(
+        response["job_id"],
+        phase="researching",
+        checkpoint_key="researching-unit-search-1",
+        state={
+            "completed_unit_ids": ["unit-search-1"],
+            "failed_unit_ids": [],
+            "failed_units": [],
+            "skipped_unit_ids": ["unit-search-2"],
+            "skipped_units": [
+                {
+                    "unit_id": "unit-search-2",
+                    "unit_type": "search",
+                    "reason": "max_search_queries_reached",
+                }
+            ],
+            "constraint_violations": [
+                {
+                    "unit_id": "unit-search-1",
+                    "removed_source_count": 2,
+                    "reason": "domain_constraints_applied",
+                }
+            ],
+            "coverage_state": {
+                "items": [
+                    {
+                        "target": "One?",
+                        "matched_unit_ids": ["unit-search-1"],
+                        "grounded_source_ids": ["R1"],
+                        "candidate_section_ids": ["executive-summary"],
+                        "satisfied": True,
+                    },
+                    {
+                        "target": "Two?",
+                        "matched_unit_ids": [],
+                        "grounded_source_ids": [],
+                        "candidate_section_ids": [],
+                        "satisfied": False,
+                    },
+                ]
+            },
+            "unit_results": {
+                "unit-search-1": {
+                    "summary": "First unit already completed.",
+                    "source_ids": ["R1"],
+                    "citations": ["R1"],
+                }
+            },
+            "sources": [{"source_id": "R1", "url": "https://example.com/one", "title": "Source one"}],
+            "evidence_items": [],
+            "sections": [],
+            "plan": plan,
+        },
+    )
+
+    resumed = await runtime.resume(response["job_id"], schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert resumed["status"] == "queued"
+    assert executed_units == []
+    assert result["report"]["runtime"]["skipped_units"] == [
+        {
+            "unit_id": "unit-search-2",
+            "unit_type": "search",
+            "reason": "max_search_queries_reached",
+        }
+    ]
+    assert result["report"]["runtime"]["constraint_violations"] == [
+        {
+            "unit_id": "unit-search-1",
+            "removed_source_count": 2,
+            "reason": "domain_constraints_applied",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_status_returns_artifact_summaries(tmp_path):
     runtime = build_runtime(tmp_path)
     job = runtime.store.create_job(
@@ -4035,6 +4173,50 @@ async def test_cancel_requested_wins_over_batch_failure(monkeypatch, tmp_path):
     assert not any(event["type"] == "job_failed" for event in events["events"])
     assert runtime.store.read_artifact_text(current_job_id, "final_report.md") is None
     assert executed
+
+
+@pytest.mark.asyncio
+async def test_reconciled_interrupted_job_cannot_be_completed_by_stale_worker(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    did_reconcile = False
+
+    async def reconciling_search(query):
+        nonlocal did_reconcile
+        if not did_reconcile:
+            did_reconcile = True
+            runtime.store.reconcile_incomplete_jobs()
+        return (
+            "Recovered answer",
+            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", reconciling_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query="Fence stale worker after reconcile", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    status = await runtime.status(response["job_id"])
+    events = await runtime.events(response["job_id"])
+
+    assert did_reconcile is True
+    assert result["status"] == "interrupted"
+    assert status["status"] == "interrupted"
+    assert runtime.store.read_artifact_text(response["job_id"], "final_report.md") is None
+    assert any(event["type"] == "job_interrupted" for event in events["events"])
+    assert not any(event["type"] == "job_completed" for event in events["events"])
 
 
 @pytest.mark.asyncio
