@@ -425,6 +425,26 @@ def test_get_config_info_routing_diagnostics_summarize_provider_chain_families_a
     ]
 
 
+def test_deep_research_ultra_profile_defaults_to_ultra(monkeypatch):
+    monkeypatch.delenv("GROK_DEEP_RESEARCH_ULTRA_PROFILE", raising=False)
+    config = Config()
+    config.reset_runtime_state()
+
+    assert config.grok_deep_research_ultra_profile() == "ultra"
+
+
+def test_resolve_deep_research_model_for_ultra_prefers_heavy_16_agent_on_official_xai(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.resolve_deep_research_model_for_url("https://api.x.ai/v1", effort="ultra") == "grok-4.20-heavy-16-agent"
+
+
 def test_empty_process_env_still_blocks_project_env_fallback(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.setenv("TAVILY_API_KEY", "")

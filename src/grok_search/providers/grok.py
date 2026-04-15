@@ -423,7 +423,9 @@ class GrokSearchProvider(BaseSearchProvider):
             return False
         if provider_family == "official_xai" and self._uses_multi_agent_family(core):
             return True
-        if provider_family in {"openai_compatible_relay", "grok2api_like"} and core in _RESPONSES_ONLY_RELAY_MODELS:
+        if provider_family in {"openai_compatible_relay", "grok2api_like"} and (
+            self._uses_multi_agent_family(core) or core in _RESPONSES_ONLY_RELAY_MODELS
+        ):
             return True
         return False
 

@@ -154,6 +154,15 @@ _DEFAULT_SEARCH_QUERY_FN = None
 _RUNTIME_RECONCILE_STALE_SECONDS = 30
 
 
+def _effort_selective_fetch_limit(effort: str) -> int:
+    normalized = (effort or "").strip().lower()
+    if normalized == "ultra":
+        return 3
+    if normalized == "deep":
+        return 2
+    return 1
+
+
 class PlannerGenerationError(RuntimeError):
     def __init__(self, stage: str, message: str, *, trace: dict[str, Any] | None = None):
         super().__init__(message)
@@ -2254,7 +2263,7 @@ async def _build_runtime_grok_provider(
                 resolved_model = config.grok_model
     provider_chain = config.grok_provider_chain(model_override=resolved_model)
     primary = dict(provider_chain[0])
-    available_models = await server_module._get_available_models_cached(primary["api_url"], primary["api_key"])
+    available_models, _ = await server_module._get_provider_chain_available_models(provider_chain)
     requested_model = primary["model"]
     resolved_model, resolution = server_module._resolve_model_against_available_models(
         requested_model,
@@ -2994,7 +3003,7 @@ class DeepResearchRuntime:
                 "stop_policy": {
                     "stop_on_sufficient_coverage": True,
                     "max_search_queries": max(1, min(len(salvage_queries), config.deep_research_max_concurrency)),
-                    "max_urls_per_search": 1 if job.effort != "deep" else 2,
+                    "max_urls_per_search": _effort_selective_fetch_limit(job.effort),
                 },
                 "continuation_focus": continuation_focus,
             },
@@ -3010,7 +3019,7 @@ class DeepResearchRuntime:
                 "approach": "targeted",
                 "search_queries": list(salvage_queries),
                 "selective_fetch": {
-                    "max_urls_per_search": 1 if job.effort != "deep" else 2,
+                    "max_urls_per_search": _effort_selective_fetch_limit(job.effort),
                     "prefer_titles_matching_outline": True,
                 },
             },
@@ -3061,7 +3070,7 @@ class DeepResearchRuntime:
                 normalized = _normalize_whitespace(candidate)
                 if normalized:
                     search_queries.append(_rewrite_research_query(_trim_text(normalized, limit=220), continuation))
-        if job.effort == "deep":
+        if job.effort in {"deep", "ultra"}:
             search_queries.append(f"{query} tradeoffs")
         unique_queries: list[str] = []
         seen: set[str] = set()
@@ -3096,7 +3105,7 @@ class DeepResearchRuntime:
                 "stop_policy": {
                     "stop_on_sufficient_coverage": True,
                     "max_search_queries": max(1, min(len(unique_queries), config.deep_research_max_concurrency)),
-                    "max_urls_per_search": 1 if job.effort != "deep" else 2,
+                    "max_urls_per_search": _effort_selective_fetch_limit(job.effort),
                 },
                 "continuation_focus": continuation_focus,
             },
@@ -3108,7 +3117,7 @@ class DeepResearchRuntime:
                 "approach": "targeted",
                 "search_queries": unique_queries[: max(1, config.deep_research_max_concurrency)],
                 "selective_fetch": {
-                    "max_urls_per_search": 1 if job.effort != "deep" else 2,
+                    "max_urls_per_search": _effort_selective_fetch_limit(job.effort),
                     "prefer_titles_matching_outline": True,
                 },
             },
@@ -3716,7 +3725,10 @@ class DeepResearchRuntime:
     def _resolve_budget_seconds(self, requested_budget_seconds: int | None, effort: str) -> int:
         if requested_budget_seconds and requested_budget_seconds > 0:
             return min(requested_budget_seconds, config.deep_research_hard_timeout_seconds)
-        if effort == "deep":
+        normalized_effort = (effort or "").strip().lower()
+        if normalized_effort == "ultra":
+            candidate = int(config.deep_research_default_budget_seconds * 2.5)
+        elif normalized_effort == "deep":
             candidate = int(config.deep_research_default_budget_seconds * 1.5)
         else:
             candidate = config.deep_research_default_budget_seconds
