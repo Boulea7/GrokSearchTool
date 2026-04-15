@@ -1,0 +1,86 @@
+{
+  "sample": "probe-round13-main-snapshot",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: degraded_fetch_without_url_to_search:u3"
+    }
+  },
+  "report": {
+    "status": "failed",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied",
+        "planner_fallback_used"
+      ]
+    },
+    "coverage": {
+      "planned_section_ids": [
+        "executive-summary",
+        "key-findings",
+        "open-questions"
+      ],
+      "answered_section_ids": [
+        "executive-summary",
+        "key-findings"
+      ],
+      "unanswered_sections": [
+        "Open Questions"
+      ],
+      "planned_sub_question_ids": [
+        "sq1",
+        "sq2"
+      ],
+      "covered_sub_question_ids": [
+        "sq1",
+        "sq2"
+      ],
+      "uncovered_sub_questions": []
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R2",
+      "domain": "docs.aws.amazon.com",
+      "title": "3",
+      "quality_tier": "official"
+    },
+    {
+      "source_id": "R7",
+      "domain": "docs.aws.amazon.com",
+      "title": "4",
+      "quality_tier": "official"
+    }
+  ],
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "fail",
+      "score": 0.833,
+      "reason_tags": [
+        "unanswered_sections"
+      ]
+    },
+    "planner_boundary": {
+      "verdict": "fail",
+      "score": 0.6,
+      "reason_tags": [
+        "planner_fallback_used",
+        "unsafe_plan_fallback"
+      ]
+    },
+    "ranking_noise_suppression": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
