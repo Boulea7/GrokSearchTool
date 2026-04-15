@@ -49,6 +49,32 @@ def test_cli_result_artifact_prints_artifact_content(monkeypatch, tmp_path, caps
     assert capsys.readouterr().out == "# Final Report\n\nArtifact body.\n"
 
 
+def test_cli_result_artifact_missing_file_returns_nonzero(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="Missing artifact job",
+        request_fingerprint="fp-missing-artifact",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--artifact", "missing.md"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "artifact_not_found: missing.md" in captured.err
+
+
 def test_cli_result_artifact_prefers_resolved_final_batch(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
@@ -326,6 +352,79 @@ def test_cli_start_does_not_spawn_worker_for_reused_completed_job(monkeypatch, t
     assert payload["reused"] is True
     assert payload["status"] == "completed"
     assert spawned == []
+
+
+def test_cli_list_filters_jobs_by_status(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    completed = runtime.store.create_job(
+        query="Completed job",
+        request_fingerprint="fp-cli-list-completed",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.create_job(
+        query="Failed job",
+        request_fingerprint="fp-cli-list-failed",
+        status="failed",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    exit_code = deep_research_cli.main(["list", "--status", "completed"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert [job["job_id"] for job in payload["jobs"]] == [completed.job_id]
+
+
+def test_cli_watch_prints_events_until_terminal_status(monkeypatch, tmp_path, capsys):
+    class FakeRuntime:
+        def __init__(self):
+            self.status_calls = 0
+
+        async def status(self, job_id):
+            self.status_calls += 1
+            if self.status_calls == 1:
+                return {"status": "running", "phase": "researching", "progress_pct": 35.0, "resolved_artifact_batch_id": ""}
+            return {"status": "completed", "phase": "finalizing", "progress_pct": 100.0, "resolved_artifact_batch_id": "batch-1"}
+
+        async def events(self, job_id, after_seq=0, limit=100):
+            if after_seq == 0:
+                return {
+                    "events": [{"seq": 1, "phase": "researching", "type": "phase_started", "message": "Researching."}],
+                    "next_after_seq": 1,
+                }
+            return {"events": [], "next_after_seq": after_seq}
+
+    async def fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
+    monkeypatch.setattr(deep_research_cli.asyncio, "sleep", fake_sleep)
+
+    exit_code = deep_research_cli.main(["watch", "job-123", "--interval-seconds", "0.01"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "[1] researching phase_started: Researching." in output
+    assert "status=running phase=researching progress=35.0" in output
+    assert "status=completed phase=finalizing progress=100.0 resolved_batch=batch-1" in output
 
 
 def test_spawn_worker_writes_logs_to_worker_log_dir(monkeypatch, tmp_path):
