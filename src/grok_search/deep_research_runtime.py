@@ -112,6 +112,13 @@ _COMMUNITY_SOURCE_DOMAINS = {
     "medium.com",
 }
 _GAP_SECTION_MARKERS = ("remaining gap", "remaining gaps", "open question", "open questions")
+_GENERIC_CONTINUATION_QUESTION_TITLES = {
+    "executive summary",
+    "key findings",
+    "summary",
+    "open questions",
+    "open question",
+}
 _GAP_EVIDENCE_MARKERS = (
     "needs confirmation",
     "need confirmation",
@@ -1660,10 +1667,14 @@ def _collect_continuation_open_questions(report: dict[str, Any]) -> list[str]:
     items: list[str] = []
     for value in coverage.get("uncovered_sub_questions", []) or []:
         normalized = _normalize_whitespace(str(value))
+        if normalized.lower() in _GENERIC_CONTINUATION_QUESTION_TITLES:
+            continue
         if normalized:
             items.append(normalized)
     for value in coverage.get("unanswered_sections", []) or []:
         normalized = _normalize_whitespace(str(value))
+        if normalized.lower() in _GENERIC_CONTINUATION_QUESTION_TITLES:
+            continue
         if normalized:
             items.append(normalized)
     return _dedupe_preserve_order(items)
@@ -2790,6 +2801,20 @@ class DeepResearchRuntime:
             if normalized and normalized not in seen:
                 unique_queries.append(normalized)
                 seen.add(normalized)
+        continuation_focus = _dedupe_preserve_order(
+            [
+                item
+                for item in (
+                    continuation.continuation_goal,
+                    *continuation.confirmed_claims,
+                    *continuation.open_questions,
+                    *continuation.trusted_source_headers,
+                )
+                if _normalize_whitespace(item)
+            ]
+        )
+        if not continuation_focus and _normalize_whitespace(continuation.previous_summary):
+            continuation_focus = [continuation.previous_summary]
 
         raw_plan = {
             "brief": {
@@ -2807,16 +2832,7 @@ class DeepResearchRuntime:
                     "max_search_queries": max(1, min(len(unique_queries), config.deep_research_max_concurrency)),
                     "max_urls_per_search": 1 if job.effort != "deep" else 2,
                 },
-                "continuation_focus": _dedupe_preserve_order(
-                    [
-                        item
-                        for item in (
-                            continuation.continuation_goal,
-                            continuation.previous_summary,
-                        )
-                        if _normalize_whitespace(item)
-                    ]
-                ),
+                "continuation_focus": continuation_focus,
             },
             "sub_questions": [
                 {"id": f"sq{index}", "question": item, "reason": "Cover the core research surface."}
