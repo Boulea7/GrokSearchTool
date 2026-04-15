@@ -51,14 +51,16 @@ These hosts remain planned targets until remote transport and host-specific veri
 ## Provider Requirements
 
 - `GROK_API_URL` should use an OpenAI-compatible root with an explicit `/v1` suffix; the current code path does not pre-block the request on its own when `/v1` is omitted, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning
-- model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value -> code default `grok-4.20-0309`
+- model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value -> provider-aware default profile, with `grok-4.20-0309` still kept as the stable internal fallback
 - process env presence overrides project `.env.local` / `.env` fallback, even when the env value is explicitly empty
 - the base config snapshot now includes `GROK_MODEL_SOURCE`, so callers can see the active model source (`process_env`, `project_env_local`, `project_env`, `persisted_config`, or `default`)
 - the preferred built-in default is `grok-4.20-0309`; runtime model resolution stays flexible for Grok 4.1+ families and may fall back to a compatible available Grok model instead of failing just because a suffix differs
+- the base config snapshot now also includes additive `GROK_MODEL_PROFILE`, `GROK_DEEP_RESEARCH_STANDARD_PROFILE`, `GROK_DEEP_RESEARCH_DEEP_PROFILE`, and `GROK_PROVIDER_FAMILY`
 - project env fallback accepts both `KEY=value` and optional `export KEY=value` lines
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` controls local time-context injection for `web_search`; the default is `always`
-- `web_search` depends on a working `/chat/completions` implementation
+- `web_search` depends on a working `/chat/completions` or `/responses` implementation, depending on provider family and model family
+- common OpenAI-compatible relays, including many `grok2api`-style reverse proxies, stay on `chat/completions` unless runtime heuristics identify a response-only Grok family
 - `TAVILY_API_KEY` is used by `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search`
 - `FIRECRAWL_API_KEY` is used by fetch fallback and optional supplemental `web_search`
 - `web_search.topic` currently supports `general`, `news`, and `finance`

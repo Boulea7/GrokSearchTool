@@ -149,6 +149,9 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint; using an explicit `/v1` suffix is recommended, the current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
 | `GROK_API_KEY` | Yes | Grok API key |
 | `GROK_MODEL` | No | Default model; see the precedence notes below |
+| `GROK_MODEL_PROFILE` | No | `balanced_auto` | When `GROK_MODEL` is not explicitly set, resolve a provider-aware default model for official xAI, OpenRouter, and common OpenAI-compatible relays / grok2api-like proxies |
+| `GROK_DEEP_RESEARCH_STANDARD_PROFILE` | No | `reasoning` | Default deep research profile for `standard` effort; automatically downgrades when unavailable |
+| `GROK_DEEP_RESEARCH_DEEP_PROFILE` | No | `multi_agent` | Default deep research profile for `deep` effort; automatically downgrades to single-agent when multi-agent is unavailable |
 | `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | No | The second Grok provider; real requests automatically fail over to it when the primary provider fails |
 | `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | No | Additional Grok providers, tried in numeric order as the fallback chain |
 | `GROK_MODEL_FALLBACKS` | No | Built-in downgrade chain | A comma-separated model fallback order used when a provider explicitly reports that the requested model is unavailable; this can explicitly include `grok-4.1-fast` |
@@ -180,6 +183,9 @@ Notes:
 - when `GROK_MODEL_FALLBACKS` is configured, runtime requests use that explicit model downgrade order on the same provider after a model-unavailable error; otherwise the built-in chain still includes options such as `grok-4.1-fast`
 - the base `get_config_info` snapshot now includes `GROK_MODEL_SOURCE`, which tells you which layer currently supplies the active model (`process_env`, `project_env_local`, `project_env`, `persisted_config`, or `default`)
 - the preferred built-in default is now `grok-4.20-0309`; runtime selection stays flexible for Grok 4.1+ models and can fall back to a compatible available Grok model instead of failing just because a suffix differs
+- when no explicit `GROK_MODEL` is present, runtime can now derive a provider-aware default from `GROK_MODEL_PROFILE`; the base config snapshot also includes additive `GROK_MODEL_PROFILE`, `GROK_DEEP_RESEARCH_STANDARD_PROFILE`, `GROK_DEEP_RESEARCH_DEEP_PROFILE`, and `GROK_PROVIDER_FAMILY`
+- Grok routing now supports both `/chat/completions` and `/responses`; multi-agent families and response-only relay models prefer `/responses`, while OpenRouter and most relays remain primarily `chat/completions`
+- deep research now defaults to single-agent for `standard` effort and multi-agent-first for `deep` effort, with automatic downgrade back to single-agent when the current provider, account, relay, or single-model setup cannot serve multi-agent requests
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` defaults to `always`, which preserves the current behavior of always injecting local time context
 - `GROK_DEBUG=false` suppresses these helper progress logs entirely, including `ctx.info()` forwarding; they are intentionally debug-only progress/debug signals
