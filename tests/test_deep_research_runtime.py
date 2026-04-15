@@ -6922,6 +6922,64 @@ async def test_claims_include_evidence_bindings_in_final_report(monkeypatch, tmp
     assert claim["evidence_bindings"][0]["source_url"] == "https://docs.example.com/runtime/checkpoints"
     assert claim["evidence_bindings"][0]["excerpt"]
     assert claim["evidence_bindings"][0]["excerpt_hash"]
+    assert claim["evidence_bindings"][0]["line_start"] == 3
+    assert claim["evidence_bindings"][0]["line_end"] == 3
+    assert claim["evidence_bindings"][0]["evidence_kind"] == "fetch"
+    assert claim["evidence_bindings"][0]["winner_provider"] == "grok"
+
+
+@pytest.mark.asyncio
+async def test_report_release_gate_fails_job_when_non_summary_sections_are_unanswered(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "restart-tradeoffs",
+                "title": "Restart Trade-offs",
+                "goal": "Explain restart trade-offs.",
+            },
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint, while restart replays work from a fresh starting point.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint docs.",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", lambda url: asyncio.sleep(0, result=None))
+
+    response = await runtime.start(query="Coverage hard gate probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    events = await runtime.events(response["job_id"])
+
+    assert result["status"] == "failed"
+    assert result["report"]["coverage"]["coverage_gate_passed"] is False
+    assert result["report"]["runtime"]["release_gate"]["passed"] is False
+    assert result["report"]["runtime"]["release_gate"]["reason_codes"] == ["coverage_incomplete"]
+    assert result["report"]["status"] == "failed"
+    assert "coverage_incomplete" in result["report"]["runtime"]["warnings"]
+    assert any(event["type"] == "job_failed" for event in events["events"])
+    assert not any(event["type"] == "job_completed" for event in events["events"])
 
 
 @pytest.mark.asyncio

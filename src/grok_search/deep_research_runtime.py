@@ -323,6 +323,30 @@ def _extract_relevant_excerpt(
     return _trim_text(separator.join(selected), limit=char_limit)
 
 
+def _find_excerpt_line_span(source_text: str, excerpt: str) -> tuple[int | None, int | None]:
+    raw_lines = list((source_text or "").splitlines())
+    excerpt_lines = [line.strip() for line in (excerpt or "").splitlines() if line.strip()]
+    if not raw_lines or not excerpt_lines:
+        return None, None
+
+    normalized_raw = [_normalize_whitespace(line) for line in raw_lines]
+    normalized_excerpt = [_normalize_whitespace(line) for line in excerpt_lines]
+
+    window_size = len(normalized_excerpt)
+    for index in range(len(normalized_raw) - window_size + 1):
+        window = normalized_raw[index : index + window_size]
+        if window == normalized_excerpt:
+            return index + 1, index + window_size
+
+    excerpt_text = _normalize_whitespace(excerpt)
+    if not excerpt_text:
+        return None, None
+    for index, line in enumerate(raw_lines, start=1):
+        if excerpt_text in _normalize_whitespace(line):
+            return index, index
+    return None, None
+
+
 def _extract_markdown_title(value: str) -> str:
     for raw_line in (value or "").splitlines():
         line = raw_line.strip()
@@ -4370,12 +4394,13 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         **report_coverage,
     }
     grounding_diagnostics = _build_grounding_diagnostics(citations["sections"], citations["source_registry"])
-    runtime_warnings = sorted({*runtime_warnings, *_coverage_warning_codes(report_coverage)})
+    release_gate = _build_release_gate(report_coverage, grounding_diagnostics)
+    runtime_warnings = sorted({*runtime_warnings, *_coverage_warning_codes(report_coverage), *release_gate["reason_codes"]})
     if plan.planner_metadata.get("used_fallback"):
         runtime_warnings = sorted({*runtime_warnings, "planner_fallback_used"})
     if constraint_violations:
         runtime_warnings = sorted({*runtime_warnings, "domain_constraints_applied"})
-    report_status = "degraded" if runtime_warnings or not citations["sections"] or failed_units else "completed"
+    report_status = "failed" if not release_gate["passed"] else ("degraded" if runtime_warnings or not citations["sections"] or failed_units else "completed")
     report_confidence = _cluster_confidence(
         source_count=len({citation for section in citations["sections"] for citation in section.get("citations", [])}),
         evidence_count=sum(len(section.get("claims", [])) for section in citations["sections"]),
@@ -4400,7 +4425,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "total_claims": grounding_diagnostics["total_claims"],
                 "ungrounded_claims": grounding_diagnostics["ungrounded_claims"],
                 "single_source_claims": grounding_diagnostics["single_source_claims"],
+                "missing_evidence_binding_claims": grounding_diagnostics["missing_evidence_binding_claims"],
             },
+            "release_gate": release_gate,
             "constraint_violations": constraint_violations,
             "failed_units": failed_units,
             "skipped_units": skipped_units,
@@ -4461,20 +4488,26 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     )
     if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
         return
+    terminal_status = "completed" if release_gate["passed"] else "failed"
     runtime.store.update_job(
         job_id,
-        status="completed",
+        status=terminal_status,
         phase="finalizing",
         progress_pct=100.0,
         finished_at=utc_now_iso(),
         heartbeat_at=utc_now_iso(),
+        last_error="" if release_gate["passed"] else ",".join(release_gate["reason_codes"]),
     )
     runtime.store.append_event(
         job_id,
-        type="job_completed",
+        type="job_completed" if release_gate["passed"] else "job_failed",
         phase="finalizing",
-        message="Deep research completed.",
-        data={"sources_count": len(source_registry), "artifact_batch_id": artifact_batch_id},
+        message="Deep research completed." if release_gate["passed"] else "Deep research failed release gate.",
+        data={
+            "sources_count": len(source_registry),
+            "artifact_batch_id": artifact_batch_id,
+            "release_gate": release_gate,
+        },
     )
 
 
@@ -4525,6 +4558,12 @@ async def _execute_research_unit(
                 [],
                 [],
             )
+        summary_text = _extract_relevant_excerpt(
+            fetched,
+            reference_texts=reference_texts,
+            line_limit=4,
+            char_limit=_MAX_CLAIM_LENGTH,
+        )
         detail = _extract_relevant_excerpt(
             fetched,
             reference_texts=reference_texts,
@@ -4532,12 +4571,8 @@ async def _execute_research_unit(
             char_limit=1200,
             multiline=True,
         )
-        summary = _extract_relevant_excerpt(
-            fetched,
-            reference_texts=reference_texts,
-            line_limit=3,
-            char_limit=180,
-        )
+        summary = _trim_text(summary_text, limit=180)
+        line_start, line_end = _find_excerpt_line_span(fetched, summary_text or detail)
         source = {"url": unit.url, "title": unit.title}
         return (
             {"summary": summary, "detail": detail},
@@ -4547,16 +4582,13 @@ async def _execute_research_unit(
                     evidence_id=f"evidence-{unit.unit_id}",
                     unit_id=unit.unit_id,
                     source_urls=[unit.url] if unit.url else [],
-                    summary=_extract_relevant_excerpt(
-                        fetched,
-                        reference_texts=reference_texts,
-                        line_limit=4,
-                        char_limit=_MAX_CLAIM_LENGTH,
-                    ),
+                    summary=summary_text,
                     detail=detail,
                     evidence_kind="fetch",
                     weight=1.0,
                     derived_from_source_url=unit.url,
+                    line_start=line_start,
+                    line_end=line_end,
                 ).model_dump()
             ],
         )
@@ -4570,6 +4602,12 @@ async def _execute_research_unit(
                 [],
             )
         mapped_raw = mapped
+        summary_text = _extract_relevant_excerpt(
+            mapped,
+            reference_texts=reference_texts,
+            line_limit=4,
+            char_limit=_MAX_CLAIM_LENGTH,
+        )
         detail = _extract_relevant_excerpt(
             mapped,
             reference_texts=reference_texts,
@@ -4577,22 +4615,20 @@ async def _execute_research_unit(
             char_limit=1200,
             multiline=True,
         )
+        line_start, line_end = _find_excerpt_line_span(mapped_raw, summary_text or detail)
         sources = [{"url": unit.url, "title": unit.title}]
         evidence_items = [
             DeepResearchEvidenceItem(
                 evidence_id=f"evidence-{unit.unit_id}-map",
                 unit_id=unit.unit_id,
                 source_urls=[unit.url] if unit.url else [],
-                summary=_extract_relevant_excerpt(
-                    mapped,
-                    reference_texts=reference_texts,
-                    line_limit=4,
-                    char_limit=_MAX_CLAIM_LENGTH,
-                ),
+                summary=summary_text,
                 detail=detail,
                 evidence_kind="map",
                 weight=0.6,
                 derived_from_source_url=unit.url,
+                line_start=line_start,
+                line_end=line_end,
             ).model_dump()
         ]
         candidate_sources = [
@@ -4633,6 +4669,24 @@ async def _execute_research_unit(
                     evidence_kind="fetch",
                     weight=1.0,
                     derived_from_source_url=candidate_url,
+                    line_start=_find_excerpt_line_span(
+                        fetched,
+                        _extract_relevant_excerpt(
+                            fetched,
+                            reference_texts=reference_texts + [candidate_url, fetched_source.get("title", "")],
+                            line_limit=4,
+                            char_limit=_MAX_CLAIM_LENGTH,
+                        ),
+                    )[0],
+                    line_end=_find_excerpt_line_span(
+                        fetched,
+                        _extract_relevant_excerpt(
+                            fetched,
+                            reference_texts=reference_texts + [candidate_url, fetched_source.get("title", "")],
+                            line_limit=4,
+                            char_limit=_MAX_CLAIM_LENGTH,
+                        ),
+                    )[1],
                 ).model_dump()
             )
         return (
@@ -4688,6 +4742,7 @@ async def _execute_research_unit(
     primary_search_support_source = search_support_sources[:1]
     evidence_items: list[dict[str, Any]] = []
     if not search_result.get("warning_code"):
+        search_line_start, search_line_end = _find_excerpt_line_span(search_result["answer"], answer_summary or answer_detail)
         evidence_items.append(
             DeepResearchEvidenceItem(
                 evidence_id=f"evidence-{unit.unit_id}-search",
@@ -4697,6 +4752,8 @@ async def _execute_research_unit(
                 detail=answer_detail,
                 evidence_kind="search",
                 weight=0.9,
+                line_start=search_line_start,
+                line_end=search_line_end,
             ).model_dump()
         )
     fetched_evidence_items: list[dict[str, Any]] = []
@@ -4709,27 +4766,32 @@ async def _execute_research_unit(
             if original_source.get("url") == enriched_source.get("url"):
                 sources[index] = enriched_source
                 break
+        fetched_summary = _extract_relevant_excerpt(
+            fetched,
+            reference_texts=reference_texts + [source["url"], enriched_source.get("title", "")],
+            line_limit=4,
+            char_limit=_MAX_CLAIM_LENGTH,
+        )
+        fetched_detail = _extract_relevant_excerpt(
+            fetched,
+            reference_texts=reference_texts + [source["url"], enriched_source.get("title", "")],
+            line_limit=8,
+            char_limit=1200,
+            multiline=True,
+        )
+        line_start, line_end = _find_excerpt_line_span(fetched, fetched_summary or fetched_detail)
         fetched_evidence_items.append(
             DeepResearchEvidenceItem(
                 evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
                 unit_id=unit.unit_id,
                 source_urls=[source["url"]],
-                summary=_extract_relevant_excerpt(
-                    fetched,
-                    reference_texts=reference_texts + [source["url"], enriched_source.get("title", "")],
-                    line_limit=4,
-                    char_limit=_MAX_CLAIM_LENGTH,
-                ),
-                detail=_extract_relevant_excerpt(
-                    fetched,
-                    reference_texts=reference_texts + [source["url"], enriched_source.get("title", "")],
-                    line_limit=8,
-                    char_limit=1200,
-                    multiline=True,
-                ),
+                summary=fetched_summary,
+                detail=fetched_detail,
                 evidence_kind="fetch",
                 weight=1.0,
                 derived_from_source_url=source["url"],
+                line_start=line_start,
+                line_end=line_end,
             ).model_dump()
         )
     evidence_items.extend(fetched_evidence_items)
@@ -5059,6 +5121,7 @@ def _build_grounding_diagnostics(
     grounded_claims = 0
     single_source_claims = 0
     low_confidence_claims = 0
+    missing_evidence_binding_claims = 0
     for section in sections:
         claims = section.get("claims", [])
         claim_diagnostics: list[dict[str, Any]] = []
@@ -5066,12 +5129,15 @@ def _build_grounding_diagnostics(
             total_claims += 1
             citation_ids = [citation for citation in claim.get("citations", []) if citation in source_registry]
             grounded = bool(citation_ids)
+            evidence_bindings = claim.get("evidence_bindings", []) or []
             if grounded:
                 grounded_claims += 1
             if len(set(citation_ids)) <= 1:
                 single_source_claims += 1
             if str(claim.get("confidence", "")).lower() == "low":
                 low_confidence_claims += 1
+            if grounded and not evidence_bindings:
+                missing_evidence_binding_claims += 1
             claim_id = str(claim.get("claim_id", "")).strip()
             section_id = str(section.get("section_id", "")).strip()
             for citation_id in citation_ids:
@@ -5087,6 +5153,7 @@ def _build_grounding_diagnostics(
                     "supporting_source_count": len(set(citation_ids)),
                     "supporting_domain_count": _supporting_domain_count(citation_ids, source_registry),
                     "confidence": claim.get("confidence", ""),
+                    "evidence_binding_count": len(evidence_bindings),
                 }
             )
         section_diagnostics.append(
@@ -5104,6 +5171,7 @@ def _build_grounding_diagnostics(
         "ungrounded_claims": max(0, total_claims - grounded_claims),
         "single_source_claims": single_source_claims,
         "low_confidence_claims": low_confidence_claims,
+        "missing_evidence_binding_claims": missing_evidence_binding_claims,
         "sections": section_diagnostics,
         "sources": [
             {
@@ -5116,6 +5184,23 @@ def _build_grounding_diagnostics(
             for source_id in sorted(source_registry)
             if source_claim_ids.get(source_id) or source_section_ids.get(source_id)
         ],
+    }
+
+
+def _build_release_gate(
+    coverage: dict[str, Any],
+    grounding: dict[str, Any],
+) -> dict[str, Any]:
+    reason_codes: list[str] = []
+    if not coverage.get("coverage_gate_passed", False):
+        reason_codes.append("coverage_incomplete")
+    if int(grounding.get("ungrounded_claims", 0) or 0) > 0:
+        reason_codes.append("ungrounded_claims")
+    if int(grounding.get("missing_evidence_binding_claims", 0) or 0) > 0:
+        reason_codes.append("missing_evidence_bindings")
+    return {
+        "passed": not reason_codes,
+        "reason_codes": reason_codes,
     }
 
 
@@ -5166,8 +5251,12 @@ def _build_claim_evidence_bindings(
                     "evidence_id": item.evidence_id,
                     "source_id": normalized_source_id,
                     "source_url": source_url,
+                    "winner_provider": str(source.get("winner_provider") or source.get("provider") or "").strip(),
+                    "evidence_kind": item.evidence_kind,
                     "excerpt": excerpt,
                     "excerpt_hash": excerpt_hash,
+                    "line_start": item.line_start,
+                    "line_end": item.line_end,
                 }
             )
     return bindings
