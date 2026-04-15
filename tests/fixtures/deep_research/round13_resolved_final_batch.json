@@ -1,0 +1,77 @@
+{
+  "sample": "round13-resolved-final-batch",
+  "job": {
+    "query": "Resolved final batch precedence",
+    "request_fingerprint": "fp-round13-resolved-final-batch",
+    "status": "completed",
+    "phase": "finalizing",
+    "effort": "standard",
+    "context": "",
+    "include_domains": [],
+    "exclude_domains": [],
+    "plan_only": false,
+    "force_new": false,
+    "resolved_budget_seconds": 240,
+    "continued_from_job_id": ""
+  },
+  "plan": {
+    "query": "Resolved final batch precedence"
+  },
+  "batches": [
+    {
+      "sources.json": [
+        {
+          "source_id": "R1",
+          "url": "https://good.example.com"
+        }
+      ],
+      "citations.json": {
+        "source_registry": {
+          "R1": {
+            "source_id": "R1",
+            "url": "https://good.example.com"
+          }
+        },
+        "sections": []
+      },
+      "report.json": {
+        "summary": "Recovered final report",
+        "sections": [],
+        "unit_results": {}
+      },
+      "final_report.md": "# Final Report\n\nRecovered final report.\n"
+    },
+    {
+      "sources.json": [
+        {
+          "source_id": "R9",
+          "url": "https://stale.example.com"
+        }
+      ],
+      "citations.json": {
+        "source_registry": {
+          "R9": {
+            "source_id": "R9",
+            "url": "https://stale.example.com"
+          }
+        },
+        "sections": []
+      },
+      "report.json": "{bad-json",
+      "final_report.md": "# Final Report\n\nStale final report.\n"
+    }
+  ],
+  "current_artifacts": {
+    "sources.json": [
+      {
+        "source_id": "R99",
+        "url": "https://stale-current.example.com"
+      }
+    ]
+  },
+  "expected": {
+    "resolved_summary": "Recovered final report",
+    "resolved_source_url": "https://good.example.com",
+    "artifact_fallback_used": true
+  }
+}
