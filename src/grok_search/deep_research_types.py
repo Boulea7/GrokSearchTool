@@ -88,6 +88,11 @@ class DeepResearchBrief(BaseModel):
     objective: str
     deliverable: str
     success_criteria: list[str] = Field(default_factory=list)
+    must_cover: list[str] = Field(default_factory=list)
+    out_of_scope: list[str] = Field(default_factory=list)
+    preferred_sources: list[str] = Field(default_factory=list)
+    stop_policy: dict[str, Any] = Field(default_factory=dict)
+    continuation_focus: list[str] = Field(default_factory=list)
 
 
 class DeepResearchSubQuestion(BaseModel):
@@ -117,6 +122,7 @@ class DeepResearchContinuation(BaseModel):
     mode: Literal["fresh", "continue"] = "fresh"
     source_job_id: str = ""
     source_job_status: str = ""
+    continuation_identity: str = ""
     previous_summary: str = ""
     prior_plan_summary: str = ""
     continuation_goal: str = ""

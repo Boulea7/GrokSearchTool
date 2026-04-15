@@ -121,6 +121,22 @@ _GAP_EVIDENCE_MARKERS = (
     "open question",
 )
 _VALID_SEARCH_STRATEGY_APPROACHES = {"targeted", "breadth_first", "depth_first"}
+_UNSAFE_NORMALIZE_ACTION_PREFIXES = (
+    "filled_search_query:",
+    "degraded_fetch_without_url_to_search:",
+    "degraded_map_without_url_to_search:",
+    "dropped_unknown_dependency:",
+    "dropped_forward_or_cyclic_dependency:",
+    "added_sub_question_search_unit:",
+)
+_UNSAFE_VALIDATION_ISSUES = {
+    "missing_search_query",
+    "missing_fetch_url",
+    "missing_map_url",
+    "missing_sub_question_unit_coverage",
+    "unknown_dependency",
+    "forward_or_cyclic_dependency",
+}
 _FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 _DEFAULT_SEARCH_QUERY_FN = None
 _RUNTIME_RECONCILE_STALE_SECONDS = 30
@@ -784,6 +800,13 @@ def _artifact_bundle_differs_from_current(store: DeepResearchStore, job_id: str,
     return current_bundle.get("batch_id") != bundle.get("batch_id")
 
 
+def _artifact_bundle_identity(store: DeepResearchStore, job_id: str) -> str:
+    bundle = _resolve_final_artifact_bundle(store, job_id)
+    if _artifact_bundle_is_usable(bundle):
+        return str(bundle.get("batch_id", "") or "")
+    return ""
+
+
 def _artifact_content_type(kind: str) -> str:
     if kind.endswith(".md"):
         return "text/markdown"
@@ -925,12 +948,159 @@ def _normalize_selective_fetch_config(
     }
 
 
+def _normalize_brief_payload(
+    value: Any,
+    *,
+    job: DeepResearchJob,
+    continuation: DeepResearchContinuationState,
+    normalize_actions: list[str],
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        if value is not None:
+            normalize_actions.append("non_dict_brief")
+        objective = _rewrite_research_query(job.query, continuation)
+        return {
+            "objective": objective,
+            "deliverable": "A structured deep research report with citations.",
+            "success_criteria": ["Answer the query with source-backed sections."],
+            "must_cover": [objective],
+            "out_of_scope": [],
+            "preferred_sources": list(job.include_domains),
+            "stop_policy": {},
+            "continuation_focus": [],
+        }
+
+    normalized = dict(value)
+    if not isinstance(normalized.get("success_criteria"), list):
+        normalize_actions.append("string_success_criteria")
+        normalized["success_criteria"] = _normalize_string_list(normalized.get("success_criteria"))
+    normalized["must_cover"] = _normalize_string_list(normalized.get("must_cover"))
+    normalized["out_of_scope"] = _normalize_string_list(normalized.get("out_of_scope"))
+    normalized["preferred_sources"] = _normalize_string_list(normalized.get("preferred_sources"))
+    if not isinstance(normalized.get("stop_policy"), dict):
+        if normalized.get("stop_policy") is not None:
+            normalize_actions.append("non_dict_stop_policy")
+        normalized["stop_policy"] = {}
+    normalized["continuation_focus"] = _normalize_string_list(normalized.get("continuation_focus"))
+    return normalized
+
+
+def _finalize_brief_payload(
+    brief: dict[str, Any],
+    *,
+    job: DeepResearchJob,
+    continuation: DeepResearchContinuationState,
+    sub_questions: list[dict[str, Any]],
+    strategy: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(brief)
+    objective = _normalize_whitespace(str(normalized.get("objective") or _rewrite_research_query(job.query, continuation)))
+    normalized["objective"] = objective or _rewrite_research_query(job.query, continuation)
+    normalized["deliverable"] = _normalize_whitespace(
+        str(normalized.get("deliverable") or "A structured deep research report with citations.")
+    ) or "A structured deep research report with citations."
+    success_criteria = _normalize_string_list(normalized.get("success_criteria"))
+    if not success_criteria:
+        success_criteria = ["Answer the query with source-backed sections."]
+    normalized["success_criteria"] = success_criteria
+
+    must_cover = _normalize_string_list(normalized.get("must_cover"))
+    if not must_cover:
+        must_cover = [
+            question
+            for item in sub_questions
+            if isinstance(item, dict)
+            for question in [_normalize_whitespace(str(item.get("question", "")))]
+            if question
+        ] or [_rewrite_research_query(job.query, continuation)]
+    normalized["must_cover"] = _dedupe_preserve_order(must_cover)
+    normalized["out_of_scope"] = _dedupe_preserve_order(_normalize_string_list(normalized.get("out_of_scope")))
+
+    preferred_sources = _normalize_string_list(normalized.get("preferred_sources"))
+    if not preferred_sources and job.include_domains:
+        preferred_sources = list(job.include_domains)
+    normalized["preferred_sources"] = _dedupe_preserve_order(preferred_sources)
+
+    continuation_focus = _normalize_string_list(normalized.get("continuation_focus"))
+    if not continuation_focus and continuation.mode == "continue":
+        continuation_focus = _dedupe_preserve_order(
+            [
+                item
+                for item in (
+                    continuation.continuation_goal,
+                    continuation.previous_summary,
+                    continuation.prior_plan_summary,
+                )
+                if _normalize_whitespace(item)
+            ]
+        )
+    normalized["continuation_focus"] = continuation_focus
+
+    stop_policy = dict(normalized.get("stop_policy") or {})
+    search_queries = _normalize_string_list(strategy.get("search_queries"))
+    selective_fetch = strategy.get("selective_fetch") if isinstance(strategy.get("selective_fetch"), dict) else {}
+    stop_policy.setdefault("stop_on_sufficient_coverage", True)
+    stop_policy.setdefault("max_search_queries", max(1, len(search_queries) or config.deep_research_max_concurrency))
+    stop_policy.setdefault("max_urls_per_search", int(selective_fetch.get("max_urls_per_search", 1) or 1))
+    normalized["stop_policy"] = stop_policy
+    return normalized
+
+
+def _unsafe_plan_reason(
+    *,
+    planner: str,
+    continuation: DeepResearchContinuationState,
+    normalize_actions: list[str],
+    validation_issues: list[str],
+    blocked_reasons: list[str],
+) -> dict[str, Any] | None:
+    if planner == "fallback":
+        return None
+    for action in normalize_actions:
+        if any(action.startswith(prefix) for prefix in _UNSAFE_NORMALIZE_ACTION_PREFIXES):
+            return {"issue": action, "reason": "unsafe_normalize_action"}
+    for issue in validation_issues:
+        if issue in _UNSAFE_VALIDATION_ISSUES:
+            return {"issue": issue, "reason": "unsafe_validation_issue"}
+        if continuation.mode == "continue" and issue == "generic_continuation_outline":
+            return {"issue": issue, "reason": "unsafe_continuation_outline"}
+    if blocked_reasons:
+        return {"issue": blocked_reasons[0], "reason": "blocked_plan_dependency"}
+    return None
+
+
 def _first_url_from_texts(*values: str) -> str:
     for value in values:
         urls = extract_unique_urls(value or "")
         if urls:
             return urls[0]
     return ""
+
+
+def _plan_payload_hash(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return ""
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _continuation_identity_for_source_job(
+    store: DeepResearchStore,
+    job: DeepResearchJob,
+    *,
+    plan_payload: dict[str, Any] | None = None,
+) -> str:
+    payload = {
+        "source_job_id": job.job_id,
+        "status": job.status,
+        "current_checkpoint": job.current_checkpoint,
+        "resolved_artifact_batch_id": _artifact_bundle_identity(store, job.job_id),
+        "plan_hash": _plan_payload_hash(plan_payload),
+    }
+    return hashlib.sha256(_json_markdown_block(payload).encode("utf-8")).hexdigest()
 
 
 def _unit_query_fallback(
@@ -1620,7 +1790,20 @@ async def _build_runtime_grok_provider(current_model: str) -> tuple[GrokSearchPr
     if resolved_model:
         primary["model"] = resolved_model
         for fallback_provider in provider_chain[1:]:
-            if fallback_provider.get("model") == requested_model:
+            provider_name = str(fallback_provider.get("name", ""))
+            suffix_match = re.fullmatch(r"provider_(\d+)", provider_name)
+            explicit_model = (
+                config._get_env_value(f"GROK_MODEL_{suffix_match.group(1)}")
+                if suffix_match is not None
+                else None
+            )
+            fallback_model = str(fallback_provider.get("model", "") or "")
+            inherited_requested_model = fallback_model.split(":", 1)[0] == requested_model.split(":", 1)[0]
+            explicit_model_is_distinct = (
+                explicit_model is not None
+                and str(explicit_model).split(":", 1)[0] != requested_model.split(":", 1)[0]
+            )
+            if not explicit_model_is_distinct and inherited_requested_model:
                 fallback_provider["model"] = config._apply_model_suffix_for_url(resolved_model, fallback_provider["api_url"])
     provider = GrokSearchProvider(
         primary["api_url"],
@@ -1664,6 +1847,7 @@ class DeepResearchRuntime:
         normalized_include_domains = list(include_domains or [])
         normalized_exclude_domains = list(exclude_domains or [])
         resolved_budget_seconds = self._resolve_budget_seconds(time_budget_seconds, effort)
+        continuation = self._build_continuation_context(continue_from_job_id)
         request_fingerprint = self._request_fingerprint(
             query=query,
             context=context,
@@ -1672,6 +1856,7 @@ class DeepResearchRuntime:
             exclude_domains=normalized_exclude_domains,
             continue_from_job_id=continue_from_job_id,
             plan_only=plan_only,
+            continuation_identity=continuation.continuation_identity,
         )
 
         reused_job = None
@@ -1703,7 +1888,6 @@ class DeepResearchRuntime:
             resolved_budget_seconds=resolved_budget_seconds,
             continued_from_job_id=continue_from_job_id,
         )
-        continuation = self._build_continuation_context(continue_from_job_id)
         plan = await self._build_plan(job, continuation)
         self.write_artifact(job.job_id, "plan.json", _json_markdown_block(plan.model_dump()), "application/json")
         planner_trace = dict(plan.planner_metadata.get("trace") or {})
@@ -1879,7 +2063,7 @@ class DeepResearchRuntime:
             return self._job_payload(job, reused=False)
         if job.status == "interrupted" and _job_prefers_resolved_final_bundle(job):
             final_bundle = _resolve_final_artifact_bundle(self.store, job_id)
-            if final_bundle is not None:
+            if _artifact_bundle_is_usable(final_bundle):
                 completed_at = job.finished_at or utc_now_iso()
                 job = self.store.update_job(
                     job_id,
@@ -1922,6 +2106,12 @@ class DeepResearchRuntime:
     async def cancel(self, job_id: str) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
+        if job.status in {"completed", "failed", "canceled", "interrupted"}:
+            if job.cancel_requested:
+                job = self.store.update_job(job_id, cancel_requested=False)
+            payload = self._job_payload(job, reused=False)
+            payload["cancel_requested"] = False
+            return payload
         job = self.store.update_job(job_id, cancel_requested=True)
         self.store.append_event(
             job_id,
@@ -2063,6 +2253,8 @@ class DeepResearchRuntime:
             try:
                 return self._normalize_plan_payload(job, raw_plan, continuation, planner_trace=planner_trace)
             except Exception as exc:
+                if isinstance(exc, PlannerGenerationError) and exc.stage == "unsafe_plan":
+                    raise
                 planner_trace["repair_attempted"] = True
                 planner_trace["repair_stage"] = "normalize"
                 try:
@@ -2250,8 +2442,15 @@ class DeepResearchRuntime:
     ) -> DeepResearchPlan:
         query = _rewrite_research_query(job.query.strip(), continuation)
         search_queries = [query]
-        if continuation.previous_summary:
-            search_queries.append(f"{query} follow up findings checkpoint recovery".strip())
+        if continuation.mode == "continue":
+            for candidate in (
+                continuation.continuation_goal,
+                continuation.prior_plan_summary,
+                continuation.previous_summary,
+            ):
+                normalized = _normalize_whitespace(candidate)
+                if normalized:
+                    search_queries.append(_rewrite_research_query(_trim_text(normalized, limit=220), continuation))
         if job.effort == "deep":
             search_queries.append(f"{query} tradeoffs")
         unique_queries: list[str] = []
@@ -2270,6 +2469,24 @@ class DeepResearchRuntime:
                     "Answer the main research question.",
                     "Ground each section in verifiable sources.",
                 ],
+                "must_cover": unique_queries[:3] or [query],
+                "out_of_scope": [],
+                "preferred_sources": list(job.include_domains),
+                "stop_policy": {
+                    "stop_on_sufficient_coverage": True,
+                    "max_search_queries": max(1, min(len(unique_queries), config.deep_research_max_concurrency)),
+                    "max_urls_per_search": 1 if job.effort != "deep" else 2,
+                },
+                "continuation_focus": _dedupe_preserve_order(
+                    [
+                        item
+                        for item in (
+                            continuation.continuation_goal,
+                            continuation.previous_summary,
+                        )
+                        if _normalize_whitespace(item)
+                    ]
+                ),
             },
             "sub_questions": [
                 {"id": f"sq{index}", "question": item, "reason": "Cover the core research surface."}
@@ -2351,27 +2568,13 @@ class DeepResearchRuntime:
                     for title in raw_plan.get("report_sections") or []
                 ],
             }
-        validation_issues: list[str] = []
-        brief_value = raw_plan.get("brief")
-        if not isinstance(brief_value, dict):
-            normalize_actions.append("non_dict_brief")
-            raw_plan = {
-                **raw_plan,
-                "brief": {
-                    "objective": job.query,
-                    "deliverable": "A structured deep research report with citations.",
-                    "success_criteria": ["Answer the query with source-backed sections."],
-                },
-            }
-        elif not isinstance(brief_value.get("success_criteria"), list):
-            normalize_actions.append("string_success_criteria")
-            raw_plan = {
-                **raw_plan,
-                "brief": {
-                    **brief_value,
-                    "success_criteria": _normalize_string_list(brief_value.get("success_criteria")),
-                },
-            }
+        validation_issues: list[str] = list(planner_trace.get("validation_issues") or [])
+        normalized_brief = _normalize_brief_payload(
+            raw_plan.get("brief"),
+            job=job,
+            continuation=continuation,
+            normalize_actions=normalize_actions,
+        )
         sub_questions = raw_plan.get("sub_questions") or []
         if isinstance(sub_questions, dict):
             normalize_actions.append("dict_sub_questions_wrapped")
@@ -2628,6 +2831,13 @@ class DeepResearchRuntime:
                 ]
             ]
         )
+        normalized_brief = _finalize_brief_payload(
+            normalized_brief,
+            job=job,
+            continuation=continuation,
+            sub_questions=sub_questions,
+            strategy=strategy,
+        )
 
         raw_planner_metadata = raw_plan.get("planner_metadata")
         if not isinstance(raw_planner_metadata, dict):
@@ -2644,6 +2854,22 @@ class DeepResearchRuntime:
         planner_trace["blocked_reasons"] = _dedupe_preserve_order(list(planner_trace.get("blocked_reasons") or []))
         planner_trace["fallback_used"] = bool(planner_metadata.get("used_fallback"))
         planner_trace["fallback_reason"] = planner_metadata.get("fallback_reason")
+        unsafe_plan_reason = _unsafe_plan_reason(
+            planner=str(planner_metadata.get("planner", "") or ""),
+            continuation=continuation,
+            normalize_actions=planner_trace["normalize_actions"],
+            validation_issues=planner_trace["validation_issues"],
+            blocked_reasons=planner_trace["blocked_reasons"],
+        )
+        planner_trace["unsafe_plan"] = bool(planner_trace.get("unsafe_plan")) or unsafe_plan_reason is not None
+        if unsafe_plan_reason is not None:
+            planner_trace["unsafe_plan_reason"] = unsafe_plan_reason
+            planner_trace["final_status"] = "unsafe_plan"
+            raise PlannerGenerationError(
+                "unsafe_plan",
+                f"{unsafe_plan_reason['reason']}: {unsafe_plan_reason['issue']}",
+                trace=planner_trace,
+            )
         planner_trace["final_status"] = "fallback" if planner_metadata.get("used_fallback") else "normalized"
         planner_metadata["trace"] = planner_trace
 
@@ -2654,7 +2880,7 @@ class DeepResearchRuntime:
             "time_budget_seconds": job.resolved_budget_seconds,
             "include_domains": job.include_domains,
             "exclude_domains": job.exclude_domains,
-            "brief": raw_plan.get("brief"),
+            "brief": normalized_brief,
             "sub_questions": sub_questions,
             "search_strategy": strategy,
             "report_outline": normalized_outline,
@@ -2672,30 +2898,42 @@ class DeepResearchRuntime:
         job = self.store.get_job(continue_from_job_id)
 
         final_bundle = _resolve_final_artifact_bundle(self.store, continue_from_job_id)
+        use_final_bundle = _artifact_bundle_is_usable(final_bundle)
+        current_report_text = self.store.read_artifact_text(continue_from_job_id, "report.json") or ""
+        current_final_report = self.store.read_artifact_text(continue_from_job_id, "final_report.md") or ""
+        current_sources_text = self.store.read_artifact_text(continue_from_job_id, "sources.json") or "[]"
+        current_citations_text = self.store.read_artifact_text(continue_from_job_id, "citations.json") or ""
+        plan_text = self.store.read_artifact_text(continue_from_job_id, "plan.json") or ""
+        checkpoints = self.store.list_checkpoints(continue_from_job_id)
+        checkpoint_state, checkpoint_meta = self._load_checkpoint_state(job)
+        latest_state = checkpoints[-1].state or {} if checkpoints else {}
+        selected_tier = "current"
+        if use_final_bundle:
+            selected_tier = "resolved_final_batch"
+        elif checkpoint_state or isinstance(latest_state, dict) and latest_state:
+            selected_tier = "checkpoint"
+
         report_text = (
             _read_text_if_exists(final_bundle["paths"]["report.json"])
-            if final_bundle is not None
-            else self.store.read_artifact_text(continue_from_job_id, "report.json")
+            if selected_tier == "resolved_final_batch"
+            else current_report_text if selected_tier == "current" else ""
         )
         final_report = (
             _read_text_if_exists(final_bundle["paths"]["final_report.md"])
-            if final_bundle is not None
-            else self.store.read_artifact_text(continue_from_job_id, "final_report.md")
-        ) or ""
+            if selected_tier == "resolved_final_batch"
+            else current_final_report if selected_tier == "current" else ""
+        )
         partial_report = self.store.read_artifact_text(continue_from_job_id, "partial_report.md") or ""
-        plan_text = self.store.read_artifact_text(continue_from_job_id, "plan.json") or ""
         sources_text = (
             _read_text_if_exists(final_bundle["paths"]["sources.json"])
-            if final_bundle is not None
-            else self.store.read_artifact_text(continue_from_job_id, "sources.json")
+            if selected_tier == "resolved_final_batch"
+            else current_sources_text if selected_tier == "current" else "[]"
         ) or "[]"
         citations_text = (
             _read_text_if_exists(final_bundle["paths"]["citations.json"])
-            if final_bundle is not None
-            else self.store.read_artifact_text(continue_from_job_id, "citations.json")
+            if selected_tier == "resolved_final_batch"
+            else current_citations_text if selected_tier == "current" else ""
         ) or ""
-        checkpoints = self.store.list_checkpoints(continue_from_job_id)
-        checkpoint_state, checkpoint_meta = self._load_checkpoint_state(job)
         report: dict[str, Any] = {}
         if report_text:
             report_value, _ = _safe_load_json_artifact(report_text)
@@ -2740,30 +2978,29 @@ class DeepResearchRuntime:
             ):
                 carry_forward_sources = list(normalized_citations["source_registry"].values())
 
-        latest_state = checkpoints[-1].state or {} if checkpoints else {}
-        if not carry_forward_sources and checkpoint_state:
+        if selected_tier == "checkpoint" and not carry_forward_sources and checkpoint_state:
             carry_forward_sources = list(checkpoint_state.sources)
-        elif not carry_forward_sources and isinstance(latest_state, dict):
+        elif selected_tier == "checkpoint" and not carry_forward_sources and isinstance(latest_state, dict):
             carry_forward_sources = list(latest_state.get("sources") or [])
         source_count = len(carry_forward_sources)
 
         carry_forward_sections = list(report.get("sections") or []) if isinstance(report.get("sections"), list) else []
-        if not carry_forward_sections and checkpoint_state:
+        if selected_tier == "checkpoint" and not carry_forward_sections and checkpoint_state:
             carry_forward_sections = list(checkpoint_state.sections)
-        elif not carry_forward_sections and isinstance(latest_state, dict):
+        elif selected_tier == "checkpoint" and not carry_forward_sections and isinstance(latest_state, dict):
             carry_forward_sections = list(latest_state.get("sections") or [])
 
         report_unit_results = report.get("unit_results") if isinstance(report.get("unit_results"), dict) else {}
         carry_forward_unit_results = dict(report_unit_results or {})
-        if not carry_forward_unit_results and checkpoint_state:
+        if selected_tier == "checkpoint" and not carry_forward_unit_results and checkpoint_state:
             carry_forward_unit_results = dict(checkpoint_state.unit_results)
-        elif not carry_forward_unit_results and isinstance(latest_state, dict):
+        elif selected_tier == "checkpoint" and not carry_forward_unit_results and isinstance(latest_state, dict):
             carry_forward_unit_results = dict(latest_state.get("unit_results") or {})
 
         carry_forward_evidence = []
-        if checkpoint_state:
+        if selected_tier == "checkpoint" and checkpoint_state:
             carry_forward_evidence = list(checkpoint_state.evidence_items)
-        elif isinstance(latest_state, dict):
+        elif selected_tier == "checkpoint" and isinstance(latest_state, dict):
             carry_forward_evidence = list(latest_state.get("evidence_items") or [])
         if not carry_forward_evidence:
             carry_forward_evidence = _build_carry_forward_evidence(carry_forward_unit_results, carry_forward_sections)
@@ -2797,11 +3034,17 @@ class DeepResearchRuntime:
         ) or job.current_checkpoint or (checkpoints[-1].checkpoint_key if checkpoints else "")
         continuation_goal = plan_payload.get("query") or job.query
         source_count = len(carry_forward_sources)
+        continuation_identity = _continuation_identity_for_source_job(
+            self.store,
+            job,
+            plan_payload=plan_payload,
+        )
 
         return DeepResearchContinuationState(
             mode="continue",
             source_job_id=continue_from_job_id,
             source_job_status=job.status,
+            continuation_identity=continuation_identity,
             previous_summary=_trim_text(previous_summary, limit=400),
             prior_plan_summary=_trim_text(prior_plan_summary, limit=400),
             continuation_goal=_trim_text(continuation_goal, limit=200),
@@ -2823,6 +3066,7 @@ class DeepResearchRuntime:
         exclude_domains: list[str],
         continue_from_job_id: str,
         plan_only: bool,
+        continuation_identity: str = "",
     ) -> str:
         payload = {
             "query": query.strip(),
@@ -2832,6 +3076,7 @@ class DeepResearchRuntime:
             "exclude_domains": exclude_domains,
             "continue_from_job_id": continue_from_job_id.strip(),
             "plan_only": bool(plan_only),
+            "continuation_identity": continuation_identity.strip(),
         }
         return hashlib.sha256(_json_markdown_block(payload).encode("utf-8")).hexdigest()
 
@@ -2846,14 +3091,40 @@ class DeepResearchRuntime:
 
     def _job_payload(self, job: DeepResearchJob, *, reused: bool) -> dict[str, Any]:
         payload = self._serialize_job(job)
+        final_bundle = _resolve_final_artifact_bundle(self.store, job.job_id) if _job_prefers_resolved_final_bundle(job) else None
         payload["reused"] = reused
         plan_text = self.store.read_artifact_text(job.job_id, "plan.json")
         plan_value, _ = _safe_load_json_artifact(plan_text)
         payload["plan"] = plan_value
+        payload["artifact_fallback_used"] = _artifact_bundle_differs_from_current(self.store, job.job_id, final_bundle)
+        payload["resolved_artifact_batch_id"] = final_bundle["batch_id"] if final_bundle is not None else ""
         return payload
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
         return job.model_dump()
+
+    def _continuation_from_planning_checkpoint(self, job: DeepResearchJob) -> DeepResearchContinuationState | None:
+        checkpoints = self.store.list_checkpoints(job.job_id)
+        planning_checkpoint = next((item for item in reversed(checkpoints) if item.checkpoint_key == "planning"), None)
+        if planning_checkpoint is None:
+            return None
+        raw_state = planning_checkpoint.state or {}
+        if not isinstance(raw_state, dict):
+            return None
+        plan_payload = raw_state.get("plan") if isinstance(raw_state.get("plan"), dict) else {}
+        continuation_payload = plan_payload.get("continuation") if isinstance(plan_payload.get("continuation"), dict) else {}
+        if not continuation_payload.get("source_job_id"):
+            return None
+        base = DeepResearchContinuationState.model_validate(
+            {
+                **continuation_payload,
+                "carry_forward_sources": raw_state.get("sources") or [],
+                "carry_forward_evidence": raw_state.get("evidence_items") or [],
+                "carry_forward_sections": raw_state.get("sections") or [],
+                "carry_forward_unit_results": raw_state.get("unit_results") or {},
+            }
+        )
+        return base
 
     def _read_runtime_continuation(self, job: DeepResearchJob) -> DeepResearchContinuationState:
         if not job.continued_from_job_id:
@@ -2864,6 +3135,9 @@ class DeepResearchRuntime:
                 return DeepResearchContinuationState.model_validate(json.loads(continuation_text))
             except Exception:
                 pass
+        checkpoint_continuation = self._continuation_from_planning_checkpoint(job)
+        if checkpoint_continuation is not None:
+            return checkpoint_continuation
         return self._build_continuation_context(job.continued_from_job_id)
 
     def _read_plan(self, job_id: str, job: DeepResearchJob | None = None) -> DeepResearchPlan:
@@ -3423,18 +3697,20 @@ async def _execute_research_unit(
                 derived_from_source_url=unit.url,
             ).model_dump()
         ]
-        candidate_urls = [
-            candidate
+        candidate_sources = [
+            {"url": candidate, "title": _guess_title_from_url(candidate)}
             for candidate in extract_unique_urls(mapped_raw)
             if candidate and candidate != unit.url
         ]
         fetch_limit = max(0, plan.search_strategy.selective_fetch.max_urls_per_search)
-        for candidate_url in candidate_urls[:fetch_limit]:
+        ranked_candidate_sources = _select_fetch_sources(candidate_sources, plan, unit)
+        for candidate_source in ranked_candidate_sources[:fetch_limit]:
+            candidate_url = candidate_source["url"]
             fetched = await _fetch_url(candidate_url)
             if not fetched:
                 continue
             fetched_source = _enrich_source_from_fetched_text(
-                {"url": candidate_url, "title": _guess_title_from_url(candidate_url)},
+                candidate_source,
                 fetched,
             )
             sources.append(fetched_source)
