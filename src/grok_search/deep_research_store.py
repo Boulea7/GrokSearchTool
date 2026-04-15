@@ -505,20 +505,36 @@ class DeepResearchStore:
                     age_seconds = (now - newest).total_seconds()
                     if age_seconds < stale_after_seconds:
                         continue
-            job = self.update_job(
-                row["job_id"],
-                status="interrupted",
-                last_error="worker_restarted",
-                finished_at=interrupted_at,
-                heartbeat_at=interrupted_at,
-            )
-            self.append_event(
-                row["job_id"],
-                type="job_interrupted",
-                phase=row["phase"],
-                message="Deep research interrupted during worker recovery.",
-                data={"reason": "worker_restarted"},
-            )
+            if bool(row["cancel_requested"]):
+                job = self.update_job(
+                    row["job_id"],
+                    status="canceled",
+                    last_error="",
+                    finished_at=interrupted_at,
+                    heartbeat_at=interrupted_at,
+                )
+                self.append_event(
+                    row["job_id"],
+                    type="job_canceled",
+                    phase=row["phase"],
+                    message="Deep research canceled during worker recovery.",
+                    data={"reason": "cancel_requested_during_recovery"},
+                )
+            else:
+                job = self.update_job(
+                    row["job_id"],
+                    status="interrupted",
+                    last_error="worker_restarted",
+                    finished_at=interrupted_at,
+                    heartbeat_at=interrupted_at,
+                )
+                self.append_event(
+                    row["job_id"],
+                    type="job_interrupted",
+                    phase=row["phase"],
+                    message="Deep research interrupted during worker recovery.",
+                    data={"reason": "worker_restarted"},
+                )
             recovered.append(job)
         return recovered
 

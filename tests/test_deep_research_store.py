@@ -263,6 +263,34 @@ def test_store_marks_inflight_jobs_as_interrupted_during_recovery(tmp_path):
     assert store.get_job(draft.job_id).status == "draft"
 
 
+def test_store_reconcile_cancel_requested_jobs_as_canceled(tmp_path):
+    store = make_store(tmp_path)
+    running = store.create_job(
+        query="Cancel requested recovery",
+        request_fingerprint="fp-recover-cancel-requested",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    store.update_job(running.job_id, cancel_requested=True)
+
+    recovered = store.reconcile_incomplete_jobs()
+    events = store.list_events(running.job_id)
+
+    assert [job.job_id for job in recovered] == [running.job_id]
+    assert store.get_job(running.job_id).status == "canceled"
+    assert store.get_job(running.job_id).last_error == ""
+    assert events[-1].type == "job_canceled"
+    assert events[-1].data["reason"] == "cancel_requested_during_recovery"
+
+
 def test_store_reconcile_incomplete_jobs_skips_recent_heartbeats_when_threshold_applies(tmp_path):
     store = make_store(tmp_path)
     running = store.create_job(
