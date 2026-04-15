@@ -1,0 +1,32 @@
+{
+  "sample": "probe-round8-noise",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "brief": {
+    "scope": {
+      "allowed_sources": [
+        "docs.aws.amazon.com"
+      ],
+      "include_domains": [
+        "docs.aws.amazon.com"
+      ],
+      "exclude_domains": [
+        "repost.aws"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "domain": "docs.aws.amazon.com",
+      "title": "Troubleshooting migration tasks in AWS Database Migration Service"
+    }
+  ],
+  "golden": {
+    "ranking_noise_suppression": {
+      "verdict": "fail",
+      "reason_tags": [
+        "troubleshooting_shell_source"
+      ]
+    }
+  }
+}
