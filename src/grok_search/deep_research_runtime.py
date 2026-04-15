@@ -2625,6 +2625,14 @@ class DeepResearchRuntime:
             return self._job_payload(job, reused=False)
         if job.status not in {"draft", "failed", "interrupted"}:
             return self._job_payload(job, reused=False)
+        if job.last_error == "worker_restarted":
+            resume_source = "worker_restarted"
+        elif job.status == "failed":
+            resume_source = "failed_retry"
+        elif job.status == "draft":
+            resume_source = "draft_execution"
+        else:
+            resume_source = "interrupted_resume"
         if job.status == "interrupted" and _job_prefers_resolved_final_bundle(job):
             final_bundle = _resolve_final_artifact_bundle(self.store, job_id)
             if _artifact_bundle_is_usable(final_bundle):
@@ -2664,6 +2672,7 @@ class DeepResearchRuntime:
             data={
                 "checkpoint_key": job.current_checkpoint,
                 "checkpoint_kind": _checkpoint_kind(job.current_checkpoint),
+                "resume_source": resume_source,
             },
         )
         if schedule:

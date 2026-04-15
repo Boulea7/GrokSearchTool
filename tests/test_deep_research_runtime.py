@@ -3320,6 +3320,33 @@ async def test_result_prefers_resolved_final_batch_over_current_mixed_artifacts(
 
 
 @pytest.mark.asyncio
+async def test_result_prefers_resolved_final_batch_from_fixture(tmp_path):
+    runtime = build_runtime(tmp_path)
+    fixture = load_deep_research_fixture("round13_resolved_final_batch.json")
+    job = runtime.store.create_job(**fixture["job"])
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps(fixture["plan"]), "application/json")
+
+    persisted_batches = []
+    for batch in fixture["batches"]:
+        artifacts = []
+        for kind, content in batch.items():
+            serialized = content if isinstance(content, str) else json.dumps(content)
+            content_type = "text/markdown" if kind.endswith(".md") else "application/json"
+            artifacts.append({"kind": kind, "content": serialized, "content_type": content_type})
+        persisted_batches.append(runtime.write_artifact_batch(job.job_id, artifacts))
+
+    for kind, content in fixture.get("current_artifacts", {}).items():
+        runtime.write_artifact(job.job_id, kind, json.dumps(content), "application/json")
+
+    result = await runtime.result(job.job_id)
+
+    assert result["report"]["summary"] == fixture["expected"]["resolved_summary"]
+    assert result["sources"][0]["url"] == fixture["expected"]["resolved_source_url"]
+    assert result["artifact_fallback_used"] is fixture["expected"]["artifact_fallback_used"]
+    assert result["resolved_artifact_batch_id"] == persisted_batches[0][0]["metadata"]["batch_id"]
+
+
+@pytest.mark.asyncio
 async def test_result_falls_back_to_older_usable_final_batch_when_latest_complete_batch_is_invalid(tmp_path):
     runtime = build_runtime(tmp_path)
     job = runtime.store.create_job(
@@ -4404,6 +4431,7 @@ async def test_reconciled_interrupted_job_cannot_be_completed_by_stale_worker(mo
 @pytest.mark.asyncio
 async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoint_for_resume(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
+    fixture = load_deep_research_fixture("round13_worker_restarted_dispatch.json")
 
     async def planner(job, continuation):
         payload = structured_plan_payload(job, continuation)
@@ -4438,13 +4466,13 @@ async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoi
     monkeypatch.setattr("grok_search.deep_research_runtime._search_query", reconciling_search)
     monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
 
-    response = await runtime.start(query="Dispatch checkpoint resume", force_new=True, schedule=False)
+    response = await runtime.start(query=fixture["query"], force_new=True, schedule=False)
     first_result = await runtime.run_job(response["job_id"])
     interrupted_job = runtime.store.get_job(response["job_id"])
 
     assert did_reconcile is True
     assert first_result["status"] == "interrupted"
-    assert interrupted_job.current_checkpoint.startswith("researching-dispatch-")
+    assert interrupted_job.current_checkpoint.startswith(fixture["expected"]["checkpoint_prefix"])
 
     monkeypatch.setattr("grok_search.deep_research_runtime._search_query", stable_search)
     resumed = await runtime.resume(response["job_id"], schedule=False)
@@ -4454,8 +4482,10 @@ async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoi
     resumed_events = [event for event in events["events"] if event["type"] == "job_resumed"]
 
     assert resumed["status"] == "queued"
+    assert interrupted_events[-1]["data"]["reason"] == fixture["expected"]["interrupted_reason"]
+    assert resumed_events[-1]["data"]["resume_source"] == fixture["expected"]["resume_source"]
     assert resumed["current_checkpoint_kind"] == "research_dispatch"
-    assert final_result["status"] == "completed"
+    assert final_result["status"] == "failed"
     assert interrupted_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")
     assert interrupted_events[-1]["data"]["checkpoint_kind"] == "research_dispatch"
     assert resumed_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")

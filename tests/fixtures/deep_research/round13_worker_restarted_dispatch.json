@@ -1,0 +1,9 @@
+{
+  "sample": "round13-worker-restarted-dispatch",
+  "query": "Dispatch checkpoint resume",
+  "expected": {
+    "interrupted_reason": "worker_restarted",
+    "resume_source": "worker_restarted",
+    "checkpoint_prefix": "researching-dispatch-"
+  }
+}
