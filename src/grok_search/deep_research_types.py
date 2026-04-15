@@ -212,6 +212,12 @@ class DeepResearchPlan(BaseModel):
 class DeepResearchCheckpointState(BaseModel):
     plan: DeepResearchPlan
     completed_unit_ids: list[str] = Field(default_factory=list)
+    failed_unit_ids: list[str] = Field(default_factory=list)
+    failed_units: list[dict[str, Any]] = Field(default_factory=list)
+    skipped_unit_ids: list[str] = Field(default_factory=list)
+    skipped_units: list[dict[str, Any]] = Field(default_factory=list)
+    constraint_violations: list[dict[str, Any]] = Field(default_factory=list)
+    coverage_state: dict[str, Any] = Field(default_factory=dict)
     unit_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
     sources: list[dict[str, Any]] = Field(default_factory=list)
     evidence_items: list[dict[str, Any]] = Field(default_factory=list)

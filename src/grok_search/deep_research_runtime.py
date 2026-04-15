@@ -1775,6 +1775,76 @@ def _artifact_metadata(content: str, *, batch_id: str = "") -> dict[str, Any]:
     return metadata
 
 
+def _checkpoint_state_payload(
+    *,
+    plan: DeepResearchPlan,
+    completed_unit_ids: list[str],
+    failed_unit_ids: list[str],
+    failed_units: list[dict[str, Any]],
+    skipped_unit_ids: list[str],
+    skipped_units: list[dict[str, Any]],
+    constraint_violations: list[dict[str, Any]],
+    coverage_state: dict[str, Any],
+    unit_results: dict[str, dict[str, Any]],
+    sources: list[dict[str, Any]],
+    evidence_items: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+) -> DeepResearchCheckpointState:
+    return DeepResearchCheckpointState(
+        plan=plan,
+        completed_unit_ids=list(completed_unit_ids),
+        failed_unit_ids=list(failed_unit_ids),
+        failed_units=[dict(item) for item in failed_units],
+        skipped_unit_ids=list(skipped_unit_ids),
+        skipped_units=[dict(item) for item in skipped_units],
+        constraint_violations=[dict(item) for item in constraint_violations],
+        coverage_state=dict(coverage_state),
+        unit_results=dict(unit_results),
+        sources=list(sources),
+        evidence_items=list(evidence_items),
+        sections=list(sections),
+    )
+
+
+def _runtime_coverage_state(
+    plan: DeepResearchPlan,
+    unit_results: dict[str, dict[str, Any]],
+    *,
+    completed_unit_ids: list[str],
+    failed_unit_ids: list[str],
+    skipped_unit_ids: list[str],
+) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for target in _stop_policy_targets(plan):
+        matched_unit_ids = [
+            unit_id
+            for unit_id, result in unit_results.items()
+            if (result.get("source_ids") or result.get("citations")) and _result_text_covers_item(result, target)
+        ]
+        grounded_source_ids = sorted(
+            {
+                source_id
+                for unit_id in matched_unit_ids
+                for source_id in unit_results.get(unit_id, {}).get("source_ids", [])
+            }
+        )
+        items.append(
+            {
+                "target": target,
+                "matched_unit_ids": matched_unit_ids,
+                "grounded_source_ids": grounded_source_ids,
+                "candidate_section_ids": [],
+                "satisfied": bool(matched_unit_ids and grounded_source_ids),
+            }
+        )
+    return {
+        "items": items,
+        "completed_unit_ids": list(completed_unit_ids),
+        "failed_unit_ids": list(failed_unit_ids),
+        "skipped_unit_ids": list(skipped_unit_ids),
+    }
+
+
 def _build_carry_forward_evidence(
     unit_results: dict[str, dict[str, Any]],
     sections: list[dict[str, Any]],
@@ -3490,6 +3560,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         attempt_count=job.attempt_count + 1,
         last_error="",
     )
+    worker_attempt_count = job.attempt_count
     checkpoint_state, checkpoint_meta = runtime._load_checkpoint_state(job)
     plan = checkpoint_state.plan if checkpoint_state else runtime._read_plan(job_id, job)
     runtime.write_artifact(job_id, "plan.json", _json_markdown_block(plan.model_dump()), "application/json")
@@ -3518,11 +3589,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
 
     continuation = runtime._read_runtime_continuation(job)
     completed_unit_ids = list(checkpoint_state.completed_unit_ids) if checkpoint_state else []
-    failed_unit_ids: list[str] = []
-    failed_units: list[dict[str, Any]] = []
-    skipped_unit_ids: list[str] = []
-    skipped_units: list[dict[str, Any]] = []
-    constraint_violations: list[dict[str, Any]] = []
+    failed_unit_ids = list(checkpoint_state.failed_unit_ids) if checkpoint_state else []
+    failed_units = [dict(item) for item in checkpoint_state.failed_units] if checkpoint_state else []
+    skipped_unit_ids = list(checkpoint_state.skipped_unit_ids) if checkpoint_state else []
+    skipped_units = [dict(item) for item in checkpoint_state.skipped_units] if checkpoint_state else []
+    constraint_violations = (
+        [dict(item) for item in checkpoint_state.constraint_violations] if checkpoint_state else []
+    )
+    coverage_state = dict(checkpoint_state.coverage_state) if checkpoint_state else {}
     unit_results = dict(checkpoint_state.unit_results) if checkpoint_state else dict(continuation.carry_forward_unit_results)
     source_registry = list(checkpoint_state.sources) if checkpoint_state else list(continuation.carry_forward_sources)
     source_registry = _apply_domain_constraints(
@@ -3693,6 +3767,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             *[_execute_research_unit(runtime, plan, unit) for unit in batch_units],
             return_exceptions=True,
         )
+        if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
+            return
         batch_error: Exception | None = None
         for unit, batch_result in zip(batch_units, batch_results, strict=False):
             if isinstance(batch_result, Exception):
@@ -3768,9 +3844,22 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             evidence_items.extend(new_evidence)
             unit_results = _sanitize_unit_results(unit_results, source_registry)
             evidence_items = _sanitize_evidence_items(evidence_items, source_registry)
-            checkpoint_state = DeepResearchCheckpointState(
+            coverage_state = _runtime_coverage_state(
+                plan,
+                unit_results,
+                completed_unit_ids=completed_unit_ids,
+                failed_unit_ids=failed_unit_ids,
+                skipped_unit_ids=skipped_unit_ids,
+            )
+            checkpoint_state = _checkpoint_state_payload(
                 plan=plan,
                 completed_unit_ids=completed_unit_ids,
+                failed_unit_ids=failed_unit_ids,
+                failed_units=failed_units,
+                skipped_unit_ids=skipped_unit_ids,
+                skipped_units=skipped_units,
+                constraint_violations=constraint_violations,
+                coverage_state=coverage_state,
                 unit_results=unit_results,
                 sources=source_registry,
                 evidence_items=evidence_items,
@@ -3849,6 +3938,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 progress = 20.0 + ((len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids)) / unit_total) * 50.0
                 runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
 
+    if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
+        return
     sections = _build_section_citations(plan, evidence_items, source_registry)
     source_registry = _annotate_source_usage(
         source_registry,
@@ -3868,13 +3959,26 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     )
     partial_report = _build_partial_report(plan, completed_unit_ids, unit_results, sections)
     runtime.write_artifact(job_id, "partial_report.md", partial_report, "text/markdown")
+    coverage_state = _runtime_coverage_state(
+        plan,
+        unit_results,
+        completed_unit_ids=completed_unit_ids,
+        failed_unit_ids=failed_unit_ids,
+        skipped_unit_ids=skipped_unit_ids,
+    )
     runtime.store.save_checkpoint(
         job_id,
         phase="synthesizing",
         checkpoint_key="synthesizing",
-        state=DeepResearchCheckpointState(
+        state=_checkpoint_state_payload(
             plan=plan,
             completed_unit_ids=completed_unit_ids,
+            failed_unit_ids=failed_unit_ids,
+            failed_units=failed_units,
+            skipped_unit_ids=skipped_unit_ids,
+            skipped_units=skipped_units,
+            constraint_violations=constraint_violations,
+            coverage_state=coverage_state,
             unit_results=unit_results,
             sources=source_registry,
             evidence_items=evidence_items,
@@ -3884,6 +3988,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
 
     if runtime.store.get_job(job_id).cancel_requested:
         _mark_canceled(runtime, job_id, "synthesizing")
+        return
+    if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
         return
 
     citations = {
@@ -3896,6 +4002,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "query": plan.query,
         "must_cover": list(plan.brief.must_cover),
         "coverage_checklist": list(plan.brief.coverage_checklist),
+        "coverage_state": coverage_state,
         **report_coverage,
     }
     grounding_diagnostics = _build_grounding_diagnostics(citations["sections"], citations["source_registry"])
@@ -3973,15 +4080,23 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         job_id,
         phase="finalizing",
         checkpoint_key="finalizing",
-        state=DeepResearchCheckpointState(
+        state=_checkpoint_state_payload(
             plan=plan,
             completed_unit_ids=completed_unit_ids,
+            failed_unit_ids=failed_unit_ids,
+            failed_units=failed_units,
+            skipped_unit_ids=skipped_unit_ids,
+            skipped_units=skipped_units,
+            constraint_violations=constraint_violations,
+            coverage_state=coverage_state,
             unit_results=unit_results,
             sources=source_registry,
             evidence_items=evidence_items,
             sections=sections,
         ).model_dump(),
     )
+    if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
+        return
     runtime.store.update_job(
         job_id,
         status="completed",
@@ -4011,6 +4126,13 @@ def _mark_canceled(
         return
     runtime.store.update_job(job_id, status="canceled", finished_at=utc_now_iso(), heartbeat_at=utc_now_iso())
     runtime.store.append_event(job_id, type="job_canceled", phase=phase, message="Canceled.", data=data or {})
+
+
+def _job_execution_is_stale(runtime: DeepResearchRuntime, job_id: str, *, attempt_count: int) -> bool:
+    current_job = runtime.store.get_job(job_id)
+    if current_job.attempt_count != attempt_count:
+        return True
+    return current_job.status in {"interrupted", "canceled", "completed", "failed"}
 
 
 def _write_partial_outputs(
