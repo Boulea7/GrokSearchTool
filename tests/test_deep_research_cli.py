@@ -10,6 +10,10 @@ def build_runtime(tmp_path):
     return DeepResearchRuntime(tmp_path / "deep-research")
 
 
+def summary_lines(text: str) -> list[str]:
+    return [line for line in text.splitlines() if line.startswith("summary:")]
+
+
 def test_cli_plan_only_start_prints_draft_job(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
@@ -44,9 +48,13 @@ def test_cli_result_artifact_prints_artifact_content(monkeypatch, tmp_path, caps
     runtime.write_artifact(response.job_id, "final_report.md", "# Final Report\n\nArtifact body.", "text/markdown")
 
     exit_code = deep_research_cli.main(["result", response.job_id, "--artifact", "final_report.md"])
+    captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert capsys.readouterr().out == "# Final Report\n\nArtifact body.\n"
+    assert captured.out == "# Final Report\n\nArtifact body.\n"
+    assert summary_lines(captured.err) == [
+        f"summary: job={response.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false artifact=final_report.md bytes=30"
+    ]
 
 
 def test_cli_result_artifact_missing_file_returns_nonzero(monkeypatch, tmp_path, capsys):
@@ -93,7 +101,7 @@ def test_cli_result_artifact_prefers_resolved_final_batch(monkeypatch, tmp_path,
         continued_from_job_id="",
     )
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Artifact batch job"}), "application/json")
-    runtime.write_artifact_batch(
+    persisted = runtime.write_artifact_batch(
         job.job_id,
         [
             {
@@ -126,9 +134,15 @@ def test_cli_result_artifact_prefers_resolved_final_batch(monkeypatch, tmp_path,
     )
 
     exit_code = deep_research_cli.main(["result", job.job_id, "--artifact", "sources.json"])
+    captured = capsys.readouterr()
+    batch_id = persisted[0]["metadata"]["batch_id"]
+    artifact_content = '[{"source_id": "R1", "url": "https://good.example.com"}]'
 
     assert exit_code == 0
-    assert capsys.readouterr().out == '[{"source_id": "R1", "url": "https://good.example.com"}]\n'
+    assert captured.out == artifact_content + "\n"
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch={batch_id} artifact_fallback=true artifact=sources.json bytes={len(artifact_content.encode('utf-8'))}"
+    ]
 
 
 def test_cli_result_artifact_reads_resolved_final_batch_for_interrupted_finalizing_job(monkeypatch, tmp_path, capsys):
@@ -239,11 +253,15 @@ def test_cli_status_surfaces_resolved_artifact_batch_id(monkeypatch, tmp_path, c
     )
 
     exit_code = deep_research_cli.main(["status", job.job_id])
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
 
     assert exit_code == 0
     assert payload["resolved_artifact_batch_id"]
     assert payload["artifact_fallback_used"] is True
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch={payload['resolved_artifact_batch_id']} artifact_fallback=true"
+    ]
 
 
 def test_cli_start_spawns_worker_for_background_job(monkeypatch, tmp_path, capsys):
@@ -387,10 +405,15 @@ def test_cli_list_filters_jobs_by_status(monkeypatch, tmp_path, capsys):
     )
 
     exit_code = deep_research_cli.main(["list", "--status", "completed"])
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
 
     assert exit_code == 0
     assert [job["job_id"] for job in payload["jobs"]] == [completed.job_id]
+    assert summary_lines(captured.err) == [
+        "summary: jobs=1 status_filter=completed limit=50",
+        f'summary: job={completed.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=- query="Completed job"',
+    ]
 
 
 def test_cli_watch_prints_events_until_terminal_status(monkeypatch, tmp_path, capsys):
@@ -401,8 +424,29 @@ def test_cli_watch_prints_events_until_terminal_status(monkeypatch, tmp_path, ca
         async def status(self, job_id):
             self.status_calls += 1
             if self.status_calls == 1:
-                return {"status": "running", "phase": "researching", "progress_pct": 35.0, "resolved_artifact_batch_id": ""}
-            return {"status": "completed", "phase": "finalizing", "progress_pct": 100.0, "resolved_artifact_batch_id": "batch-1"}
+                return {
+                    "job_id": job_id,
+                    "status": "running",
+                    "phase": "researching",
+                    "progress_pct": 35.0,
+                    "attempt_count": 1,
+                    "current_checkpoint": "researching",
+                    "cancel_requested": False,
+                    "continued_from_job_id": "",
+                    "resolved_artifact_batch_id": "",
+                }
+            return {
+                "job_id": job_id,
+                "status": "completed",
+                "phase": "finalizing",
+                "progress_pct": 100.0,
+                "attempt_count": 1,
+                "current_checkpoint": "finalizing",
+                "cancel_requested": False,
+                "continued_from_job_id": "",
+                "resolved_artifact_batch_id": "batch-1",
+                "artifact_fallback_used": True,
+            }
 
         async def events(self, job_id, after_seq=0, limit=100):
             if after_seq == 0:
@@ -419,12 +463,97 @@ def test_cli_watch_prints_events_until_terminal_status(monkeypatch, tmp_path, ca
     monkeypatch.setattr(deep_research_cli.asyncio, "sleep", fake_sleep)
 
     exit_code = deep_research_cli.main(["watch", "job-123", "--interval-seconds", "0.01"])
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
+    output = captured.err
 
     assert exit_code == 0
     assert "[1] researching phase_started: Researching." in output
-    assert "status=running phase=researching progress=35.0" in output
-    assert "status=completed phase=finalizing progress=100.0 resolved_batch=batch-1" in output
+    assert "summary: job=job-123 status=running phase=researching progress=35.0% checkpoint=researching attempts=1 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=-" in output
+    assert "summary: job=job-123 status=completed phase=finalizing progress=100.0% checkpoint=finalizing attempts=1 cancel_requested=false continued_from=- resolved_batch=batch-1 artifact_fallback=true" in output
+
+
+def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+
+    job = runtime.store.create_job(
+        query="Resume me",
+        request_fingerprint="fp-cli-resume",
+        status="interrupted",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="seed-job",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        progress_pct=45.0,
+        attempt_count=2,
+        current_checkpoint="researching",
+        cancel_requested=True,
+        finished_at=utc_now_iso(),
+    )
+
+    exit_code = deep_research_cli.main(["resume", job.job_id])
+    resume_captured = capsys.readouterr()
+    resume_payload = json.loads(resume_captured.out)
+
+    assert exit_code == 0
+    assert resume_payload["status"] == "queued"
+    assert summary_lines(resume_captured.err) == [
+        f"summary: job={job.job_id} status=queued phase=researching progress=0.0% checkpoint=researching attempts=2 cancel_requested=false continued_from=seed-job resolved_batch=- artifact_fallback=false"
+    ]
+
+    exit_code = deep_research_cli.main(["cancel", job.job_id])
+    cancel_captured = capsys.readouterr()
+    cancel_payload = json.loads(cancel_captured.out)
+
+    assert exit_code == 0
+    assert cancel_payload == {
+        "job_id": job.job_id,
+        "cancel_requested": True,
+        "status": "canceled",
+    }
+    assert summary_lines(cancel_captured.err) == [
+        f"summary: job={job.job_id} status=canceled phase=researching progress=0.0% checkpoint=researching attempts=2 cancel_requested=true continued_from=seed-job resolved_batch=- artifact_fallback=false"
+    ]
+
+
+def test_cli_events_prints_operator_batch_summary(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+
+    job = runtime.store.create_job(
+        query="Eventful job",
+        request_fingerprint="fp-cli-events",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.append_event(job.job_id, type="phase_started", phase="researching", message="Researching.", data={})
+    runtime.store.append_event(job.job_id, type="job_completed", phase="finalizing", message="Done.", data={})
+
+    exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "0", "--limit", "10"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert [event["type"] for event in payload["events"]] == ["phase_started", "job_completed"]
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} events=2 after_seq=0 next_after_seq=2 last_event=job_completed terminal=false"
+    ]
 
 
 def test_spawn_worker_writes_logs_to_worker_log_dir(monkeypatch, tmp_path):
