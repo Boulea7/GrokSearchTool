@@ -1,0 +1,37 @@
+{
+  "sample": "round9-live",
+  "plan": {
+    "brief": {
+      "continuation_focus": [
+        "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+        "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: You can monitor, stop, or restart tasks using the console, AWS CLI, or AWS DMS API."
+      ]
+    }
+  },
+  "continuation": {
+    "mode": "continue",
+    "source_job_id": "cde2365cfe603c949ad433a7",
+    "source_job_status": "completed",
+    "continuation_identity": "e78e5613ce2d04ef313a45b0f610557990f71a22d4be394f912d0167adcb61e4",
+    "previous_summary": "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: You can monitor, stop, or restart tasks using the console, AWS CLI, or AWS DMS API.",
+    "prior_plan_summary": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+    "continuation_goal": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+    "source_count": 1,
+    "checkpoint_key": "finalizing",
+    "carry_forward_sources": [
+      {
+        "source_id": "R1",
+        "title": "Working with AWS DMS tasks",
+        "domain": "docs.aws.amazon.com",
+        "quality_tier": "official",
+        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.html"
+      }
+    ]
+  },
+  "golden": {
+    "resume_continue_semantics": {
+      "verdict": "pass",
+      "reason_tags": []
+    }
+  }
+}

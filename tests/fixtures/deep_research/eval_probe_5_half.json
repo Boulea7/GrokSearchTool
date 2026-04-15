@@ -1,0 +1,28 @@
+{
+  "sample": "probe-5/half",
+  "query": "Half-real interrupted probe",
+  "report": {
+    "coverage": {
+      "planned_section_ids": [
+        "resume-semantics"
+      ],
+      "answered_section_ids": [
+        "resume-semantics"
+      ],
+      "unanswered_sections": [],
+      "planned_sub_question_ids": [
+        "sq1"
+      ],
+      "covered_sub_question_ids": [
+        "sq1"
+      ],
+      "uncovered_sub_questions": []
+    }
+  },
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "pass",
+      "reason_tags": []
+    }
+  }
+}
