@@ -1,0 +1,95 @@
+{
+  "job_id": "39f06508eeb45dba278a3101",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: filled_search_query:u1"
+    }
+  },
+  "brief": {
+    "scope": {
+      "allowed_sources": [
+        "docs.aws.amazon.com"
+      ],
+      "include_domains": [
+        "docs.aws.amazon.com"
+      ],
+      "exclude_domains": [
+        "repost.aws"
+      ],
+      "continuation_mode": "fresh"
+    },
+    "coverage_checklist": [
+      "Compare checkpoint resume and restart semantics in AWS DMS with official docs only"
+    ],
+    "stop_policy": {
+      "max_runtime_seconds": 180,
+      "max_search_queries": 1,
+      "max_urls_per_search": 1,
+      "stop_on_sufficient_coverage": true
+    }
+  },
+  "report": {
+    "status": "degraded",
+    "summary": "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: operations. For more information, see [Endpoint settings when using Amazon S3 as a target for AWS DMS](./CHAP_Target.S3.html#CHAP_Target.S3.Configuring).",
+    "coverage": {
+      "answered_section_ids": [
+        "executive-summary"
+      ],
+      "unanswered_sections": [
+        "Key Findings",
+        "Open Questions"
+      ],
+      "covered_sub_question_ids": [],
+      "uncovered_sub_questions": [
+        "Compare checkpoint resume and restart semantics in AWS DMS with official docs only"
+      ],
+      "sub_questions": [
+        {
+          "sub_question_id": "sq1",
+          "covered": false,
+          "section_ids": [],
+          "claim_ids": []
+        }
+      ]
+    },
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete"
+      ],
+      "coverage": {
+        "must_cover_count": 1,
+        "uncovered_sub_question_count": 1,
+        "unanswered_section_count": 2
+      },
+      "grounding": {
+        "total_claims": 1,
+        "ungrounded_claims": 0,
+        "single_source_claims": 1
+      }
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+      "title": "Change processing tuning settings",
+      "source_type": "official_docs",
+      "quality_tier": "official"
+    }
+  ],
+  "artifacts": [
+    "plan.json",
+    "planner_trace.json",
+    "partial_report.md",
+    "sources.json",
+    "citations.json",
+    "report.json",
+    "final_report.md",
+    "coverage.json",
+    "grounding.json"
+  ]
+}
