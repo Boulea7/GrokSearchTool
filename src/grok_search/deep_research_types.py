@@ -23,6 +23,7 @@ DeepResearchPhase = Literal[
 
 DeepResearchUnitType = Literal["search", "fetch", "map"]
 DeepResearchUnitStatus = Literal["pending", "running", "completed", "failed", "skipped"]
+DeepResearchSearchApproach = Literal["targeted", "breadth_first", "depth_first"]
 
 
 def utc_now_iso() -> str:
@@ -96,12 +97,12 @@ class DeepResearchSubQuestion(BaseModel):
 
 
 class DeepResearchSelectiveFetchConfig(BaseModel):
-    max_urls_per_search: int = 1
+    max_urls_per_search: int = Field(default=1, ge=0, le=10)
     prefer_titles_matching_outline: bool = True
 
 
 class DeepResearchSearchStrategy(BaseModel):
-    approach: str
+    approach: DeepResearchSearchApproach
     search_queries: list[str] = Field(default_factory=list)
     selective_fetch: DeepResearchSelectiveFetchConfig = Field(default_factory=DeepResearchSelectiveFetchConfig)
 

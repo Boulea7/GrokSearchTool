@@ -395,6 +395,114 @@ async def test_plan_normalization_repairs_string_success_criteria_and_unknown_un
 
 
 @pytest.mark.asyncio
+async def test_plan_normalization_repairs_invalid_approach_and_selective_fetch_bounds(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"] = {
+            "approach": "wide_open",
+            "search_queries": [job.query],
+            "selective_fetch": {
+                "max_urls_per_search": -3,
+                "prefer_titles_matching_outline": "yes",
+            },
+        }
+        return payload
+
+    runtime._generate_plan_with_model = planner
+
+    response = await runtime.start(
+        query="Repair invalid planner strategy bounds",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    strategy = response["plan"]["search_strategy"]
+    validation = response["plan"]["planner_metadata"]["validation"]
+    trace = response["plan"]["planner_metadata"]["trace"]
+
+    assert response["plan"]["planner_metadata"]["used_fallback"] is False
+    assert strategy["approach"] == "targeted"
+    assert strategy["selective_fetch"]["max_urls_per_search"] == 1
+    assert strategy["selective_fetch"]["prefer_titles_matching_outline"] is True
+    assert validation["repaired"] is True
+    assert "invalid_search_strategy_approach" in validation["issues"]
+    assert "invalid_selective_fetch_max_urls" in validation["issues"]
+    assert "invalid_selective_fetch_prefer_titles_matching_outline" in validation["issues"]
+    assert "defaulted_invalid_search_strategy_approach:wide_open->targeted" in trace["normalize_actions"]
+    assert "clamped_selective_fetch_max_urls:-3->1" in trace["normalize_actions"]
+    assert "defaulted_invalid_selective_fetch_prefer_titles_matching_outline:yes->True" in trace["normalize_actions"]
+
+
+@pytest.mark.asyncio
+async def test_plan_normalization_repairs_duplicate_report_outline_section_ids(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "shared-section",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "shared-section",
+                "title": "Operational Impact",
+                "goal": "Explain the operational impact.",
+            },
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = planner
+
+    response = await runtime.start(
+        query="Repair duplicate report outline ids",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    outline = response["plan"]["report_outline"]
+    validation = response["plan"]["planner_metadata"]["validation"]
+    trace = response["plan"]["planner_metadata"]["trace"]
+
+    assert response["plan"]["planner_metadata"]["used_fallback"] is False
+    assert [section["title"] for section in outline] == ["Executive Summary", "Operational Impact"]
+    assert len({section["section_id"] for section in outline}) == len(outline)
+    assert validation["repaired"] is True
+    assert "duplicate_report_outline_section_id" in validation["issues"]
+    assert any(action.startswith("renamed_duplicate_report_outline_section_id:shared-section->") for action in trace["normalize_actions"])
+
+
+@pytest.mark.asyncio
+async def test_fallback_plan_omits_control_only_context_from_search_queries(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def broken_planner(job, continuation):
+        raise RuntimeError("planner exploded")
+
+    runtime._generate_plan_with_model = broken_planner
+
+    response = await runtime.start(
+        query="Plan only probe for deep research contract",
+        context="Only create the plan artifact.",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    queries = response["plan"]["search_strategy"]["search_queries"]
+    unit_queries = [unit.get("query", "") for unit in response["plan"]["research_units"]]
+
+    assert response["plan"]["planner_metadata"]["used_fallback"] is True
+    assert not any("only create the plan artifact" in query.lower() for query in queries)
+    assert not any("only create the plan artifact" in query.lower() for query in unit_queries)
+
+
+@pytest.mark.asyncio
 async def test_planner_repair_recovers_invalid_json_and_records_trace(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     observed_models = []
