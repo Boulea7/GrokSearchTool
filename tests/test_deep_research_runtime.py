@@ -6332,6 +6332,190 @@ async def test_report_exposes_sub_question_to_claim_coverage_ledger(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_stop_policy_does_not_skip_pending_unit_when_only_one_completed_unit_mentions_all_targets(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    search_calls: list[str] = []
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["brief"]["must_cover"] = [
+            "Explain checkpoint resume semantics",
+            "Explain restart trade-offs",
+        ]
+        payload["brief"]["coverage_checklist"] = [
+            "Explain checkpoint resume semantics",
+            "Explain restart trade-offs",
+        ]
+        payload["brief"]["stop_policy"] = {
+            "stop_on_sufficient_coverage": True,
+            "max_search_queries": 2,
+            "max_urls_per_search": 0,
+            "max_runtime_seconds": 240,
+        }
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "Explain checkpoint resume semantics", "reason": "Primary question."},
+            {"id": "sq2", "question": "Explain restart trade-offs", "reason": "Secondary question."},
+        ]
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            },
+            {
+                "section_id": "restart-tradeoffs",
+                "title": "Restart Trade-offs",
+                "goal": "Explain restart trade-offs.",
+            },
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Broad overview",
+                "goal": "Explain checkpoint resume semantics and restart trade-offs.",
+                "query": "checkpoint resume and restart overview",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-search-2",
+                "unit_type": "search",
+                "title": "Restart details",
+                "goal": "Explain restart trade-offs.",
+                "query": "restart trade-offs details",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["checkpoint resume and restart overview", "restart trade-offs details"],
+            "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": False},
+        }
+        return payload
+
+    async def search(query):
+        search_calls.append(query)
+        if "overview" in query:
+            return (
+                "Checkpoint resume semantics and restart trade-offs are both important operational concerns.",
+                [
+                    {
+                        "url": "https://docs.example.com/runtime/overview",
+                        "title": "Runtime overview",
+                        "description": "Broad overview.",
+                    }
+                ],
+            )
+        return (
+            "Restart trade-offs include replay delay after interruption and extra validation steps.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/restart",
+                    "title": "Restart trade-offs",
+                    "description": "Restart-specific guidance.",
+                }
+            ],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_MAX_CONCURRENCY", "1")
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query="Coverage stop gate probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert search_calls == [
+        "checkpoint resume and restart overview",
+        "restart trade-offs details",
+    ]
+    assert result["report"]["runtime"]["skipped_units"] == []
+
+
+@pytest.mark.asyncio
+async def test_domain_constraints_strip_off_domain_detail_from_unit_results(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["include_domains"] = ["docs.aws.amazon.com"]
+        payload["brief"]["scope"]["include_domains"] = ["docs.aws.amazon.com"]
+        payload["brief"]["scope"]["allowed_sources"] = ["docs.aws.amazon.com"]
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Resume search",
+                "goal": "Explain checkpoint resume semantics.",
+                "query": "checkpoint resume semantics",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["checkpoint resume semantics"],
+            "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": False},
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Stack Overflow says restart from scratch. See https://stackoverflow.com/questions/123/checkpoint-runtime "
+            "and https://repost.aws/questions/example for troubleshooting.",
+            [
+                {
+                    "url": "https://stackoverflow.com/questions/123/checkpoint-runtime",
+                    "title": "Checkpoint runtime discussion",
+                    "description": "Community discussion.",
+                },
+                {
+                    "url": "https://repost.aws/questions/example",
+                    "title": "AWS re:Post runtime troubleshooting",
+                    "description": "Troubleshooting page.",
+                },
+            ],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(
+        query="Constraint hygiene probe",
+        include_domains=["docs.aws.amazon.com"],
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+
+    unit_result = result["report"]["unit_results"]["unit-search-1"]
+
+    assert unit_result["source_ids"] == []
+    assert "stackoverflow.com" not in unit_result["detail"].lower()
+    assert "repost.aws" not in unit_result["detail"].lower()
+    assert "domain_constraints_applied" in result["report"]["runtime"]["warnings"]
+
+
+@pytest.mark.asyncio
 async def test_unused_sources_are_pruned_from_final_report_registry(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 

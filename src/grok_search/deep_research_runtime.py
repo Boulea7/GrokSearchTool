@@ -1763,12 +1763,35 @@ def _stop_policy_targets(plan: DeepResearchPlan) -> list[str]:
 def _has_sufficient_runtime_coverage(
     plan: DeepResearchPlan,
     unit_results: dict[str, dict[str, Any]],
+    *,
+    coverage_state: dict[str, Any] | None = None,
 ) -> bool:
     targets = _stop_policy_targets(plan)
     if not targets:
         return False
     if not unit_results:
         return False
+    items = coverage_state.get("items") if isinstance(coverage_state, dict) else None
+    if isinstance(items, list) and items:
+        normalized_targets = {_normalize_whitespace(target) for target in targets if _normalize_whitespace(target)}
+        matched_items = [
+            item
+            for item in items
+            if _normalize_whitespace(str(item.get("target", ""))) in normalized_targets
+        ]
+        if len(matched_items) < len(normalized_targets):
+            return False
+        if not all(bool(item.get("satisfied")) for item in matched_items):
+            return False
+        distinct_unit_ids = {
+            unit_id
+            for item in matched_items
+            for unit_id in item.get("matched_unit_ids", [])
+            if _normalize_whitespace(str(unit_id))
+        }
+        if len(normalized_targets) > 1 and len(distinct_unit_ids) < len(normalized_targets):
+            return False
+        return True
     for target in targets:
         if not any(
             (result.get("source_ids") or result.get("citations"))
@@ -3815,6 +3838,12 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                         "reason": "domain_constraints_applied",
                     }
                 )
+            if removed_source_count > 0 and not constrained_sources:
+                unit_result = {
+                    **unit_result,
+                    "summary": "",
+                    "detail": "",
+                }
             if unit.unit_type in {"fetch", "map"} and not unit_result.get("summary") and not constrained_sources and not new_evidence:
                 failed_unit_ids.append(unit.unit_id)
                 failed_units.append(
@@ -3924,7 +3953,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         if (
             stop_on_sufficient_coverage
             and not has_pending_dependency_chain
-            and _has_sufficient_runtime_coverage(plan, unit_results)
+            and _has_sufficient_runtime_coverage(plan, unit_results, coverage_state=coverage_state)
         ):
             skipped_any = False
             for unit in plan.research_units:
