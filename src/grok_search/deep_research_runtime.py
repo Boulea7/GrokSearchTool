@@ -3664,11 +3664,17 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         elapsed_seconds = (dt.datetime.now(dt.UTC) - started_at_dt).total_seconds()
         if elapsed_seconds >= job.resolved_budget_seconds:
             _write_partial_outputs(runtime, job_id, plan, completed_unit_ids, unit_results, sections)
+            latest_checkpoint_key = (
+                f"researching-{completed_unit_ids[-1]}"
+                if completed_unit_ids
+                else runtime.store.get_job(job_id).current_checkpoint
+            )
             runtime.store.update_job(
                 job_id,
                 status="interrupted",
                 phase="researching",
                 last_error="time_budget_exceeded",
+                current_checkpoint=latest_checkpoint_key,
                 finished_at=utc_now_iso(),
                 heartbeat_at=utc_now_iso(),
             )
