@@ -1,0 +1,104 @@
+{
+  "sample": "probe-round10-continuation",
+  "query": "Continue from previous findings with focus on restart risk, instance reboot behavior, recovery timeout, CDC edge cases, and resume failure recovery",
+  "plan": {
+    "include_domains": [],
+    "exclude_domains": [],
+    "brief": {
+      "scope": {
+        "allowed_sources": [],
+        "include_domains": [],
+        "exclude_domains": []
+      },
+      "must_cover": [
+        "Continue from previous findings with focus on restart risk, instance reboot behavior, recovery timeout, CDC edge cases, and checkpoint resume failure recovery",
+        "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: operations. For more information, see the target settings page."
+      ],
+      "coverage_checklist": [
+        "Continue from previous findings with focus on restart risk, instance reboot behavior, recovery timeout, CDC edge cases, and checkpoint resume failure recovery",
+        "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: operations. For more information, see the target settings page."
+      ],
+      "continuation_focus": [
+        "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+        "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: operations. For more information, see the target settings page."
+      ]
+    },
+    "search_strategy": {
+      "search_queries": [
+        "Continue from previous findings with focus on restart risk, instance reboot behavior, recovery timeout, CDC edge cases, and checkpoint resume failure recovery",
+        "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: operations. For more information, see the target settings page."
+      ]
+    },
+    "sub_questions": [
+      {
+        "id": "sq1",
+        "question": "Continue from previous findings with focus on restart risk, instance reboot behavior, recovery timeout, CDC edge cases, and checkpoint resume failure recovery"
+      },
+      {
+        "id": "sq3",
+        "question": "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: operations. For more information, see the target settings page."
+      }
+    ]
+  },
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: filled_search_query:unit-search-continue-1"
+    }
+  },
+  "continuation": {
+    "mode": "continue",
+    "source_job_id": "39f06508eeb45dba278a3101",
+    "source_job_status": "completed",
+    "continuation_focus": [
+      "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+      "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: operations. For more information, see the target settings page."
+    ]
+  },
+  "report": {
+    "status": "degraded",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R2",
+      "domain": "nightlies.apache.org",
+      "title": "Task Failure Recovery"
+    },
+    {
+      "source_id": "R4",
+      "domain": "docs.aws.amazon.com",
+      "title": "CHAP ReplicationInstance.Rebooting"
+    }
+  ],
+  "golden": {
+    "planner_boundary": {
+      "verdict": "fail",
+      "reason_tags": [
+        "planner_fallback_used",
+        "unsafe_plan_fallback",
+        "contaminated_follow_up_surface",
+        "missing_constraint_inheritance"
+      ]
+    },
+    "ranking_noise_suppression": {
+      "verdict": "fail",
+      "reason_tags": [
+        "off_domain_source"
+      ]
+    },
+    "diagnostics_consistency": {
+      "verdict": "fail",
+      "reason_tags": [
+        "planner_fallback_not_exposed",
+        "constraint_violation_not_exposed"
+      ]
+    }
+  }
+}

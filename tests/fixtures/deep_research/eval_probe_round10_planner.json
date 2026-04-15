@@ -1,0 +1,55 @@
+{
+  "sample": "probe-round10-planner",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: filled_search_query:u1"
+    }
+  },
+  "brief": {
+    "scope": {
+      "allowed_sources": [
+        "docs.aws.amazon.com"
+      ],
+      "include_domains": [
+        "docs.aws.amazon.com"
+      ],
+      "exclude_domains": [
+        "repost.aws"
+      ]
+    },
+    "must_cover": [
+      "Compare checkpoint resume and restart semantics in AWS DMS with official docs only"
+    ],
+    "coverage_checklist": [
+      "Compare checkpoint resume and restart semantics in AWS DMS with official docs only"
+    ],
+    "continuation_focus": []
+  },
+  "report": {
+    "status": "degraded",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete"
+      ]
+    }
+  },
+  "golden": {
+    "planner_boundary": {
+      "verdict": "fail",
+      "reason_tags": [
+        "planner_fallback_used",
+        "unsafe_plan_fallback"
+      ]
+    },
+    "diagnostics_consistency": {
+      "verdict": "fail",
+      "reason_tags": [
+        "planner_fallback_not_exposed"
+      ]
+    }
+  }
+}
