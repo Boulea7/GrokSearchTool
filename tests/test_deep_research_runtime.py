@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from grok_search import server
-from grok_search.deep_research_runtime import DeepResearchRuntime, _build_report_summary
+from grok_search.deep_research_runtime import (
+    DeepResearchRuntime,
+    _build_report_summary,
+    _coverage_for_report,
+    _search_query,
+)
 from grok_search.providers.grok import GrokSearchProvider
 from grok_search.deep_research_types import DeepResearchPlan, utc_now_iso
 
@@ -805,6 +810,53 @@ async def test_planner_preselects_available_grok_model_for_deep_research(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_deep_effort_prefers_multi_agent_default_and_preserves_single_agent_fallback(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    observed_models = []
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309-reasoning"]
+
+    async def fake_execute(self, headers, payload, ctx=None, render_sources=False):
+        observed_models.append(payload["model"])
+        return json.dumps(
+            {
+                "brief": {"objective": "Deep effort fallback", "deliverable": "A cited report.", "success_criteria": ["Produce a structured report."]},
+                "sub_questions": [{"id": "sq1", "question": "Deep effort fallback", "reason": "Cover the primary question."}],
+                "search_strategy": {
+                    "approach": "targeted",
+                    "search_queries": ["Deep effort fallback"],
+                    "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+                },
+                "report_outline": [{"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."}],
+                "research_units": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "unit_type": "search",
+                        "title": "Primary search",
+                        "goal": "Deep effort fallback",
+                        "query": "Deep effort fallback",
+                        "depends_on": [],
+                        "status": "pending",
+                        "notes": "",
+                    }
+                ],
+                "planner_metadata": {"planner": "test", "used_fallback": False},
+            }
+        ), []
+
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
+
+    await runtime.start(query="Deep effort fallback", effort="deep", plan_only=True, force_new=True, schedule=False)
+
+    assert observed_models == ["grok-4.20-0309-reasoning"]
+
+
+@pytest.mark.asyncio
 async def test_plan_normalization_replays_round7_probe_shape_with_focused_fallback(tmp_path):
     runtime = build_runtime(tmp_path)
     original = runtime.store.create_job(
@@ -896,6 +948,30 @@ async def test_search_query_preselects_available_grok_model_for_deep_research(mo
 
 
 @pytest.mark.asyncio
+async def test_search_query_details_uses_deep_effort_profile_before_single_agent_fallback(monkeypatch, tmp_path):
+    observed_models = []
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309-reasoning"]
+
+    async def fake_search_with_sources(self, query, **kwargs):
+        observed_models.append(self.model)
+        return ("Answer", [{"url": "https://docs.example.com/runtime", "title": "Runtime docs"}])
+
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "search_with_sources", fake_search_with_sources)
+
+    answer, sources = await _search_query("Search preselection", effort="deep")
+
+    assert answer == "Answer"
+    assert sources
+    assert observed_models == ["grok-4.20-0309-reasoning"]
+
+
+@pytest.mark.asyncio
 async def test_search_query_details_surfaces_body_quality_warning_and_runtime_metadata(monkeypatch, tmp_path):
     async def fake_models(api_url, api_key):
         return ["grok-4.20-0309-non-reasoning"]
@@ -935,7 +1011,7 @@ async def test_completed_report_with_only_runtime_warning_is_marked_degraded(mon
     async def planner(job, continuation):
         return structured_plan_payload(job, continuation)
 
-    async def warned_search(query):
+    async def warned_search(query, *, effort="standard"):
         return {
             "answer": "",
             "sources": [{"url": "https://docs.example.com/runtime", "title": "Runtime docs"}],
@@ -5736,6 +5812,136 @@ async def test_fallback_plan_uses_focused_continuation_surface_instead_of_only_p
 
 
 @pytest.mark.asyncio
+async def test_unsafe_plan_uses_bounded_salvage_surface_before_generic_fallback(tmp_path):
+    runtime = build_runtime(tmp_path)
+    original = runtime.store.create_job(
+        query="Prior checkpoint resume investigation",
+        request_fingerprint="fp-bounded-salvage-source",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(original.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(
+        original.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": "Checkpoint resume continues from the last durable checkpoint.",
+                "sections": [
+                    {
+                        "section_id": "executive-summary",
+                        "title": "Executive Summary",
+                        "summary": "Checkpoint resume continues from the last durable checkpoint.",
+                        "claims": [
+                            {
+                                "claim_id": "executive-summary-claim-1",
+                                "text": "Checkpoint resume continues from the last durable checkpoint.",
+                                "citations": ["R1"],
+                            }
+                        ],
+                        "citations": ["R1"],
+                    }
+                ],
+                "unit_results": {},
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "sources.json",
+        json.dumps(
+            [
+                {
+                    "source_id": "R1",
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.TargetMetadata.html",
+                    "title": "Target metadata task settings",
+                    "domain": "docs.aws.amazon.com",
+                    "source_type": "official_docs",
+                }
+            ]
+        ),
+        "application/json",
+    )
+
+    async def unsafe_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {
+                "id": "sq1",
+                "question": "Investigate checkpoint replay safety after interruption",
+                "reason": "Cover the remaining checkpoint-specific gap.",
+            },
+            {
+                "id": "sq2",
+                "question": "Compare restart trade-offs after interruption",
+                "reason": "Cover the remaining recovery trade-off gap.",
+            },
+        ]
+        payload["search_strategy"]["search_queries"] = [
+            "Investigate checkpoint replay safety after interruption",
+            "For more information about troubleshooting issues after restart",
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "u1",
+                "unit_type": "search",
+                "title": "Follow-up search",
+                "goal": "Investigate checkpoint replay safety after interruption",
+                "query": "",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["planner_metadata"] = {"planner": "model", "used_fallback": False}
+        return payload
+
+    runtime._generate_plan_with_model = unsafe_planner
+
+    response = await runtime.start(
+        query="Continue the previous findings",
+        continue_from_job_id=original.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    trace = plan["planner_metadata"]["trace"]
+
+    assert plan["planner_metadata"]["used_fallback"] is True
+    assert plan["planner_metadata"]["fallback_reason"]["stage"] == "unsafe_plan"
+    assert trace["unsafe_plan"] is True
+    assert trace["salvage_used"] is True
+    assert plan["sub_questions"] == [
+        {
+            "id": "sq1",
+            "question": "Investigate checkpoint replay safety after interruption",
+            "reason": "Preserve the bounded safe slice from the unsafe planner output.",
+        },
+        {
+            "id": "sq2",
+            "question": "Compare restart trade-offs after interruption",
+            "reason": "Preserve the bounded safe slice from the unsafe planner output.",
+        },
+    ]
+    assert plan["search_strategy"]["search_queries"] == [
+        "Investigate checkpoint replay safety after interruption",
+        "Compare restart trade-offs after interruption",
+    ]
+    assert all("for more information" not in item.lower() for item in plan["search_strategy"]["search_queries"])
+
+
+@pytest.mark.asyncio
 async def test_continue_from_failed_job_builds_focused_continuation_state(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -5839,6 +6045,125 @@ async def test_continue_from_failed_job_builds_focused_continuation_state(tmp_pa
     assert "checkpoint resume continues from the last durable checkpoint" in continuation["previous_summary"].lower()
     assert continuation["source_count"] == 1
     assert [source["source_id"] for source in continuation_payload["carry_forward_sources"]] == ["R1"]
+
+
+@pytest.mark.asyncio
+async def test_continuation_identity_is_stable_for_equivalent_focused_snapshot(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(runtime, query="Stable continuation identity source")
+    runtime.write_artifact(
+        source.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "query": "Stable continuation identity source",
+                "sub_questions": [
+                    {
+                        "id": "sq1",
+                        "question": "How does checkpoint resume work?",
+                        "reason": "Primary question.",
+                    }
+                ],
+            }
+        ),
+        "application/json",
+    )
+
+    first = runtime._build_continuation_context(source.job_id)
+    runtime.write_artifact(
+        source.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "query": "Stable continuation identity source",
+                "sub_questions": [
+                    {
+                        "id": "sq-rewritten",
+                        "question": "How does checkpoint resume work?",
+                        "reason": "Still the same focused snapshot.",
+                    }
+                ],
+                "planner_metadata": {
+                    "planner": "model",
+                    "used_fallback": False,
+                    "note": "This should not change continuation identity.",
+                },
+            }
+        ),
+        "application/json",
+    )
+    runtime.store.update_job(source.job_id, current_checkpoint="finalizing-duplicate")
+    second = runtime._build_continuation_context(source.job_id)
+
+    assert first.focused_snapshot == second.focused_snapshot
+    assert first.continuation_identity == second.continuation_identity
+    assert first.focused_snapshot["source_ids"] == ["R1"]
+    assert first.focused_snapshot["confirmed_claims"] == ["Resume continues from the last checkpoint."]
+
+
+def test_coverage_for_report_requires_grounded_claims_to_mark_answered_or_covered():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Compare checkpoint resume and restart semantics",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Compare checkpoint resume and restart semantics",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "Compare checkpoint resume and restart semantics",
+                    "reason": "Primary comparison.",
+                }
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["Compare checkpoint resume and restart semantics"],
+                "selective_fetch": {
+                    "max_urls_per_search": 1,
+                    "prefer_titles_matching_outline": True,
+                },
+            },
+            "report_outline": [
+                {
+                    "section_id": "resume-vs-restart",
+                    "title": "Resume vs Restart",
+                    "goal": "Compare checkpoint resume and restart semantics.",
+                }
+            ],
+            "research_units": [],
+        }
+    )
+
+    coverage = _coverage_for_report(
+        plan,
+        [
+            {
+                "section_id": "resume-vs-restart",
+                "title": "Resume vs Restart",
+                "summary": "Restart tasks from the console.",
+                "claims": [
+                    {
+                        "claim_id": "c1",
+                        "text": "Restart tasks from the console.",
+                        "citations": [],
+                    }
+                ],
+                "citations": [],
+            }
+        ],
+    )
+
+    assert coverage["answered_section_ids"] == []
+    assert coverage["covered_sub_question_ids"] == []
+    assert coverage["unanswered_sections"] == ["Resume vs Restart"]
+    assert coverage["uncovered_sub_questions"] == ["Compare checkpoint resume and restart semantics"]
 
 
 @pytest.mark.asyncio

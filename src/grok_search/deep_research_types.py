@@ -125,6 +125,7 @@ class DeepResearchContinuation(BaseModel):
     source_job_id: str = ""
     source_job_status: str = ""
     continuation_identity: str = ""
+    focused_snapshot: dict[str, Any] = Field(default_factory=dict)
     previous_summary: str = ""
     prior_plan_summary: str = ""
     continuation_goal: str = ""
