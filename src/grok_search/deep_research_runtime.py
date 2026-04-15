@@ -60,6 +60,7 @@ _STOPWORDS = {
 }
 _NOISY_EVIDENCE_MARKERS = (
     "for more information about",
+    "for more information, see",
     "real-world analogy",
     "think of `",
     "sitemap",

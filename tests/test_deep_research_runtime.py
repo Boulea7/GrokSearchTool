@@ -6624,6 +6624,61 @@ async def test_executive_summary_omits_gap_claims_when_supported_claim_exists(mo
 
 
 @pytest.mark.asyncio
+async def test_claims_suppress_for_more_information_boilerplate_when_real_claim_exists(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Use resume-processing to continue from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Official docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return (
+            "# Runtime checkpoints\n\n"
+            "Use resume-processing to continue from the last durable checkpoint.\n\n"
+            "For more information, see the checkpoint recovery appendix.\n"
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Boilerplate claim suppression probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    claim_texts = [
+        claim["text"].lower()
+        for section in result["report"]["sections"]
+        for claim in section["claims"]
+    ]
+
+    assert any("resume-processing" in claim for claim in claim_texts)
+    assert not any("for more information" in claim for claim in claim_texts)
+
+
+@pytest.mark.asyncio
 async def test_report_summary_is_synthesized_instead_of_reusing_first_claim(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
