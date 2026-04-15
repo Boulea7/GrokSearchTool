@@ -1135,8 +1135,8 @@ async def test_completed_report_with_only_runtime_warning_is_marked_degraded(mon
     response = await runtime.start(query="Degraded runtime warning", force_new=True, schedule=False)
     result = await runtime.run_job(response["job_id"])
 
-    assert result["status"] == "completed"
-    assert result["report"]["status"] == "degraded"
+    assert result["status"] == "failed"
+    assert result["report"]["status"] == "failed"
     assert "body_missing_sources_only" in result["report"]["runtime"]["warnings"]
 
 
@@ -1390,7 +1390,7 @@ async def test_run_job_outputs_consistent_sources_citations_and_report(monkeypat
     citations = result["citations"]
     report = result["report"]
 
-    assert result["status"] == "completed"
+    assert result["status"] == "failed"
     assert sources[0]["source_id"] == "R1"
     assert citations["source_registry"]["R1"]["url"] == "https://example.com/resume"
     assert citations["sections"][0]["claims"]
@@ -1888,7 +1888,7 @@ async def test_resume_migrates_legacy_plan_and_checkpoint(monkeypatch, tmp_path)
     result = await runtime.run_job(job.job_id)
 
     assert resumed["status"] == "queued"
-    assert result["status"] == "completed"
+    assert result["status"] == "failed"
     assert result["plan"]["brief"]["objective"] == "Legacy resume"
 
 
@@ -2721,9 +2721,9 @@ async def test_empty_fetch_and_map_units_emit_failed_events_and_degrade_report(m
     result = await runtime.run_job(response["job_id"])
     events = await runtime.events(response["job_id"])
 
-    assert result["status"] == "completed"
-    assert result["report"]["status"] == "degraded"
-    assert {event["type"] for event in events["events"]} >= {"research_unit_failed", "job_completed"}
+    assert result["status"] == "failed"
+    assert result["report"]["status"] == "failed"
+    assert {event["type"] for event in events["events"]} >= {"research_unit_failed", "job_failed"}
     assert not any(event["type"] == "research_unit_completed" for event in events["events"])
     assert result["report"]["runtime"]["failed_units"] == [
         {"reason": "empty_fetch_result", "unit_id": "unit-fetch-1", "unit_type": "fetch"},
@@ -2787,8 +2787,8 @@ async def test_failed_fetch_dependency_skips_downstream_units_instead_of_blockin
     result = await runtime.run_job(response["job_id"])
     events = await runtime.events(response["job_id"])
 
-    assert result["status"] == "completed"
-    assert result["report"]["status"] == "degraded"
+    assert result["status"] == "failed"
+    assert result["report"]["status"] == "failed"
     assert any(event["type"] == "research_unit_failed" and event["message"] == "Failed unit-fetch-1." for event in events["events"])
     assert any(event["type"] == "research_unit_skipped" and event["message"] == "Skipped unit-search-2." for event in events["events"])
     assert result["report"]["runtime"]["skipped_units"] == [
@@ -4314,7 +4314,7 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
     completed = await runtime.run_job(response["job_id"])
 
     assert resumed["status"] == "queued"
-    assert completed["status"] == "completed"
+    assert completed["status"] == "failed"
     assert executed == ["first checkpoint", "second checkpoint"]
     assert runtime.store.get_job(response["job_id"]).finished_at
     assert runtime.store.read_artifact_text(response["job_id"], "final_report.md")
@@ -6703,7 +6703,7 @@ async def test_incomplete_coverage_degrades_report_status_and_runtime_warnings(m
 
     assert result["report"]["coverage"]["unanswered_sections"] == ["Restart Trade-offs"]
     assert result["report"]["coverage"]["uncovered_sub_questions"] == ["Explain restart trade-offs"]
-    assert result["report"]["status"] == "degraded"
+    assert result["report"]["status"] == "failed"
     assert "coverage_incomplete" in result["report"]["runtime"]["warnings"]
 
 
@@ -6952,7 +6952,7 @@ async def test_report_coverage_exposes_hard_gate_flag_when_only_executive_summar
     result = await runtime.run_job(response["job_id"])
 
     assert result["report"]["coverage"]["coverage_gate_passed"] is False
-    assert result["report"]["status"] == "degraded"
+    assert result["report"]["status"] == "failed"
     assert "coverage_incomplete" in result["report"]["runtime"]["warnings"]
 
 

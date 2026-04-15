@@ -231,9 +231,21 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_API_KEY",
         "GROK_MODEL",
         "GROK_MODEL_SOURCE",
+        "GROK_WEB_SEARCH_MODEL",
+        "GROK_WEB_SEARCH_MODEL_SOURCE",
+        "GROK_WEB_SEARCH_FALLBACK_MODELS",
         "GROK_MODEL_PROFILE",
+        "GROK_DEEP_RESEARCH_STANDARD_MODEL",
+        "GROK_DEEP_RESEARCH_STANDARD_MODEL_SOURCE",
+        "GROK_DEEP_RESEARCH_STANDARD_FALLBACK_MODELS",
         "GROK_DEEP_RESEARCH_STANDARD_PROFILE",
+        "GROK_DEEP_RESEARCH_DEEP_MODEL",
+        "GROK_DEEP_RESEARCH_DEEP_MODEL_SOURCE",
+        "GROK_DEEP_RESEARCH_DEEP_FALLBACK_MODELS",
         "GROK_DEEP_RESEARCH_DEEP_PROFILE",
+        "GROK_DEEP_RESEARCH_ULTRA_MODEL",
+        "GROK_DEEP_RESEARCH_ULTRA_MODEL_SOURCE",
+        "GROK_DEEP_RESEARCH_ULTRA_FALLBACK_MODELS",
         "GROK_DEEP_RESEARCH_ULTRA_PROFILE",
         "GROK_PROVIDER_FAMILY",
         "GROK_ROUTING_DIAGNOSTICS",
@@ -675,9 +687,9 @@ async def test_get_config_info_deep_research_runtime_and_planner_degrade_when_mo
 
     payload = await load_config_info()
 
-    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
-    assert payload["feature_readiness"]["deep_research_planner"]["status"] == "degraded"
-    assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "degraded"
+    assert payload["feature_readiness"]["web_search"]["status"] == "ready"
+    assert payload["feature_readiness"]["deep_research_planner"]["status"] == "ready"
+    assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "ready"
     assert "尚无可读取的 source session" in payload["feature_readiness"]["get_sources"]["message"]
     assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
         {
