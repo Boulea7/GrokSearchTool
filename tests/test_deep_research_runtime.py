@@ -6808,6 +6808,149 @@ async def test_report_exposes_sub_question_to_claim_coverage_ledger(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_report_coverage_exposes_hard_gate_flag_when_only_executive_summary_is_answered(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["brief"]["must_cover"] = [
+            "Explain checkpoint resume semantics",
+            "Explain restart trade-offs",
+        ]
+        payload["brief"]["coverage_checklist"] = [
+            "Explain checkpoint resume semantics",
+            "Explain restart trade-offs",
+        ]
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "Explain checkpoint resume semantics", "reason": "Primary question."},
+            {"id": "sq2", "question": "Explain restart trade-offs", "reason": "Secondary question."},
+        ]
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "restart-tradeoffs",
+                "title": "Restart Trade-offs",
+                "goal": "Explain restart trade-offs.",
+            },
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint, while restart replays work from a fresh starting point.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint docs.",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", lambda url: asyncio.sleep(0, result=None))
+
+    response = await runtime.start(query="Coverage hard gate probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert result["report"]["coverage"]["coverage_gate_passed"] is False
+    assert result["report"]["status"] == "degraded"
+    assert "coverage_incomplete" in result["report"]["runtime"]["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_claims_include_evidence_bindings_in_final_report(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nCheckpoint resume continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Evidence binding probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    claim = result["report"]["sections"][0]["claims"][0]
+
+    assert claim["evidence_bindings"]
+    assert claim["evidence_bindings"][0]["source_id"] == "R1"
+    assert claim["evidence_bindings"][0]["source_url"] == "https://docs.example.com/runtime/checkpoints"
+    assert claim["evidence_bindings"][0]["excerpt"]
+    assert claim["evidence_bindings"][0]["excerpt_hash"]
+
+
+@pytest.mark.asyncio
+async def test_continuation_confirmed_claims_filter_low_value_boilerplate(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(
+        runtime,
+        query="Continuation hygiene source",
+        checkpoint_sections=[
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "summary": "Checkpoint resume continues from the last durable checkpoint.",
+                "claims": [
+                    {
+                        "claim_id": "executive-summary-claim-1",
+                        "text": "Checkpoint resume continues from the last durable checkpoint.",
+                        "citations": ["R1"],
+                    },
+                    {
+                        "claim_id": "executive-summary-claim-2",
+                        "text": "For more information, see the checkpoint recovery appendix.",
+                        "citations": ["R1"],
+                    },
+                ],
+                "citations": ["R1"],
+                "confidence": "medium",
+            }
+        ],
+    )
+
+    continuation = runtime._build_continuation_context(source.job_id)
+
+    assert continuation.confirmed_claims == ["Checkpoint resume continues from the last durable checkpoint."]
+
+
+@pytest.mark.asyncio
 async def test_stop_policy_does_not_skip_pending_unit_when_only_one_completed_unit_mentions_all_targets(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     search_calls: list[str] = []

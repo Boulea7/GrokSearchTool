@@ -176,6 +176,7 @@ class DeepResearchClaim(BaseModel):
     citations: list[str] = Field(default_factory=list)
     unit_id: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
+    evidence_bindings: list[dict[str, Any]] = Field(default_factory=list)
     cluster_type: str = ""
     supporting_source_count: int = 0
     supporting_domain_count: int = 0
