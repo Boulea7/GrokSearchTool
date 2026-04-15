@@ -4296,6 +4296,62 @@ async def test_reconciled_interrupted_job_cannot_be_completed_by_stale_worker(mo
 
 
 @pytest.mark.asyncio
+async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoint_for_resume(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    did_reconcile = False
+
+    async def reconciling_search(query):
+        nonlocal did_reconcile
+        if not did_reconcile:
+            did_reconcile = True
+            runtime.store.reconcile_incomplete_jobs()
+        return (
+            "Recovered answer",
+            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
+        )
+
+    async def stable_search(query):
+        return (
+            "Recovered answer",
+            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", reconciling_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query="Dispatch checkpoint resume", force_new=True, schedule=False)
+    first_result = await runtime.run_job(response["job_id"])
+    interrupted_job = runtime.store.get_job(response["job_id"])
+
+    assert did_reconcile is True
+    assert first_result["status"] == "interrupted"
+    assert interrupted_job.current_checkpoint.startswith("researching-dispatch-")
+
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", stable_search)
+    resumed = await runtime.resume(response["job_id"], schedule=False)
+    final_result = await runtime.run_job(response["job_id"])
+    events = await runtime.events(response["job_id"])
+
+    assert resumed["status"] == "queued"
+    assert final_result["status"] == "completed"
+    assert any(event["type"] == "job_resumed" for event in events["events"])
+    assert runtime.store.read_artifact_text(response["job_id"], "final_report.md") is not None
+
+
+@pytest.mark.asyncio
 async def test_canceling_queued_job_emits_single_terminal_canceled_event(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
