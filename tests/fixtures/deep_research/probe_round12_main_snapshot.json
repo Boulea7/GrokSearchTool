@@ -1,0 +1,51 @@
+{
+  "job_id": "d91b8429b9100efa4c6fc964",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: filled_search_query:u1"
+    }
+  },
+  "report": {
+    "status": "degraded",
+    "summary": "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: * You can monitor, stop, or restart tasks using the console, AWS CLI, or AWS DMS API.",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied",
+        "planner_fallback_used"
+      ],
+      "constraint_violations": [
+        {
+          "unit_id": "unit-search-1",
+          "removed_source_count": 1,
+          "reason": "domain_constraints_applied"
+        }
+      ]
+    },
+    "coverage": {
+      "answered_section_ids": [
+        "executive-summary"
+      ],
+      "unanswered_sections": [
+        "Key Findings",
+        "Open Questions"
+      ],
+      "covered_sub_question_ids": [
+        "sq1"
+      ],
+      "uncovered_sub_questions": []
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "domain": "docs.aws.amazon.com",
+      "title": "Working with AWS DMS tasks",
+      "quality_tier": "official"
+    }
+  ]
+}
