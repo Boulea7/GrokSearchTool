@@ -16,7 +16,7 @@ def test_default_grok_model_prefers_grok_4_20_0309():
     assert config._DEFAULT_MODEL == "grok-4.20-0309"
 
 
-def test_default_grok_model_uses_provider_aware_balanced_default_for_official_xai(monkeypatch, tmp_path):
+def test_default_grok_model_uses_unified_balanced_default_for_official_xai(monkeypatch, tmp_path):
     config = Config()
     config.reset_runtime_state()
     monkeypatch.delenv("GROK_MODEL", raising=False)
@@ -25,10 +25,10 @@ def test_default_grok_model_uses_provider_aware_balanced_default_for_official_xa
     monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
     monkeypatch.setattr(config, "_load_config_file", lambda: {})
 
-    assert config.grok_model == "grok-4.20-0309-non-reasoning"
+    assert config.grok_model == "grok-4.20-auto"
 
 
-def test_default_grok_model_uses_provider_aware_balanced_default_for_openrouter(monkeypatch, tmp_path):
+def test_default_grok_model_uses_unified_balanced_default_for_openrouter(monkeypatch, tmp_path):
     config = Config()
     config.reset_runtime_state()
     monkeypatch.delenv("GROK_MODEL", raising=False)
@@ -37,10 +37,10 @@ def test_default_grok_model_uses_provider_aware_balanced_default_for_openrouter(
     monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
     monkeypatch.setattr(config, "_load_config_file", lambda: {})
 
-    assert config.grok_model == "x-ai/grok-4.1-fast:online"
+    assert config.grok_model == "grok-4.20-auto:online"
 
 
-def test_default_grok_model_uses_provider_aware_balanced_default_for_relay(monkeypatch, tmp_path):
+def test_default_grok_model_uses_unified_balanced_default_for_relay(monkeypatch, tmp_path):
     config = Config()
     config.reset_runtime_state()
     monkeypatch.delenv("GROK_MODEL", raising=False)
@@ -52,7 +52,7 @@ def test_default_grok_model_uses_provider_aware_balanced_default_for_relay(monke
     assert config.grok_model == "grok-4.20-auto"
 
 
-def test_grok_provider_chain_uses_provider_specific_defaults_when_runtime_model_is_implicit(monkeypatch, tmp_path):
+def test_grok_provider_chain_uses_unified_defaults_when_runtime_model_is_implicit(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.setenv("GROK_API_URL", "https://grok2api.example.com/v1")
@@ -74,8 +74,8 @@ def test_grok_provider_chain_uses_provider_specific_defaults_when_runtime_model_
 
     assert [item["model"] for item in chain] == [
         "grok-4.20-auto",
-        "x-ai/grok-4.1-fast:online",
-        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-auto:online",
+        "grok-4.20-auto",
     ]
     assert [item["provider_family"] for item in chain] == [
         "grok2api_like",
@@ -105,6 +105,20 @@ def test_grok_model_prefers_env_over_persisted_config(monkeypatch):
     monkeypatch.setattr(config, "_load_config_file", lambda: {"model": "persisted-model"})
 
     assert config.grok_model == "env-model"
+
+
+def test_web_search_override_does_not_replace_global_grok_model(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "balanced-override")
+    monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {"model": "persisted-model"})
+
+    assert config.grok_model == "persisted-model"
+    assert config.preferred_web_search_models_for_url("https://api.example.com/v1")[0] == "balanced-override"
 
 
 def test_set_model_does_not_override_env_priority_in_current_process(monkeypatch):
@@ -319,7 +333,7 @@ def test_get_config_info_includes_routing_diagnostics_for_profile_defaults(monke
     diagnostics = info["GROK_ROUTING_DIAGNOSTICS"]
 
     assert diagnostics["active_provider"]["provider_family"] == "official_xai"
-    assert diagnostics["active_provider"]["resolved_model"] == "grok-4.20-0309-non-reasoning"
+    assert diagnostics["active_provider"]["resolved_model"] == "grok-4.20-auto"
     assert diagnostics["active_provider"]["preferred_endpoint_path"] == "/chat/completions"
     assert diagnostics["active_provider"]["path_visibility"] == {
         "chat_completions": "https://api.x.ai/v1/chat/completions",
@@ -327,7 +341,7 @@ def test_get_config_info_includes_routing_diagnostics_for_profile_defaults(monke
     }
     assert diagnostics["profile_defaults"]["web_search"] == {
         "profile": "balanced_auto",
-        "resolved_model": "grok-4.20-0309-non-reasoning",
+        "resolved_model": "grok-4.20-auto",
         "preferred_endpoint_path": "/chat/completions",
         "path_visibility": {
             "chat_completions": "https://api.x.ai/v1/chat/completions",
@@ -344,7 +358,7 @@ def test_get_config_info_includes_routing_diagnostics_for_profile_defaults(monke
     }
     assert diagnostics["profile_defaults"]["deep_research_deep"] == {
         "profile": "multi_agent",
-        "resolved_model": "grok-4.20-multi-agent-0309",
+        "resolved_model": "grok-4.20-expert-4-agent",
         "preferred_endpoint_path": "/responses",
         "path_visibility": {
             "chat_completions": "https://api.x.ai/v1/chat/completions",
@@ -400,7 +414,7 @@ def test_get_config_info_routing_diagnostics_summarize_provider_chain_families_a
             "name": "provider_2",
             "source": "project_env_local",
             "provider_family": "openrouter",
-            "resolved_model": "x-ai/grok-4.1-fast:online",
+            "resolved_model": "grok-4.20-auto:online",
             "preferred_endpoint_path": "/chat/completions",
             "multi_agent_family": False,
             "routing_signals": [
@@ -413,7 +427,7 @@ def test_get_config_info_routing_diagnostics_summarize_provider_chain_families_a
             "name": "provider_3",
             "source": "project_env_local",
             "provider_family": "official_xai",
-            "resolved_model": "grok-4.20-0309-non-reasoning",
+            "resolved_model": "grok-4.20-auto",
             "preferred_endpoint_path": "/chat/completions",
             "multi_agent_family": False,
             "routing_signals": [
@@ -467,6 +481,56 @@ def test_resolve_deep_research_model_for_ultra_prefers_heavy_16_agent_on_relay(m
     monkeypatch.setattr(config, "_load_config_file", lambda: {})
 
     assert config.resolve_deep_research_model_for_url("https://grok2api.example.com/v1", effort="ultra") == "grok-4.20-heavy-16-agent"
+
+
+def test_resolve_deep_research_model_uses_standard_override_across_provider_families(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_STANDARD_MODEL", "standard-override")
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.resolve_deep_research_model_for_url("https://api.x.ai/v1", effort="standard") == "standard-override"
+    assert config.resolve_deep_research_model_for_url("https://grok2api.example.com/v1", effort="standard") == "standard-override"
+
+
+def test_resolve_deep_research_model_uses_ultra_override_across_provider_families(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_ULTRA_MODEL", "ultra-override")
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.resolve_deep_research_model_for_url("https://api.x.ai/v1", effort="ultra") == "ultra-override"
+    assert config.resolve_deep_research_model_for_url("https://openrouter.ai/api/v1", effort="ultra") == "ultra-override:online"
+
+
+def test_get_config_info_exposes_tool_level_model_overrides(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "web-override")
+    monkeypatch.setenv("GROK_WEB_SEARCH_FALLBACK_MODELS", "web-fallback-a,web-fallback-b")
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_STANDARD_MODEL", "standard-override")
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_DEEP_MODEL", "deep-override")
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_ULTRA_MODEL", "ultra-override")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    info = config.get_config_info()
+
+    assert info["GROK_WEB_SEARCH_MODEL"] == "web-override"
+    assert info["GROK_WEB_SEARCH_FALLBACK_MODELS"] == ["web-fallback-a", "web-fallback-b"]
+    assert info["GROK_DEEP_RESEARCH_STANDARD_MODEL"] == "standard-override"
+    assert info["GROK_DEEP_RESEARCH_DEEP_MODEL"] == "deep-override"
+    assert info["GROK_DEEP_RESEARCH_ULTRA_MODEL"] == "ultra-override"
 
 
 def test_empty_process_env_still_blocks_project_env_fallback(monkeypatch, tmp_path):
