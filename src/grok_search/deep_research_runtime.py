@@ -1877,6 +1877,26 @@ class DeepResearchRuntime:
                 if not _final_artifact_bundle_is_usable(self.store, reused_job.job_id):
                     reused_job = None
         if reused_job is not None:
+            if reused_job.status == "interrupted" and _job_prefers_resolved_final_bundle(reused_job):
+                final_bundle = _resolve_final_artifact_bundle(self.store, reused_job.job_id)
+                if _artifact_bundle_is_usable(final_bundle):
+                    completed_at = reused_job.finished_at or utc_now_iso()
+                    reused_job = self.store.update_job(
+                        reused_job.job_id,
+                        status="completed",
+                        phase="finalizing",
+                        progress_pct=100.0,
+                        finished_at=completed_at,
+                        heartbeat_at=utc_now_iso(),
+                        last_error="",
+                    )
+                    self.store.append_event(
+                        reused_job.job_id,
+                        type="job_resolved_from_final_batch",
+                        phase="finalizing",
+                        message="Deep research recovered a usable final artifact batch without rerunning finalization.",
+                        data={"resolved_artifact_batch_id": final_bundle["batch_id"]},
+                    )
             return self._job_payload(reused_job, reused=True)
 
         initial_status = "draft" if plan_only else "queued"
@@ -2876,7 +2896,10 @@ class DeepResearchRuntime:
                 f"{unsafe_plan_reason['reason']}: {unsafe_plan_reason['issue']}",
                 trace=planner_trace,
             )
-        planner_trace["final_status"] = "fallback" if planner_metadata.get("used_fallback") else "normalized"
+        if planner_metadata.get("used_fallback"):
+            planner_trace["final_status"] = str(planner_trace.get("final_status") or "fallback")
+        else:
+            planner_trace["final_status"] = "normalized"
         planner_metadata["trace"] = planner_trace
 
         normalized = {
@@ -2913,32 +2936,26 @@ class DeepResearchRuntime:
         checkpoints = self.store.list_checkpoints(continue_from_job_id)
         checkpoint_state, checkpoint_meta = self._load_checkpoint_state(job)
         latest_state = checkpoints[-1].state or {} if checkpoints else {}
-        selected_tier = "current"
-        if use_final_bundle:
-            selected_tier = "resolved_final_batch"
-        elif checkpoint_state or isinstance(latest_state, dict) and latest_state:
-            selected_tier = "checkpoint"
-
         report_text = (
             _read_text_if_exists(final_bundle["paths"]["report.json"])
-            if selected_tier == "resolved_final_batch"
-            else current_report_text if selected_tier == "current" else ""
+            if use_final_bundle
+            else current_report_text
         )
         final_report = (
             _read_text_if_exists(final_bundle["paths"]["final_report.md"])
-            if selected_tier == "resolved_final_batch"
-            else current_final_report if selected_tier == "current" else ""
+            if use_final_bundle
+            else current_final_report
         )
         partial_report = self.store.read_artifact_text(continue_from_job_id, "partial_report.md") or ""
         sources_text = (
             _read_text_if_exists(final_bundle["paths"]["sources.json"])
-            if selected_tier == "resolved_final_batch"
-            else current_sources_text if selected_tier == "current" else "[]"
+            if use_final_bundle
+            else current_sources_text
         ) or "[]"
         citations_text = (
             _read_text_if_exists(final_bundle["paths"]["citations.json"])
-            if selected_tier == "resolved_final_batch"
-            else current_citations_text if selected_tier == "current" else ""
+            if use_final_bundle
+            else current_citations_text
         ) or ""
         report: dict[str, Any] = {}
         if report_text:
@@ -2984,29 +3001,29 @@ class DeepResearchRuntime:
             ):
                 carry_forward_sources = list(normalized_citations["source_registry"].values())
 
-        if selected_tier == "checkpoint" and not carry_forward_sources and checkpoint_state:
+        if not carry_forward_sources and checkpoint_state:
             carry_forward_sources = list(checkpoint_state.sources)
-        elif selected_tier == "checkpoint" and not carry_forward_sources and isinstance(latest_state, dict):
+        elif not carry_forward_sources and isinstance(latest_state, dict):
             carry_forward_sources = list(latest_state.get("sources") or [])
         source_count = len(carry_forward_sources)
 
         carry_forward_sections = list(report.get("sections") or []) if isinstance(report.get("sections"), list) else []
-        if selected_tier == "checkpoint" and not carry_forward_sections and checkpoint_state:
+        if not carry_forward_sections and checkpoint_state:
             carry_forward_sections = list(checkpoint_state.sections)
-        elif selected_tier == "checkpoint" and not carry_forward_sections and isinstance(latest_state, dict):
+        elif not carry_forward_sections and isinstance(latest_state, dict):
             carry_forward_sections = list(latest_state.get("sections") or [])
 
         report_unit_results = report.get("unit_results") if isinstance(report.get("unit_results"), dict) else {}
         carry_forward_unit_results = dict(report_unit_results or {})
-        if selected_tier == "checkpoint" and not carry_forward_unit_results and checkpoint_state:
+        if not carry_forward_unit_results and checkpoint_state:
             carry_forward_unit_results = dict(checkpoint_state.unit_results)
-        elif selected_tier == "checkpoint" and not carry_forward_unit_results and isinstance(latest_state, dict):
+        elif not carry_forward_unit_results and isinstance(latest_state, dict):
             carry_forward_unit_results = dict(latest_state.get("unit_results") or {})
 
         carry_forward_evidence = []
-        if selected_tier == "checkpoint" and checkpoint_state:
+        if checkpoint_state:
             carry_forward_evidence = list(checkpoint_state.evidence_items)
-        elif selected_tier == "checkpoint" and isinstance(latest_state, dict):
+        elif isinstance(latest_state, dict):
             carry_forward_evidence = list(latest_state.get("evidence_items") or [])
         if not carry_forward_evidence:
             carry_forward_evidence = _build_carry_forward_evidence(carry_forward_unit_results, carry_forward_sections)

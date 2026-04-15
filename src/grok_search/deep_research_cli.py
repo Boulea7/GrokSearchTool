@@ -35,14 +35,27 @@ def _spawn_worker(job_id: str) -> None:
 
 async def _watch_job(runtime: DeepResearchRuntime, job_id: str, *, interval_seconds: float = 1.0) -> None:
     last_seq = 0
+    last_status_line = ""
     while True:
         status = await runtime.status(job_id)
         events = await runtime.events(job_id, after_seq=last_seq, limit=100)
         for event in events["events"]:
             print(f"[{event['seq']}] {event['phase']} {event['type']}: {event['message']}")
         last_seq = events["next_after_seq"]
+        phase = status.get("phase", "")
+        progress = status.get("progress_pct")
+        batch_id = status.get("resolved_artifact_batch_id", "")
+        status_line = f"status={status['status']}"
+        if phase:
+            status_line += f" phase={phase}"
+        if progress is not None:
+            status_line += f" progress={progress}"
+        if batch_id:
+            status_line += f" resolved_batch={batch_id}"
+        if status_line != last_status_line:
+            print(status_line)
+            last_status_line = status_line
         if status["status"] in TERMINAL_STATUSES:
-            print(f"status={status['status']} progress={status['progress_pct']}")
             return
         await asyncio.sleep(interval_seconds)
 

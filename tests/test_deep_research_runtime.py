@@ -635,6 +635,45 @@ async def test_planner_attempts_targeted_repair_before_fallback_on_normalize_fai
 
 
 @pytest.mark.asyncio
+async def test_planner_repair_failure_falls_back_with_explicit_repair_stage(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    observed_models = []
+    call_count = {"value": 0}
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309"]
+
+    async def fake_execute(self, headers, payload, ctx=None, render_sources=False):
+        observed_models.append(payload["model"])
+        call_count["value"] += 1
+        return "```json\n{\"brief\": \"broken\"\n```", []
+
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
+
+    response = await runtime.start(
+        query="Repair planner failure stage",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    trace = json.loads(runtime.store.read_artifact_text(response["job_id"], "planner_trace.json"))
+
+    assert response["plan"]["planner_metadata"]["used_fallback"] is True
+    assert response["plan"]["planner_metadata"]["fallback_reason"]["stage"] == "repair"
+    assert call_count["value"] == 2
+    assert observed_models == ["grok-4.20-0309", "grok-4.20-0309"]
+    assert trace["repair_attempted"] is True
+    assert trace["repair_succeeded"] is False
+    assert trace["final_status"] == "repair_failed"
+    assert trace["repair_error"]
+
+
+@pytest.mark.asyncio
 async def test_plan_only_does_not_schedule_execution(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -3259,7 +3298,7 @@ async def test_start_reuses_interrupted_finalizing_job_with_usable_final_batch(t
 
     assert response["reused"] is True
     assert response["job_id"] == job.job_id
-    assert response["status"] == "interrupted"
+    assert response["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -4164,6 +4203,62 @@ async def test_corrupt_runtime_continuation_uses_frozen_planning_checkpoint_snap
 
 
 @pytest.mark.asyncio
+async def test_read_plan_uses_frozen_follow_up_continuation_instead_of_live_source_job(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = create_completed_source_job(runtime, query="Frozen continuation precedence source")
+
+    response = await runtime.start(
+        query="Follow up frozen continuation precedence source",
+        continue_from_job_id=source.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+    follow_up_job = runtime.store.get_job(response["job_id"])
+    frozen_continuation = json.loads(runtime.store.read_artifact_text(follow_up_job.job_id, "continuation.json"))
+
+    runtime.write_artifact(
+        source.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "query": "Frozen continuation precedence source",
+                "summary": "Updated source summary after follow-up creation.",
+                "sections": [
+                    {
+                        "section_id": "updated",
+                        "title": "Updated",
+                        "summary": "Updated source summary after follow-up creation.",
+                        "claims": [
+                            {
+                                "claim_id": "updated-claim-1",
+                                "text": "Updated source summary after follow-up creation.",
+                                "citations": ["R9"],
+                            }
+                        ],
+                        "citations": ["R9"],
+                    }
+                ],
+                "unit_results": {},
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        source.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://docs.example.com/runtime/updated"}]),
+        "application/json",
+    )
+
+    rebuilt_plan = runtime._read_plan(follow_up_job.job_id, follow_up_job)
+
+    assert rebuilt_plan.continuation.previous_summary == frozen_continuation["previous_summary"]
+    assert rebuilt_plan.continuation.source_count == frozen_continuation["source_count"]
+
+
+@pytest.mark.asyncio
 async def test_continuation_prefers_consistent_final_artifact_batch_over_mixed_current_artifacts(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -4322,6 +4417,76 @@ async def test_continuation_does_not_mix_checkpoint_state_into_selected_final_ba
     assert continuation_payload["carry_forward_sections"] == []
     assert continuation_payload["carry_forward_unit_results"] == {}
     assert continuation_payload["previous_summary"] == "Selected final batch summary."
+
+
+@pytest.mark.asyncio
+async def test_continuation_uses_current_valid_sources_before_checkpoint_fallback(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = runtime.store.create_job(
+        query="Per artifact fallback source",
+        request_fingerprint="fp-per-artifact-fallback-source",
+        status="failed",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(source.job_id, "plan.json", json.dumps({"query": "Per artifact fallback source"}), "application/json")
+    runtime.write_artifact(
+        source.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/current"}]),
+        "application/json",
+    )
+    runtime.write_artifact(source.job_id, "report.json", "{bad-json", "application/json")
+    runtime.store.save_checkpoint(
+        source.job_id,
+        phase="researching",
+        checkpoint_key="researching",
+        state={
+            "plan": structured_plan_payload(source, {"mode": "fresh"}),
+            "completed_unit_ids": ["unit-search-1"],
+            "unit_results": {
+                "unit-search-1": {
+                    "summary": "Checkpoint fallback summary.",
+                    "detail": "Checkpoint fallback detail.",
+                    "source_ids": ["R9"],
+                    "citations": ["R9"],
+                }
+            },
+            "sources": [{"source_id": "R9", "url": "https://docs.example.com/runtime/checkpoint"}],
+            "evidence_items": [],
+            "sections": [
+                {
+                    "section_id": "checkpoint-only",
+                    "title": "Checkpoint Only",
+                    "summary": "Checkpoint fallback summary.",
+                    "claims": [{"claim_id": "c1", "text": "Checkpoint fallback summary.", "citations": ["R9"]}],
+                    "citations": ["R9"],
+                }
+            ],
+        },
+    )
+
+    response = await runtime.start(
+        query="Follow up per artifact fallback source",
+        continue_from_job_id=source.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+    continuation_payload = json.loads(runtime.store.read_artifact_text(response["job_id"], "continuation.json"))
+
+    assert continuation_payload["carry_forward_sources"] == [
+        {"source_id": "R1", "url": "https://docs.example.com/runtime/current"}
+    ]
+    assert continuation_payload["carry_forward_sections"][0]["title"] == "Checkpoint Only"
 
 
 @pytest.mark.asyncio
@@ -5874,6 +6039,70 @@ async def test_selective_fetch_avoids_same_domain_off_topic_page(monkeypatch, tm
     assert "Resume-processing continues from the last checkpoint" in result["final_report"]
     assert "Flink restart restores a job graph from a savepoint" not in result["final_report"]
     assert "jobruns-flink-restart.html" not in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_selective_fetch_penalizes_troubleshooting_shell_even_when_keywords_match(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain AWS DMS checkpoint resume semantics.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "AWS DMS checkpoint resume semantics are documented in the API reference.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Troubleshooting.html",
+                    "title": "AWS DMS checkpoint resume troubleshooting",
+                    "description": "Checkpoint and resume troubleshooting topics for AWS DMS tasks.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "StartReplicationTask",
+                    "description": "AWS DMS API reference for start, resume-processing, and reload-target semantics.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "Troubleshooting" in url:
+            return (
+                "# Troubleshooting migration tasks in AWS Database Migration Service\n\n"
+                "Following, you can find topics about troubleshooting issues with AWS Database Migration Service (AWS DMS).\n"
+                "These topics can help you to resolve common issues using both AWS DMS and selected endpoint databases.\n"
+            )
+        return (
+            "# StartReplicationTask\n\n"
+            "The `resume-processing` start type resumes from the last recovery checkpoint when checkpoint metadata is still available.\n"
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="AWS DMS checkpoint resume semantics", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    source_lines = [line for line in result["final_report"].splitlines() if line.startswith("- [R")]
+
+    assert "resume-processing" in result["final_report"]
+    assert "CHAP_Troubleshooting.html" not in source_lines[0]
+    assert "API_StartReplicationTask.html" in source_lines[0]
 
 
 @pytest.mark.asyncio
