@@ -49,7 +49,7 @@ def _quote_summary_text(value: str, *, limit: int = 80) -> str:
 
 def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") -> list[str]:
     artifact_fallback = payload.get("artifact_fallback_used")
-    return [
+    parts = [
         f"job={_summary_value(payload.get('job_id') or fallback_job_id)}",
         f"status={_summary_value(payload.get('status'))}",
         f"phase={_summary_value(payload.get('phase'))}",
@@ -61,6 +61,15 @@ def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") ->
         f"resolved_batch={_summary_value(payload.get('resolved_artifact_batch_id'))}",
         f"artifact_fallback={_summary_value(artifact_fallback) if artifact_fallback is not None else '-'}",
     ]
+    if payload.get("planner_fallback_used"):
+        parts.append("planner_fallback=true")
+    runtime_warnings = payload.get("runtime_warnings")
+    if isinstance(runtime_warnings, list) and runtime_warnings:
+        parts.append(f"warnings={len(runtime_warnings)}")
+    constraint_violations = payload.get("constraint_violations")
+    if isinstance(constraint_violations, list) and constraint_violations:
+        parts.append(f"constraint_violations={len(constraint_violations)}")
+    return parts
 
 
 def _print_summary_line(parts: list[str]) -> None:
