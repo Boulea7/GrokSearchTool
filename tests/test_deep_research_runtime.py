@@ -5550,6 +5550,192 @@ async def test_continue_plan_inherits_domain_constraints_and_keeps_summary_out_o
 
 
 @pytest.mark.asyncio
+async def test_continuation_open_questions_drop_generic_section_titles(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    original = runtime.store.create_job(
+        query="Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+        request_fingerprint="fp-continuation-open-questions-filter",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(original.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(
+        original.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": "Resume-processing continues from the last durable checkpoint.",
+                "sections": [
+                    {
+                        "section_id": "executive-summary",
+                        "title": "Executive Summary",
+                        "summary": "Resume-processing continues from the last durable checkpoint.",
+                        "claims": [
+                            {
+                                "claim_id": "executive-summary-claim-1",
+                                "text": "Resume-processing continues from the last durable checkpoint.",
+                                "citations": ["R1"],
+                            }
+                        ],
+                        "citations": ["R1"],
+                    }
+                ],
+                "coverage": {
+                    "uncovered_sub_questions": ["Investigate restart trade-offs after interruption"],
+                    "unanswered_sections": ["Key Findings", "Open Questions"],
+                },
+                "unit_results": {},
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "sources.json",
+        json.dumps(
+            [
+                {
+                    "source_id": "R1",
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.TargetMetadata.html",
+                    "title": "Target metadata task settings",
+                    "domain": "docs.aws.amazon.com",
+                    "source_type": "official_docs",
+                }
+            ]
+        ),
+        "application/json",
+    )
+
+    response = await runtime.start(
+        query="Focus on restart risk and recovery timeout",
+        continue_from_job_id=original.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    continuation = response["plan"]["continuation"]
+    continuation_payload = json.loads(runtime.store.read_artifact_text(response["job_id"], "continuation.json"))
+
+    assert continuation["open_questions"] == ["Investigate restart trade-offs after interruption"]
+    assert continuation_payload["open_questions"] == ["Investigate restart trade-offs after interruption"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_plan_uses_focused_continuation_surface_instead_of_only_previous_summary(tmp_path):
+    runtime = build_runtime(tmp_path)
+    original = runtime.store.create_job(
+        query="Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+        request_fingerprint="fp-fallback-continuation-focus",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(original.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(
+        original.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": "Medium confidence: Resume-processing continues from the last durable checkpoint.",
+                "sections": [
+                    {
+                        "section_id": "executive-summary",
+                        "title": "Executive Summary",
+                        "summary": "Resume-processing continues from the last durable checkpoint.",
+                        "claims": [
+                            {
+                                "claim_id": "executive-summary-claim-1",
+                                "text": "Resume-processing continues from the last durable checkpoint.",
+                                "citations": ["R1"],
+                            }
+                        ],
+                        "citations": ["R1"],
+                    }
+                ],
+                "coverage": {
+                    "uncovered_sub_questions": ["Investigate restart trade-offs after interruption"],
+                    "unanswered_sections": ["Key Findings", "Open Questions"],
+                },
+                "unit_results": {},
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "sources.json",
+        json.dumps(
+            [
+                {
+                    "source_id": "R1",
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.TargetMetadata.html",
+                    "title": "Target metadata task settings",
+                    "domain": "docs.aws.amazon.com",
+                    "source_type": "official_docs",
+                    "citation_count": 1,
+                    "section_count": 1,
+                }
+            ]
+        ),
+        "application/json",
+    )
+
+    async def unsafe_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["brief"] = "not-a-brief-object"
+        payload["research_units"] = [
+            {
+                "unit_id": "u1",
+                "unit_type": "search",
+                "title": "Follow-up search",
+                "goal": "Investigate restart trade-offs after interruption",
+                "query": "",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["planner_metadata"] = {"planner": "model", "used_fallback": False}
+        return payload
+
+    runtime._generate_plan_with_model = unsafe_planner
+
+    response = await runtime.start(
+        query="Focus on restart risk and recovery timeout",
+        continue_from_job_id=original.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    brief = plan["brief"]
+
+    assert plan["planner_metadata"]["used_fallback"] is True
+    assert "Resume-processing continues from the last durable checkpoint." in brief["continuation_focus"]
+    assert "Investigate restart trade-offs after interruption" in brief["continuation_focus"]
+    assert "Target metadata task settings (docs.aws.amazon.com)" in brief["continuation_focus"]
+    assert len(brief["continuation_focus"]) >= 3
+
+
+@pytest.mark.asyncio
 async def test_continue_from_failed_job_builds_focused_continuation_state(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
