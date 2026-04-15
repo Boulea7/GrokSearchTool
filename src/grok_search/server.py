@@ -169,6 +169,23 @@ async def _get_available_models_cached(api_url: str, api_key: str) -> list[str]:
     return models
 
 
+async def _get_provider_chain_available_models(provider_chain: list[dict[str, Any]]) -> tuple[list[str], dict[str, list[str]]]:
+    available_by_provider: dict[str, list[str]] = {}
+    merged: list[str] = []
+    for provider in provider_chain:
+        api_url = str(provider.get("api_url", "") or "")
+        api_key = str(provider.get("api_key", "") or "")
+        if not api_url or not api_key:
+            continue
+        provider_name = str(provider.get("name", "") or api_url)
+        models = await _get_available_models_cached(api_url, api_key)
+        available_by_provider[provider_name] = models
+        for model in models:
+            if model not in merged:
+                merged.append(model)
+    return merged, available_by_provider
+
+
 def _parse_grok_model_parts(model: str) -> tuple[int, int, tuple[int, ...], str] | None:
     text = (model or "").strip().lower()
     if "/" in text:
@@ -220,7 +237,7 @@ def _preferred_endpoint_path(provider_family: str, model: str) -> str:
         or core in {
             "grok-4.20-reasoning",
             "grok-4.20-multi-agent",
-            "grok-4.20-export-4-agent",
+            "grok-4.20-expert-4-agent",
             "grok-4.20-heavy-16-agent",
         }
     ):
@@ -262,7 +279,7 @@ def _profile_default_summary(api_url: str, *, profile: str, effort: str | None =
         resolved_model = config.resolve_deep_research_model_for_url(api_url, effort=effort)
     summary = _routing_profile_summary(api_url, resolved_model)
     summary["selected_profile"] = profile
-    summary["multi_agent_requested"] = profile == "multi_agent" or (effort or "").strip().lower() == "deep"
+    summary["multi_agent_requested"] = profile in {"multi_agent", "ultra"} or (effort or "").strip().lower() in {"deep", "ultra"}
     return summary
 
 
@@ -284,6 +301,11 @@ def _build_routing_diagnostics(provider_chain: list[dict[str, Any]]) -> dict[str
                 api_url,
                 profile=config.grok_deep_research_deep_profile(),
                 effort="deep",
+            ),
+            "deep_research_ultra": _profile_default_summary(
+                api_url,
+                profile=config.grok_deep_research_ultra_profile(),
+                effort="ultra",
             ),
         },
     }
@@ -367,6 +389,9 @@ def _is_grok_model_unavailable_message(message: str) -> bool:
         "model is not available",
         "model unavailable",
         "no model named",
+        "model_unavailable",
+        "模型当前不可用",
+        "模型不可用",
     )
     return any(marker in normalized for marker in markers)
 
@@ -619,6 +644,13 @@ def _search_probe_quality_message(warning_code: str) -> str:
     if warning_code == _BODY_PROBABLY_TRUNCATED_WARNING:
         return "真实搜索探针返回成功，但正文疑似截断。"
     return "真实搜索探针返回成功，但正文质量存在疑点。"
+
+
+def _deep_research_probe_check_id(effort: str) -> str:
+    normalized_effort = (effort or "standard").strip().lower() or "standard"
+    if normalized_effort not in {"standard", "deep", "ultra"}:
+        normalized_effort = "standard"
+    return f"deep_research_{normalized_effort}_probe"
 
 
 async def _provider_search_with_sources(
@@ -1255,7 +1287,8 @@ async def web_search(
             error="config_error",
         )
 
-    available_models = await _get_available_models_cached(api_url, api_key)
+    provider_chain = config.grok_provider_chain()
+    available_models, _ = await _get_provider_chain_available_models(provider_chain)
     requested_model = config.grok_model
     effective_model = requested_model
     warnings: list[str] = []
@@ -2171,6 +2204,74 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
     )
 
 
+async def _probe_deep_research_profile(api_url: str, api_key: str, *, effort: str) -> dict:
+    import time
+
+    from . import deep_research_runtime as deep_research_runtime_module
+
+    start_time = time.perf_counter()
+    check_id = _deep_research_probe_check_id(effort)
+    try:
+        result = await deep_research_runtime_module._search_query_with_details(_SEARCH_PROBE_QUERY, effort=effort)
+    except Exception as exc:
+        check = _build_doctor_check(
+            check_id,
+            "error",
+            f"Deep research {effort} 探针失败: {_format_grok_error(exc)}",
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            error_kind="probe_failed",
+        )
+        if _is_grok_model_unavailable_message(check["message"]):
+            check["reason_code"] = "model_unavailable"
+        return check
+
+    endpoint = _grok_endpoint_for_model(
+        result.get("provider_api_url") or api_url,
+        result.get("provider_model") or result.get("effective_model") or result.get("requested_model") or "",
+    )
+    extra = {
+        "requested_model": result.get("requested_model", ""),
+        "effective_model": result.get("effective_model", ""),
+        "provider_name": result.get("provider_name", ""),
+        "provider_model": result.get("provider_model", ""),
+        "provider_api_url": result.get("provider_api_url", ""),
+        "winning_provider": result.get("provider_name", ""),
+        "winning_model": result.get("provider_model") or result.get("effective_model") or result.get("requested_model", ""),
+    }
+    body_quality_warning = result.get("warning_code") or _assess_search_body_quality(
+        result.get("answer", ""),
+        result.get("sources", []) or [],
+    )
+    if body_quality_warning:
+        return _build_doctor_check(
+            check_id,
+            "warning",
+            f"Deep research {effort} 探针返回质量警告: {_search_probe_quality_message(body_quality_warning)}",
+            endpoint=endpoint,
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            warning_code=body_quality_warning,
+            **extra,
+        )
+    if not sanitize_answer_text(result.get("answer", "")).strip() and not (result.get("sources") or []):
+        return _build_doctor_check(
+            check_id,
+            "error",
+            f"Deep research {effort} 探针失败: 上游未返回可用正文或来源。",
+            endpoint=endpoint,
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            error_kind="empty_probe_response",
+            **extra,
+        )
+    return _build_doctor_check(
+        check_id,
+        "ok",
+        f"Deep research {effort} 探针成功。",
+        endpoint=endpoint,
+        response_time_ms=(time.perf_counter() - start_time) * 1000,
+        **extra,
+    )
+
+
 async def _probe_web_search_with_fallback(
     api_url: str,
     api_key: str,
@@ -2268,6 +2369,25 @@ def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> di
             item["reason_code"] = reason_code
         return item
     item = {"status": "degraded", "message": check["message"], "check_id": check["check_id"]}
+    reason_code = _check_reason_code(check)
+    if reason_code:
+        item["reason_code"] = reason_code
+    return item
+
+
+def _build_profile_probe_item(check: dict | None, *, default_message: str) -> dict:
+    if not check:
+        return {"status": "not_ready", "message": default_message}
+    item = {
+        "status": "ready" if check["status"] == "ok" else ("not_ready" if check["status"] == "skipped" else "degraded"),
+        "message": check["message"],
+        "check_id": check["check_id"],
+        "requested_model": check.get("requested_model", ""),
+        "effective_model": check.get("effective_model", ""),
+        "winning_provider": check.get("winning_provider", ""),
+        "winning_model": check.get("winning_model", ""),
+        "endpoint": check.get("endpoint", ""),
+    }
     reason_code = _check_reason_code(check)
     if reason_code:
         item["reason_code"] = reason_code
@@ -2372,6 +2492,9 @@ def _build_feature_readiness(
     grok_model_selection = checks_by_id.get("grok_model_selection")
     grok_model_runtime_fallback = checks_by_id.get("grok_model_runtime_fallback")
     grok_search_probe = checks_by_id["grok_search_probe"]
+    deep_research_standard_probe = checks_by_id.get("deep_research_standard_probe")
+    deep_research_deep_probe = checks_by_id.get("deep_research_deep_probe")
+    deep_research_ultra_probe = checks_by_id.get("deep_research_ultra_probe")
     tavily_extract = checks_by_id["tavily_extract"]
     firecrawl_scrape = checks_by_id["firecrawl_scrape"]
     web_fetch_probe = checks_by_id["web_fetch_probe"]
@@ -2500,6 +2623,9 @@ def _build_feature_readiness(
     deep_research_runtime_check_ids = [
         *deep_research_planner_check_ids,
         "grok_search_probe",
+        "deep_research_standard_probe",
+        "deep_research_deep_probe",
+        "deep_research_ultra_probe",
     ]
     deep_research_planner_degraded_by = [
         _readiness_cause_from_check(check)
@@ -2521,9 +2647,26 @@ def _build_feature_readiness(
             grok_model_selection,
             grok_model_runtime_fallback,
             grok_search_probe,
+            deep_research_standard_probe,
+            deep_research_deep_probe,
+            deep_research_ultra_probe,
         )
         if check and check["status"] in {"warning", "error"}
     ]
+    profile_probes = {
+        "standard": _build_profile_probe_item(
+            deep_research_standard_probe,
+            default_message="Deep research standard probe unavailable.",
+        ),
+        "deep": _build_profile_probe_item(
+            deep_research_deep_probe,
+            default_message="Deep research deep probe unavailable.",
+        ),
+        "ultra": _build_profile_probe_item(
+            deep_research_ultra_probe,
+            default_message="Deep research ultra probe unavailable.",
+        ),
+    }
     if grok_config["status"] != "ok":
         deep_research_planner_status = "not_ready"
         deep_research_planner_message = grok_config["message"]
@@ -2583,6 +2726,9 @@ def _build_feature_readiness(
             "provider_family": grok_provider_capabilities.get("provider_family", "") if grok_provider_capabilities else "",
             "responses_supported": bool(grok_provider_capabilities.get("responses_supported", False)) if grok_provider_capabilities else False,
             "multi_agent_supported": bool(grok_provider_capabilities.get("multi_agent_supported", False)) if grok_provider_capabilities else False,
+            "winning_provider": grok_search_probe.get("provider_name", ""),
+            "winning_model": grok_search_probe.get("provider_model", ""),
+            "winning_endpoint": grok_search_probe.get("endpoint", ""),
         },
         "get_sources": _build_get_sources_readiness(
             web_search_status=web_search_status,
@@ -2625,6 +2771,10 @@ def _build_feature_readiness(
             "provider_family": grok_provider_capabilities.get("provider_family", "") if grok_provider_capabilities else "",
             "responses_supported": bool(grok_provider_capabilities.get("responses_supported", False)) if grok_provider_capabilities else False,
             "multi_agent_supported": bool(grok_provider_capabilities.get("multi_agent_supported", False)) if grok_provider_capabilities else False,
+            "profile_probes": profile_probes,
+            "winning_provider": deep_research_standard_probe.get("provider_name", "") if deep_research_standard_probe else "",
+            "winning_model": deep_research_standard_probe.get("provider_model", "") if deep_research_standard_probe else "",
+            "winning_endpoint": deep_research_standard_probe.get("endpoint", "") if deep_research_standard_probe else "",
         },
         "deep_research_runtime": {
             "status": deep_research_runtime_status,
@@ -2637,6 +2787,10 @@ def _build_feature_readiness(
             "provider_family": grok_provider_capabilities.get("provider_family", "") if grok_provider_capabilities else "",
             "responses_supported": bool(grok_provider_capabilities.get("responses_supported", False)) if grok_provider_capabilities else False,
             "multi_agent_supported": bool(grok_provider_capabilities.get("multi_agent_supported", False)) if grok_provider_capabilities else False,
+            "profile_probes": profile_probes,
+            "winning_provider": deep_research_deep_probe.get("provider_name", "") if deep_research_deep_probe else "",
+            "winning_model": deep_research_deep_probe.get("provider_model", "") if deep_research_deep_probe else "",
+            "winning_endpoint": deep_research_deep_probe.get("endpoint", "") if deep_research_deep_probe else "",
         },
     }
 
@@ -2772,6 +2926,7 @@ async def get_config_info(
                 model_profile=config.grok_model_profile(),
                 deep_research_standard_profile=config.grok_deep_research_standard_profile(),
                 deep_research_deep_profile=config.grok_deep_research_deep_profile(),
+                deep_research_ultra_profile=config.grok_deep_research_ultra_profile(),
             )
         )
     except ValueError as exc:
@@ -2846,14 +3001,17 @@ async def get_config_info(
         runtime_model_source = config.grok_model_source
         runtime_model_source_label = _runtime_model_source_label(runtime_model_source)
         available_models = grok_models.get("available_models") or []
+        if provider_chain:
+            provider_chain_models, available_models_by_provider = await _get_provider_chain_available_models(provider_chain)
+            if provider_chain_models:
+                available_models = provider_chain_models
+                grok_models["available_models"] = available_models
+            chain_check = next((check for check in checks if check.get("check_id") == "grok_provider_chain"), None)
+            if chain_check is not None:
+                chain_check["available_models_by_provider"] = available_models_by_provider
         multi_agent_supported = any(_supports_multi_agent_family(model) for model in available_models)
         responses_supported = provider_family == "official_xai" or multi_agent_supported or any(
-            _normalized_grok_model_core(model) in {
-                "grok-4.20-reasoning",
-                "grok-4.20-multi-agent",
-                "grok-4.20-export-4-agent",
-                "grok-4.20-heavy-16-agent",
-            }
+            _normalized_grok_model_core(model) == "grok-4.20-reasoning"
             for model in available_models
         )
         for check in checks:
@@ -2982,6 +3140,19 @@ async def get_config_info(
             skipped_reason="missing_grok_config",
         )
     checks.append(grok_search_probe)
+    if api_url and api_key:
+        for effort in ("standard", "deep", "ultra"):
+            checks.append(await _probe_deep_research_profile(api_url, api_key, effort=effort))
+    else:
+        for effort in ("standard", "deep", "ultra"):
+            checks.append(
+                _build_doctor_check(
+                    _deep_research_probe_check_id(effort),
+                    "skipped",
+                    f"未执行 deep research {effort} 探针。",
+                    skipped_reason="missing_grok_config",
+                )
+            )
 
     if config.tavily_enabled and config.tavily_api_key:
         tavily_extract = await _probe_json_endpoint(

@@ -39,7 +39,8 @@ class Config:
     _DEFAULT_MODEL_PROFILE = "balanced_auto"
     _DEFAULT_DEEP_RESEARCH_STANDARD_PROFILE = "reasoning"
     _DEFAULT_DEEP_RESEARCH_DEEP_PROFILE = "multi_agent"
-    _ALLOWED_MODEL_PROFILES = {"balanced_auto", "reasoning", "multi_agent", "fast", "exact"}
+    _DEFAULT_DEEP_RESEARCH_ULTRA_PROFILE = "ultra"
+    _ALLOWED_MODEL_PROFILES = {"balanced_auto", "reasoning", "multi_agent", "ultra", "fast", "exact"}
     _KNOWN_PROVIDER_FAMILIES = {
         "official_xai",
         "openrouter",
@@ -328,7 +329,7 @@ class Config:
             "resolved_model": resolved_model,
             "preferred_endpoint_path": self.grok_preferred_endpoint_path(api_url, resolved_model),
             "path_visibility": self._routing_path_visibility(api_url),
-            "multi_agent_requested": profile == "multi_agent",
+            "multi_agent_requested": profile in {"multi_agent", "ultra"},
             "multi_agent_family": self.grok_model_is_multi_agent_family(resolved_model),
             "routing_signals": self._routing_signals(provider_family, resolved_model, profile=profile),
         }
@@ -357,6 +358,7 @@ class Config:
             web_profile = self.grok_model_profile()
             standard_profile = self.grok_deep_research_standard_profile()
             deep_profile = self.grok_deep_research_deep_profile()
+            ultra_profile = self.grok_deep_research_ultra_profile()
             profile_defaults = {
                 "web_search": self._profile_default_routing_entry(
                     api_url,
@@ -372,6 +374,11 @@ class Config:
                     api_url,
                     profile=deep_profile,
                     resolved_model=self.resolve_default_grok_model_for_url(api_url, profile=deep_profile),
+                ),
+                "deep_research_ultra": self._profile_default_routing_entry(
+                    api_url,
+                    profile=ultra_profile,
+                    resolved_model=self.resolve_default_grok_model_for_url(api_url, profile=ultra_profile),
                 ),
             }
 
@@ -405,12 +412,23 @@ class Config:
         ).strip().lower()
         return raw if raw in self._ALLOWED_MODEL_PROFILES else self._DEFAULT_DEEP_RESEARCH_DEEP_PROFILE
 
+    def grok_deep_research_ultra_profile(self) -> str:
+        raw = (
+            self._get_env_value(
+                "GROK_DEEP_RESEARCH_ULTRA_PROFILE",
+                self._DEFAULT_DEEP_RESEARCH_ULTRA_PROFILE,
+            )
+            or ""
+        ).strip().lower()
+        return raw if raw in self._ALLOWED_MODEL_PROFILES else self._DEFAULT_DEEP_RESEARCH_ULTRA_PROFILE
+
     def _resolved_default_model_for_family(self, provider_family: str, *, profile: str) -> str:
         family_defaults = {
             "official_xai": {
                 "balanced_auto": "grok-4.20-0309-non-reasoning",
                 "reasoning": "grok-4.20-0309-reasoning",
                 "multi_agent": "grok-4.20-multi-agent-0309",
+                "ultra": "grok-4.20-heavy-16-agent",
                 "fast": "grok-4-1-fast-non-reasoning",
                 "exact": self._DEFAULT_MODEL,
             },
@@ -418,6 +436,7 @@ class Config:
                 "balanced_auto": "x-ai/grok-4.1-fast",
                 "reasoning": "x-ai/grok-4.20",
                 "multi_agent": "x-ai/grok-4.20-multi-agent",
+                "ultra": "x-ai/grok-4.20-multi-agent",
                 "fast": "x-ai/grok-4.1-fast",
                 "exact": "x-ai/grok-4.20",
             },
@@ -425,6 +444,7 @@ class Config:
                 "balanced_auto": "grok-4.20-auto",
                 "reasoning": "grok-4.20-reasoning",
                 "multi_agent": "grok-4.20-multi-agent",
+                "ultra": "grok-4.20-heavy-16-agent",
                 "fast": "grok-4.20-fast",
                 "exact": self._DEFAULT_MODEL,
             },
@@ -432,6 +452,7 @@ class Config:
                 "balanced_auto": "grok-4.20-auto",
                 "reasoning": "grok-4.20-reasoning",
                 "multi_agent": "grok-4.20-multi-agent",
+                "ultra": "grok-4.20-heavy-16-agent",
                 "fast": "grok-4.20-fast",
                 "exact": self._DEFAULT_MODEL,
             },
@@ -460,11 +481,13 @@ class Config:
         return bool(self._load_config_file().get("model"))
 
     def resolve_deep_research_model_for_url(self, api_url: str, *, effort: str) -> str:
-        selected_profile = (
-            self.grok_deep_research_deep_profile()
-            if (effort or "").strip().lower() == "deep"
-            else self.grok_deep_research_standard_profile()
-        )
+        normalized_effort = (effort or "").strip().lower()
+        if normalized_effort == "ultra":
+            selected_profile = self.grok_deep_research_ultra_profile()
+        elif normalized_effort == "deep":
+            selected_profile = self.grok_deep_research_deep_profile()
+        else:
+            selected_profile = self.grok_deep_research_standard_profile()
         return self.resolve_default_grok_model_for_url(api_url, profile=selected_profile)
 
     @property
@@ -851,6 +874,7 @@ class Config:
             "GROK_MODEL_PROFILE": self.grok_model_profile(),
             "GROK_DEEP_RESEARCH_STANDARD_PROFILE": self.grok_deep_research_standard_profile(),
             "GROK_DEEP_RESEARCH_DEEP_PROFILE": self.grok_deep_research_deep_profile(),
+            "GROK_DEEP_RESEARCH_ULTRA_PROFILE": self.grok_deep_research_ultra_profile(),
             "GROK_PROVIDER_FAMILY": (
                 self.provider_family_for_url(api_url) if api_url != "未配置" else "未配置"
             ),

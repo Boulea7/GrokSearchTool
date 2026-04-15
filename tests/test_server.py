@@ -62,7 +62,7 @@ class StubAsyncClient:
         key = ("POST", url)
         if key in self._exc:
             raise self._take(self._exc, key)
-        if key not in self._responses and url.endswith("/chat/completions"):
+        if key not in self._responses and (url.endswith("/chat/completions") or url.endswith("/responses")):
             response = httpx.Response(
                 200,
                 json={"choices": [{"message": {"content": "probe ok"}}]},
@@ -234,6 +234,7 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_MODEL_PROFILE",
         "GROK_DEEP_RESEARCH_STANDARD_PROFILE",
         "GROK_DEEP_RESEARCH_DEEP_PROFILE",
+        "GROK_DEEP_RESEARCH_ULTRA_PROFILE",
         "GROK_PROVIDER_FAMILY",
         "GROK_ROUTING_DIAGNOSTICS",
         "GROK_DEBUG",
@@ -263,6 +264,7 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_API_KEY",
         "GROK_MODEL",
         "GROK_MODEL_SOURCE",
+        "GROK_DEEP_RESEARCH_ULTRA_PROFILE",
         "GROK_ROUTING_DIAGNOSTICS",
         "GROK_DEBUG",
         "GROK_OUTPUT_CLEANUP",
@@ -1817,6 +1819,63 @@ async def test_get_config_info_marks_multi_agent_probe_path_as_responses(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_exposes_ultra_profile_probe_readiness(monkeypatch):
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    responses = {
+        ("GET", "https://api.x.ai/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-heavy-16-agent"}, {"id": "grok-4.20-multi-agent-0309"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["deep_research_runtime"]["profile_probes"]["ultra"]["status"] == "ready"
+    assert payload["feature_readiness"]["deep_research_runtime"]["profile_probes"]["ultra"]["winning_model"] == "grok-4.20-heavy-16-agent"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_exposes_winning_provider_in_web_search_readiness(monkeypatch):
+    async def fake_probe_web_search_with_fallback(api_url, api_key, requested_model, available_models):
+        return server._build_doctor_check(
+            "grok_search_probe",
+            "ok",
+            "真实搜索探针成功。",
+            provider_name="provider_2",
+            provider_model="grok-4.20-0309-non-reasoning",
+            endpoint="https://secondary.example.com/v1/chat/completions",
+        )
+
+    async def fake_probe_deep_research_profile(api_url, api_key, *, effort):
+        return server._build_doctor_check(
+            server._deep_research_probe_check_id(effort),
+            "ok",
+            f"Deep research {effort} 探针成功。",
+            provider_name="provider_2",
+            provider_model="grok-4.20-0309-non-reasoning",
+            endpoint="https://secondary.example.com/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(server, "_probe_web_search_with_fallback", fake_probe_web_search_with_fallback)
+    monkeypatch.setattr(server, "_probe_deep_research_profile", fake_probe_deep_research_profile)
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309-non-reasoning"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["web_search"]["winning_provider"] == "provider_2"
+    assert payload["feature_readiness"]["web_search"]["winning_model"] == "grok-4.20-0309-non-reasoning"
+    assert payload["feature_readiness"]["web_search"]["winning_endpoint"] == "https://secondary.example.com/v1/chat/completions"
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_summary_exposes_runtime_override_machine_fields(monkeypatch, tmp_path):
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
@@ -2727,6 +2786,40 @@ async def test_web_search_rejects_unknown_explicit_model(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_accepts_explicit_model_when_it_is_available_on_fallback_provider(monkeypatch):
+    monkeypatch.setenv("GROK_API_URL_2", "https://secondary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY_2", "secondary-key")
+    observed = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model, fallback_providers=None):
+            observed["api_url"] = api_url
+            observed["model"] = model
+            observed["fallback_providers"] = fallback_providers or []
+
+        async def search_with_sources(self, query, **kwargs):
+            return "Search answer", [{"url": "https://docs.example.com/runtime", "title": "Runtime docs"}]
+
+    async def fake_models(api_url, api_key):
+        if api_url == "https://api.example.com/v1":
+            return ["grok-4.20-0309"]
+        if api_url == "https://secondary.example.com/v1":
+            return ["grok-4.20-heavy-16-agent"]
+        return []
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query", model="grok-4.20-heavy-16-agent")
+
+    assert result["status"] == "ok"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-heavy-16-agent"
+    assert observed["model"] == "grok-4.20-heavy-16-agent"
+    assert observed["fallback_providers"][0]["api_url"] == "https://secondary.example.com/v1"
+
+
+@pytest.mark.asyncio
 async def test_web_search_falls_back_to_preferred_available_grok_model_for_compatible_explicit_model(monkeypatch):
     captured = {}
 
@@ -2813,6 +2906,36 @@ async def test_web_search_retries_with_alternate_available_grok_model_after_runt
     assert result["effective_params"]["model"] == "grok-4.20-0309-non-reasoning"
     assert "model_fallback_applied" in result["warnings"]
     assert captured["models"] == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_runtime_fallback_accepts_localized_model_unavailable_message(monkeypatch):
+    captured = {"models": []}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            self.model = model
+            captured["models"].append(model)
+
+        async def search(self, query, platform):
+            if self.model == "grok-4.20-0309":
+                raise ValueError("模型当前不可用")
+            return "Search answer"
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309", "grok-4.20-fast"]
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query")
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-fast"
+    assert "model_fallback_applied" in result["warnings"]
+    assert captured["models"] == ["grok-4.20-0309", "grok-4.20-fast"]
 
 
 @pytest.mark.asyncio
