@@ -168,6 +168,8 @@ class DeepResearchEvidenceItem(BaseModel):
     evidence_kind: str = "search"
     weight: float = 1.0
     derived_from_source_url: str = ""
+    line_start: int | None = None
+    line_end: int | None = None
 
 
 class DeepResearchClaim(BaseModel):
