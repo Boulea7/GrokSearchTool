@@ -3752,23 +3752,27 @@ def _coverage_for_report(
     sections: list[dict[str, Any]],
 ) -> dict[str, Any]:
     answered_section_ids = [str(section.get("section_id", "")).strip() for section in sections if str(section.get("section_id", "")).strip()]
-    answered_text = " ".join(
-        " ".join(
-            [
-                str(section.get("title", "")),
-                str(section.get("summary", "")),
-                " ".join(str(claim.get("text", "")) for claim in section.get("claims", [])),
-            ]
-        )
-        for section in sections
-    )
     covered_sub_question_ids: list[str] = []
     uncovered_sub_questions: list[str] = []
     for item in plan.sub_questions:
         question = item.question.strip()
         if not question:
             continue
-        if _count_keyword_overlap(answered_text, _tokenize_keywords(question)) > 0:
+        question_tokens = _tokenize_keywords(question)
+        coverage_threshold = max(2, min(4, max(1, len(question_tokens) // 2)))
+        covered = False
+        for section in sections:
+            section_text = " ".join(
+                [
+                    str(section.get("title", "")),
+                    str(section.get("summary", "")),
+                    " ".join(str(claim.get("text", "")) for claim in section.get("claims", [])),
+                ]
+            )
+            if _count_keyword_overlap(section_text, question_tokens) >= coverage_threshold:
+                covered = True
+                break
+        if covered:
             covered_sub_question_ids.append(item.id)
         else:
             uncovered_sub_questions.append(question)
