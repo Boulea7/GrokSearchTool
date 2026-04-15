@@ -4659,6 +4659,113 @@ async def test_completed_claims_bind_only_to_supporting_source_ids(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_search_grounded_fetch_uses_query_aware_excerpt_instead_of_page_lead(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume behavior.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "AWS DMS documentation covers checkpoint resume behavior.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "StartReplicationTask",
+                    "description": "AWS DMS API reference.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return (
+            "# StartReplicationTask\n\n"
+            "Starts the replication task. For more information about AWS DMS tasks, see Working with Migration Tasks.\n"
+            "The StartReplicationTaskType value `resume-processing` resumes from the last recovery checkpoint when checkpoint metadata is still available.\n"
+            "Use `reload-target` to reload target tables instead of continuing from the prior checkpoint.\n"
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="AWS DMS checkpoint resume semantics", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    summary = result["report"]["summary"]
+    claim_text = result["report"]["sections"][0]["claims"][0]["text"]
+
+    assert "resumes from the last recovery checkpoint" in summary
+    assert "resumes from the last recovery checkpoint" in claim_text
+    assert "Starts the replication task." not in summary
+    assert "Starts the replication task." not in claim_text
+
+
+@pytest.mark.asyncio
+async def test_search_only_evidence_does_not_claim_multi_source_corroboration(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume behavior.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume-processing continues from the last durable checkpoint when recovery metadata is still available.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.example.com/runtime/restart",
+                    "title": "Runtime restart",
+                    "description": "Restart docs.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+
+    response = await runtime.start(query="checkpoint resume semantics", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    claim = result["report"]["sections"][0]["claims"][0]
+
+    assert claim["cluster_type"] == "single_source"
+    assert claim["supporting_source_count"] == 1
+    assert len(claim["citations"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_same_domain_corroboration_does_not_escalate_claim_confidence_to_high(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -5074,6 +5181,98 @@ async def test_final_report_omits_remaining_gaps_without_real_gap_and_claims_sta
     assert report_claims
     assert report_claims == citation_claims
     assert len(report_claims) == len(set(report_claims))
+
+
+@pytest.mark.asyncio
+async def test_incomplete_coverage_degrades_report_status_and_runtime_warnings(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "Explain checkpoint resume semantics", "reason": "Primary question."},
+            {"id": "sq2", "question": "Explain restart trade-offs", "reason": "Secondary question."},
+        ]
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            },
+            {
+                "section_id": "restart-tradeoffs",
+                "title": "Restart Trade-offs",
+                "goal": "Explain restart trade-offs.",
+            },
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Resume search",
+                "goal": "Explain checkpoint resume semantics.",
+                "query": "checkpoint resume semantics",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-search-2",
+                "unit_type": "search",
+                "title": "Restart search",
+                "goal": "Explain restart trade-offs.",
+                "query": "restart trade-offs",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["checkpoint resume semantics", "restart trade-offs"],
+            "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+        }
+        return payload
+
+    async def search(query):
+        if "restart" in query:
+            return (
+                "General operational guidance for on-call handling.",
+                [
+                    {
+                        "url": "https://docs.example.com/runtime/operations",
+                        "title": "Runtime operations overview",
+                        "description": "General operational guidance.",
+                    }
+                ],
+            )
+        return (
+            "Checkpoint resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Official docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        if "operations" in url:
+            return "# Runtime operations overview\n\nGeneral operational guidance for on-call handling."
+        return "# Runtime checkpoints\n\nCheckpoint resume continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Coverage completeness regression", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert result["report"]["coverage"]["unanswered_sections"] == ["Restart Trade-offs"]
+    assert result["report"]["coverage"]["uncovered_sub_questions"] == ["Explain restart trade-offs"]
+    assert result["report"]["status"] == "degraded"
+    assert "coverage_incomplete" in result["report"]["runtime"]["warnings"]
 
 
 @pytest.mark.asyncio
