@@ -31,6 +31,7 @@
   "golden": {
     "resume_continue_semantics": {
       "verdict": "pass",
+      "score": 1.0,
       "reason_tags": []
     }
   }

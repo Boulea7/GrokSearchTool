@@ -40,6 +40,7 @@
   "golden": {
     "planner_boundary": {
       "verdict": "fail",
+      "score": 0.6,
       "reason_tags": [
         "planner_fallback_used",
         "unsafe_plan_fallback"
@@ -47,6 +48,7 @@
     },
     "diagnostics_consistency": {
       "verdict": "fail",
+      "score": 0.6,
       "reason_tags": [
         "planner_fallback_not_exposed"
       ]

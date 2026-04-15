@@ -44,6 +44,13 @@ def load_eval_case(name: str) -> dict:
     return json.loads(fixture_path.read_text())
 
 
+def assert_metric_matches_golden(result: dict, golden: dict) -> None:
+    assert result["verdict"] == golden["verdict"]
+    assert result["reason_tags"] == sorted(golden.get("reason_tags", []))
+    if "score" in golden:
+        assert result["score"] == pytest.approx(golden["score"], abs=1e-3)
+
+
 def evaluate_case_metric(case: dict, metric: str) -> dict:
     if metric == "citation_faithfulness":
         return evaluate_citation_faithfulness(case)
@@ -391,8 +398,7 @@ def test_citation_faithfulness_probe_goldens(fixture_name):
 
     result = evaluate_case_metric(case, "citation_faithfulness")
 
-    assert result["verdict"] == golden["verdict"]
-    assert set(golden.get("reason_tags", [])).issubset(result["reason_tags"])
+    assert_metric_matches_golden(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -409,8 +415,7 @@ def test_coverage_completeness_probe_goldens(fixture_name):
 
     result = evaluate_case_metric(case, "coverage_completeness")
 
-    assert result["verdict"] == golden["verdict"]
-    assert set(golden.get("reason_tags", [])).issubset(result["reason_tags"])
+    assert_metric_matches_golden(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -418,6 +423,7 @@ def test_coverage_completeness_probe_goldens(fixture_name):
     [
         "eval_probe_5_real.json",
         "eval_round9_live.json",
+        "eval_probe_round11_interrupted_continue.json",
     ],
 )
 def test_resume_continue_semantics_probe_goldens(fixture_name):
@@ -426,8 +432,7 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
 
     result = evaluate_case_metric(case, "resume_continue_semantics")
 
-    assert result["verdict"] == golden["verdict"]
-    assert set(golden.get("reason_tags", [])).issubset(result["reason_tags"])
+    assert_metric_matches_golden(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -435,6 +440,8 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
     [
         "eval_probe_round10_planner.json",
         "eval_probe_round10_continuation.json",
+        "eval_probe_round11_main_snapshot.json",
+        "eval_probe_round11_interrupted_continue.json",
     ],
 )
 def test_planner_boundary_probe_goldens(fixture_name):
@@ -443,8 +450,7 @@ def test_planner_boundary_probe_goldens(fixture_name):
 
     result = evaluate_case_metric(case, "planner_boundary")
 
-    assert result["verdict"] == golden["verdict"]
-    assert set(golden.get("reason_tags", [])).issubset(result["reason_tags"])
+    assert_metric_matches_golden(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -452,6 +458,8 @@ def test_planner_boundary_probe_goldens(fixture_name):
     [
         "eval_probe_round8_noise.json",
         "eval_probe_round10_continuation.json",
+        "eval_probe_round11_main_snapshot.json",
+        "eval_probe_round11_interrupted_continue.json",
     ],
 )
 def test_ranking_noise_suppression_probe_goldens(fixture_name):
@@ -460,8 +468,7 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
 
     result = evaluate_case_metric(case, "ranking_noise_suppression")
 
-    assert result["verdict"] == golden["verdict"]
-    assert set(golden.get("reason_tags", [])).issubset(result["reason_tags"])
+    assert_metric_matches_golden(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -469,6 +476,8 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
     [
         "eval_probe_round10_planner.json",
         "eval_probe_round10_continuation.json",
+        "eval_probe_round11_main_snapshot.json",
+        "eval_probe_round11_interrupted_continue.json",
     ],
 )
 def test_diagnostics_consistency_probe_goldens(fixture_name):
@@ -477,5 +486,57 @@ def test_diagnostics_consistency_probe_goldens(fixture_name):
 
     result = evaluate_case_metric(case, "diagnostics_consistency")
 
-    assert result["verdict"] == golden["verdict"]
-    assert set(golden.get("reason_tags", [])).issubset(result["reason_tags"])
+    assert_metric_matches_golden(result, golden)
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "metric", "golden"),
+    [
+        (
+            "probe_round11_main_snapshot.json",
+            "planner_boundary",
+            {
+                "verdict": "fail",
+                "score": 0.6,
+                "reason_tags": ["planner_fallback_used", "unsafe_plan_fallback"],
+            },
+        ),
+        (
+            "probe_round11_main_snapshot.json",
+            "diagnostics_consistency",
+            {
+                "verdict": "pass",
+                "score": 1.0,
+                "reason_tags": [],
+            },
+        ),
+        (
+            "probe_round11_interrupted_continue_snapshot.json",
+            "planner_boundary",
+            {
+                "verdict": "fail",
+                "score": 0.2,
+                "reason_tags": [
+                    "missing_constraint_inheritance",
+                    "planner_fallback_used",
+                    "unsafe_plan_fallback",
+                ],
+            },
+        ),
+        (
+            "probe_round11_interrupted_continue_snapshot.json",
+            "diagnostics_consistency",
+            {
+                "verdict": "fail",
+                "score": 0.6,
+                "reason_tags": ["planner_fallback_not_exposed"],
+            },
+        ),
+    ],
+)
+def test_round11_snapshot_smoke_metrics(fixture_name, metric, golden):
+    case = load_eval_case(fixture_name)
+
+    result = evaluate_case_metric(case, metric)
+
+    assert_metric_matches_golden(result, golden)

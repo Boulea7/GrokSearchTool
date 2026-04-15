@@ -22,6 +22,7 @@
   "golden": {
     "coverage_completeness": {
       "verdict": "pass",
+      "score": 1.0,
       "reason_tags": []
     }
   }
