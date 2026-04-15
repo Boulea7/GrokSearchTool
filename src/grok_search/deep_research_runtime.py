@@ -3001,29 +3001,29 @@ class DeepResearchRuntime:
             ):
                 carry_forward_sources = list(normalized_citations["source_registry"].values())
 
-        if not carry_forward_sources and checkpoint_state:
+        if not carry_forward_sources and not use_final_bundle and checkpoint_state:
             carry_forward_sources = list(checkpoint_state.sources)
-        elif not carry_forward_sources and isinstance(latest_state, dict):
+        elif not carry_forward_sources and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_sources = list(latest_state.get("sources") or [])
         source_count = len(carry_forward_sources)
 
         carry_forward_sections = list(report.get("sections") or []) if isinstance(report.get("sections"), list) else []
-        if not carry_forward_sections and checkpoint_state:
+        if not carry_forward_sections and not use_final_bundle and checkpoint_state:
             carry_forward_sections = list(checkpoint_state.sections)
-        elif not carry_forward_sections and isinstance(latest_state, dict):
+        elif not carry_forward_sections and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_sections = list(latest_state.get("sections") or [])
 
         report_unit_results = report.get("unit_results") if isinstance(report.get("unit_results"), dict) else {}
         carry_forward_unit_results = dict(report_unit_results or {})
-        if not carry_forward_unit_results and checkpoint_state:
+        if not carry_forward_unit_results and not use_final_bundle and checkpoint_state:
             carry_forward_unit_results = dict(checkpoint_state.unit_results)
-        elif not carry_forward_unit_results and isinstance(latest_state, dict):
+        elif not carry_forward_unit_results and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_unit_results = dict(latest_state.get("unit_results") or {})
 
         carry_forward_evidence = []
-        if checkpoint_state:
+        if not use_final_bundle and checkpoint_state:
             carry_forward_evidence = list(checkpoint_state.evidence_items)
-        elif isinstance(latest_state, dict):
+        elif not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_evidence = list(latest_state.get("evidence_items") or [])
         if not carry_forward_evidence:
             carry_forward_evidence = _build_carry_forward_evidence(carry_forward_unit_results, carry_forward_sections)
