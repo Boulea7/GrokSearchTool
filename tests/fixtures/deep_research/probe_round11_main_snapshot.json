@@ -1,0 +1,44 @@
+{
+  "job_id": "1c0440168ef353290bb30f87",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: filled_search_query:u1"
+    }
+  },
+  "report": {
+    "status": "degraded",
+    "summary": "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: operations. For more information, see [Endpoint settings when using Amazon S3 as a target for AWS DMS](./CHAP_Target.S3.html#CHAP_Target.S3.Configuring). Example of how task setti…",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "planner_fallback_used"
+      ],
+      "constraint_violations": []
+    },
+    "coverage": {
+      "answered_section_ids": [
+        "executive-summary"
+      ],
+      "unanswered_sections": [
+        "Key Findings",
+        "Open Questions"
+      ],
+      "covered_sub_question_ids": [],
+      "uncovered_sub_questions": [
+        "Compare checkpoint resume and restart semantics in AWS DMS with official docs only"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "domain": "docs.aws.amazon.com",
+      "title": "Change processing tuning settings",
+      "quality_tier": "official"
+    }
+  ]
+}
