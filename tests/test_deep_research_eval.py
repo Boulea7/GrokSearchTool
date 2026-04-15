@@ -407,6 +407,7 @@ def test_citation_faithfulness_probe_goldens(fixture_name):
         "eval_probe_5_half.json",
         "eval_round8.json",
         "eval_probe_final.json",
+        "eval_probe_round12_main_snapshot.json",
     ],
 )
 def test_coverage_completeness_probe_goldens(fixture_name):
@@ -424,6 +425,7 @@ def test_coverage_completeness_probe_goldens(fixture_name):
         "eval_probe_5_real.json",
         "eval_round9_live.json",
         "eval_probe_round11_interrupted_continue.json",
+        "eval_probe_round12_continue_resume.json",
     ],
 )
 def test_resume_continue_semantics_probe_goldens(fixture_name):
@@ -442,6 +444,8 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
         "eval_probe_round10_continuation.json",
         "eval_probe_round11_main_snapshot.json",
         "eval_probe_round11_interrupted_continue.json",
+        "eval_probe_round12_main_snapshot.json",
+        "eval_probe_round12_continue_resume.json",
     ],
 )
 def test_planner_boundary_probe_goldens(fixture_name):
@@ -460,6 +464,7 @@ def test_planner_boundary_probe_goldens(fixture_name):
         "eval_probe_round10_continuation.json",
         "eval_probe_round11_main_snapshot.json",
         "eval_probe_round11_interrupted_continue.json",
+        "eval_probe_round12_main_snapshot.json",
     ],
 )
 def test_ranking_noise_suppression_probe_goldens(fixture_name):
@@ -478,6 +483,8 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
         "eval_probe_round10_continuation.json",
         "eval_probe_round11_main_snapshot.json",
         "eval_probe_round11_interrupted_continue.json",
+        "eval_probe_round12_main_snapshot.json",
+        "eval_probe_round12_continue_resume.json",
     ],
 )
 def test_diagnostics_consistency_probe_goldens(fixture_name):
@@ -532,9 +539,27 @@ def test_diagnostics_consistency_probe_goldens(fixture_name):
                 "reason_tags": ["planner_fallback_not_exposed"],
             },
         ),
+        (
+            "probe_round12_main_snapshot.json",
+            "planner_boundary",
+            {
+                "verdict": "fail",
+                "score": 0.6,
+                "reason_tags": ["planner_fallback_used", "unsafe_plan_fallback"],
+            },
+        ),
+        (
+            "probe_round12_main_snapshot.json",
+            "diagnostics_consistency",
+            {
+                "verdict": "pass",
+                "score": 1.0,
+                "reason_tags": [],
+            },
+        ),
     ],
 )
-def test_round11_snapshot_smoke_metrics(fixture_name, metric, golden):
+def test_round11_round12_snapshot_smoke_metrics(fixture_name, metric, golden):
     case = load_eval_case(fixture_name)
 
     result = evaluate_case_metric(case, metric)

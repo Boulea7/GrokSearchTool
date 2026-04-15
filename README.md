@@ -226,6 +226,7 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_MODEL_PROFILE` | 否 | `balanced_auto` | 当未显式设置 `GROK_MODEL` 时，按 provider family 解析默认模型；当前优先兼容官方 xAI、OpenRouter、常见 OpenAI-compatible relay 与 `grok2api` 风格反代 |
 | `GROK_DEEP_RESEARCH_STANDARD_PROFILE` | 否 | `reasoning` | `deep research` 的 `standard` 档默认 profile；不可用时会自动回落 |
 | `GROK_DEEP_RESEARCH_DEEP_PROFILE` | 否 | `multi_agent` | `deep research` 的 `deep` 档默认 profile；若当前 provider / relay / 账户不支持多 agent，会自动回落到单 agent |
+| `GROK_DEEP_RESEARCH_ULTRA_PROFILE` | 否 | `ultra` | `deep research` 的 `ultra` 档默认 profile；显式请求时优先尝试 `grok-4.20-heavy-16-agent`，不可用时会自动降级到更轻的多 agent / 单 agent 模型 |
 | `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | 否 | - | 第 2 个 Grok 供应商；当主供应商失败时会自动切到该供应商继续重试 |
 | `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | 否 | - | 更多 Grok 供应商，按编号升序依次作为 failover provider chain |
 | `GROK_MODEL_FALLBACKS` | 否 | 内建降级链 | 逗号分隔的模型自动降级顺序；当当前供应商明确返回“模型不可用”时，会在同一供应商内按该顺序继续尝试，例如可显式包含 `grok-4.1-fast` |
@@ -264,13 +265,13 @@ claude mcp add-json grok-search --scope user '{
 
 > 当前默认首选模型是 `grok-4.20-0309`。运行时模型选择对 Grok 4.1+ 族会保持弹性：如果显式或隐式请求的模型不在 `/models` 返回列表里，但列表中存在兼容的 Grok 4.1+ 可用模型，系统会优先回退到更合适的可用模型，而不是仅因后缀不匹配而直接失败。
 
-> 当没有显式 `GROK_MODEL` 时，运行时当前会按 `GROK_MODEL_PROFILE` 做 provider-aware 默认解析；`get_config_info` 基础快照会额外返回 `GROK_MODEL_PROFILE`、`GROK_DEEP_RESEARCH_STANDARD_PROFILE`、`GROK_DEEP_RESEARCH_DEEP_PROFILE` 与 `GROK_PROVIDER_FAMILY`，便于排查官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代的差异。
+> 当没有显式 `GROK_MODEL` 时，运行时当前会按 `GROK_MODEL_PROFILE` 做 provider-aware 默认解析；`get_config_info` 基础快照会额外返回 `GROK_MODEL_PROFILE`、`GROK_DEEP_RESEARCH_STANDARD_PROFILE`、`GROK_DEEP_RESEARCH_DEEP_PROFILE`、`GROK_DEEP_RESEARCH_ULTRA_PROFILE` 与 `GROK_PROVIDER_FAMILY`，便于排查官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代的差异。
 
 > `get_config_info` 的基础快照现在还会返回 `GROK_ROUTING_DIAGNOSTICS`。其中会列出当前 active provider、编号 provider chain、各 profile 解析出的默认模型、预期会走 `/chat/completions` 还是 `/responses`，以及 multi-agent 相关 routing signals，方便判断官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代在当前配置下到底会怎么走。
 
 > 当前 Grok 路由已支持 `/chat/completions` 与 `/responses` 双通道。多 agent 家族与部分 response-only relay 模型会优先走 `/responses`；OpenRouter 与多数兼容 relay 仍优先 `chat/completions`。
 
-> `deep research` 当前默认采用 `standard` 单 agent、`deep` 多 agent 优先的策略；若当前 provider、relay、账户套餐或单模型配置不支持多 agent，会自动回落到单 agent。多 agent 通常会带来更高时延，单次大约可能在 `10` 秒到 `2` 分钟之间。
+> `deep research` 当前默认采用 `standard` 单 agent、`deep` 多 agent 优先、`ultra` 超强多 agent 优先的策略；`ultra` 只会在显式指定 `effort=ultra` 时启用，默认优先尝试 `grok-4.20-heavy-16-agent`。若当前 provider、relay、账户套餐或单模型配置不支持更高档位，会自动回落到更轻的多 agent 或单 agent。多 agent 通常会带来更高时延，单次大约可能在 `10` 秒到 `2` 分钟之间，`ultra` 通常还会更慢。
 
 > `GROK_TIME_CONTEXT_MODE` 默认是 `always`，保持当前“全量注入本地时间上下文”的行为；如需节省上下文，可改为 `auto` 或 `never`。
 
@@ -448,7 +449,7 @@ claude mcp list
 - `feature_readiness.get_sources` 只有在当前进程内至少存在一个非 error 的可读取 source session 时才会显示 `ready`；如果只有失败搜索留下的 session，状态会保持 `partial_ready`。即使 `web_search` 当前尚未 ready，只要当前进程里仍保有可读取 session，`get_sources` 也会继续显示 `ready`，同时通过 `degraded_by` 暴露上游配置问题。
 - `feature_readiness.get_sources` 当前会附带 `cache_summary`，至少包含 `total_sessions`、`readable_sessions`、`error_sessions`、`partial_sessions`、`unreadable_sessions`，用于快速判断当前 source cache 的可读性与退化面。
 - `feature_readiness` 当前还会提供一组 summary-safe 机器字段：`based_on_checks` 表示该能力主要参考了哪些 doctor checks，`probe_scope` 表示结论属于哪类探针/状态面，`degraded_by` 用 `check_id/status/reason_code` 描述当前退化来源。对 `get_sources`，cache 侧退化当前会使用 synthetic cause `source_cache_state`；对 `web_search` 还会额外返回 `runtime_override_active` 与 `runtime_model_source`，用于标记当前退化是否受进程 env / 项目 `.env.local` / `.env` 覆盖层影响。
-- `feature_readiness.deep_research_planner` 与 `feature_readiness.deep_research_runtime` 当前共享 Grok provider chain 与真实搜索探针的 readiness 结论，用于区分“默认轻路径正常”与“deep research 也能在相同运行时下工作”。
+- `feature_readiness.deep_research_planner` 与 `feature_readiness.deep_research_runtime` 当前会额外暴露 `profile_probes`，分别给出 `standard` / `deep` / `ultra` 三档 deep research 的真实探针结果、winning provider / model，以及命中的 endpoint path，用于区分“默认轻路径正常”与“指定档位的 deep research 也能真实工作”。
 - `feature_readiness` / `doctor` 的状态语义当前可按以下方式理解：`ready`=当前能力已验证可用，`degraded`=能力存在但探针或局部依赖异常，`not_ready`=配置或前置条件不足，`partial_ready`=接口存在但仍缺少运行中瞬时条件；其中 `transient` 和 `client_specific` 项默认不拉低 overall doctor。
 - 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query、常见 OAuth/OIDC credential 参数，以及高置信度 cloud-signed credential 键（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）也会做遮罩。但诊断结果仍可能包含本机绝对路径、endpoint/主机名或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
 
