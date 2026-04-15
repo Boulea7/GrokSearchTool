@@ -2306,10 +2306,14 @@ async def _build_runtime_grok_provider(
     primary = dict(provider_chain[0])
     available_models, _ = await server_module._get_provider_chain_available_models(provider_chain)
     requested_model = primary["model"]
-    resolved_model, resolution = server_module._resolve_model_against_available_models(
-        requested_model,
-        available_models,
-    )
+    preferred_models = config.preferred_deep_research_models_for_url(primary["api_url"], effort=effort)
+    resolved_model = next((model for model in preferred_models if model in available_models), None)
+    resolution = "preferred_profile_match" if resolved_model and resolved_model != requested_model else None
+    if resolved_model is None:
+        resolved_model, resolution = server_module._resolve_model_against_available_models(
+            requested_model,
+            available_models,
+        )
     if resolved_model:
         primary["model"] = resolved_model
         for fallback_provider in provider_chain[1:]:

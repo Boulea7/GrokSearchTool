@@ -445,6 +445,30 @@ def test_resolve_deep_research_model_for_ultra_prefers_heavy_16_agent_on_officia
     assert config.resolve_deep_research_model_for_url("https://api.x.ai/v1", effort="ultra") == "grok-4.20-heavy-16-agent"
 
 
+def test_resolve_deep_research_model_for_deep_prefers_expert_4_agent_on_relay(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://grok2api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.resolve_deep_research_model_for_url("https://grok2api.example.com/v1", effort="deep") == "grok-4.20-expert-4-agent"
+
+
+def test_resolve_deep_research_model_for_ultra_prefers_heavy_16_agent_on_relay(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://grok2api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.resolve_deep_research_model_for_url("https://grok2api.example.com/v1", effort="ultra") == "grok-4.20-heavy-16-agent"
+
+
 def test_empty_process_env_still_blocks_project_env_fallback(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.setenv("TAVILY_API_KEY", "")
