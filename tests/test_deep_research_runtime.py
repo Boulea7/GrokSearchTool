@@ -1101,7 +1101,7 @@ async def test_continue_plan_uses_previous_artifacts(tmp_path):
 
     assert continuation["mode"] == "continue"
     assert continuation["source_job_id"] == original.job_id
-    assert "resume behavior" in continuation["previous_summary"].lower()
+    assert "resume should continue from checkpoints" in continuation["previous_summary"].lower()
     assert continuation["source_count"] == 1
     assert continuation["source_job_status"] == "completed"
     assert "carry_forward_sources" not in continuation
@@ -1722,7 +1722,7 @@ async def test_continuation_plan_stays_compact_while_artifact_keeps_full_state(t
     plan_continuation = response["plan"]["continuation"]
     continuation_payload = json.loads(runtime.store.read_artifact_text(response["job_id"], "continuation.json"))
 
-    assert set(plan_continuation) == {
+    assert {
         "mode",
         "source_job_id",
         "source_job_status",
@@ -1732,6 +1732,14 @@ async def test_continuation_plan_stays_compact_while_artifact_keeps_full_state(t
         "continuation_goal",
         "source_count",
         "checkpoint_key",
+    }.issubset(plan_continuation)
+    assert plan_continuation["state_version"] >= 2
+    assert plan_continuation["confirmed_claims"] == ["Claim"]
+    assert plan_continuation["carry_forward_constraints"] == {
+        "include_domains": [],
+        "exclude_domains": [],
+        "preferred_sources": [],
+        "allowed_sources": [],
     }
     assert continuation_payload["carry_forward_sources"][0]["source_id"] == "R1"
     assert continuation_payload["carry_forward_sections"][0]["title"] == "Section"
@@ -5240,6 +5248,126 @@ async def test_continue_plan_sanitizes_previous_summary_before_persisting_contin
 
 
 @pytest.mark.asyncio
+async def test_continue_plan_inherits_domain_constraints_and_keeps_summary_out_of_follow_up_surface(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    original = runtime.store.create_job(
+        query="Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+        request_fingerprint="fp-continuation-constraint-inheritance",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(original.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(
+        original.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+                "sub_questions": [
+                    {
+                        "id": "sq1",
+                        "question": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+                        "reason": "Primary question.",
+                    }
+                ],
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": (
+                    "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: "
+                    "operations. For more information, see the target settings page."
+                ),
+                "sections": [
+                    {
+                        "section_id": "executive-summary",
+                        "title": "Executive Summary",
+                        "summary": "Resume-processing continues from the last durable checkpoint.",
+                        "claims": [
+                            {
+                                "claim_id": "executive-summary-claim-1",
+                                "text": "Resume-processing continues from the last durable checkpoint.",
+                                "citations": ["R1"],
+                                "unit_id": "unit-search-1",
+                                "evidence_ids": ["evidence-unit-search-1-search"],
+                                "confidence": "medium",
+                            }
+                        ],
+                        "citations": ["R1"],
+                        "confidence": "medium",
+                    }
+                ],
+                "unit_results": {
+                    "unit-search-1": {
+                        "summary": "Resume-processing continues from the last durable checkpoint.",
+                        "detail": "Resume-processing continues from the last durable checkpoint.",
+                        "source_ids": ["R1"],
+                        "citations": ["R1"],
+                    }
+                },
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "sources.json",
+        json.dumps(
+            [
+                {
+                    "source_id": "R1",
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.TargetMetadata.html",
+                    "title": "Target metadata task settings",
+                    "domain": "docs.aws.amazon.com",
+                    "source_type": "official_docs",
+                    "citation_count": 1,
+                    "section_count": 1,
+                }
+            ]
+        ),
+        "application/json",
+    )
+
+    response = await runtime.start(
+        query="Continue from previous findings with focus on restart risk and recovery timeout",
+        continue_from_job_id=original.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    brief = plan["brief"]
+    continuation = plan["continuation"]
+
+    assert plan["include_domains"] == ["docs.aws.amazon.com"]
+    assert plan["exclude_domains"] == ["repost.aws"]
+    assert brief["scope"]["allowed_sources"] == ["docs.aws.amazon.com"]
+    assert brief["scope"]["include_domains"] == ["docs.aws.amazon.com"]
+    assert brief["scope"]["exclude_domains"] == ["repost.aws"]
+    assert all("for more information" not in item.lower() for item in brief["must_cover"])
+    assert all("for more information" not in item.lower() for item in brief["coverage_checklist"])
+    assert all("for more information" not in item.lower() for item in brief["continuation_focus"])
+    assert all("for more information" not in item.lower() for item in plan["search_strategy"]["search_queries"])
+    assert all("for more information" not in item["question"].lower() for item in plan["sub_questions"])
+    assert "resume-processing continues from the last durable checkpoint" in continuation["previous_summary"].lower()
+
+
+@pytest.mark.asyncio
 async def test_continue_from_failed_job_builds_focused_continuation_state(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -5343,6 +5471,92 @@ async def test_continue_from_failed_job_builds_focused_continuation_state(tmp_pa
     assert "checkpoint resume continues from the last durable checkpoint" in continuation["previous_summary"].lower()
     assert continuation["source_count"] == 1
     assert [source["source_id"] for source in continuation_payload["carry_forward_sources"]] == ["R1"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_honors_max_search_queries_stop_policy(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["brief"]["must_cover"] = ["Explain checkpoint resume semantics"]
+        payload["brief"]["coverage_checklist"] = ["Explain checkpoint resume semantics"]
+        payload["brief"]["stop_policy"] = {
+            "stop_on_sufficient_coverage": False,
+            "max_search_queries": 1,
+            "max_urls_per_search": 0,
+            "max_runtime_seconds": 240,
+        }
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "Explain checkpoint resume semantics", "reason": "Primary question."},
+        ]
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Primary search",
+                "goal": "Explain checkpoint resume semantics.",
+                "query": "checkpoint resume semantics",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-search-2",
+                "unit_type": "search",
+                "title": "Secondary search",
+                "goal": "Explain restart trade-offs.",
+                "query": "restart trade-offs",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        payload["search_strategy"]["search_queries"] = ["checkpoint resume semantics", "restart trade-offs"]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    search_calls: list[str] = []
+
+    async def search(query):
+        search_calls.append(query)
+        return (
+            "Checkpoint resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", lambda url: asyncio.sleep(0, result=None))
+
+    response = await runtime.start(query="Respect max_search_queries", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert search_calls == ["checkpoint resume semantics"]
+    assert set(result["report"]["unit_results"]) == {"unit-search-1"}
+    assert result["report"]["runtime"]["skipped_units"] == [
+        {
+            "unit_id": "unit-search-2",
+            "unit_type": "search",
+            "reason": "max_search_queries_reached",
+        }
+    ]
 
 
 @pytest.mark.asyncio
