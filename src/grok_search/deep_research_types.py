@@ -91,6 +91,8 @@ class DeepResearchBrief(BaseModel):
     must_cover: list[str] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
     preferred_sources: list[str] = Field(default_factory=list)
+    scope: dict[str, Any] = Field(default_factory=dict)
+    coverage_checklist: list[str] = Field(default_factory=list)
     stop_policy: dict[str, Any] = Field(default_factory=dict)
     continuation_focus: list[str] = Field(default_factory=list)
 

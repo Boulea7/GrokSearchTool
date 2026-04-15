@@ -235,6 +235,26 @@ def _extract_meaningful_lines(value: str) -> list[str]:
     return meaningful
 
 
+def _final_report_text_is_meaningful(text: str, *, report_value: dict[str, Any] | None = None) -> bool:
+    meaningful_lines = _extract_meaningful_lines(text)
+    if not meaningful_lines:
+        return False
+    body_text = _normalize_whitespace(" ".join(meaningful_lines))
+    report_summary = ""
+    if isinstance(report_value, dict):
+        report_summary = _normalize_whitespace(str(report_value.get("summary", "")))
+    if report_summary:
+        summary_tokens = _tokenize_keywords(report_summary)
+        if summary_tokens and _count_keyword_overlap(body_text, summary_tokens) == 0:
+            return False
+        if len(body_text) >= 12:
+            return True
+        return False
+    if len(body_text) < 24:
+        return False
+    return True
+
+
 def _summarize_evidence_text(value: str, *, limit: int = _MAX_CLAIM_LENGTH) -> str:
     lines = _extract_meaningful_lines(value)
     if not lines:
@@ -744,6 +764,7 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
     if bundle is None:
         return False
     paths = bundle.get("paths") or {}
+    report_value: dict[str, Any] | None = None
     for kind in _FINAL_ARTIFACT_KINDS:
         text = _read_text_if_exists(paths.get(kind))
         if text is None:
@@ -751,6 +772,11 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
         if kind.endswith(".json"):
             value, error = _safe_load_json_artifact(text)
             if error is not None or _validate_json_artifact_shape(kind, value) is not None:
+                return False
+            if kind == "report.json" and isinstance(value, dict):
+                report_value = value
+        elif kind == "final_report.md":
+            if not _final_report_text_is_meaningful(text, report_value=report_value):
                 return False
     return True
 
@@ -829,7 +855,15 @@ def _artifact_payloads(
 ) -> list[dict[str, Any]]:
     current_artifacts = {artifact.kind: artifact for artifact in store.list_artifacts(job_id)}
     payloads: list[dict[str, Any]] = []
-    ordered_kinds = ["plan.json", "planner_trace.json", "continuation.json", "partial_report.md", *_FINAL_ARTIFACT_KINDS]
+    ordered_kinds = [
+        "plan.json",
+        "planner_trace.json",
+        "continuation.json",
+        "partial_report.md",
+        *_FINAL_ARTIFACT_KINDS,
+        "coverage.json",
+        "grounding.json",
+    ]
     for kind in ordered_kinds:
         artifact = current_artifacts.get(kind)
         if final_bundle is not None and kind in final_bundle.get("paths", {}):
@@ -983,6 +1017,14 @@ def _normalize_brief_payload(
     normalized["must_cover"] = _normalize_string_list(normalized.get("must_cover"))
     normalized["out_of_scope"] = _normalize_string_list(normalized.get("out_of_scope"))
     normalized["preferred_sources"] = _normalize_string_list(normalized.get("preferred_sources"))
+    if not isinstance(normalized.get("scope"), dict):
+        if normalized.get("scope") is not None:
+            normalize_actions.append("non_dict_scope")
+        normalized["scope"] = {}
+    if not isinstance(normalized.get("coverage_checklist"), list):
+        if normalized.get("coverage_checklist") is not None:
+            normalize_actions.append("string_coverage_checklist")
+        normalized["coverage_checklist"] = _normalize_string_list(normalized.get("coverage_checklist"))
     if not isinstance(normalized.get("stop_policy"), dict):
         if normalized.get("stop_policy") is not None:
             normalize_actions.append("non_dict_stop_policy")
@@ -1026,6 +1068,12 @@ def _finalize_brief_payload(
     if not preferred_sources and job.include_domains:
         preferred_sources = list(job.include_domains)
     normalized["preferred_sources"] = _dedupe_preserve_order(preferred_sources)
+    scope = dict(normalized.get("scope") or {})
+    scope.setdefault("allowed_sources", list(normalized["preferred_sources"]))
+    scope.setdefault("include_domains", list(job.include_domains))
+    scope.setdefault("exclude_domains", list(job.exclude_domains))
+    scope.setdefault("continuation_mode", continuation.mode)
+    normalized["scope"] = scope
 
     continuation_focus = _normalize_string_list(normalized.get("continuation_focus"))
     if not continuation_focus and continuation.mode == "continue":
@@ -1048,7 +1096,12 @@ def _finalize_brief_payload(
     stop_policy.setdefault("stop_on_sufficient_coverage", True)
     stop_policy.setdefault("max_search_queries", max(1, len(search_queries) or config.deep_research_max_concurrency))
     stop_policy.setdefault("max_urls_per_search", int(selective_fetch.get("max_urls_per_search", 1) or 1))
+    stop_policy.setdefault("max_runtime_seconds", int(job.resolved_budget_seconds))
     normalized["stop_policy"] = stop_policy
+    coverage_checklist = _normalize_string_list(normalized.get("coverage_checklist"))
+    if not coverage_checklist:
+        coverage_checklist = list(normalized["must_cover"])
+    normalized["coverage_checklist"] = _dedupe_preserve_order(coverage_checklist)
     return normalized
 
 
@@ -1849,7 +1902,11 @@ class DeepResearchRuntime:
     ) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
         if continue_from_job_id:
-            self.store.get_job(continue_from_job_id)
+            source_job = self.store.get_job(continue_from_job_id)
+            if source_job.status not in {"completed", "failed", "interrupted", "canceled"}:
+                raise ValueError(
+                    f"continue_from_job_id must reference a finished or recoverable job, got {source_job.status}"
+                )
         normalized_include_domains = list(include_domains or [])
         normalized_exclude_domains = list(exclude_domains or [])
         resolved_budget_seconds = self._resolve_budget_seconds(time_budget_seconds, effort)
@@ -3169,14 +3226,14 @@ class DeepResearchRuntime:
             raw_plan = json.loads(plan_text)
             if job is None:
                 job = self.store.get_job(job_id)
-            continuation = self._build_continuation_context(job.continued_from_job_id)
+            continuation = self._read_runtime_continuation(job)
             plan = self._normalize_plan_payload(job, raw_plan, continuation)
             if raw_plan != plan.model_dump():
                 self.write_artifact(job_id, "plan.json", _json_markdown_block(plan.model_dump()), "application/json")
             return plan
         if job is None:
             job = self.store.get_job(job_id)
-        continuation = self._build_continuation_context(job.continued_from_job_id)
+        continuation = self._read_runtime_continuation(job)
         return self._build_fallback_plan(job, continuation)
 
     def _load_checkpoint_state(self, job: DeepResearchJob) -> tuple[DeepResearchCheckpointState | None, dict[str, Any] | None]:
@@ -3529,6 +3586,13 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     report_summary = _build_report_summary(plan, citations["sections"])
     runtime_warnings = sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])})
     report_coverage = _coverage_for_report(plan, citations["sections"])
+    coverage_diagnostics = {
+        "query": plan.query,
+        "must_cover": list(plan.brief.must_cover),
+        "coverage_checklist": list(plan.brief.coverage_checklist),
+        **report_coverage,
+    }
+    grounding_diagnostics = _build_grounding_diagnostics(citations["sections"], citations["source_registry"])
     runtime_warnings = sorted({*runtime_warnings, *_coverage_warning_codes(report_coverage)})
     report_status = "degraded" if runtime_warnings or not citations["sections"] or failed_units else "completed"
     report_confidence = _cluster_confidence(
@@ -3545,6 +3609,16 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "unit_results": unit_results,
         "runtime": {
             "warnings": runtime_warnings,
+            "coverage": {
+                "must_cover_count": len(plan.brief.must_cover),
+                "uncovered_sub_question_count": len(report_coverage.get("uncovered_sub_questions", [])),
+                "unanswered_section_count": len(report_coverage.get("unanswered_sections", [])),
+            },
+            "grounding": {
+                "total_claims": grounding_diagnostics["total_claims"],
+                "ungrounded_claims": grounding_diagnostics["ungrounded_claims"],
+                "single_source_claims": grounding_diagnostics["single_source_claims"],
+            },
             "failed_units": failed_units,
             "skipped_units": skipped_units,
             "provider_winners": [
@@ -3560,6 +3634,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         },
     }
     final_report = _build_final_report(plan, citations["sections"], citations["source_registry"], report_summary)
+    runtime.write_artifact(job_id, "coverage.json", _json_markdown_block(coverage_diagnostics), "application/json")
+    runtime.write_artifact(job_id, "grounding.json", _json_markdown_block(grounding_diagnostics), "application/json")
     runtime.store.update_job(job_id, phase="finalizing", progress_pct=94.0, heartbeat_at=utc_now_iso())
     runtime.store.append_event(
         job_id,
@@ -3998,17 +4074,27 @@ def _select_fetch_sources(
     plan: DeepResearchPlan,
     unit: DeepResearchResearchUnit,
 ) -> list[dict[str, Any]]:
+    prefer_outline = bool(plan.search_strategy.selective_fetch.prefer_titles_matching_outline)
     outline_keywords = _tokenize_keywords(" ".join(f"{section.title} {section.goal}" for section in plan.report_outline))
     query_keywords = _tokenize_keywords(f"{plan.query} {unit.title} {unit.goal} {unit.query}")
 
-    def score(source: dict[str, Any]) -> tuple[int, int, int, int, str]:
+    query_intent_text = f"{plan.query} {unit.title} {unit.goal} {unit.query}".lower()
+
+    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, str]:
         title = f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
         quality_bias = _source_quality_bias(source)
+        lowered_title = title.lower()
+        shell_penalty = 0
+        if "troubleshooting" not in query_intent_text and "troubleshooting" in lowered_title:
+            shell_penalty -= 2
+        if "support" not in query_intent_text and "support" in lowered_title:
+            shell_penalty -= 1
         return (
             quality_bias,
             _count_keyword_overlap(title, query_keywords),
-            _count_keyword_overlap(title, outline_keywords),
+            _count_keyword_overlap(title, outline_keywords) if prefer_outline else 0,
             _source_topic_match_score(source, [plan.query, unit.goal, unit.query]),
+            shell_penalty,
             source.get("url", ""),
         )
 
@@ -4019,9 +4105,7 @@ def _select_fetch_sources(
             for source in ranked
             if _count_keyword_overlap(f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}", query_keywords) > 0
         ]
-    if plan.search_strategy.selective_fetch.prefer_titles_matching_outline:
-        return ranked
-    return sources
+    return ranked
 
 
 def _evidence_similarity(left: DeepResearchEvidenceItem, right: DeepResearchEvidenceItem) -> float:
@@ -4066,28 +4150,46 @@ def _coverage_for_report(
     answered_section_ids = [str(section.get("section_id", "")).strip() for section in sections if str(section.get("section_id", "")).strip()]
     covered_sub_question_ids: list[str] = []
     uncovered_sub_questions: list[str] = []
+    sub_question_coverage: list[dict[str, Any]] = []
     for item in plan.sub_questions:
         question = item.question.strip()
         if not question:
             continue
         question_tokens = _tokenize_keywords(question)
         coverage_threshold = max(2, min(4, max(1, len(question_tokens) // 2)))
-        covered = False
+        matching_section_ids: list[str] = []
+        matching_claim_ids: list[str] = []
         for section in sections:
-            section_text = " ".join(
-                [
-                    str(section.get("title", "")),
-                    str(section.get("summary", "")),
-                    " ".join(str(claim.get("text", "")) for claim in section.get("claims", [])),
-                ]
-            )
-            if _count_keyword_overlap(section_text, question_tokens) >= coverage_threshold:
-                covered = True
-                break
+            section_id = str(section.get("section_id", "")).strip()
+            section_matched = False
+            for claim in section.get("claims", []):
+                claim_text = str(claim.get("text", ""))
+                if _count_keyword_overlap(claim_text, question_tokens) >= coverage_threshold:
+                    if section_id and section_id not in matching_section_ids:
+                        matching_section_ids.append(section_id)
+                    claim_id = str(claim.get("claim_id", "")).strip()
+                    if claim_id and claim_id not in matching_claim_ids:
+                        matching_claim_ids.append(claim_id)
+                    section_matched = True
+            if not section_matched:
+                section_text = " ".join([str(section.get("title", "")), str(section.get("summary", ""))])
+                if _count_keyword_overlap(section_text, question_tokens) >= max(coverage_threshold, 3):
+                    if section_id and section_id not in matching_section_ids:
+                        matching_section_ids.append(section_id)
+        covered = bool(matching_claim_ids)
         if covered:
             covered_sub_question_ids.append(item.id)
         else:
             uncovered_sub_questions.append(question)
+        sub_question_coverage.append(
+            {
+                "sub_question_id": item.id,
+                "question": question,
+                "covered": covered,
+                "section_ids": matching_section_ids,
+                "claim_ids": matching_claim_ids,
+            }
+        )
     return {
         "planned_section_ids": [section.section_id for section in plan.report_outline],
         "answered_section_ids": answered_section_ids,
@@ -4099,6 +4201,7 @@ def _coverage_for_report(
         "planned_sub_question_ids": [item.id for item in plan.sub_questions],
         "covered_sub_question_ids": covered_sub_question_ids,
         "uncovered_sub_questions": uncovered_sub_questions,
+        "sub_questions": sub_question_coverage,
     }
 
 
@@ -4106,6 +4209,57 @@ def _coverage_warning_codes(coverage: dict[str, Any]) -> list[str]:
     if coverage.get("unanswered_sections") or coverage.get("uncovered_sub_questions"):
         return ["coverage_incomplete"]
     return []
+
+
+def _build_grounding_diagnostics(
+    sections: list[dict[str, Any]],
+    source_registry: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    section_diagnostics: list[dict[str, Any]] = []
+    total_claims = 0
+    grounded_claims = 0
+    single_source_claims = 0
+    low_confidence_claims = 0
+    for section in sections:
+        claims = section.get("claims", [])
+        claim_diagnostics: list[dict[str, Any]] = []
+        for claim in claims:
+            total_claims += 1
+            citation_ids = [citation for citation in claim.get("citations", []) if citation in source_registry]
+            grounded = bool(citation_ids)
+            if grounded:
+                grounded_claims += 1
+            if len(set(citation_ids)) <= 1:
+                single_source_claims += 1
+            if str(claim.get("confidence", "")).lower() == "low":
+                low_confidence_claims += 1
+            claim_diagnostics.append(
+                {
+                    "claim_id": claim.get("claim_id", ""),
+                    "citation_ids": citation_ids,
+                    "grounded": grounded,
+                    "supporting_source_count": len(set(citation_ids)),
+                    "supporting_domain_count": _supporting_domain_count(citation_ids, source_registry),
+                    "confidence": claim.get("confidence", ""),
+                }
+            )
+        section_diagnostics.append(
+            {
+                "section_id": section.get("section_id", ""),
+                "title": section.get("title", ""),
+                "claim_count": len(claim_diagnostics),
+                "grounded_claim_count": sum(1 for claim in claim_diagnostics if claim["grounded"]),
+                "claims": claim_diagnostics,
+            }
+        )
+    return {
+        "total_claims": total_claims,
+        "grounded_claims": grounded_claims,
+        "ungrounded_claims": max(0, total_claims - grounded_claims),
+        "single_source_claims": single_source_claims,
+        "low_confidence_claims": low_confidence_claims,
+        "sections": section_diagnostics,
+    }
 
 
 def _cluster_confidence(*, source_count: int, evidence_count: int, cluster_type: str = "", domain_count: int = 0) -> str:
