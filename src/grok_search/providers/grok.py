@@ -207,6 +207,50 @@ _DEFAULT_GROK_MODEL_FALLBACKS = {
         "grok-4.1-expert",
         "grok-4.1-thinking",
     ],
+    "grok-4.20-auto": [
+        "grok-4.20-0309",
+        "grok-4.20-fast",
+        "grok-4.20-expert",
+        "grok-4.1-fast",
+        "grok-4.1-mini",
+    ],
+    "grok-4.20-reasoning": [
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309",
+        "grok-4.20-fast",
+        "grok-4.1-thinking",
+        "grok-4.1-fast",
+    ],
+    "grok-4.20-multi-agent": [
+        "grok-4.20-heavy-16-agent",
+        "grok-4.20-expert-4-agent",
+        "grok-4.20-reasoning",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309",
+        "grok-4.20-fast",
+        "grok-4.1-fast",
+    ],
+    "grok-4.20-expert-4-agent": [
+        "grok-4.20-multi-agent",
+        "grok-4.20-heavy-16-agent",
+        "grok-4.20-reasoning",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309",
+    ],
+    "grok-4.20-heavy-16-agent": [
+        "grok-4.20-multi-agent",
+        "grok-4.20-expert-4-agent",
+        "grok-4.20-reasoning",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309",
+    ],
+}
+
+_RESPONSES_ONLY_RELAY_MODELS = {
+    "grok-4.20-reasoning",
+    "grok-4.20-multi-agent",
+    "grok-4.20-export-4-agent",
+    "grok-4.20-heavy-16-agent",
 }
 
 
@@ -238,22 +282,37 @@ def _is_model_unavailable_exception(exc: Exception) -> bool:
 
 
 def _provider_model_candidates(model: str, api_url: str) -> list[str]:
+    raw_model = (model or "").strip()
+    model_prefix = ""
+    model_suffix = ""
+    normalized_core = raw_model
+    if "/" in normalized_core:
+        model_prefix, normalized_core = normalized_core.split("/", 1)
+        model_prefix = f"{model_prefix}/"
+    if ":" in normalized_core:
+        normalized_core, trailing = normalized_core.split(":", 1)
+        model_suffix = f":{trailing}"
     raw_override = (config._get_env_value("GROK_MODEL_FALLBACKS", "") or "").strip()
     if raw_override:
         configured = [item.strip() for item in raw_override.split(",") if item.strip()]
     else:
-        configured = _DEFAULT_GROK_MODEL_FALLBACKS.get(model, [])
-        if not configured and model.startswith("grok-4.20"):
+        configured = _DEFAULT_GROK_MODEL_FALLBACKS.get(normalized_core, [])
+        if not configured and normalized_core.startswith("grok-4.20"):
             configured = [
+                "grok-4.20-0309",
+                "grok-4.20-fast",
                 "grok-4.1-fast",
                 "grok-4.1-expert",
                 "grok-4.1-mini",
                 "grok-4.1-thinking",
             ]
-    candidates = [model]
-    seen = {model}
+    candidates = [raw_model]
+    seen = {raw_model}
     for item in configured:
-        normalized = config._apply_model_suffix_for_url(item, api_url)
+        candidate = f"{model_prefix}{item}"
+        normalized = config._apply_model_suffix_for_url(candidate, api_url)
+        if model_suffix and ":" not in normalized:
+            normalized = f"{normalized}{model_suffix}"
         if normalized in seen:
             continue
         seen.add(normalized)
@@ -340,6 +399,47 @@ class GrokSearchProvider(BaseSearchProvider):
                 if item.get("api_url") and item.get("api_key")
             ],
         ]
+
+    @staticmethod
+    def _model_core(model: str) -> str:
+        text = (model or "").strip().lower()
+        if "/" in text:
+            text = text.split("/", 1)[1]
+        if ":" in text:
+            text = text.split(":", 1)[0]
+        return text
+
+    def _provider_family_for_url(self, api_url: str) -> str:
+        return config.provider_family_for_url(api_url)
+
+    def _uses_multi_agent_family(self, model: str) -> bool:
+        core = self._model_core(model)
+        return any(token in core for token in ("multi-agent", "heavy-16-agent", "expert-4-agent"))
+
+    def _prefers_responses_endpoint(self, api_url: str, model: str) -> bool:
+        core = self._model_core(model)
+        provider_family = self._provider_family_for_url(api_url)
+        if provider_family == "official_xai" and self._uses_multi_agent_family(core):
+            return True
+        if provider_family in {"openai_compatible_relay", "grok2api_like"} and core in _RESPONSES_ONLY_RELAY_MODELS:
+            return True
+        return self._uses_multi_agent_family(core)
+
+    def _prepare_request_for_endpoint(
+        self,
+        provider_config: dict[str, Any],
+        payload: dict[str, Any],
+        candidate_model: str,
+    ) -> tuple[str, dict[str, Any]]:
+        attempt_payload = copy.deepcopy(payload)
+        attempt_payload["model"] = candidate_model
+        if self._prefers_responses_endpoint(provider_config["api_url"], candidate_model):
+            if "input" not in attempt_payload and "messages" in attempt_payload:
+                attempt_payload["input"] = attempt_payload.pop("messages")
+            endpoint = f"{provider_config['api_url']}/responses"
+            return endpoint, attempt_payload
+        endpoint = f"{provider_config['api_url']}/chat/completions"
+        return endpoint, attempt_payload
 
     def get_provider_name(self) -> str:
         return "Grok"
@@ -829,14 +929,16 @@ class GrokSearchProvider(BaseSearchProvider):
         last_exc: Exception | None = None
         provider_configs = self._iter_provider_configs(payload)
         for index, provider_config in enumerate(provider_configs):
-            endpoint = f"{provider_config['api_url']}/chat/completions"
             attempt_headers = self._build_api_headers_for_key(provider_config["api_key"])
             model_candidates = _provider_model_candidates(provider_config["model"], provider_config["api_url"])
             try:
-                async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
-                    for model_index, candidate_model in enumerate(model_candidates):
-                        attempt_payload = copy.deepcopy(payload)
-                        attempt_payload["model"] = candidate_model
+                for model_index, candidate_model in enumerate(model_candidates):
+                    endpoint, attempt_payload = self._prepare_request_for_endpoint(
+                        provider_config,
+                        payload,
+                        candidate_model,
+                    )
+                    async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
                         try:
                             async for attempt in AsyncRetrying(
                                 stop=stop_after_attempt(config.retry_max_attempts + 1),
@@ -902,14 +1004,16 @@ class GrokSearchProvider(BaseSearchProvider):
         last_exc: Exception | None = None
         provider_configs = self._iter_provider_configs(payload)
         for index, provider_config in enumerate(provider_configs):
-            endpoint = f"{provider_config['api_url']}/chat/completions"
             attempt_headers = self._build_api_headers_for_key(provider_config["api_key"])
             model_candidates = _provider_model_candidates(provider_config["model"], provider_config["api_url"])
             try:
-                async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
-                    for model_index, candidate_model in enumerate(model_candidates):
-                        attempt_payload = copy.deepcopy(payload)
-                        attempt_payload["model"] = candidate_model
+                for model_index, candidate_model in enumerate(model_candidates):
+                    endpoint, attempt_payload = self._prepare_request_for_endpoint(
+                        provider_config,
+                        payload,
+                        candidate_model,
+                    )
+                    async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
                         try:
                             async for attempt in AsyncRetrying(
                                 stop=stop_after_attempt(config.retry_max_attempts + 1),

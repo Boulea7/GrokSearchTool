@@ -171,12 +171,16 @@ async def _get_available_models_cached(api_url: str, api_key: str) -> list[str]:
 
 def _parse_grok_model_parts(model: str) -> tuple[int, int, tuple[int, ...], str] | None:
     text = (model or "").strip().lower()
-    match = re.match(r"^grok-(\d+)\.(\d+)(?:-(.*))?$", text)
+    if "/" in text:
+        text = text.split("/", 1)[1]
+    if ":" in text:
+        text = text.split(":", 1)[0]
+    match = re.match(r"^grok-(\d+)(?:[.-](\d+))?(?:-(.*))?$", text)
     if not match:
         return None
 
     major = int(match.group(1))
-    minor = int(match.group(2))
+    minor = int(match.group(2) or 0)
     remainder = (match.group(3) or "").strip()
     numeric_parts: list[int] = []
     semantic_parts: list[str] = []
@@ -207,9 +211,15 @@ def _grok_model_preference_key(model: str) -> tuple:
     major, minor, numeric_parts, semantic_suffix = parts
     padded_numeric = numeric_parts + (0, 0, 0)
     semantic_preference = {
-        "": 3,
-        "non-reasoning": 2,
-        "reasoning": 1,
+        "auto": 7,
+        "": 6,
+        "fast": 5,
+        "non-reasoning": 4,
+        "expert": 3,
+        "reasoning": 2,
+        "multi-agent": 1,
+        "expert-4-agent": 0,
+        "heavy-16-agent": -1,
     }.get(semantic_suffix, 0)
     return (major, minor, padded_numeric[:3], semantic_preference)
 

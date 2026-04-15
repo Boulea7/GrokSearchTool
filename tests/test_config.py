@@ -16,6 +16,74 @@ def test_default_grok_model_prefers_grok_4_20_0309():
     assert config._DEFAULT_MODEL == "grok-4.20-0309"
 
 
+def test_default_grok_model_uses_provider_aware_balanced_default_for_official_xai(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.grok_model == "grok-4.20-0309-non-reasoning"
+
+
+def test_default_grok_model_uses_provider_aware_balanced_default_for_openrouter(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.grok_model == "x-ai/grok-4.1-fast:online"
+
+
+def test_default_grok_model_uses_provider_aware_balanced_default_for_relay(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://grok2api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.grok_model == "grok-4.20-auto"
+
+
+def test_grok_provider_chain_uses_provider_specific_defaults_when_runtime_model_is_implicit(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://grok2api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+    (tmp_path / ".env.local").write_text(
+        (
+            "GROK_API_URL_2=https://openrouter.ai/api/v1\n"
+            "GROK_API_KEY_2=secondary-key\n"
+            "GROK_API_URL_3=https://api.x.ai/v1\n"
+            "GROK_API_KEY_3=third-key\n"
+        ),
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    chain = config.grok_provider_chain()
+
+    assert [item["model"] for item in chain] == [
+        "grok-4.20-auto",
+        "x-ai/grok-4.1-fast:online",
+        "grok-4.20-0309-non-reasoning",
+    ]
+    assert [item["provider_family"] for item in chain] == [
+        "grok2api_like",
+        "openrouter",
+        "official_xai",
+    ]
+
+
 def test_time_context_mode_defaults_to_always(monkeypatch):
     monkeypatch.delenv("GROK_TIME_CONTEXT_MODE", raising=False)
     config = Config()

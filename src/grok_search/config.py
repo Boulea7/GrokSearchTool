@@ -36,6 +36,15 @@ class Config:
         '"env":{"GROK_API_URL":"https://api.example.com/v1","GROK_API_KEY":"your-api-key"}}\''
     )
     _DEFAULT_MODEL = "grok-4.20-0309"
+    _DEFAULT_MODEL_PROFILE = "balanced_auto"
+    _DEFAULT_DEEP_RESEARCH_STANDARD_PROFILE = "reasoning"
+    _DEFAULT_DEEP_RESEARCH_DEEP_PROFILE = "multi_agent"
+    _KNOWN_PROVIDER_FAMILIES = {
+        "official_xai",
+        "openrouter",
+        "openai_compatible_relay",
+        "grok2api_like",
+    }
 
     def __new__(cls):
         if cls._instance is None:
@@ -156,6 +165,11 @@ class Config:
             f"GROK_MODEL{suffix_text}",
         )
 
+    @staticmethod
+    def _provider_family_env_key(suffix: int | None = None) -> str:
+        suffix_text = f"_{suffix}" if suffix is not None else ""
+        return f"GROK_PROVIDER_FAMILY{suffix_text}"
+
     def _resolve_provider_credentials(self, suffix: int | None = None) -> dict[str, str] | None:
         url_key, key_key, _ = self._provider_env_keys(suffix)
         if url_key in os.environ or key_key in os.environ:
@@ -173,6 +187,122 @@ class Config:
                     "api_key": values.get(key_key, ""),
                 }
         return None
+
+    def _provider_family_override(self, suffix: int | None = None) -> str:
+        raw = self._get_env_value(self._provider_family_env_key(suffix), "") or ""
+        family = raw.strip().lower()
+        return family if family in self._KNOWN_PROVIDER_FAMILIES else ""
+
+    @staticmethod
+    def _normalize_host(host: str) -> str:
+        return (host or "").strip().lower().rstrip(".")
+
+    def provider_family_for_url(self, api_url: str, *, suffix: int | None = None) -> str:
+        override = self._provider_family_override(suffix)
+        if override:
+            return override
+        try:
+            host = self._normalize_host(urlsplit((api_url or "").strip()).hostname or "")
+        except ValueError:
+            host = ""
+        if not host:
+            return "openai_compatible_relay"
+        if "openrouter.ai" in host:
+            return "openrouter"
+        if host == "api.x.ai" or host.endswith(".x.ai"):
+            return "official_xai"
+        if any(marker in host for marker in ("grok2api", "oneapi", "newapi", "example-provider")):
+            return "grok2api_like"
+        return "openai_compatible_relay"
+
+    def grok_model_profile(self) -> str:
+        raw = (self._get_env_value("GROK_MODEL_PROFILE", self._DEFAULT_MODEL_PROFILE) or "").strip().lower()
+        allowed = {"balanced_auto", "reasoning", "multi_agent", "fast", "exact"}
+        return raw if raw in allowed else self._DEFAULT_MODEL_PROFILE
+
+    def grok_deep_research_standard_profile(self) -> str:
+        raw = (
+            self._get_env_value(
+                "GROK_DEEP_RESEARCH_STANDARD_PROFILE",
+                self._DEFAULT_DEEP_RESEARCH_STANDARD_PROFILE,
+            )
+            or ""
+        ).strip().lower()
+        allowed = {"balanced_auto", "reasoning", "multi_agent", "fast", "exact"}
+        return raw if raw in allowed else self._DEFAULT_DEEP_RESEARCH_STANDARD_PROFILE
+
+    def grok_deep_research_deep_profile(self) -> str:
+        raw = (
+            self._get_env_value(
+                "GROK_DEEP_RESEARCH_DEEP_PROFILE",
+                self._DEFAULT_DEEP_RESEARCH_DEEP_PROFILE,
+            )
+            or ""
+        ).strip().lower()
+        allowed = {"balanced_auto", "reasoning", "multi_agent", "fast", "exact"}
+        return raw if raw in allowed else self._DEFAULT_DEEP_RESEARCH_DEEP_PROFILE
+
+    def _resolved_default_model_for_family(self, provider_family: str, *, profile: str) -> str:
+        family_defaults = {
+            "official_xai": {
+                "balanced_auto": "grok-4.20-0309-non-reasoning",
+                "reasoning": "grok-4.20-0309-reasoning",
+                "multi_agent": "grok-4.20-multi-agent-0309",
+                "fast": "grok-4-1-fast-non-reasoning",
+                "exact": self._DEFAULT_MODEL,
+            },
+            "openrouter": {
+                "balanced_auto": "x-ai/grok-4.1-fast",
+                "reasoning": "x-ai/grok-4.20",
+                "multi_agent": "x-ai/grok-4.20-multi-agent",
+                "fast": "x-ai/grok-4.1-fast",
+                "exact": "x-ai/grok-4.20",
+            },
+            "openai_compatible_relay": {
+                "balanced_auto": "grok-4.20-auto",
+                "reasoning": "grok-4.20-reasoning",
+                "multi_agent": "grok-4.20-multi-agent",
+                "fast": "grok-4.20-fast",
+                "exact": self._DEFAULT_MODEL,
+            },
+            "grok2api_like": {
+                "balanced_auto": "grok-4.20-auto",
+                "reasoning": "grok-4.20-reasoning",
+                "multi_agent": "grok-4.20-multi-agent",
+                "fast": "grok-4.20-fast",
+                "exact": self._DEFAULT_MODEL,
+            },
+        }
+        selected_family = family_defaults.get(provider_family, family_defaults["openai_compatible_relay"])
+        return selected_family.get(profile, selected_family["balanced_auto"])
+
+    def resolve_default_grok_model_for_url(
+        self,
+        api_url: str,
+        *,
+        profile: str | None = None,
+        suffix: int | None = None,
+    ) -> str:
+        selected_profile = (profile or self.grok_model_profile()).strip().lower()
+        if selected_profile == "exact":
+            model = self._DEFAULT_MODEL
+        else:
+            provider_family = self.provider_family_for_url(api_url, suffix=suffix)
+            model = self._resolved_default_model_for_family(provider_family, profile=selected_profile)
+        return self._apply_model_suffix_for_url(model, api_url)
+
+    def _has_explicit_runtime_model(self) -> bool:
+        if self._get_env_value("GROK_MODEL") is not None:
+            return True
+        return bool(self._load_config_file().get("model"))
+
+    def resolve_deep_research_model_for_url(self, api_url: str, *, effort: str) -> str:
+        selected_profile = (
+            self.grok_deep_research_deep_profile()
+            if (effort or "").strip().lower() == "deep"
+            else self.grok_deep_research_standard_profile()
+        )
+        return self.resolve_default_grok_model_for_url(api_url, profile=selected_profile)
 
     @property
     def config_file(self) -> Path:
@@ -380,13 +510,18 @@ class Config:
     def grok_provider_chain(self, model_override: str | None = None) -> list[dict[str, Any]]:
         primary_url = self.grok_api_url
         primary_key = self.grok_api_key
-        base_model = self.grok_model if model_override is None else model_override
+        explicit_runtime_model = self._has_explicit_runtime_model()
+        if model_override is None:
+            base_model = self.grok_model
+        else:
+            base_model = model_override
         chain: list[dict[str, Any]] = [
             {
                 "name": "primary",
                 "api_url": primary_url,
                 "api_key": primary_key,
                 "model": self._apply_model_suffix_for_url(base_model, primary_url),
+                "provider_family": self.provider_family_for_url(primary_url),
                 "source": "primary",
             }
         ]
@@ -407,7 +542,12 @@ class Config:
             if not provider_url or not provider_key:
                 continue
             provider_model = self._get_env_value(f"GROK_MODEL_{suffix}")
-            resolved_model = self._apply_model_suffix_for_url(provider_model if provider_model is not None else base_model, provider_url)
+            if provider_model is not None:
+                resolved_model = self._apply_model_suffix_for_url(provider_model, provider_url)
+            elif model_override is not None or explicit_runtime_model:
+                resolved_model = self._apply_model_suffix_for_url(base_model, provider_url)
+            else:
+                resolved_model = self.resolve_default_grok_model_for_url(provider_url, suffix=suffix)
             identity = (provider_url, provider_key, resolved_model)
             if identity in seen:
                 continue
@@ -418,6 +558,7 @@ class Config:
                     "api_url": provider_url,
                     "api_key": provider_key,
                     "model": resolved_model,
+                    "provider_family": self.provider_family_for_url(provider_url, suffix=suffix),
                     "source": provider["source"],
                 }
             )
@@ -432,7 +573,14 @@ class Config:
         if env_model is not None:
             model = env_model
         else:
-            model = self._load_config_file().get("model") or self._DEFAULT_MODEL
+            persisted_model = self._load_config_file().get("model")
+            if persisted_model:
+                model = persisted_model
+            else:
+                try:
+                    model = self.resolve_default_grok_model_for_url(self.grok_api_url)
+                except ValueError:
+                    model = self._DEFAULT_MODEL
         self._cached_model = self._apply_model_suffix(model)
         return self._cached_model
 
@@ -537,6 +685,12 @@ class Config:
             "GROK_API_KEY": api_key_masked,
             "GROK_MODEL": self.grok_model,
             "GROK_MODEL_SOURCE": self.grok_model_source,
+            "GROK_MODEL_PROFILE": self.grok_model_profile(),
+            "GROK_DEEP_RESEARCH_STANDARD_PROFILE": self.grok_deep_research_standard_profile(),
+            "GROK_DEEP_RESEARCH_DEEP_PROFILE": self.grok_deep_research_deep_profile(),
+            "GROK_PROVIDER_FAMILY": (
+                self.provider_family_for_url(api_url) if api_url != "未配置" else "未配置"
+            ),
             "GROK_DEBUG": self.debug_enabled,
             "GROK_OUTPUT_CLEANUP": self.output_cleanup_enabled,
             "GROK_TIME_CONTEXT_MODE": self.time_context_mode,
