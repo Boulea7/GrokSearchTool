@@ -2829,6 +2829,62 @@ async def test_interrupted_finalizing_job_reads_resolved_final_batch(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_resume_interrupted_finalizing_job_with_usable_final_batch_short_circuits(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Interrupted finalizing resume",
+        request_fingerprint="fp-interrupted-finalizing-resume",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Interrupted finalizing resume"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+
+    resumed = await runtime.resume(job.job_id, schedule=False)
+    status = await runtime.status(job.job_id)
+    events = await runtime.events(job.job_id)
+
+    assert resumed["status"] == "completed"
+    assert status["status"] == "completed"
+    assert any(event["type"] == "job_resolved_from_final_batch" for event in events["events"])
+    assert not any(event["type"] == "job_completed" for event in events["events"])
+    assert runtime.read_artifact_text(job.job_id, "final_report.md") == "# Final Report\n\nRecovered final report.\n"
+
+
+@pytest.mark.asyncio
 async def test_run_job_executes_independent_units_concurrently(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     started = []
@@ -4141,6 +4197,112 @@ async def test_continue_plan_sanitizes_previous_summary_before_persisting_contin
     assert "topics can help you to resolve common issues" not in response["plan"]["continuation"]["previous_summary"].lower()
     assert "topics can help you to resolve common issues" not in continuation_payload["previous_summary"].lower()
     assert "resume continues from the last completed checkpoint" in continuation_payload["previous_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_continue_from_failed_job_builds_focused_continuation_state(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    original = runtime.store.create_job(
+        query="Failed research on checkpoint resume",
+        request_fingerprint="fp-failed-continuation-focus",
+        status="failed",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "query": "Failed research on checkpoint resume",
+                "sub_questions": [
+                    {"id": "sq1", "question": "How does checkpoint resume work?", "reason": "Primary question."},
+                ],
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": "",
+                "sections": [
+                    {
+                        "section_id": "executive-summary",
+                        "title": "Executive Summary",
+                        "summary": "Checkpoint resume continues from the last durable checkpoint.",
+                        "claims": [
+                            {
+                                "claim_id": "executive-summary-claim-1",
+                                "text": "Checkpoint resume continues from the last durable checkpoint.",
+                                "citations": ["R1"],
+                            }
+                        ],
+                    }
+                ],
+                "unit_results": {
+                    "unit-search-1": {
+                        "summary": "Checkpoint resume continues from the last durable checkpoint.",
+                        "detail": "Checkpoint resume continues from the last durable checkpoint.",
+                        "source_ids": ["R1"],
+                        "citations": ["R1"],
+                    }
+                },
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        original.job_id,
+        "sources.json",
+        json.dumps(
+            [
+                {
+                    "source_id": "R1",
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Checkpoint runtime docs",
+                    "source_type": "official_docs",
+                    "citation_count": 1,
+                    "section_count": 1,
+                },
+                {
+                    "source_id": "R2",
+                    "url": "https://docs.example.com/runtime/troubleshooting",
+                    "title": "Troubleshooting runtime docs",
+                    "source_type": "official_docs",
+                    "citation_count": 0,
+                    "section_count": 0,
+                },
+            ]
+        ),
+        "application/json",
+    )
+
+    response = await runtime.start(
+        query="Follow up on failed checkpoint resume research",
+        continue_from_job_id=original.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    continuation = response["plan"]["continuation"]
+    continuation_payload = json.loads(runtime.store.read_artifact_text(response["job_id"], "continuation.json"))
+
+    assert "continuation from failed job" not in continuation["previous_summary"].lower()
+    assert "checkpoint resume continues from the last durable checkpoint" in continuation["previous_summary"].lower()
+    assert continuation["source_count"] == 1
+    assert [source["source_id"] for source in continuation_payload["carry_forward_sources"]] == ["R1"]
 
 
 @pytest.mark.asyncio

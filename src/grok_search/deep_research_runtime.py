@@ -1258,6 +1258,85 @@ def _sanitize_continuation_sections(
     return sanitized
 
 
+def _continuation_used_source_ids(
+    unit_results: dict[str, dict[str, Any]],
+    evidence_items: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+) -> set[str]:
+    used_source_ids: set[str] = set()
+    for result in unit_results.values():
+        used_source_ids.update(str(source_id) for source_id in result.get("source_ids", []) if str(source_id).strip())
+        used_source_ids.update(str(source_id) for source_id in result.get("citations", []) if str(source_id).strip())
+    for item in evidence_items:
+        used_source_ids.update(str(source_id) for source_id in item.get("source_ids", []) if str(source_id).strip())
+    for section in sections:
+        used_source_ids.update(str(source_id) for source_id in section.get("citations", []) if str(source_id).strip())
+        for claim in section.get("claims", []):
+            used_source_ids.update(str(source_id) for source_id in claim.get("citations", []) if str(source_id).strip())
+    return used_source_ids
+
+
+def _source_is_high_trust(source: dict[str, Any]) -> bool:
+    source_type = str(source.get("source_type", "") or "").strip().lower()
+    return source_type in {"official_docs", "standard", "paper"}
+
+
+def _focused_continuation_sources(
+    sources: list[dict[str, Any]],
+    *,
+    used_source_ids: set[str],
+) -> list[dict[str, Any]]:
+    if used_source_ids:
+        return [
+            dict(source)
+            for source in sources
+            if str(source.get("source_id", "")).strip() in used_source_ids
+        ]
+    focused: list[dict[str, Any]] = []
+    for source in sources:
+        source_id = str(source.get("source_id", "")).strip()
+        if not source_id:
+            continue
+        if source_id in used_source_ids or _source_is_high_trust(source):
+            focused.append(dict(source))
+    if focused:
+        return focused
+    return [dict(source) for source in sources if str(source.get("source_id", "")).strip()]
+
+
+def _best_continuation_summary(
+    *,
+    report: dict[str, Any],
+    final_report: str,
+    partial_report: str,
+    unit_results: dict[str, dict[str, Any]],
+    sections: list[dict[str, Any]],
+    prior_plan_summary: str,
+    job: DeepResearchJob,
+) -> str:
+    candidates: list[str] = []
+    if report:
+        candidates.append(str(report.get("summary") or ""))
+    for section in sections:
+        candidates.append(str(section.get("summary") or ""))
+        for claim in section.get("claims", []):
+            candidates.append(str(claim.get("text") or ""))
+    for result in unit_results.values():
+        candidates.append(str(result.get("summary") or result.get("detail") or ""))
+    for body in (final_report, partial_report):
+        lines = [line.strip() for line in body.splitlines() if line.strip() and not line.startswith("#")]
+        if lines:
+            candidates.extend(lines[:2])
+    if prior_plan_summary:
+        candidates.append(prior_plan_summary)
+    candidates.append(job.query)
+    for candidate in candidates:
+        summary = _summarize_evidence_text(candidate, limit=220)
+        if summary and not _is_noisy_text(summary):
+            return summary
+    return _trim_text(job.query, limit=220)
+
+
 def _artifact_metadata(content: str, *, batch_id: str = "") -> dict[str, Any]:
     metadata = {"bytes": len(content.encode("utf-8"))}
     if batch_id:
@@ -1756,6 +1835,27 @@ class DeepResearchRuntime:
             return self._job_payload(job, reused=False)
         if job.status not in {"draft", "failed", "interrupted"}:
             return self._job_payload(job, reused=False)
+        if job.status == "interrupted" and _job_prefers_resolved_final_bundle(job):
+            final_bundle = _resolve_final_artifact_bundle(self.store, job_id)
+            if final_bundle is not None:
+                completed_at = job.finished_at or utc_now_iso()
+                job = self.store.update_job(
+                    job_id,
+                    status="completed",
+                    phase="finalizing",
+                    progress_pct=100.0,
+                    finished_at=completed_at,
+                    heartbeat_at=utc_now_iso(),
+                    last_error="",
+                )
+                self.store.append_event(
+                    job_id,
+                    type="job_resolved_from_final_batch",
+                    phase="finalizing",
+                    message="Deep research recovered a usable final artifact batch without rerunning finalization.",
+                    data={"resolved_artifact_batch_id": final_bundle["batch_id"]},
+                )
+                return self._job_payload(job, reused=False)
         job = self.store.update_job(
             job_id,
             status="queued",
@@ -2560,17 +2660,6 @@ class DeepResearchRuntime:
             if _validate_json_artifact_shape("report.json", report_value) is None and isinstance(report_value, dict):
                 report = report_value
 
-        previous_summary = ""
-        if report:
-            previous_summary = report.get("summary") or ""
-        if not previous_summary:
-            lines = [line.strip() for line in final_report.splitlines() if line.strip() and not line.startswith("#")]
-            previous_summary = lines[0] if lines else ""
-        if not previous_summary:
-            lines = [line.strip() for line in partial_report.splitlines() if line.strip() and not line.startswith("#")]
-            previous_summary = lines[0] if lines else ""
-        previous_summary = _summarize_evidence_text(previous_summary, limit=220)
-
         prior_plan_summary = ""
         plan_payload: dict[str, Any] = {}
         if plan_text:
@@ -2639,17 +2728,39 @@ class DeepResearchRuntime:
         carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
         carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
+        used_source_ids = _continuation_used_source_ids(
+            carry_forward_unit_results,
+            carry_forward_evidence,
+            carry_forward_sections,
+        )
+        carry_forward_sources = _focused_continuation_sources(
+            carry_forward_sources,
+            used_source_ids=used_source_ids,
+        )
+        carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
+        carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
+        carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
+        previous_summary = _best_continuation_summary(
+            report=report,
+            final_report=final_report,
+            partial_report=partial_report,
+            unit_results=carry_forward_unit_results,
+            sections=carry_forward_sections,
+            prior_plan_summary=prior_plan_summary,
+            job=job,
+        )
 
         checkpoint_key = (
             checkpoint_meta.get("fallback_to", "") if checkpoint_meta else ""
         ) or job.current_checkpoint or (checkpoints[-1].checkpoint_key if checkpoints else "")
         continuation_goal = plan_payload.get("query") or job.query
+        source_count = len(carry_forward_sources)
 
         return DeepResearchContinuationState(
             mode="continue",
             source_job_id=continue_from_job_id,
             source_job_status=job.status,
-            previous_summary=_trim_text(previous_summary or f"Continuation from {job.status} job {continue_from_job_id}.", limit=400),
+            previous_summary=_trim_text(previous_summary, limit=400),
             prior_plan_summary=_trim_text(prior_plan_summary, limit=400),
             continuation_goal=_trim_text(continuation_goal, limit=200),
             source_count=source_count,
