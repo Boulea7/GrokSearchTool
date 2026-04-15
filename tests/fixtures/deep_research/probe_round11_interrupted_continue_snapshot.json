@@ -1,0 +1,63 @@
+{
+  "job_id": "9315c45f3e0a4769e2d528c7",
+  "query": "Focus on resume failure recovery, checkpoint replay safety, and restart trade-offs after interruption",
+  "continued_from_job_id": "03b35102ee3d4a01f06e3187",
+  "include_domains": [
+    "docs.aws.amazon.com"
+  ],
+  "exclude_domains": [
+    "repost.aws"
+  ],
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: degraded_fetch_without_url_to_search:unit-browse-reboot-impact"
+    }
+  },
+  "continuation": {
+    "mode": "continue",
+    "source_job_status": "completed",
+    "checkpoint_key": "finalizing",
+    "state_version": 2,
+    "carry_forward_constraints": {
+      "include_domains": [
+        "docs.aws.amazon.com"
+      ],
+      "exclude_domains": [
+        "repost.aws"
+      ],
+      "preferred_sources": [
+        "docs.aws.amazon.com"
+      ],
+      "allowed_sources": [
+        "docs.aws.amazon.com"
+      ]
+    },
+    "continuation_focus": [
+      "Compare checkpoint resume, restart risk, instance reboot behavior, recovery timeout, and CDC edge cases in AWS DMS with official docs only",
+      "Medium confidence: To reboot a replication instance, use the AWS CLI [`reboot-replication-instance`](https://docs.aws.amazon.com/cli/latest/reference/dms/reboot-replication-instance.html) command wi… You can migrate vie…"
+    ]
+  },
+  "plan": {
+    "brief": {
+      "must_cover": [
+        "Focus on checkpoint resume failure recovery, checkpoint replay safety, and restart trade-offs after interruption migration database",
+        "Compare checkpoint resume, restart risk, instance reboot behavior, recovery timeout, and CDC edge cases in AWS DMS with official docs only migration database",
+        "Key Findings"
+      ],
+      "coverage_checklist": [
+        "Focus on checkpoint resume failure recovery, checkpoint replay safety, and restart trade-offs after interruption migration database",
+        "Compare checkpoint resume, restart risk, instance reboot behavior, recovery timeout, and CDC edge cases in AWS DMS with official docs only migration database",
+        "Key Findings"
+      ]
+    },
+    "search_strategy": {
+      "search_queries": [
+        "Focus on checkpoint resume failure recovery, checkpoint replay safety, and restart trade-offs after interruption migration database",
+        "Key Findings"
+      ]
+    }
+  }
+}
