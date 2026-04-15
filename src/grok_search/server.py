@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
 from fastmcp import FastMCP, Context
@@ -193,6 +193,100 @@ def _parse_grok_model_parts(model: str) -> tuple[int, int, tuple[int, ...], str]
                 semantic_parts.append(part)
 
     return major, minor, tuple(numeric_parts), "-".join(semantic_parts)
+
+
+def _normalized_grok_model_core(model: str) -> str:
+    text = (model or "").strip().lower()
+    if "/" in text:
+        text = text.split("/", 1)[1]
+    if ":" in text:
+        text = text.split(":", 1)[0]
+    return text
+
+
+def _supports_multi_agent_family(model: str) -> bool:
+    core = _normalized_grok_model_core(model)
+    return any(token in core for token in ("multi-agent", "heavy-16-agent", "expert-4-agent"))
+
+
+def _preferred_endpoint_path(provider_family: str, model: str) -> str:
+    core = _normalized_grok_model_core(model)
+    if provider_family == "openrouter":
+        return "/chat/completions"
+    if provider_family == "official_xai" and _supports_multi_agent_family(core):
+        return "/responses"
+    if provider_family in {"openai_compatible_relay", "grok2api_like"} and (
+        _supports_multi_agent_family(core)
+        or core in {
+            "grok-4.20-reasoning",
+            "grok-4.20-multi-agent",
+            "grok-4.20-export-4-agent",
+            "grok-4.20-heavy-16-agent",
+        }
+    ):
+        return "/responses"
+    return "/chat/completions"
+
+
+def _routing_signals(provider_family: str, model: str) -> list[str]:
+    multi_agent_family = _supports_multi_agent_family(model)
+    endpoint_path = _preferred_endpoint_path(provider_family, model)
+    signals = [
+        f"model_family:{'multi_agent' if multi_agent_family else 'single_agent'}",
+        f"routing_path:{'responses' if endpoint_path == '/responses' else 'chat_completions'}",
+    ]
+    if provider_family == "openrouter":
+        signals.append("openrouter_chat_completions_default")
+    elif endpoint_path == "/responses":
+        signals.append("relay_responses_family" if provider_family != "official_xai" else "official_responses_family")
+    else:
+        signals.append("relay_chat_completions_default")
+    return signals
+
+
+def _routing_profile_summary(api_url: str, model: str) -> dict[str, Any]:
+    provider_family = config.provider_family_for_url(api_url)
+    return {
+        "provider_family": provider_family,
+        "resolved_model": model,
+        "preferred_endpoint_path": _preferred_endpoint_path(provider_family, model),
+        "multi_agent_family": _supports_multi_agent_family(model),
+        "routing_signals": _routing_signals(provider_family, model),
+    }
+
+
+def _profile_default_summary(api_url: str, *, profile: str, effort: str | None = None) -> dict[str, Any]:
+    if effort is None:
+        resolved_model = config.resolve_default_grok_model_for_url(api_url, profile=profile)
+    else:
+        resolved_model = config.resolve_deep_research_model_for_url(api_url, effort=effort)
+    summary = _routing_profile_summary(api_url, resolved_model)
+    summary["selected_profile"] = profile
+    summary["multi_agent_requested"] = profile == "multi_agent" or (effort or "").strip().lower() == "deep"
+    return summary
+
+
+def _build_routing_diagnostics(provider_chain: list[dict[str, Any]]) -> dict[str, Any]:
+    if not provider_chain:
+        return {"active_provider": {}, "profile_defaults": {}}
+    primary = provider_chain[0]
+    api_url = primary["api_url"]
+    return {
+        "active_provider": _routing_profile_summary(api_url, primary["model"]),
+        "profile_defaults": {
+            "general": _profile_default_summary(api_url, profile=config.grok_model_profile()),
+            "deep_research_standard": _profile_default_summary(
+                api_url,
+                profile=config.grok_deep_research_standard_profile(),
+                effort="standard",
+            ),
+            "deep_research_deep": _profile_default_summary(
+                api_url,
+                profile=config.grok_deep_research_deep_profile(),
+                effort="deep",
+            ),
+        },
+    }
 
 
 def _is_flexible_grok_model(model: str) -> bool:
@@ -1845,6 +1939,11 @@ def _runtime_model_source_label(source: str) -> str:
     return labels.get(source, source or "未知来源")
 
 
+def _grok_endpoint_for_model(api_url: str, model: str) -> str:
+    path = config.grok_preferred_endpoint_path(api_url, model)
+    return f"{api_url.rstrip('/')}{path}"
+
+
 def _httpx_client_kwargs_for_url(url: str, *, timeout: float) -> dict:
     host = (urlparse(url).hostname or "").lower().rstrip(".")
     kwargs = {"timeout": timeout}
@@ -2025,7 +2124,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
             "grok_search_probe",
             "error",
             f"真实搜索探针失败: {_format_grok_error(exc)}",
-            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            endpoint=_grok_endpoint_for_model(api_url, model),
             response_time_ms=(time.perf_counter() - start_time) * 1000,
             error_kind="probe_failed",
         )
@@ -2043,7 +2142,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
             "grok_search_probe",
             "warning",
             _search_probe_quality_message(body_quality_warning),
-            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            endpoint=_grok_endpoint_for_model(api_url, model),
             response_time_ms=(time.perf_counter() - start_time) * 1000,
             warning_code=body_quality_warning,
         )
@@ -2053,7 +2152,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
             "grok_search_probe",
             "error",
             "真实搜索探针失败: 上游未返回可用正文。",
-            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            endpoint=_grok_endpoint_for_model(api_url, model),
             response_time_ms=(time.perf_counter() - start_time) * 1000,
             error_kind="empty_probe_response",
         )
@@ -2062,7 +2161,10 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
         "grok_search_probe",
         "ok",
         "真实搜索探针成功。",
-        endpoint=f"{provider._last_success_provider_api_url.rstrip('/')}/chat/completions",
+        endpoint=_grok_endpoint_for_model(
+            provider._last_success_provider_api_url,
+            provider._last_success_provider_model,
+        ),
         response_time_ms=(time.perf_counter() - start_time) * 1000,
         provider_name=provider._last_success_provider_name,
         provider_model=provider._last_success_provider_model,
@@ -2265,6 +2367,7 @@ def _build_feature_readiness(
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
     grok_provider_chain = checks_by_id.get("grok_provider_chain")
+    grok_provider_capabilities = checks_by_id.get("grok_provider_capabilities")
     grok_models = checks_by_id["grok_models"]
     grok_model_selection = checks_by_id.get("grok_model_selection")
     grok_model_runtime_fallback = checks_by_id.get("grok_model_runtime_fallback")
@@ -2477,6 +2580,9 @@ def _build_feature_readiness(
             "degraded_by": web_search_degraded_by,
             "runtime_override_active": _runtime_override_active(runtime_model_source),
             "runtime_model_source": runtime_model_source,
+            "provider_family": grok_provider_capabilities.get("provider_family", "") if grok_provider_capabilities else "",
+            "responses_supported": bool(grok_provider_capabilities.get("responses_supported", False)) if grok_provider_capabilities else False,
+            "multi_agent_supported": bool(grok_provider_capabilities.get("multi_agent_supported", False)) if grok_provider_capabilities else False,
         },
         "get_sources": _build_get_sources_readiness(
             web_search_status=web_search_status,
@@ -2516,6 +2622,9 @@ def _build_feature_readiness(
             "degraded_by": deep_research_planner_degraded_by,
             "runtime_override_active": _runtime_override_active(runtime_model_source),
             "runtime_model_source": runtime_model_source,
+            "provider_family": grok_provider_capabilities.get("provider_family", "") if grok_provider_capabilities else "",
+            "responses_supported": bool(grok_provider_capabilities.get("responses_supported", False)) if grok_provider_capabilities else False,
+            "multi_agent_supported": bool(grok_provider_capabilities.get("multi_agent_supported", False)) if grok_provider_capabilities else False,
         },
         "deep_research_runtime": {
             "status": deep_research_runtime_status,
@@ -2525,6 +2634,9 @@ def _build_feature_readiness(
             "degraded_by": deep_research_runtime_degraded_by,
             "runtime_override_active": _runtime_override_active(runtime_model_source),
             "runtime_model_source": runtime_model_source,
+            "provider_family": grok_provider_capabilities.get("provider_family", "") if grok_provider_capabilities else "",
+            "responses_supported": bool(grok_provider_capabilities.get("responses_supported", False)) if grok_provider_capabilities else False,
+            "multi_agent_supported": bool(grok_provider_capabilities.get("multi_agent_supported", False)) if grok_provider_capabilities else False,
         },
     }
 
@@ -2624,6 +2736,7 @@ async def get_config_info(
         }
 
     config_info = config.get_config_info()
+    routing_diagnostics = config_info.get("GROK_ROUTING_DIAGNOSTICS") or {}
     checks: list[dict] = []
     recommendations: list[str] = []
     recommendation_details: list[dict] = []
@@ -2633,6 +2746,9 @@ async def get_config_info(
         api_key = config.grok_api_key
         checks.append(_build_doctor_check("grok_config", "ok", "Grok 核心配置已提供。"))
         provider_chain = config.grok_provider_chain()
+        routing_diagnostics = config_info.get("GROK_ROUTING_DIAGNOSTICS") or config.grok_routing_diagnostics()
+        config_info["GROK_ROUTING_DIAGNOSTICS"] = routing_diagnostics
+        provider_family = config.provider_family_for_url(api_url)
         checks.append(
             _build_doctor_check(
                 "grok_provider_chain",
@@ -2640,12 +2756,29 @@ async def get_config_info(
                 f"已检测到 {len(provider_chain)} 个 Grok provider。",
                 provider_count=len(provider_chain),
                 provider_names=[item["name"] for item in provider_chain],
+                providers=routing_diagnostics.get("provider_chain"),
+                active_provider=routing_diagnostics.get("active_provider"),
+                profile_defaults=routing_diagnostics.get("profile_defaults"),
+            )
+        )
+        checks.append(
+            _build_doctor_check(
+                "grok_provider_capabilities",
+                "ok",
+                f"当前 primary provider family 为 {provider_family}。",
+                provider_family=provider_family,
+                responses_supported=provider_family == "official_xai",
+                multi_agent_supported=False,
+                model_profile=config.grok_model_profile(),
+                deep_research_standard_profile=config.grok_deep_research_standard_profile(),
+                deep_research_deep_profile=config.grok_deep_research_deep_profile(),
             )
         )
     except ValueError as exc:
         api_url = ""
         api_key = ""
         provider_chain = []
+        provider_family = ""
         checks.append(_build_doctor_check("grok_config", "error", str(exc), error_kind="config_error"))
         _append_recommendation(
             recommendations,
@@ -2713,6 +2846,22 @@ async def get_config_info(
         runtime_model_source = config.grok_model_source
         runtime_model_source_label = _runtime_model_source_label(runtime_model_source)
         available_models = grok_models.get("available_models") or []
+        multi_agent_supported = any(_supports_multi_agent_family(model) for model in available_models)
+        responses_supported = provider_family == "official_xai" or multi_agent_supported or any(
+            _normalized_grok_model_core(model) in {
+                "grok-4.20-reasoning",
+                "grok-4.20-multi-agent",
+                "grok-4.20-export-4-agent",
+                "grok-4.20-heavy-16-agent",
+            }
+            for model in available_models
+        )
+        for check in checks:
+            if check.get("check_id") == "grok_provider_capabilities":
+                check["responses_supported"] = responses_supported
+                check["multi_agent_supported"] = multi_agent_supported
+                check["available_model_count"] = len(available_models)
+                break
         resolved_model, resolution = _resolve_model_against_available_models(configured_model, available_models)
         fallback_model = resolved_model if resolution == _MODEL_FALLBACK_WARNING else None
         if configured_model and available_models and configured_model not in available_models:
