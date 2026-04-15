@@ -2007,6 +2007,62 @@ async def test_selective_fetch_prefers_official_docs_over_community_pages(monkey
 
 
 @pytest.mark.asyncio
+async def test_selective_fetch_prefers_official_docs_when_community_title_matches_query_better(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fetched_urls = []
+
+    async def fake_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "checkpoint-docs",
+                "title": "Checkpoint Resume Docs",
+                "goal": "Use official runtime checkpoint documentation.",
+            }
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["checkpoint resume runtime exact semantics"],
+            "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+        }
+        return payload
+
+    async def fake_search(query):
+        return (
+            "Checkpoint resume should rely on primary runtime docs.",
+            [
+                {
+                    "url": "https://community.example.com/checkpoint-resume-runtime-guide",
+                    "title": "Checkpoint resume runtime guide and exact restart semantics",
+                    "description": "Community post with very query-heavy title.",
+                },
+                {
+                    "url": "https://docs.example.com/runtime/recovery",
+                    "title": "Runtime recovery",
+                    "description": "Official runtime documentation.",
+                },
+            ],
+        )
+
+    async def fake_fetch(url):
+        fetched_urls.append(url)
+        if "docs.example.com" in url:
+            return "# Runtime recovery\n\nCheckpoint resume continues from the last durable checkpoint."
+        return "# Community guide\n\nCommunity speculation."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", fake_planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", fake_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fake_fetch)
+
+    response = await runtime.start(query="Prefer official docs over catchy community titles", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert fetched_urls == ["https://docs.example.com/runtime/recovery"]
+    assert "Checkpoint resume continues from the last durable checkpoint" in result["final_report"]
+    assert "Community speculation" not in result["final_report"]
+
+
+@pytest.mark.asyncio
 async def test_noisy_fetched_shell_text_does_not_enter_final_report(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -3952,12 +4008,11 @@ async def test_source_registry_keeps_stable_ids_and_prefers_enriched_metadata(mo
 
     registry = result["citations"]["source_registry"]
     docs_source = next(item for item in registry.values() if item["url"] == "https://docs.example.com/runtime/checkpoints")
-    community_source = next(item for item in registry.values() if "stackoverflow.com" in item["url"])
 
     assert docs_source["source_id"] == "R4"
     assert docs_source["title"] == "Runtime checkpoints"
     assert "Official checkpoint docs" in (docs_source.get("description") or docs_source.get("snippet") or "")
-    assert docs_source["rank"] < community_source["rank"]
+    assert all("stackoverflow.com" not in item["url"] for item in registry.values())
 
 
 @pytest.mark.asyncio
@@ -4311,6 +4366,9 @@ async def test_continuation_artifact_omits_troubleshooting_shell_text_from_carry
 
     async def planner(job, continuation):
         payload = structured_plan_payload(job, continuation)
+        payload["research_units"][0]["goal"] = "Explain checkpoint resume semantics."
+        payload["research_units"][0]["query"] = "checkpoint resume semantics"
+        payload["search_strategy"]["search_queries"] = ["checkpoint resume semantics"]
         payload["search_strategy"]["selective_fetch"] = {
             "max_urls_per_search": 1,
             "prefer_titles_matching_outline": True,
@@ -4423,6 +4481,187 @@ async def test_final_report_omits_remaining_gaps_without_real_gap_and_claims_sta
     assert report_claims
     assert report_claims == citation_claims
     assert len(report_claims) == len(set(report_claims))
+
+
+@pytest.mark.asyncio
+async def test_report_exposes_coverage_for_unanswered_sections_and_sub_questions(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "Explain checkpoint resume semantics", "reason": "Primary question."},
+            {"id": "sq2", "question": "Explain restart trade-offs", "reason": "Secondary question."},
+        ]
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            },
+            {
+                "section_id": "restart-tradeoffs",
+                "title": "Restart Trade-offs",
+                "goal": "Explain restart trade-offs.",
+            },
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Resume search",
+                "goal": "Explain checkpoint resume semantics.",
+                "query": "checkpoint resume semantics",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["checkpoint resume semantics"],
+            "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Official docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nCheckpoint resume continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Coverage ledger probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    coverage = result["report"]["coverage"]
+
+    assert coverage["planned_section_ids"] == ["resume-semantics", "restart-tradeoffs"]
+    assert coverage["answered_section_ids"] == ["resume-semantics"]
+    assert coverage["unanswered_sections"] == ["Restart Trade-offs"]
+    assert coverage["planned_sub_question_ids"] == ["sq1", "sq2"]
+    assert coverage["covered_sub_question_ids"] == ["sq1"]
+    assert coverage["uncovered_sub_questions"] == ["Explain restart trade-offs"]
+
+
+@pytest.mark.asyncio
+async def test_unused_sources_are_pruned_from_final_report_registry(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["research_units"][0]["goal"] = "Explain checkpoint resume semantics."
+        payload["research_units"][0]["query"] = "checkpoint resume semantics"
+        payload["search_strategy"]["search_queries"] = ["checkpoint resume semantics"]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Official docs.",
+                },
+                {
+                    "url": "https://docs.example.com/runtime/background",
+                    "title": "Background runtime notes",
+                    "description": "Related but unused docs.",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nCheckpoint resume continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Unused source pruning probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    source_urls = {item["url"] for item in result["citations"]["source_registry"].values()}
+
+    assert source_urls == {"https://docs.example.com/runtime/checkpoints"}
+    assert "runtime/background" not in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_executive_summary_omits_gap_claims_when_supported_claim_exists(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize checkpoint resume semantics.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 2,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint for previously executed tasks.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Primary docs.",
+                },
+                {
+                    "url": "https://docs.example.com/runtime/troubleshooting",
+                    "title": "Troubleshooting runtime checkpoints",
+                    "description": "Following, you can find topics about troubleshooting runtime issues.",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "troubleshooting" in url:
+            return (
+                "# Troubleshooting runtime checkpoints\n\n"
+                "Following, you can find topics about troubleshooting runtime issues.\n"
+                "These topics can help you to resolve common issues.\n"
+                "If you opened a support case, your engineer might ask you to run a support script.\n"
+            )
+        return "# Runtime checkpoints\n\nCheckpoint resume continues from the last durable checkpoint for previously executed tasks."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Executive summary gap suppression", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    first_section = result["report"]["sections"][0]
+
+    assert len(first_section["claims"]) == 1
+    assert first_section["claims"][0]["cluster_type"] != "gap"
+    assert "support script" not in first_section["summary"].lower()
+    assert "support script" not in result["final_report"].lower()
 
 
 @pytest.mark.asyncio
@@ -4643,10 +4882,9 @@ async def test_completed_claims_include_provenance_fields_and_final_sources_foll
     assert first_claim["unit_id"] == "unit-search-1"
     assert first_claim["evidence_ids"]
     assert "docs.example.com/runtime/checkpoints" in source_lines[0]
-    assert "stackoverflow.com" in source_lines[-1]
     assert "official_docs" in source_lines[0]
-    assert "community" in source_lines[-1]
     assert "reasons:" in source_lines[0]
+    assert all("stackoverflow.com" not in line for line in source_lines)
 
 
 @pytest.mark.asyncio
@@ -4774,7 +5012,7 @@ async def test_source_ranking_prefers_standards_and_papers_over_generic_blog(mon
 
     assert urls[0] == "https://standards.example.org/runtime/recovery"
     assert "arxiv.org/abs/2404.12345" in urls[1]
-    assert urls[-1] == "https://blog.example.com/runtime-checkpoint-post"
+    assert "https://blog.example.com/runtime-checkpoint-post" not in urls
     assert sources[0]["winner_provider"] == "grok"
     assert sources[0]["citation_count"] >= 1
     assert "standard" in sources[0]["ranking_reasons"]
