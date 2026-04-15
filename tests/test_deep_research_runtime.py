@@ -2633,6 +2633,11 @@ async def test_result_prefers_resolved_final_batch_over_current_mixed_artifacts(
 
     assert result["sources"][0]["url"] == "https://good.example.com"
     assert result["artifact_errors"] == {}
+    assert result["resolved_artifact_batch_id"]
+    assert any(
+        artifact["kind"] == "sources.json" and "batches" in artifact["path"] and "good.example.com" not in artifact["path"]
+        for artifact in result["artifacts"]
+    )
 
 
 @pytest.mark.asyncio
@@ -2882,6 +2887,67 @@ async def test_interrupted_finalizing_job_reads_resolved_final_batch(tmp_path):
     assert status["resolved_artifact_batch_id"] == batch_id
     assert result["report"]["summary"] == "Recovered final report"
     assert report_text == "# Final Report\n\nRecovered final report.\n"
+
+
+@pytest.mark.asyncio
+async def test_start_reuses_interrupted_finalizing_job_with_usable_final_batch(tmp_path):
+    runtime = build_runtime(tmp_path)
+    fingerprint = runtime._request_fingerprint(
+        query="Reuse interrupted final batch",
+        context="",
+        effort="standard",
+        include_domains=[],
+        exclude_domains=[],
+        continue_from_job_id="",
+        plan_only=False,
+    )
+    job = runtime.store.create_job(
+        query="Reuse interrupted final batch",
+        request_fingerprint=fingerprint,
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Reuse interrupted final batch"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+
+    response = await runtime.start(query="Reuse interrupted final batch", force_new=False, schedule=False)
+
+    assert response["reused"] is True
+    assert response["job_id"] == job.job_id
+    assert response["status"] == "interrupted"
 
 
 @pytest.mark.asyncio
