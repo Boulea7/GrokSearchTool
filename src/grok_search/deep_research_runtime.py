@@ -4950,6 +4950,7 @@ def _coverage_for_report(
     uncovered_sub_questions: list[str] = []
     sub_question_coverage: list[dict[str, Any]] = []
     grounded_sections: list[dict[str, Any]] = []
+    section_coverage: list[dict[str, Any]] = []
     for section in sections:
         section_id = str(section.get("section_id", "")).strip()
         grounded_claims = [
@@ -4972,6 +4973,15 @@ def _coverage_for_report(
                 **dict(section),
                 "claims": grounded_claims,
                 "citations": grounded_citations,
+            }
+        )
+        section_coverage.append(
+            {
+                "section_id": section_id,
+                "title": str(section.get("title", "")),
+                "answered": bool(grounded_claims),
+                "grounded_claim_count": len(grounded_claims),
+                "citation_count": len(grounded_citations),
             }
         )
     for item in plan.sub_questions:
@@ -5013,18 +5023,22 @@ def _coverage_for_report(
                 "claim_ids": matching_claim_ids,
             }
         )
+    unanswered_sections = [
+        section.title
+        for section in plan.report_outline
+        if section.section_id not in answered_section_ids
+    ]
+    coverage_gate_passed = not unanswered_sections and not uncovered_sub_questions
     return {
         "planned_section_ids": [section.section_id for section in plan.report_outline],
         "answered_section_ids": answered_section_ids,
-        "unanswered_sections": [
-            section.title
-            for section in plan.report_outline
-            if section.section_id not in answered_section_ids
-        ],
+        "unanswered_sections": unanswered_sections,
         "planned_sub_question_ids": [item.id for item in plan.sub_questions],
         "covered_sub_question_ids": covered_sub_question_ids,
         "uncovered_sub_questions": uncovered_sub_questions,
         "sub_questions": sub_question_coverage,
+        "section_coverage": section_coverage,
+        "coverage_gate_passed": coverage_gate_passed,
     }
 
 
@@ -5122,6 +5136,41 @@ def _cluster_type_for_items(items: list[DeepResearchEvidenceItem]) -> str:
     if len(source_ids) >= 2:
         return "consensus"
     return "single_source"
+
+
+def _build_claim_evidence_bindings(
+    items: list[DeepResearchEvidenceItem],
+    source_registry: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    bindings: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        excerpt = _summarize_evidence_text(item.summary or item.detail, limit=_MAX_CLAIM_LENGTH)
+        if not excerpt:
+            continue
+        excerpt_hash = hashlib.sha256(excerpt.encode("utf-8")).hexdigest()
+        for source_id in item.source_ids:
+            normalized_source_id = str(source_id).strip()
+            if not normalized_source_id:
+                continue
+            identity = (item.evidence_id, normalized_source_id)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            source = source_registry.get(normalized_source_id, {})
+            source_url = str(source.get("url", "") or "").strip()
+            if not source_url:
+                source_url = next((str(url).strip() for url in item.source_urls if str(url).strip()), "")
+            bindings.append(
+                {
+                    "evidence_id": item.evidence_id,
+                    "source_id": normalized_source_id,
+                    "source_url": source_url,
+                    "excerpt": excerpt,
+                    "excerpt_hash": excerpt_hash,
+                }
+            )
+    return bindings
 
 
 def _best_cluster_claim_text(items: list[DeepResearchEvidenceItem]) -> str:
@@ -5252,6 +5301,7 @@ def _build_section_citations(
                 citations=_preferred_citation_ids(cluster_source_ids, source_registry, limit=3),
                 unit_id=cluster[0].unit_id,
                 evidence_ids=_dedupe_preserve_order([item.evidence_id for item in cluster]),
+                evidence_bindings=_build_claim_evidence_bindings(cluster, registry_by_id),
                 cluster_type=cluster_type,
                 supporting_source_count=len(set(cluster_source_ids)),
                 supporting_domain_count=supporting_domain_count,
