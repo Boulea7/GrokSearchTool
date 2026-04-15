@@ -1271,8 +1271,8 @@ async def web_search(
         )
 
     try:
-        api_url = config.grok_api_url
-        api_key = config.grok_api_key
+        config.grok_api_url
+        config.grok_api_key
     except ValueError as e:
         await _SOURCES_CACHE.set(
             session_id,

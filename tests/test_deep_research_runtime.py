@@ -848,6 +848,10 @@ async def test_deep_effort_prefers_multi_agent_default_and_preserves_single_agen
     monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
     monkeypatch.setenv("GROK_API_KEY", "primary-key")
     monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.delenv("GROK_DEEP_RESEARCH_ULTRA_PROFILE", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {})
+    server.config.reset_runtime_state()
     monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
     monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
 
@@ -895,6 +899,10 @@ async def test_ultra_effort_prefers_heavy_16_agent_before_fallback(monkeypatch, 
     monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
     monkeypatch.setenv("GROK_API_KEY", "primary-key")
     monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.delenv("GROK_DEEP_RESEARCH_ULTRA_PROFILE", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {})
+    server.config.reset_runtime_state()
     monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
     monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
 
