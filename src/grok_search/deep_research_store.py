@@ -37,6 +37,23 @@ def _parse_utc_iso(value: str) -> dt.datetime | None:
         return None
 
 
+def _checkpoint_kind(checkpoint_key: str) -> str:
+    normalized = (checkpoint_key or "").strip()
+    if not normalized:
+        return ""
+    if normalized.startswith("researching-dispatch-"):
+        return "research_dispatch"
+    if normalized.startswith("researching-"):
+        return "research_unit"
+    if normalized == "planning":
+        return "planning"
+    if normalized == "synthesizing":
+        return "synthesizing"
+    if normalized == "finalizing":
+        return "finalizing"
+    return "unknown"
+
+
 class DeepResearchStore:
     def __init__(self, root_dir: Path):
         self._root_dir = Path(root_dir)
@@ -520,7 +537,11 @@ class DeepResearchStore:
                     type="job_canceled",
                     phase=row["phase"],
                     message="Deep research canceled during worker recovery.",
-                    data={"reason": "cancel_requested_during_recovery"},
+                    data={
+                        "reason": "cancel_requested_during_recovery",
+                        "checkpoint_key": row["current_checkpoint"],
+                        "checkpoint_kind": _checkpoint_kind(row["current_checkpoint"]),
+                    },
                 )
             else:
                 job = self.update_job(
@@ -535,7 +556,11 @@ class DeepResearchStore:
                     type="job_interrupted",
                     phase=row["phase"],
                     message="Deep research interrupted during worker recovery.",
-                    data={"reason": "worker_restarted"},
+                    data={
+                        "reason": "worker_restarted",
+                        "checkpoint_key": row["current_checkpoint"],
+                        "checkpoint_kind": _checkpoint_kind(row["current_checkpoint"]),
+                    },
                 )
             recovered.append(job)
         return recovered

@@ -4391,11 +4391,59 @@ async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoi
     resumed = await runtime.resume(response["job_id"], schedule=False)
     final_result = await runtime.run_job(response["job_id"])
     events = await runtime.events(response["job_id"])
+    interrupted_events = [event for event in events["events"] if event["type"] == "job_interrupted"]
+    resumed_events = [event for event in events["events"] if event["type"] == "job_resumed"]
 
     assert resumed["status"] == "queued"
+    assert resumed["current_checkpoint_kind"] == "research_dispatch"
     assert final_result["status"] == "completed"
-    assert any(event["type"] == "job_resumed" for event in events["events"])
+    assert interrupted_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")
+    assert interrupted_events[-1]["data"]["checkpoint_kind"] == "research_dispatch"
+    assert resumed_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")
+    assert resumed_events[-1]["data"]["checkpoint_kind"] == "research_dispatch"
     assert runtime.store.read_artifact_text(response["job_id"], "final_report.md") is not None
+
+
+@pytest.mark.asyncio
+async def test_status_surfaces_checkpoint_kind_for_interrupted_dispatch_resume(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    did_reconcile = False
+
+    async def reconciling_search(query):
+        nonlocal did_reconcile
+        if not did_reconcile:
+            did_reconcile = True
+            runtime.store.reconcile_incomplete_jobs()
+        return (
+            "Recovered answer",
+            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", reconciling_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query="Dispatch checkpoint kind status", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+    status = await runtime.status(response["job_id"])
+    result = await runtime.result(response["job_id"])
+
+    assert status["status"] == "interrupted"
+    assert status["current_checkpoint_kind"] == "research_dispatch"
+    assert result["status"] == "interrupted"
+    assert result["current_checkpoint_kind"] == "research_dispatch"
 
 
 @pytest.mark.asyncio
