@@ -1,0 +1,80 @@
+{
+  "sample": "probe-round12-continue-resume",
+  "query": "Focus on resume failure recovery, checkpoint replay safety, and restart trade-offs after interruption",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: filled_search_query:unit-search-resume-restart"
+    }
+  },
+  "continuation": {
+    "mode": "continue",
+    "source_job_status": "completed",
+    "checkpoint_key": "finalizing",
+    "state_version": 2,
+    "carry_forward_constraints": {
+      "include_domains": [
+        "docs.aws.amazon.com"
+      ],
+      "exclude_domains": [
+        "repost.aws"
+      ],
+      "preferred_sources": [
+        "docs.aws.amazon.com"
+      ],
+      "allowed_sources": [
+        "docs.aws.amazon.com"
+      ]
+    }
+  },
+  "plan": {
+    "include_domains": [
+      "docs.aws.amazon.com"
+    ],
+    "exclude_domains": [
+      "repost.aws"
+    ],
+    "search_strategy": {
+      "search_queries": [
+        "Focus on resume failure recovery, checkpoint replay safety, and restart trade-offs after interruption",
+        "Compare checkpoint resume and restart semantics in AWS DMS with official docs only"
+      ]
+    }
+  },
+  "report": {
+    "status": "interrupted",
+    "runtime": {
+      "warnings": []
+    }
+  },
+  "golden": {
+    "resume_continue_semantics": {
+      "verdict": "fail",
+      "score": 0.0,
+      "reason_tags": [
+        "missing_carry_forward_sources",
+        "missing_continuation_focus",
+        "missing_continuation_identity",
+        "missing_previous_summary",
+        "missing_source_job_id"
+      ]
+    },
+    "planner_boundary": {
+      "verdict": "fail",
+      "score": 0.6,
+      "reason_tags": [
+        "planner_fallback_used",
+        "unsafe_plan_fallback"
+      ]
+    },
+    "diagnostics_consistency": {
+      "verdict": "fail",
+      "score": 0.6,
+      "reason_tags": [
+        "planner_fallback_not_exposed"
+      ]
+    }
+  }
+}
