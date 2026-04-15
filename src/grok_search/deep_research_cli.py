@@ -20,6 +20,97 @@ def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def _summary_value(value: Any, *, empty: str = "-") -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return empty
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or empty
+    return str(value)
+
+
+def _format_progress(progress: Any) -> str:
+    if progress is None or progress == "":
+        return "-"
+    try:
+        return f"{float(progress):.1f}%"
+    except (TypeError, ValueError):
+        return _summary_value(progress)
+
+
+def _quote_summary_text(value: str, *, limit: int = 80) -> str:
+    text = value.strip()
+    if len(text) > limit:
+        text = text[: limit - 3].rstrip() + "..."
+    return json.dumps(text, ensure_ascii=False)
+
+
+def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") -> list[str]:
+    artifact_fallback = payload.get("artifact_fallback_used")
+    return [
+        f"job={_summary_value(payload.get('job_id') or fallback_job_id)}",
+        f"status={_summary_value(payload.get('status'))}",
+        f"phase={_summary_value(payload.get('phase'))}",
+        f"progress={_format_progress(payload.get('progress_pct'))}",
+        f"checkpoint={_summary_value(payload.get('current_checkpoint'))}",
+        f"attempts={_summary_value(payload.get('attempt_count', 0), empty='0')}",
+        f"cancel_requested={_summary_value(payload.get('cancel_requested', False), empty='false')}",
+        f"continued_from={_summary_value(payload.get('continued_from_job_id'))}",
+        f"resolved_batch={_summary_value(payload.get('resolved_artifact_batch_id'))}",
+        f"artifact_fallback={_summary_value(artifact_fallback) if artifact_fallback is not None else '-'}",
+    ]
+
+
+def _print_summary_line(parts: list[str]) -> None:
+    print(f"summary: {' '.join(parts)}", file=sys.stderr)
+
+
+def _print_job_summary(payload: dict[str, Any], *, fallback_job_id: str = "", extra_parts: list[str] | None = None) -> None:
+    parts = _job_summary_parts(payload, fallback_job_id=fallback_job_id)
+    if extra_parts:
+        parts.extend(extra_parts)
+    _print_summary_line(parts)
+
+
+def _print_list_summary(payload: dict[str, Any], *, status_filter: str, limit: int) -> None:
+    jobs = payload.get("jobs", [])
+    _print_summary_line(
+        [
+            f"jobs={len(jobs)}",
+            f"status_filter={status_filter or 'all'}",
+            f"limit={limit}",
+        ]
+    )
+    for job in jobs:
+        _print_job_summary(
+            job,
+            extra_parts=[f"query={_quote_summary_text(str(job.get('query', '')))}"],
+        )
+
+
+def _print_events_summary(
+    payload: dict[str, Any],
+    *,
+    after_seq: int,
+    terminal: bool,
+    fallback_job_id: str = "",
+) -> None:
+    events = payload.get("events", [])
+    last_event = events[-1]["type"] if events else "-"
+    _print_summary_line(
+        [
+            f"job={_summary_value(payload.get('job_id') or fallback_job_id)}",
+            f"events={len(events)}",
+            f"after_seq={after_seq}",
+            f"next_after_seq={payload.get('next_after_seq', after_seq)}",
+            f"last_event={last_event}",
+            f"terminal={'true' if terminal else 'false'}",
+        ]
+    )
+
+
 def _spawn_worker(job_id: str) -> None:
     log_dir = config.deep_research_dir / "worker-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -40,20 +131,12 @@ async def _watch_job(runtime: DeepResearchRuntime, job_id: str, *, interval_seco
         status = await runtime.status(job_id)
         events = await runtime.events(job_id, after_seq=last_seq, limit=100)
         for event in events["events"]:
-            print(f"[{event['seq']}] {event['phase']} {event['type']}: {event['message']}")
+            print(f"[{event['seq']}] {event['phase']} {event['type']}: {event['message']}", file=sys.stderr)
         last_seq = events["next_after_seq"]
-        phase = status.get("phase", "")
-        progress = status.get("progress_pct")
-        batch_id = status.get("resolved_artifact_batch_id", "")
-        status_line = f"status={status['status']}"
-        if phase:
-            status_line += f" phase={phase}"
-        if progress is not None:
-            status_line += f" progress={progress}"
-        if batch_id:
-            status_line += f" resolved_batch={batch_id}"
+        summary_parts = _job_summary_parts(status, fallback_job_id=job_id)
+        status_line = " ".join(summary_parts)
         if status_line != last_status_line:
-            print(status_line)
+            _print_summary_line(summary_parts)
             last_status_line = status_line
         if status["status"] in TERMINAL_STATUSES:
             return
@@ -90,7 +173,9 @@ async def _handle_watch(args: argparse.Namespace) -> int:
 
 async def _handle_status(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
-    _print_json(await runtime.status(args.job_id))
+    payload = await runtime.status(args.job_id)
+    _print_job_summary(payload, fallback_job_id=args.job_id)
+    _print_json(payload)
     return 0
 
 
@@ -100,14 +185,28 @@ async def _handle_events(args: argparse.Namespace) -> int:
         last_seq = args.after_seq
         while True:
             payload = await runtime.events(args.job_id, after_seq=last_seq, limit=args.limit)
+            status = await runtime.status(args.job_id)
+            _print_events_summary(
+                payload,
+                after_seq=last_seq,
+                terminal=status["status"] in TERMINAL_STATUSES,
+                fallback_job_id=args.job_id,
+            )
             if payload["events"]:
                 _print_json(payload)
             last_seq = payload["next_after_seq"]
-            status = await runtime.status(args.job_id)
             if status["status"] in TERMINAL_STATUSES:
                 return 0
             await asyncio.sleep(args.interval_seconds)
-    _print_json(await runtime.events(args.job_id, after_seq=args.after_seq, limit=args.limit))
+    payload = await runtime.events(args.job_id, after_seq=args.after_seq, limit=args.limit)
+    status = await runtime.status(args.job_id)
+    _print_events_summary(
+        payload,
+        after_seq=args.after_seq,
+        terminal=status["status"] in TERMINAL_STATUSES,
+        fallback_job_id=args.job_id,
+    )
+    _print_json(payload)
     return 0
 
 
@@ -118,6 +217,15 @@ async def _handle_result(args: argparse.Namespace) -> int:
         if content is None:
             print(f"artifact_not_found: {args.artifact}", file=sys.stderr)
             return 1
+        status = await runtime.status(args.job_id)
+        _print_job_summary(
+            status,
+            fallback_job_id=args.job_id,
+            extra_parts=[
+                f"artifact={args.artifact}",
+                f"bytes={len(content.encode('utf-8'))}",
+            ],
+        )
         print(content)
         return 0
     _print_json(await runtime.result(args.job_id, include_partial=args.include_partial))
@@ -129,6 +237,7 @@ async def _handle_resume(args: argparse.Namespace) -> int:
     response = await runtime.resume(args.job_id, schedule=False)
     if response["status"] == "queued":
         _spawn_worker(args.job_id)
+    _print_job_summary(response, fallback_job_id=args.job_id)
     _print_json(response)
     if args.watch and response["status"] == "queued":
         await _watch_job(runtime, args.job_id, interval_seconds=args.interval_seconds)
@@ -137,13 +246,17 @@ async def _handle_resume(args: argparse.Namespace) -> int:
 
 async def _handle_cancel(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
-    _print_json(await runtime.cancel(args.job_id))
+    response = await runtime.cancel(args.job_id)
+    _print_job_summary(await runtime.status(args.job_id), fallback_job_id=args.job_id)
+    _print_json(response)
     return 0
 
 
 async def _handle_list(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
-    _print_json(await runtime.list_jobs(status=args.status, limit=args.limit))
+    payload = await runtime.list_jobs(status=args.status, limit=args.limit)
+    _print_list_summary(payload, status_filter=args.status, limit=args.limit)
+    _print_json(payload)
     return 0
 
 
