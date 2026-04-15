@@ -3194,12 +3194,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         source_count=len({citation for section in citations["sections"] for citation in section.get("citations", [])}),
         evidence_count=sum(len(section.get("claims", [])) for section in citations["sections"]),
     )
+    report_coverage = _coverage_for_report(plan, citations["sections"])
     report = {
         "query": plan.query,
         "summary": report_summary,
         "confidence": report_confidence,
         "status": report_status,
         "sections": citations["sections"],
+        "coverage": report_coverage,
         "unit_results": unit_results,
         "runtime": {
             "warnings": runtime_warnings,
@@ -3623,6 +3625,14 @@ def _annotate_source_usage(
             item["ranking_penalties"].append("same_domain_off_topic")
             continue
         filtered.append(item)
+    if any(item.get("citation_count", 0) > 0 or item.get("section_count", 0) > 0 for item in filtered):
+        used_only: list[dict[str, Any]] = []
+        for item in filtered:
+            if item.get("citation_count", 0) > 0 or item.get("section_count", 0) > 0:
+                used_only.append(item)
+            else:
+                item["ranking_penalties"].append("unused_source")
+        filtered = used_only
     annotated = sorted(filtered, key=_source_sort_tuple)
     for rank, item in enumerate(annotated, start=1):
         item["rank"] = rank
@@ -3637,12 +3647,14 @@ def _select_fetch_sources(
     outline_keywords = _tokenize_keywords(" ".join(f"{section.title} {section.goal}" for section in plan.report_outline))
     query_keywords = _tokenize_keywords(f"{plan.query} {unit.title} {unit.goal} {unit.query}")
 
-    def score(source: dict[str, Any]) -> tuple[int, int, int, str]:
+    def score(source: dict[str, Any]) -> tuple[int, int, int, int, str]:
         title = f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
+        quality_bias = _source_quality_bias(source)
         return (
+            quality_bias,
             _count_keyword_overlap(title, query_keywords),
             _count_keyword_overlap(title, outline_keywords),
-            _source_quality_bias(source),
+            _source_topic_match_score(source, [plan.query, unit.goal, unit.query]),
             source.get("url", ""),
         )
 
@@ -3691,6 +3703,45 @@ def _supporting_domain_count(source_ids: list[str], source_registry: dict[str, d
         if domain:
             domains.add(domain)
     return len(domains)
+
+
+def _coverage_for_report(
+    plan: DeepResearchPlan,
+    sections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    answered_section_ids = [str(section.get("section_id", "")).strip() for section in sections if str(section.get("section_id", "")).strip()]
+    answered_text = " ".join(
+        " ".join(
+            [
+                str(section.get("title", "")),
+                str(section.get("summary", "")),
+                " ".join(str(claim.get("text", "")) for claim in section.get("claims", [])),
+            ]
+        )
+        for section in sections
+    )
+    covered_sub_question_ids: list[str] = []
+    uncovered_sub_questions: list[str] = []
+    for item in plan.sub_questions:
+        question = item.question.strip()
+        if not question:
+            continue
+        if _count_keyword_overlap(answered_text, _tokenize_keywords(question)) > 0:
+            covered_sub_question_ids.append(item.id)
+        else:
+            uncovered_sub_questions.append(question)
+    return {
+        "planned_section_ids": [section.section_id for section in plan.report_outline],
+        "answered_section_ids": answered_section_ids,
+        "unanswered_sections": [
+            section.title
+            for section in plan.report_outline
+            if section.section_id not in answered_section_ids
+        ],
+        "planned_sub_question_ids": [item.id for item in plan.sub_questions],
+        "covered_sub_question_ids": covered_sub_question_ids,
+        "uncovered_sub_questions": uncovered_sub_questions,
+    }
 
 
 def _cluster_confidence(*, source_count: int, evidence_count: int, cluster_type: str = "", domain_count: int = 0) -> str:
