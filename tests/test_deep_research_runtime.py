@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 
 from grok_search import server
-from grok_search.deep_research_runtime import DeepResearchRuntime
+from grok_search.deep_research_runtime import DeepResearchRuntime, _build_report_summary
 from grok_search.providers.grok import GrokSearchProvider
-from grok_search.deep_research_types import utc_now_iso
+from grok_search.deep_research_types import DeepResearchPlan, utc_now_iso
 
 
 def build_runtime(tmp_path):
@@ -6843,3 +6843,161 @@ async def test_fallback_plan_records_generation_failure_in_metadata_and_events(t
         event["type"] == "planner_fallback" and event["data"]["stage"] == "generation"
         for event in events["events"]
     )
+
+
+@pytest.mark.asyncio
+async def test_report_runtime_surfaces_planner_fallback_and_constraint_violations(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["planner_metadata"] = {
+            "planner": "fallback",
+            "used_fallback": True,
+            "fallback_reason": {"stage": "unsafe_plan", "error": "filled_search_query:u1"},
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Allowed docs page.",
+                },
+                {
+                    "url": "https://blog.example.net/runtime/checkpoints",
+                    "title": "Checkpoint troubleshooting shell",
+                    "description": "Off-domain shell page.",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nCheckpoint resume continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(
+        query="Planner fallback diagnostics probe",
+        include_domains=["docs.example.com"],
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+
+    warnings = result["report"]["runtime"]["warnings"]
+    violations = result["report"]["runtime"]["constraint_violations"]
+
+    assert "planner_fallback_used" in warnings
+    assert "domain_constraints_applied" in warnings
+    assert violations == [
+        {
+            "unit_id": "unit-search-1",
+            "removed_source_count": 1,
+            "reason": "domain_constraints_applied",
+        }
+    ]
+
+
+def test_report_summary_uses_explicit_report_confidence_prefix():
+    plan = DeepResearchPlan.model_validate(
+        structured_plan_payload(
+            type(
+                "Job",
+                (),
+                {
+                    "query": "Checkpoint resume semantics",
+                    "context": "",
+                    "effort": "standard",
+                    "resolved_budget_seconds": 240,
+                },
+            )(),
+            {"mode": "fresh"},
+        )
+    )
+    sections = [
+        {
+            "section_id": "executive-summary",
+            "title": "Executive Summary",
+            "summary": "High confidence: Resume continues from the last durable checkpoint.",
+            "confidence": "high",
+            "claims": [
+                {
+                    "claim_id": "c1",
+                    "text": "Resume continues from the last durable checkpoint.",
+                    "citations": ["R1", "R2"],
+                }
+            ],
+        }
+    ]
+
+    summary = _build_report_summary(plan, sections, confidence="medium")
+
+    assert summary.startswith("Medium confidence:")
+
+
+@pytest.mark.asyncio
+async def test_grounding_diagnostics_include_source_level_usage(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Primary search",
+                "goal": "Explain checkpoint resume semantics.",
+                "query": "checkpoint resume semantics",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nCheckpoint resume continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Grounding diagnostics probe", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+
+    grounding = json.loads(runtime.read_artifact_text(response["job_id"], "grounding.json"))
+
+    assert grounding["sources"] == [
+        {
+            "source_id": "R1",
+            "citation_count": 1,
+            "section_count": 1,
+            "supporting_claim_ids": ["resume-semantics-claim-1"],
+            "supporting_section_ids": ["resume-semantics"],
+        }
+    ]

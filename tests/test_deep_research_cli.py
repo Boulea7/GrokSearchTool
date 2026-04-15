@@ -264,6 +264,64 @@ def test_cli_status_surfaces_resolved_artifact_batch_id(monkeypatch, tmp_path, c
     ]
 
 
+def test_cli_status_summary_surfaces_planner_fallback_and_warning_counts(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="CLI diagnostics job",
+        request_fingerprint="fp-cli-diagnostics",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "query": "CLI diagnostics job",
+                "planner_metadata": {
+                    "planner": "fallback",
+                    "used_fallback": True,
+                    "fallback_reason": {"stage": "unsafe_plan", "error": "filled_search_query:u1"},
+                },
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": "Checkpoint resume summary.",
+                "sections": [],
+                "unit_results": {},
+                "runtime": {
+                    "warnings": ["planner_fallback_used", "domain_constraints_applied"],
+                    "constraint_violations": [{"unit_id": "unit-search-1", "removed_source_count": 1}],
+                },
+            }
+        ),
+        "application/json",
+    )
+
+    exit_code = deep_research_cli.main(["status", job.job_id])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false planner_fallback=true warnings=2 constraint_violations=1"
+    ]
+
+
 def test_cli_start_spawns_worker_for_background_job(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     spawned = []

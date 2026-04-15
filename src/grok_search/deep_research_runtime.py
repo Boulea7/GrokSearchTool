@@ -597,7 +597,7 @@ def _enrich_source_from_fetched_text(source: dict[str, Any], fetched_text: str) 
     return enriched
 
 
-def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]) -> str:
+def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]], *, confidence: str = "") -> str:
     claim_texts: list[str] = []
     for section in sections:
         for claim in section.get("claims", []):
@@ -611,7 +611,14 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
     summary = " ".join(claim_texts[:2])
     section_confidences = {str(section.get("confidence", "")) for section in sections if section.get("confidence")}
     confidence_prefix = ""
-    if "high" in section_confidences:
+    explicit_confidence = str(confidence or "").strip().lower()
+    if explicit_confidence == "high":
+        confidence_prefix = "High confidence: "
+    elif explicit_confidence == "medium":
+        confidence_prefix = "Medium confidence: "
+    elif explicit_confidence == "low":
+        confidence_prefix = "Low confidence: "
+    elif "high" in section_confidences:
         confidence_prefix = "High confidence: "
     elif "medium" in section_confidences:
         confidence_prefix = "Medium confidence: "
@@ -893,6 +900,37 @@ def _artifact_payloads(
         if artifact is not None:
             payloads.append(artifact.model_dump())
     return payloads
+
+
+def _job_runtime_diagnostics(
+    store: DeepResearchStore,
+    job_id: str,
+    *,
+    final_bundle: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    plan_text = store.read_artifact_text(job_id, "plan.json")
+    report_text = (
+        _read_text_if_exists(final_bundle["paths"]["report.json"])
+        if final_bundle is not None and "report.json" in final_bundle.get("paths", {})
+        else store.read_artifact_text(job_id, "report.json")
+    )
+    diagnostics = {
+        "planner_fallback_used": False,
+        "runtime_warnings": [],
+        "constraint_violations": [],
+    }
+    plan_value, _ = _safe_load_json_artifact(plan_text)
+    if isinstance(plan_value, dict):
+        planner_metadata = plan_value.get("planner_metadata")
+        if isinstance(planner_metadata, dict):
+            diagnostics["planner_fallback_used"] = bool(planner_metadata.get("used_fallback"))
+    report_value, _ = _safe_load_json_artifact(report_text)
+    if isinstance(report_value, dict):
+        runtime_payload = report_value.get("runtime")
+        if isinstance(runtime_payload, dict):
+            diagnostics["runtime_warnings"] = list(runtime_payload.get("warnings") or [])
+            diagnostics["constraint_violations"] = list(runtime_payload.get("constraint_violations") or [])
+    return diagnostics
 
 
 def _job_prefers_resolved_final_bundle(job: DeepResearchJob) -> bool:
@@ -2169,6 +2207,10 @@ class DeepResearchRuntime:
         payload["artifacts"] = artifacts
         payload["artifact_fallback_used"] = _artifact_bundle_differs_from_current(self.store, job_id, final_bundle)
         payload["resolved_artifact_batch_id"] = final_bundle["batch_id"] if final_bundle is not None else ""
+        diagnostics = _job_runtime_diagnostics(self.store, job_id, final_bundle=final_bundle)
+        payload["planner_fallback_used"] = diagnostics["planner_fallback_used"]
+        payload["runtime_warnings"] = diagnostics["runtime_warnings"]
+        payload["constraint_violations"] = diagnostics["constraint_violations"]
         return payload
 
     async def events(self, job_id: str, *, after_seq: int = 0, limit: int = 100) -> dict[str, Any]:
@@ -3319,6 +3361,10 @@ class DeepResearchRuntime:
         payload["plan"] = plan_value
         payload["artifact_fallback_used"] = _artifact_bundle_differs_from_current(self.store, job.job_id, final_bundle)
         payload["resolved_artifact_batch_id"] = final_bundle["batch_id"] if final_bundle is not None else ""
+        diagnostics = _job_runtime_diagnostics(self.store, job.job_id, final_bundle=final_bundle)
+        payload["planner_fallback_used"] = diagnostics["planner_fallback_used"]
+        payload["runtime_warnings"] = diagnostics["runtime_warnings"]
+        payload["constraint_violations"] = diagnostics["constraint_violations"]
         return payload
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
@@ -3476,6 +3522,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     failed_units: list[dict[str, Any]] = []
     skipped_unit_ids: list[str] = []
     skipped_units: list[dict[str, Any]] = []
+    constraint_violations: list[dict[str, Any]] = []
     unit_results = dict(checkpoint_state.unit_results) if checkpoint_state else dict(continuation.carry_forward_unit_results)
     source_registry = list(checkpoint_state.sources) if checkpoint_state else list(continuation.carry_forward_sources)
     source_registry = _apply_domain_constraints(
@@ -3661,6 +3708,15 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 include_domains=plan.include_domains,
                 exclude_domains=plan.exclude_domains,
             )
+            removed_source_count = max(0, len(new_sources) - len(constrained_sources))
+            if removed_source_count > 0:
+                constraint_violations.append(
+                    {
+                        "unit_id": unit.unit_id,
+                        "removed_source_count": removed_source_count,
+                        "reason": "domain_constraints_applied",
+                    }
+                )
             if unit.unit_type in {"fetch", "map"} and not unit_result.get("summary") and not constrained_sources and not new_evidence:
                 failed_unit_ids.append(unit.unit_id)
                 failed_units.append(
@@ -3828,7 +3884,6 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "source_registry": {item["source_id"]: item for item in source_registry},
         "sections": _sanitize_sections(sections, source_registry),
     }
-    report_summary = _build_report_summary(plan, citations["sections"])
     runtime_warnings = sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])})
     report_coverage = _coverage_for_report(plan, citations["sections"])
     coverage_diagnostics = {
@@ -3839,11 +3894,16 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     }
     grounding_diagnostics = _build_grounding_diagnostics(citations["sections"], citations["source_registry"])
     runtime_warnings = sorted({*runtime_warnings, *_coverage_warning_codes(report_coverage)})
+    if plan.planner_metadata.get("used_fallback"):
+        runtime_warnings = sorted({*runtime_warnings, "planner_fallback_used"})
+    if constraint_violations:
+        runtime_warnings = sorted({*runtime_warnings, "domain_constraints_applied"})
     report_status = "degraded" if runtime_warnings or not citations["sections"] or failed_units else "completed"
     report_confidence = _cluster_confidence(
         source_count=len({citation for section in citations["sections"] for citation in section.get("citations", [])}),
         evidence_count=sum(len(section.get("claims", [])) for section in citations["sections"]),
     )
+    report_summary = _build_report_summary(plan, citations["sections"], confidence=report_confidence)
     report = {
         "query": plan.query,
         "summary": report_summary,
@@ -3864,6 +3924,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "ungrounded_claims": grounding_diagnostics["ungrounded_claims"],
                 "single_source_claims": grounding_diagnostics["single_source_claims"],
             },
+            "constraint_violations": constraint_violations,
             "failed_units": failed_units,
             "skipped_units": skipped_units,
             "provider_winners": [
@@ -4461,6 +4522,8 @@ def _build_grounding_diagnostics(
     source_registry: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     section_diagnostics: list[dict[str, Any]] = []
+    source_claim_ids: dict[str, list[str]] = {}
+    source_section_ids: dict[str, list[str]] = {}
     total_claims = 0
     grounded_claims = 0
     single_source_claims = 0
@@ -4478,9 +4541,16 @@ def _build_grounding_diagnostics(
                 single_source_claims += 1
             if str(claim.get("confidence", "")).lower() == "low":
                 low_confidence_claims += 1
+            claim_id = str(claim.get("claim_id", "")).strip()
+            section_id = str(section.get("section_id", "")).strip()
+            for citation_id in citation_ids:
+                if claim_id and claim_id not in source_claim_ids.setdefault(citation_id, []):
+                    source_claim_ids[citation_id].append(claim_id)
+                if section_id and section_id not in source_section_ids.setdefault(citation_id, []):
+                    source_section_ids[citation_id].append(section_id)
             claim_diagnostics.append(
                 {
-                    "claim_id": claim.get("claim_id", ""),
+                    "claim_id": claim_id,
                     "citation_ids": citation_ids,
                     "grounded": grounded,
                     "supporting_source_count": len(set(citation_ids)),
@@ -4504,6 +4574,17 @@ def _build_grounding_diagnostics(
         "single_source_claims": single_source_claims,
         "low_confidence_claims": low_confidence_claims,
         "sections": section_diagnostics,
+        "sources": [
+            {
+                "source_id": source_id,
+                "citation_count": len(source_claim_ids.get(source_id, [])),
+                "section_count": len(source_section_ids.get(source_id, [])),
+                "supporting_claim_ids": list(source_claim_ids.get(source_id, [])),
+                "supporting_section_ids": list(source_section_ids.get(source_id, [])),
+            }
+            for source_id in sorted(source_registry)
+            if source_claim_ids.get(source_id) or source_section_ids.get(source_id)
+        ],
     }
 
 
