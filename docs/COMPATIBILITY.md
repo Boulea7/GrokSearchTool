@@ -56,6 +56,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - the base config snapshot now includes `GROK_MODEL_SOURCE`, so callers can see the active model source (`process_env`, `project_env_local`, `project_env`, `persisted_config`, or `default`)
 - the preferred built-in default is `grok-4.20-0309`; runtime model resolution stays flexible for Grok 4.1+ families and may fall back to a compatible available Grok model instead of failing just because a suffix differs
 - the base config snapshot now also includes additive `GROK_MODEL_PROFILE`, `GROK_DEEP_RESEARCH_STANDARD_PROFILE`, `GROK_DEEP_RESEARCH_DEEP_PROFILE`, and `GROK_PROVIDER_FAMILY`
+- the base config snapshot now also includes `GROK_ROUTING_DIAGNOSTICS`, which summarizes active-provider routing, numbered provider-chain routing, profile-derived defaults, `/chat/completions` vs `/responses` path visibility, and multi-agent signals for official xAI, OpenRouter, generic relays, and grok2api-like proxies
 - project env fallback accepts both `KEY=value` and optional `export KEY=value` lines
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` controls local time-context injection for `web_search`; the default is `always`
@@ -74,7 +75,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage and runtime will preselect a better Grok candidate before the real request
 - `grok_model_runtime_fallback` means the current probe model still succeeded on the real `/chat/completions` path only after a runtime retry against another Grok candidate; both checks may appear in the same diagnostic run
 - successful `grok_search_probe` results now also report the actual `provider_name` / `provider_model` that satisfied the probe
-- `grok_provider_chain` exposes the currently resolved Grok provider count and provider names so diagnostics can distinguish single-provider from numbered-provider setups
+- `grok_provider_chain` now also exposes each resolved provider's family, resolved model, and expected endpoint path so diagnostics can distinguish single-provider from numbered-provider setups and show where `/responses` becomes relevant
 - runtime model fallback is currently a best-effort compatibility path: it depends on `/models` returning candidate models and on the upstream error text matching the current “model unavailable” heuristics
 - when diagnosing degraded `web_search`, treat `GROK_MODEL_SOURCE` as part of the root-cause contract: a model mismatch caused by process env or project `.env.local` / `.env` overrides is different from a persisted-config mismatch
 - `doctor.recommendations_detail` is an additive structured hint layer; clients that only read `recommendations` remain compatible

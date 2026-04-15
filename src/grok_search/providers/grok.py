@@ -249,7 +249,7 @@ _DEFAULT_GROK_MODEL_FALLBACKS = {
 _RESPONSES_ONLY_RELAY_MODELS = {
     "grok-4.20-reasoning",
     "grok-4.20-multi-agent",
-    "grok-4.20-export-4-agent",
+    "grok-4.20-expert-4-agent",
     "grok-4.20-heavy-16-agent",
 }
 
@@ -419,11 +419,13 @@ class GrokSearchProvider(BaseSearchProvider):
     def _prefers_responses_endpoint(self, api_url: str, model: str) -> bool:
         core = self._model_core(model)
         provider_family = self._provider_family_for_url(api_url)
+        if provider_family == "openrouter":
+            return False
         if provider_family == "official_xai" and self._uses_multi_agent_family(core):
             return True
         if provider_family in {"openai_compatible_relay", "grok2api_like"} and core in _RESPONSES_ONLY_RELAY_MODELS:
             return True
-        return self._uses_multi_agent_family(core)
+        return False
 
     def _prepare_request_for_endpoint(
         self,

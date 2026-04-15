@@ -235,6 +235,7 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_DEEP_RESEARCH_STANDARD_PROFILE",
         "GROK_DEEP_RESEARCH_DEEP_PROFILE",
         "GROK_PROVIDER_FAMILY",
+        "GROK_ROUTING_DIAGNOSTICS",
         "GROK_DEBUG",
         "GROK_OUTPUT_CLEANUP",
         "GROK_TIME_CONTEXT_MODE",
@@ -262,6 +263,7 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_API_KEY",
         "GROK_MODEL",
         "GROK_MODEL_SOURCE",
+        "GROK_ROUTING_DIAGNOSTICS",
         "GROK_DEBUG",
         "GROK_OUTPUT_CLEANUP",
         "GROK_TIME_CONTEXT_MODE",
@@ -556,8 +558,14 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     assert checks["grok_search_probe"]["status"] == "ok"
     assert checks["grok_provider_chain"]["status"] == "ok"
     assert checks["grok_provider_chain"]["provider_count"] == 1
+    assert checks["grok_provider_capabilities"]["provider_family"] == "openai_compatible_relay"
+    assert checks["grok_provider_capabilities"]["responses_supported"] is False
+    assert checks["grok_provider_capabilities"]["multi_agent_supported"] is False
     assert checks["web_fetch_probe"]["status"] == "ok"
     assert payload["feature_readiness"]["web_search"]["status"] == "ready"
+    assert payload["feature_readiness"]["web_search"]["provider_family"] == "openai_compatible_relay"
+    assert payload["feature_readiness"]["web_search"]["responses_supported"] is False
+    assert payload["feature_readiness"]["web_search"]["multi_agent_supported"] is False
     assert payload["feature_readiness"]["deep_research_planner"]["status"] == "ready"
     assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "ready"
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
@@ -1636,6 +1644,29 @@ async def test_get_config_info_marks_configured_model_mismatch_as_degraded(monke
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_reports_official_xai_multi_agent_capability(monkeypatch):
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    responses = {
+        ("GET", "https://api.x.ai/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-multi-agent-0309"}, {"id": "grok-4.20-0309-reasoning"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert checks["grok_provider_capabilities"]["provider_family"] == "official_xai"
+    assert checks["grok_provider_capabilities"]["responses_supported"] is True
+    assert checks["grok_provider_capabilities"]["multi_agent_supported"] is True
+    assert payload["feature_readiness"]["deep_research_runtime"]["provider_family"] == "official_xai"
+    assert payload["feature_readiness"]["deep_research_runtime"]["responses_supported"] is True
+    assert payload["feature_readiness"]["deep_research_runtime"]["multi_agent_supported"] is True
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkeypatch):
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
@@ -1687,6 +1718,102 @@ async def test_get_config_info_reports_runtime_model_source_when_project_env_loc
 
     assert payload["GROK_MODEL"] == "project-model"
     assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_exposes_routing_diagnostics_and_provider_chain_details(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_API_URL_2", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("GROK_API_KEY_2", "secondary-key")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-auto"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+    diagnostics = payload["GROK_ROUTING_DIAGNOSTICS"]
+    chain_check = doctor_checks(payload)["grok_provider_chain"]
+
+    assert diagnostics["active_provider"]["provider_family"] == "openai_compatible_relay"
+    assert diagnostics["profile_defaults"]["deep_research_deep"]["preferred_endpoint_path"] == "/responses"
+    assert diagnostics["profile_defaults"]["deep_research_deep"]["multi_agent_requested"] is True
+    assert "relay_responses_family" in diagnostics["profile_defaults"]["deep_research_deep"]["routing_signals"]
+    assert chain_check["provider_count"] == 2
+    assert chain_check["providers"] == [
+        {
+            "name": "primary",
+            "source": "primary",
+            "provider_family": "openai_compatible_relay",
+            "resolved_model": "grok-4.20-auto",
+            "preferred_endpoint_path": "/chat/completions",
+            "multi_agent_family": False,
+            "routing_signals": [
+                "model_family:single_agent",
+                "routing_path:chat_completions",
+                "relay_chat_completions_default",
+            ],
+        },
+        {
+            "name": "provider_2",
+            "source": "process_env",
+            "provider_family": "openrouter",
+            "resolved_model": "x-ai/grok-4.1-fast:online",
+            "preferred_endpoint_path": "/chat/completions",
+            "multi_agent_family": False,
+            "routing_signals": [
+                "model_family:single_agent",
+                "routing_path:chat_completions",
+                "openrouter_chat_completions_default",
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_marks_multi_agent_probe_path_as_responses(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-multi-agent")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-multi-agent"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert checks["grok_search_probe"]["endpoint"] == "https://api.example.com/v1/responses"
 
 
 @pytest.mark.asyncio

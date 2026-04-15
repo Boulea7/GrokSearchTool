@@ -184,6 +184,7 @@ Notes:
 - the base `get_config_info` snapshot now includes `GROK_MODEL_SOURCE`, which tells you which layer currently supplies the active model (`process_env`, `project_env_local`, `project_env`, `persisted_config`, or `default`)
 - the preferred built-in default is now `grok-4.20-0309`; runtime selection stays flexible for Grok 4.1+ models and can fall back to a compatible available Grok model instead of failing just because a suffix differs
 - when no explicit `GROK_MODEL` is present, runtime can now derive a provider-aware default from `GROK_MODEL_PROFILE`; the base config snapshot also includes additive `GROK_MODEL_PROFILE`, `GROK_DEEP_RESEARCH_STANDARD_PROFILE`, `GROK_DEEP_RESEARCH_DEEP_PROFILE`, and `GROK_PROVIDER_FAMILY`
+- the base config snapshot now also includes `GROK_ROUTING_DIAGNOSTICS`, which summarizes the active provider, numbered provider chain, profile-derived default models, the expected `/chat/completions` vs `/responses` path, and multi-agent routing signals for official xAI, OpenRouter, generic relays, and grok2api-like proxies
 - Grok routing now supports both `/chat/completions` and `/responses`; multi-agent families and response-only relay models prefer `/responses`, while OpenRouter and most relays remain primarily `chat/completions`
 - deep research now defaults to single-agent for `standard` effort and multi-agent-first for `deep` effort, with automatic downgrade back to single-agent when the current provider, account, relay, or single-model setup cannot serve multi-agent requests
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
@@ -227,7 +228,8 @@ For any local `stdio` host, start with this lightweight verification flow:
 - `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, `toggle_builtin_tools`, `deep_research_planner`, and `deep_research_runtime`
 - `doctor.recommendations_detail`: additive structured repair hints linked to `check_id` and feature scope
 - `feature_readiness.web_fetch.providers`: provider-level readiness details with stable `check_id`; `verified_path` shows which real fetch probe succeeded, and degraded or skipped providers include `reason_code` when it can be derived and may also include `skipped_reason`
-- `grok_provider_chain`: a structured summary of the currently resolved Grok provider count and provider names
+- `grok_provider_chain`: a structured summary of the currently resolved Grok provider count, provider names, and each provider's family / resolved model / expected endpoint path
+- `GROK_ROUTING_DIAGNOSTICS` in the base snapshot: active provider details, provider-chain routing hints, profile-derived defaults, endpoint-path visibility, and multi-agent routing signals
 - `GROK_MODEL_SOURCE` in the base snapshot: the active model source, so callers can tell whether runtime behavior comes from process env, project env files, persisted config, or code defaults
 - minimal real `web_search` / `web_fetch` probe results
 
@@ -238,7 +240,7 @@ The `/models` connection test uses a 10-second timeout; additional real `web_sea
 `connection_test` only reflects `/models` reachability; if `web_search` is degraded, combine `doctor`, `feature_readiness`, `GROK_MODEL_SOURCE`, and the `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` checks before concluding the root cause.
 `grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage, while `grok_model_runtime_fallback` means the real `/chat/completions` path only succeeded after a runtime retry against another Grok candidate; both checks may appear in the same diagnostic run.
 `grok_search_probe` may now return a body-quality `warning` as well as `ok` or `error`; for example, a sources-only probe or a probably truncated probe body degrades `feature_readiness.web_search` even though the endpoint itself still responded successfully.
-Successful `grok_search_probe` results now also report the actual `provider_name` / `provider_model` that satisfied the probe, so diagnostics can distinguish primary success from numbered-provider failover.
+Successful `grok_search_probe` results now also report the actual `provider_name` / `provider_model` that satisfied the probe, and the reported endpoint path now follows that winner model's routing rules, so diagnostics can distinguish primary success, numbered-provider failover, and multi-agent `/responses` routing.
 `feature_readiness.get_sources` only reports `ready` when the current process already holds at least one readable non-error source session; error-only cached sessions keep it at `partial_ready`. Even if `web_search` is currently not ready, `get_sources` can still report `ready` when the running process still holds a readable session, while surfacing the upstream config problem through `degraded_by`.
 `feature_readiness.get_sources` now also includes an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, `partial_sessions`, and `unreadable_sessions`.
 `feature_readiness` now also carries summary-safe machine fields: `based_on_checks`, `probe_scope`, and `degraded_by`. For `web_search`, it additionally returns `runtime_override_active` and `runtime_model_source` so callers can tell when a higher-priority runtime override is still in effect.

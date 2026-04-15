@@ -266,6 +266,8 @@ claude mcp add-json grok-search --scope user '{
 
 > 当没有显式 `GROK_MODEL` 时，运行时当前会按 `GROK_MODEL_PROFILE` 做 provider-aware 默认解析；`get_config_info` 基础快照会额外返回 `GROK_MODEL_PROFILE`、`GROK_DEEP_RESEARCH_STANDARD_PROFILE`、`GROK_DEEP_RESEARCH_DEEP_PROFILE` 与 `GROK_PROVIDER_FAMILY`，便于排查官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代的差异。
 
+> `get_config_info` 的基础快照现在还会返回 `GROK_ROUTING_DIAGNOSTICS`。其中会列出当前 active provider、编号 provider chain、各 profile 解析出的默认模型、预期会走 `/chat/completions` 还是 `/responses`，以及 multi-agent 相关 routing signals，方便判断官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代在当前配置下到底会怎么走。
+
 > 当前 Grok 路由已支持 `/chat/completions` 与 `/responses` 双通道。多 agent 家族与部分 response-only relay 模型会优先走 `/responses`；OpenRouter 与多数兼容 relay 仍优先 `chat/completions`。
 
 > `deep research` 当前默认采用 `standard` 单 agent、`deep` 多 agent 优先的策略；若当前 provider、relay、账户套餐或单模型配置不支持多 agent，会自动回落到单 agent。多 agent 通常会带来更高时延，单次大约可能在 `10` 秒到 `2` 分钟之间。
@@ -431,7 +433,8 @@ claude mcp list
 - 修复建议列表（API Key 自动脱敏）
 - `doctor.recommendations_detail`：与 `check_id` / `feature` 关联的结构化修复建议
 - `feature_readiness.web_fetch.providers`：provider 级状态，稳定包含 `check_id`；`verified_path` 表示真实抓取探针实际打通的后端；未执行或退化的 provider 会在可判定时附带 `reason_code`，并可能补充 `skipped_reason`
-- `grok_provider_chain`：当前解析到的 Grok provider 数量与命名摘要，便于判断 diagnostics 是否仅在 primary 配置下运行
+- `grok_provider_chain`：当前解析到的 Grok provider 数量、命名摘要，以及每个 provider 的 family / resolved model / 预期 endpoint path
+- 基础快照里的 `GROK_ROUTING_DIAGNOSTICS`：当前 active provider、provider chain、按 profile 推导出的默认模型、`/chat/completions` 与 `/responses` 路径可见性，以及 multi-agent routing signals
 - 基础快照里的 `GROK_MODEL_SOURCE`：当前活动模型的来源层，便于区分是进程 env、项目 `.env.local` / `.env`、持久化配置还是代码默认值在生效
 
 注意：
@@ -440,7 +443,7 @@ claude mcp list
 - `connection_test` 当前只反映 `/models` 连通性，不代表当前活动模型一定能通过真实 `chat/completions` 路径；判断 `web_search` 是否真可用时，应结合 `doctor`、`feature_readiness`、`GROK_MODEL_SOURCE` 与 `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` 结果一起看。
 - `grok_model_selection` 表示 `/models` 列表阶段就已发现当前模型不可直接使用，并会在运行前预选到更合适的 Grok 候选模型；`grok_model_runtime_fallback` 表示当前 probe model 在真实 `chat/completions` 路径上仍只能靠运行时二次回退才成功。这两个 check 可能同时出现。
 - `grok_search_probe` 当前除了 `ok` / `error` 之外，也可能返回正文质量降级类 `warning`；例如探针只拿到信源列表、没有可用正文，或正文疑似截断时，`feature_readiness.web_search` 会相应显示为 `degraded`。
-- `grok_search_probe` 当前在成功时还会附带实际命中的 `provider_name` / `provider_model`；当 secondary provider 接住请求时，diagnostics 会按真实 winner 回显，而不是只停留在 primary 静态配置层。
+- `grok_search_probe` 当前在成功时还会附带实际命中的 `provider_name` / `provider_model`，并按该模型的真实 routing 规则回显 endpoint path；当 secondary provider 接住请求或 multi-agent 模型改走 `/responses` 时，diagnostics 会按真实 winner 回显，而不是只停留在 primary 静态配置层。
 - 运行时模型回退当前属于 best-effort 兼容路径：它依赖 `/models` 能返回可选候选列表，且上游错误摘要命中“模型不可用”类文案；如果 `/models` 不可用，或错误类型不属于该类信号，就不保证会自动继续回退。
 - `feature_readiness.get_sources` 只有在当前进程内至少存在一个非 error 的可读取 source session 时才会显示 `ready`；如果只有失败搜索留下的 session，状态会保持 `partial_ready`。即使 `web_search` 当前尚未 ready，只要当前进程里仍保有可读取 session，`get_sources` 也会继续显示 `ready`，同时通过 `degraded_by` 暴露上游配置问题。
 - `feature_readiness.get_sources` 当前会附带 `cache_summary`，至少包含 `total_sessions`、`readable_sessions`、`error_sessions`、`partial_sessions`、`unreadable_sessions`，用于快速判断当前 source cache 的可读性与退化面。

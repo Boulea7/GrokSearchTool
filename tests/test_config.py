@@ -306,6 +306,125 @@ def test_grok_provider_chain_does_not_change_base_config_snapshot(monkeypatch, t
     assert "GROK_PROVIDER_CHAIN" not in info
 
 
+def test_get_config_info_includes_routing_diagnostics_for_profile_defaults(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    info = config.get_config_info()
+    diagnostics = info["GROK_ROUTING_DIAGNOSTICS"]
+
+    assert diagnostics["active_provider"]["provider_family"] == "official_xai"
+    assert diagnostics["active_provider"]["resolved_model"] == "grok-4.20-0309-non-reasoning"
+    assert diagnostics["active_provider"]["preferred_endpoint_path"] == "/chat/completions"
+    assert diagnostics["active_provider"]["path_visibility"] == {
+        "chat_completions": "https://api.x.ai/v1/chat/completions",
+        "responses": "https://api.x.ai/v1/responses",
+    }
+    assert diagnostics["profile_defaults"]["web_search"] == {
+        "profile": "balanced_auto",
+        "resolved_model": "grok-4.20-0309-non-reasoning",
+        "preferred_endpoint_path": "/chat/completions",
+        "path_visibility": {
+            "chat_completions": "https://api.x.ai/v1/chat/completions",
+            "responses": "https://api.x.ai/v1/responses",
+        },
+        "multi_agent_requested": False,
+        "multi_agent_family": False,
+        "routing_signals": [
+            "profile_requests_single_agent",
+            "model_family:single_agent",
+            "routing_path:chat_completions",
+            "official_xai_chat_completions_default",
+        ],
+    }
+    assert diagnostics["profile_defaults"]["deep_research_deep"] == {
+        "profile": "multi_agent",
+        "resolved_model": "grok-4.20-multi-agent-0309",
+        "preferred_endpoint_path": "/responses",
+        "path_visibility": {
+            "chat_completions": "https://api.x.ai/v1/chat/completions",
+            "responses": "https://api.x.ai/v1/responses",
+        },
+        "multi_agent_requested": True,
+        "multi_agent_family": True,
+        "routing_signals": [
+            "profile_requests_multi_agent",
+            "model_family:multi_agent",
+            "routing_path:responses",
+            "official_xai_multi_agent_prefers_responses",
+        ],
+    }
+
+
+def test_get_config_info_routing_diagnostics_summarize_provider_chain_families_and_paths(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://relay.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+    (tmp_path / ".env.local").write_text(
+        (
+            "GROK_API_URL_2=https://openrouter.ai/api/v1\n"
+            "GROK_API_KEY_2=secondary-key\n"
+            "GROK_API_URL_3=https://api.x.ai/v1\n"
+            "GROK_API_KEY_3=third-key\n"
+        ),
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    info = config.get_config_info()
+    provider_chain = info["GROK_ROUTING_DIAGNOSTICS"]["provider_chain"]
+
+    assert provider_chain == [
+        {
+            "name": "primary",
+            "source": "primary",
+            "provider_family": "openai_compatible_relay",
+            "resolved_model": "grok-4.20-auto",
+            "preferred_endpoint_path": "/chat/completions",
+            "multi_agent_family": False,
+            "routing_signals": [
+                "model_family:single_agent",
+                "routing_path:chat_completions",
+                "relay_chat_completions_default",
+            ],
+        },
+        {
+            "name": "provider_2",
+            "source": "project_env_local",
+            "provider_family": "openrouter",
+            "resolved_model": "x-ai/grok-4.1-fast:online",
+            "preferred_endpoint_path": "/chat/completions",
+            "multi_agent_family": False,
+            "routing_signals": [
+                "model_family:single_agent",
+                "routing_path:chat_completions",
+                "openrouter_chat_completions_default",
+            ],
+        },
+        {
+            "name": "provider_3",
+            "source": "project_env_local",
+            "provider_family": "official_xai",
+            "resolved_model": "grok-4.20-0309-non-reasoning",
+            "preferred_endpoint_path": "/chat/completions",
+            "multi_agent_family": False,
+            "routing_signals": [
+                "model_family:single_agent",
+                "routing_path:chat_completions",
+                "official_xai_chat_completions_default",
+            ],
+        },
+    ]
+
+
 def test_empty_process_env_still_blocks_project_env_fallback(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.setenv("TAVILY_API_KEY", "")
