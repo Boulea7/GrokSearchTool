@@ -422,43 +422,46 @@ class Config:
         ).strip().lower()
         return raw if raw in self._ALLOWED_MODEL_PROFILES else self._DEFAULT_DEEP_RESEARCH_ULTRA_PROFILE
 
-    def _resolved_default_model_for_family(self, provider_family: str, *, profile: str) -> str:
+    def _preferred_model_candidates_for_family(self, provider_family: str, *, profile: str) -> list[str]:
         family_defaults = {
             "official_xai": {
-                "balanced_auto": "grok-4.20-0309-non-reasoning",
-                "reasoning": "grok-4.20-0309-reasoning",
-                "multi_agent": "grok-4.20-multi-agent-0309",
-                "ultra": "grok-4.20-heavy-16-agent",
-                "fast": "grok-4-1-fast-non-reasoning",
-                "exact": self._DEFAULT_MODEL,
+                "balanced_auto": ["grok-4.20-0309-non-reasoning", "grok-4.20-0309", "grok-4-1-fast-non-reasoning"],
+                "reasoning": ["grok-4.20-0309-reasoning", "grok-4.20-0309", "grok-4.20-0309-non-reasoning"],
+                "multi_agent": ["grok-4.20-multi-agent-0309", "grok-4.20-0309-reasoning", "grok-4.20-0309"],
+                "ultra": ["grok-4.20-heavy-16-agent", "grok-4.20-multi-agent-0309", "grok-4.20-0309-reasoning"],
+                "fast": ["grok-4-1-fast-non-reasoning", "grok-4.20-0309-non-reasoning", "grok-4.20-0309"],
+                "exact": [self._DEFAULT_MODEL],
             },
             "openrouter": {
-                "balanced_auto": "x-ai/grok-4.1-fast",
-                "reasoning": "x-ai/grok-4.20",
-                "multi_agent": "x-ai/grok-4.20-multi-agent",
-                "ultra": "x-ai/grok-4.20-multi-agent",
-                "fast": "x-ai/grok-4.1-fast",
-                "exact": "x-ai/grok-4.20",
+                "balanced_auto": ["x-ai/grok-4.1-fast", "x-ai/grok-4.20"],
+                "reasoning": ["x-ai/grok-4.20", "x-ai/grok-4.1-fast"],
+                "multi_agent": ["x-ai/grok-4.20-multi-agent", "x-ai/grok-4.20", "x-ai/grok-4.1-fast"],
+                "ultra": ["x-ai/grok-4.20-multi-agent", "x-ai/grok-4.20", "x-ai/grok-4.1-fast"],
+                "fast": ["x-ai/grok-4.1-fast", "x-ai/grok-4.20"],
+                "exact": ["x-ai/grok-4.20"],
             },
             "openai_compatible_relay": {
-                "balanced_auto": "grok-4.20-auto",
-                "reasoning": "grok-4.20-reasoning",
-                "multi_agent": "grok-4.20-multi-agent",
-                "ultra": "grok-4.20-heavy-16-agent",
-                "fast": "grok-4.20-fast",
-                "exact": self._DEFAULT_MODEL,
+                "balanced_auto": ["grok-4.20-auto", "grok-4.20-0309", "grok-4.20-fast"],
+                "reasoning": ["grok-4.20-reasoning", "grok-4.20-0309-reasoning", "grok-4.20-auto", "grok-4.20-0309"],
+                "multi_agent": ["grok-4.20-expert-4-agent", "grok-4.20-expert", "grok-4.20-multi-agent", "grok-4.20-reasoning", "grok-4.20-auto"],
+                "ultra": ["grok-4.20-heavy-16-agent", "grok-4.20-heavy", "grok-4.20-expert-4-agent", "grok-4.20-expert", "grok-4.20-reasoning", "grok-4.20-auto"],
+                "fast": ["grok-4.20-fast", "grok-4.20-auto", "grok-4.20-0309-non-reasoning"],
+                "exact": [self._DEFAULT_MODEL],
             },
             "grok2api_like": {
-                "balanced_auto": "grok-4.20-auto",
-                "reasoning": "grok-4.20-reasoning",
-                "multi_agent": "grok-4.20-multi-agent",
-                "ultra": "grok-4.20-heavy-16-agent",
-                "fast": "grok-4.20-fast",
-                "exact": self._DEFAULT_MODEL,
+                "balanced_auto": ["grok-4.20-auto", "grok-4.20-0309", "grok-4.20-fast"],
+                "reasoning": ["grok-4.20-reasoning", "grok-4.20-0309-reasoning", "grok-4.20-auto", "grok-4.20-0309"],
+                "multi_agent": ["grok-4.20-expert-4-agent", "grok-4.20-expert", "grok-4.20-multi-agent", "grok-4.20-reasoning", "grok-4.20-auto"],
+                "ultra": ["grok-4.20-heavy-16-agent", "grok-4.20-heavy", "grok-4.20-expert-4-agent", "grok-4.20-expert", "grok-4.20-reasoning", "grok-4.20-auto"],
+                "fast": ["grok-4.20-fast", "grok-4.20-auto", "grok-4.20-0309-non-reasoning"],
+                "exact": [self._DEFAULT_MODEL],
             },
         }
         selected_family = family_defaults.get(provider_family, family_defaults["openai_compatible_relay"])
-        return selected_family.get(profile, selected_family["balanced_auto"])
+        return list(selected_family.get(profile, selected_family["balanced_auto"]))
+
+    def _resolved_default_model_for_family(self, provider_family: str, *, profile: str) -> str:
+        return self._preferred_model_candidates_for_family(provider_family, profile=profile)[0]
 
     def resolve_default_grok_model_for_url(
         self,
@@ -489,6 +492,20 @@ class Config:
         else:
             selected_profile = self.grok_deep_research_standard_profile()
         return self.resolve_default_grok_model_for_url(api_url, profile=selected_profile)
+
+    def preferred_deep_research_models_for_url(self, api_url: str, *, effort: str) -> list[str]:
+        normalized_effort = (effort or "").strip().lower()
+        if normalized_effort == "ultra":
+            selected_profile = self.grok_deep_research_ultra_profile()
+        elif normalized_effort == "deep":
+            selected_profile = self.grok_deep_research_deep_profile()
+        else:
+            selected_profile = self.grok_deep_research_standard_profile()
+        provider_family = self.provider_family_for_url(api_url)
+        return [
+            self._apply_model_suffix_for_url(model, api_url)
+            for model in self._preferred_model_candidates_for_family(provider_family, profile=selected_profile)
+        ]
 
     @property
     def config_file(self) -> Path:

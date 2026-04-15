@@ -1837,6 +1837,27 @@ async def test_get_config_info_exposes_ultra_profile_probe_readiness(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_treats_models_listing_as_advisory_when_runtime_probe_succeeds(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-fast")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            404,
+            json={"error": {"message": "models endpoint not supported"}},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["web_search"]["status"] == "ready"
+    assert payload["feature_readiness"]["web_search"]["supports_model_listing"] is False
+    assert payload["feature_readiness"]["web_search"]["single_model_mode"] is True
+    assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "ready"
+    assert payload["feature_readiness"]["deep_research_runtime"]["supports_model_listing"] is False
+    assert payload["feature_readiness"]["deep_research_runtime"]["single_model_mode"] is True
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_exposes_winning_provider_in_web_search_readiness(monkeypatch):
     async def fake_probe_web_search_with_fallback(api_url, api_key, requested_model, available_models):
         return server._build_doctor_check(

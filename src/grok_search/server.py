@@ -2500,6 +2500,11 @@ def _build_feature_readiness(
     web_fetch_probe = checks_by_id["web_fetch_probe"]
     tavily_map = checks_by_id["tavily_map"]
     claude_context = checks_by_id["claude_code_project"]
+    supports_model_listing = grok_models["status"] == "ok"
+    available_model_count = 0
+    if supports_model_listing:
+        available_model_count = len(grok_models.get("available_models") or [])
+    single_model_mode = not supports_model_listing or available_model_count <= 1
 
     if grok_config["status"] != "ok":
         web_search_status = "not_ready"
@@ -2508,8 +2513,8 @@ def _build_feature_readiness(
         web_search_status = "ready"
         web_search_message = "Grok 配置完整，真实搜索探针成功。"
     elif grok_search_probe["status"] == "ok":
-        web_search_status = "degraded"
-        web_search_message = "真实搜索探针成功，但 /models 或模型可见性探测存在问题。"
+        web_search_status = "ready"
+        web_search_message = "真实搜索探针成功；/models 不可用时按当前可工作的模型与单模型模式继续运行。"
     elif grok_search_probe["status"] == "warning":
         web_search_status = "degraded"
         web_search_message = grok_search_probe["message"]
@@ -2670,9 +2675,13 @@ def _build_feature_readiness(
     if grok_config["status"] != "ok":
         deep_research_planner_status = "not_ready"
         deep_research_planner_message = grok_config["message"]
-    elif grok_models["status"] != "ok":
+    elif grok_models["status"] != "ok" and (
+        (deep_research_standard_probe and deep_research_standard_probe["status"] != "ok")
+        or (deep_research_deep_probe and deep_research_deep_probe["status"] != "ok")
+        or (deep_research_ultra_probe and deep_research_ultra_probe["status"] != "ok")
+    ):
         deep_research_planner_status = "degraded"
-        deep_research_planner_message = "Deep research planner 依赖的 /models 或模型可见性探测存在问题。"
+        deep_research_planner_message = "Deep research planner 的 profile probe 未全部通过，且 /models 不可用。"
     elif (
         grok_model_runtime_fallback
         and grok_model_runtime_fallback["status"] == "warning"
@@ -2692,9 +2701,13 @@ def _build_feature_readiness(
     if grok_config["status"] != "ok":
         deep_research_runtime_status = "not_ready"
         deep_research_runtime_message = grok_config["message"]
-    elif grok_models["status"] != "ok":
+    elif grok_models["status"] != "ok" and (
+        (deep_research_standard_probe and deep_research_standard_probe["status"] != "ok")
+        or (deep_research_deep_probe and deep_research_deep_probe["status"] != "ok")
+        or (deep_research_ultra_probe and deep_research_ultra_probe["status"] != "ok")
+    ):
         deep_research_runtime_status = "degraded"
-        deep_research_runtime_message = "Deep research runtime 依赖的 /models 或模型可见性探测存在问题。"
+        deep_research_runtime_message = "Deep research runtime 的 profile probe 未全部通过，且 /models 不可用。"
     elif (
         grok_model_runtime_fallback
         and grok_model_runtime_fallback["status"] == "warning"
@@ -2729,6 +2742,8 @@ def _build_feature_readiness(
             "winning_provider": grok_search_probe.get("provider_name", ""),
             "winning_model": grok_search_probe.get("provider_model", ""),
             "winning_endpoint": grok_search_probe.get("endpoint", ""),
+            "supports_model_listing": supports_model_listing,
+            "single_model_mode": single_model_mode,
         },
         "get_sources": _build_get_sources_readiness(
             web_search_status=web_search_status,
@@ -2775,6 +2790,8 @@ def _build_feature_readiness(
             "winning_provider": deep_research_standard_probe.get("provider_name", "") if deep_research_standard_probe else "",
             "winning_model": deep_research_standard_probe.get("provider_model", "") if deep_research_standard_probe else "",
             "winning_endpoint": deep_research_standard_probe.get("endpoint", "") if deep_research_standard_probe else "",
+            "supports_model_listing": supports_model_listing,
+            "single_model_mode": single_model_mode,
         },
         "deep_research_runtime": {
             "status": deep_research_runtime_status,
@@ -2791,6 +2808,8 @@ def _build_feature_readiness(
             "winning_provider": deep_research_deep_probe.get("provider_name", "") if deep_research_deep_probe else "",
             "winning_model": deep_research_deep_probe.get("provider_model", "") if deep_research_deep_probe else "",
             "winning_endpoint": deep_research_deep_probe.get("endpoint", "") if deep_research_deep_probe else "",
+            "supports_model_listing": supports_model_listing,
+            "single_model_mode": single_model_mode,
         },
     }
 

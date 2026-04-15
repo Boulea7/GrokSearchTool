@@ -912,6 +912,57 @@ async def test_ultra_effort_prefers_heavy_16_agent_before_fallback(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_ultra_effort_falls_back_to_heavy_single_agent_before_lower_tiers(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    observed_models = []
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-heavy", "grok-4.20-expert-4-agent", "grok-4.20-reasoning"]
+
+    async def fake_execute(self, headers, payload, ctx=None, render_sources=False):
+        observed_models.append(payload["model"])
+        return json.dumps(
+            {
+                "brief": {"objective": "Ultra effort fallback", "deliverable": "A cited report.", "success_criteria": ["Produce a structured report."]},
+                "sub_questions": [{"id": "sq1", "question": "Ultra effort fallback", "reason": "Cover the primary question."}],
+                "search_strategy": {
+                    "approach": "targeted",
+                    "search_queries": ["Ultra effort fallback"],
+                    "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+                },
+                "report_outline": [{"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."}],
+                "research_units": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "unit_type": "search",
+                        "title": "Primary search",
+                        "goal": "Ultra effort fallback",
+                        "query": "Ultra effort fallback",
+                        "depends_on": [],
+                        "status": "pending",
+                        "notes": "",
+                    }
+                ],
+                "planner_metadata": {"planner": "test", "used_fallback": False},
+            }
+        ), []
+
+    monkeypatch.setenv("GROK_API_URL", "https://grok2api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.delenv("GROK_DEEP_RESEARCH_ULTRA_PROFILE", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {})
+    server.config.reset_runtime_state()
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
+
+    await runtime.start(query="Ultra effort fallback", effort="ultra", plan_only=True, force_new=True, schedule=False)
+
+    assert observed_models == ["grok-4.20-heavy"]
+
+
+@pytest.mark.asyncio
 async def test_plan_normalization_replays_round7_probe_shape_with_focused_fallback(tmp_path):
     runtime = build_runtime(tmp_path)
     original = runtime.store.create_job(
