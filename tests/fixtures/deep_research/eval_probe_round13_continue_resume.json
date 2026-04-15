@@ -1,0 +1,71 @@
+{
+  "sample": "probe-round13-continue-resume",
+  "query": "Focus on recovery timeout, resume failure handling, and continuation hygiene after the previous AWS DMS checkpoint analysis",
+  "planner": {
+    "planner": "model",
+    "used_fallback": false
+  },
+  "continuation": {
+    "mode": "continue",
+    "source_job_id": "2db4a65bfb94d4601d6a6e11",
+    "source_job_status": "failed",
+    "checkpoint_key": "finalizing",
+    "source_count": 2,
+    "continuation_identity": "fc8d2a2a1203ce5116bb30753afe035f85dd2525d739080451d4f6a684771087",
+    "carry_forward_sources": [
+      {
+        "source_id": "R2",
+        "url": "https://docs.aws.amazon.com/dms/latest/userguide/dm-migrating-data-manage.html"
+      },
+      {
+        "source_id": "R7",
+        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html"
+      }
+    ],
+    "previous_summary": "Medium confidence: By default, AWS DMS processes changes in a transactional mode, which preserves transactional the resume checkpoint."
+  },
+  "plan": {
+    "brief": {
+      "continuation_focus": [
+        "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+        "By default, AWS DMS processes changes in a transactional mode, which preserves transactional the resume checkpoint.",
+        "**Resume-processing** (the primary mechanism for checkpoint resume) is a `StartReplicationTaskType` value available only for previously executed tasks.",
+        "**Checkpoint resume (via `resume-processing` or checkpoint-based recovery) continues replication efficiently from the last valid DMS checkpoint with minimal rework for completed work."
+      ]
+    },
+    "include_domains": [
+      "docs.aws.amazon.com"
+    ],
+    "exclude_domains": [
+      "repost.aws"
+    ]
+  },
+  "report": {
+    "status": "failed",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied"
+      ]
+    }
+  },
+  "golden": {
+    "resume_continue_semantics": {
+      "verdict": "pass",
+      "score": 0.6,
+      "reason_tags": [
+        "failed_source_job"
+      ]
+    },
+    "planner_boundary": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
