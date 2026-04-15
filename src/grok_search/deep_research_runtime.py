@@ -1948,6 +1948,23 @@ def _artifact_metadata(content: str, *, batch_id: str = "") -> dict[str, Any]:
     return metadata
 
 
+def _checkpoint_kind(checkpoint_key: str) -> str:
+    normalized = (checkpoint_key or "").strip()
+    if not normalized:
+        return ""
+    if normalized.startswith("researching-dispatch-"):
+        return "research_dispatch"
+    if normalized.startswith("researching-"):
+        return "research_unit"
+    if normalized == "planning":
+        return "planning"
+    if normalized == "synthesizing":
+        return "synthesizing"
+    if normalized == "finalizing":
+        return "finalizing"
+    return "unknown"
+
+
 def _checkpoint_state_payload(
     *,
     plan: DeepResearchPlan,
@@ -2457,6 +2474,7 @@ class DeepResearchRuntime:
         await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
         payload = self._serialize_job(job)
+        payload["current_checkpoint_kind"] = _checkpoint_kind(job.current_checkpoint)
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
         artifacts = _artifact_payloads(self.store, job_id, final_bundle=final_bundle)
         payload["artifact_kinds"] = [artifact["kind"] for artifact in artifacts]
@@ -2545,6 +2563,7 @@ class DeepResearchRuntime:
             "job_id": job_id,
             "status": job.status,
             "phase": job.phase,
+            "current_checkpoint_kind": _checkpoint_kind(job.current_checkpoint),
             "plan": plan_value,
             "partial_report": partial_text,
             "final_report": final_text,
@@ -2614,7 +2633,10 @@ class DeepResearchRuntime:
             type="job_resumed",
             phase=job.phase,
             message="Deep research job resumed from checkpoint.",
-            data={"checkpoint_key": job.current_checkpoint},
+            data={
+                "checkpoint_key": job.current_checkpoint,
+                "checkpoint_kind": _checkpoint_kind(job.current_checkpoint),
+            },
         )
         if schedule:
             await self._schedule(job_id)
@@ -3750,7 +3772,9 @@ class DeepResearchRuntime:
         return payload
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
-        return job.model_dump()
+        payload = job.model_dump()
+        payload["current_checkpoint_kind"] = _checkpoint_kind(job.current_checkpoint)
+        return payload
 
     def _continuation_from_planning_checkpoint(self, job: DeepResearchJob) -> DeepResearchContinuationState | None:
         checkpoints = self.store.list_checkpoints(job.job_id)
