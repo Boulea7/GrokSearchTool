@@ -381,6 +381,7 @@ def _compact_continuation(continuation: DeepResearchContinuationState) -> DeepRe
         source_job_id=continuation.source_job_id,
         source_job_status=continuation.source_job_status,
         continuation_identity=continuation.continuation_identity,
+        focused_snapshot=dict(continuation.focused_snapshot),
         previous_summary=continuation.previous_summary,
         prior_plan_summary=continuation.prior_plan_summary,
         continuation_goal=continuation.continuation_goal,
@@ -391,6 +392,112 @@ def _compact_continuation(continuation: DeepResearchContinuationState) -> DeepRe
         open_questions=list(continuation.open_questions),
         trusted_source_headers=list(continuation.trusted_source_headers),
         carry_forward_constraints=dict(continuation.carry_forward_constraints),
+    )
+
+
+def _focused_continuation_snapshot(
+    *,
+    source_job_id: str,
+    source_job_status: str,
+    checkpoint_key: str,
+    continuation_goal: str,
+    previous_summary: str,
+    prior_plan_summary: str,
+    confirmed_claims: list[str],
+    open_questions: list[str],
+    trusted_source_headers: list[str],
+    carry_forward_constraints: dict[str, Any],
+    carry_forward_sources: list[dict[str, Any]],
+    carry_forward_sections: list[dict[str, Any]],
+    carry_forward_unit_results: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "source_job_id": source_job_id.strip(),
+        "source_job_status": source_job_status.strip(),
+        "checkpoint_key": checkpoint_key.strip(),
+        "continuation_goal": _trim_text(continuation_goal, limit=200),
+        "previous_summary": _trim_text(previous_summary, limit=400),
+        "prior_plan_summary": _trim_text(prior_plan_summary, limit=400),
+        "confirmed_claims": _dedupe_preserve_order(confirmed_claims),
+        "open_questions": _dedupe_preserve_order(open_questions),
+        "trusted_source_headers": _dedupe_preserve_order(trusted_source_headers),
+        "carry_forward_constraints": dict(carry_forward_constraints or {}),
+        "source_ids": [
+            str(item.get("source_id", "")).strip()
+            for item in carry_forward_sources
+            if str(item.get("source_id", "")).strip()
+        ],
+        "sources": [
+            {
+                "source_id": str(item.get("source_id", "")).strip(),
+                "url": str(item.get("url", "")).strip(),
+                "title": _normalize_whitespace(str(item.get("title", ""))),
+                "source_type": _normalize_whitespace(str(item.get("source_type", ""))),
+            }
+            for item in carry_forward_sources
+            if str(item.get("source_id", "")).strip() and str(item.get("url", "")).strip()
+        ],
+        "sections": [
+            {
+                "section_id": str(item.get("section_id", "")).strip(),
+                "title": _normalize_whitespace(str(item.get("title", ""))),
+                "summary": _summarize_evidence_text(str(item.get("summary", "")), limit=180),
+                "citations": [
+                    str(citation).strip()
+                    for citation in item.get("citations", [])
+                    if str(citation).strip()
+                ],
+            }
+            for item in carry_forward_sections
+            if str(item.get("section_id", "")).strip() and _normalize_whitespace(str(item.get("title", "")))
+        ],
+        "unit_results": {
+            str(unit_id): {
+                "summary": _summarize_evidence_text(str(result.get("summary") or result.get("detail") or ""), limit=180),
+                "source_ids": [
+                    str(source_id).strip()
+                    for source_id in result.get("source_ids", []) or result.get("citations", []) or []
+                    if str(source_id).strip()
+                ],
+            }
+            for unit_id, result in sorted(carry_forward_unit_results.items())
+            if _summarize_evidence_text(str(result.get("summary") or result.get("detail") or ""), limit=180)
+        },
+    }
+
+
+def _continuation_identity_from_snapshot(snapshot: dict[str, Any]) -> str:
+    return hashlib.sha256(_json_markdown_block(snapshot).encode("utf-8")).hexdigest()
+
+
+def _hydrate_continuation_snapshot(continuation: DeepResearchContinuationState) -> DeepResearchContinuationState:
+    if continuation.mode != "continue":
+        return continuation
+    snapshot = dict(continuation.focused_snapshot or {})
+    if not snapshot:
+        snapshot = _focused_continuation_snapshot(
+            source_job_id=continuation.source_job_id,
+            source_job_status=continuation.source_job_status,
+            checkpoint_key=continuation.checkpoint_key,
+            continuation_goal=continuation.continuation_goal,
+            previous_summary=continuation.previous_summary,
+            prior_plan_summary=continuation.prior_plan_summary,
+            confirmed_claims=list(continuation.confirmed_claims),
+            open_questions=list(continuation.open_questions),
+            trusted_source_headers=list(continuation.trusted_source_headers),
+            carry_forward_constraints=dict(continuation.carry_forward_constraints),
+            carry_forward_sources=list(continuation.carry_forward_sources),
+            carry_forward_sections=list(continuation.carry_forward_sections),
+            carry_forward_unit_results=dict(continuation.carry_forward_unit_results),
+        )
+    identity = continuation.continuation_identity or _continuation_identity_from_snapshot(snapshot)
+    if snapshot == continuation.focused_snapshot and identity == continuation.continuation_identity:
+        return continuation
+    return continuation.model_copy(
+        update={
+            "focused_snapshot": snapshot,
+            "continuation_identity": identity,
+        }
     )
 
 
@@ -1130,19 +1237,16 @@ def _finalize_brief_payload(
 
     continuation_focus = _normalize_string_list(normalized.get("continuation_focus"))
     if not continuation_focus and continuation.mode == "continue":
-        continuation_focus = _dedupe_preserve_order(
+        continuation_focus = _sanitize_follow_up_surface_items(
             [
-                item
-                for item in (
-                    continuation.continuation_goal,
-                    *continuation.confirmed_claims,
-                    *continuation.open_questions,
-                    *continuation.trusted_source_headers,
-                )
-                if _normalize_whitespace(item)
-            ]
+                continuation.continuation_goal,
+                *continuation.confirmed_claims,
+                *continuation.open_questions,
+                *continuation.trusted_source_headers,
+            ],
+            limit=6,
         )
-    normalized["continuation_focus"] = continuation_focus
+    normalized["continuation_focus"] = _dedupe_preserve_order(continuation_focus)
 
     stop_policy = dict(normalized.get("stop_policy") or {})
     search_queries = _normalize_string_list(strategy.get("search_queries"))
@@ -1155,7 +1259,7 @@ def _finalize_brief_payload(
     coverage_checklist = _normalize_string_list(normalized.get("coverage_checklist"))
     if not coverage_checklist:
         coverage_checklist = list(normalized["must_cover"])
-    normalized["coverage_checklist"] = _dedupe_preserve_order(coverage_checklist)
+    normalized["coverage_checklist"] = _sanitize_follow_up_surface_items(coverage_checklist, limit=6)
     return normalized
 
 
@@ -1190,30 +1294,10 @@ def _first_url_from_texts(*values: str) -> str:
     return ""
 
 
-def _plan_payload_hash(value: Any) -> str:
-    if value is None:
-        return ""
-    try:
-        serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
-    except Exception:
-        return ""
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-
 def _continuation_identity_for_source_job(
-    store: DeepResearchStore,
-    job: DeepResearchJob,
-    *,
-    plan_payload: dict[str, Any] | None = None,
+    snapshot: dict[str, Any],
 ) -> str:
-    payload = {
-        "source_job_id": job.job_id,
-        "status": job.status,
-        "current_checkpoint": job.current_checkpoint,
-        "resolved_artifact_batch_id": _artifact_bundle_identity(store, job.job_id),
-        "plan_hash": _plan_payload_hash(plan_payload),
-    }
-    return hashlib.sha256(_json_markdown_block(payload).encode("utf-8")).hexdigest()
+    return _continuation_identity_from_snapshot(snapshot)
 
 
 def _unit_query_fallback(
@@ -1709,6 +1793,51 @@ def _trusted_source_headers(sources: list[dict[str, Any]], *, limit: int = 4) ->
     return _dedupe_preserve_order(headers)
 
 
+def _sanitize_follow_up_surface_items(
+    items: list[str],
+    *,
+    limit: int,
+) -> list[str]:
+    sanitized: list[str] = []
+    for item in items:
+        normalized = _summarize_evidence_text(str(item), limit=220) or _normalize_whitespace(str(item))
+        if not normalized:
+            continue
+        if normalized.lower() in _GENERIC_CONTINUATION_QUESTION_TITLES:
+            continue
+        if _is_noisy_text(normalized):
+            continue
+        sanitized.append(normalized)
+        if len(sanitized) >= limit:
+            break
+    return _dedupe_preserve_order(sanitized)
+
+
+def _bounded_salvage_queries(
+    raw_plan: dict[str, Any] | None,
+    *,
+    continuation: DeepResearchContinuationState,
+) -> list[str]:
+    if not isinstance(raw_plan, dict):
+        return []
+    candidates: list[str] = []
+    for item in raw_plan.get("sub_questions") or []:
+        if isinstance(item, dict):
+            candidates.append(str(item.get("question", "")))
+    strategy = raw_plan.get("search_strategy")
+    if isinstance(strategy, dict):
+        candidates.extend(str(value) for value in strategy.get("search_queries") or [])
+    for item in raw_plan.get("research_units") or []:
+        if not isinstance(item, dict):
+            continue
+        for key in ("query", "goal", "title", "notes", "instructions"):
+            candidates.append(str(item.get(key, "")))
+    return _sanitize_follow_up_surface_items(
+        [_rewrite_research_query(candidate, continuation) for candidate in candidates],
+        limit=3,
+    )
+
+
 def _carry_forward_constraints(
     *,
     job: DeepResearchJob,
@@ -2107,10 +2236,23 @@ def _apply_domain_constraints(
     return filtered
 
 
-async def _build_runtime_grok_provider(current_model: str) -> tuple[GrokSearchProvider, dict[str, Any]]:
+async def _build_runtime_grok_provider(
+    current_model: str = "",
+    *,
+    effort: str = "standard",
+) -> tuple[GrokSearchProvider, dict[str, Any]]:
     from . import server as server_module
 
-    provider_chain = config.grok_provider_chain(model_override=current_model)
+    resolved_model = current_model
+    if not resolved_model:
+        if config._has_explicit_runtime_model():
+            resolved_model = config.grok_model
+        else:
+            try:
+                resolved_model = config.resolve_deep_research_model_for_url(config.grok_api_url, effort=effort)
+            except ValueError:
+                resolved_model = config.grok_model
+    provider_chain = config.grok_provider_chain(model_override=resolved_model)
     primary = dict(provider_chain[0])
     available_models = await server_module._get_available_models_cached(primary["api_url"], primary["api_key"])
     requested_model = primary["model"]
@@ -2610,6 +2752,7 @@ class DeepResearchRuntime:
                 self._tasks.pop(job_id, None)
 
     async def _build_plan(self, job: DeepResearchJob, continuation: DeepResearchContinuationState) -> DeepResearchPlan:
+        raw_plan: dict[str, Any] | None = None
         try:
             generated = await self._generate_plan_with_model(job, continuation)
             planner_trace: dict[str, Any] = {}
@@ -2651,10 +2794,21 @@ class DeepResearchRuntime:
                     raise PlannerGenerationError("normalize", str(exc), trace=planner_trace) from exc
         except Exception as exc:
             stage = exc.stage if isinstance(exc, PlannerGenerationError) else "generation"
+            fallback_reason = {"stage": stage, "error": _trim_text(str(exc), limit=280)}
+            if stage == "unsafe_plan":
+                bounded_salvage = self._build_bounded_salvage_plan(
+                    job,
+                    continuation,
+                    raw_plan=raw_plan,
+                    fallback_reason=fallback_reason,
+                    planner_trace=getattr(exc, "trace", None),
+                )
+                if bounded_salvage is not None:
+                    return bounded_salvage
             return self._build_fallback_plan(
                 job,
                 continuation,
-                fallback_reason={"stage": stage, "error": _trim_text(str(exc), limit=280)},
+                fallback_reason=fallback_reason,
                 planner_trace=getattr(exc, "trace", None),
             )
 
@@ -2663,7 +2817,7 @@ class DeepResearchRuntime:
         job: DeepResearchJob,
         continuation: DeepResearchContinuationState,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        provider, _ = await _build_runtime_grok_provider(config.grok_model)
+        provider, _ = await _build_runtime_grok_provider(effort=job.effort)
         provider_meta = _
         planner_trace: dict[str, Any] = {
             "requested_model": provider_meta.get("requested_model"),
@@ -2756,7 +2910,7 @@ class DeepResearchRuntime:
         planner_trace: dict[str, Any],
         error: Exception,
     ) -> dict[str, Any]:
-        provider, provider_meta = await _build_runtime_grok_provider(config.grok_model)
+        provider, provider_meta = await _build_runtime_grok_provider(effort=job.effort)
         planner_trace["repair_requested_model"] = provider_meta.get("requested_model")
         planner_trace["repair_effective_model"] = provider_meta.get("effective_model")
         planner_trace["repair_model_resolution"] = provider_meta.get("resolution")
@@ -2798,6 +2952,97 @@ class DeepResearchRuntime:
         planner_trace.update({f"repair_{key}": value for key, value in parse_trace.items()})
         return repaired_plan
 
+    def _build_bounded_salvage_plan(
+        self,
+        job: DeepResearchJob,
+        continuation: DeepResearchContinuationState,
+        *,
+        raw_plan: dict[str, Any] | None,
+        fallback_reason: dict[str, Any],
+        planner_trace: dict[str, Any] | None = None,
+    ) -> DeepResearchPlan | None:
+        if continuation.mode != "continue":
+            return None
+        salvage_queries = _bounded_salvage_queries(raw_plan, continuation=continuation)
+        if not salvage_queries:
+            return None
+        trace = dict(planner_trace or {})
+        trace["salvage_used"] = True
+        trace["salvage_query_count"] = len(salvage_queries)
+        trace["salvage_queries"] = list(salvage_queries)
+        trace["final_status"] = "bounded_salvage"
+        continuation_focus = _sanitize_follow_up_surface_items(
+            [
+                continuation.continuation_goal,
+                *continuation.confirmed_claims,
+                *continuation.open_questions,
+                *continuation.trusted_source_headers,
+            ],
+            limit=6,
+        )
+        raw_plan = {
+            "brief": {
+                "objective": salvage_queries[0],
+                "deliverable": "A structured deep research report with citations.",
+                "success_criteria": [
+                    "Answer the remaining continuation-specific questions.",
+                    "Ground each section in verifiable sources.",
+                ],
+                "must_cover": list(salvage_queries),
+                "out_of_scope": [],
+                "preferred_sources": list(job.include_domains),
+                "stop_policy": {
+                    "stop_on_sufficient_coverage": True,
+                    "max_search_queries": max(1, min(len(salvage_queries), config.deep_research_max_concurrency)),
+                    "max_urls_per_search": 1 if job.effort != "deep" else 2,
+                },
+                "continuation_focus": continuation_focus,
+            },
+            "sub_questions": [
+                {
+                    "id": f"sq{index}",
+                    "question": item,
+                    "reason": "Preserve the bounded safe slice from the unsafe planner output.",
+                }
+                for index, item in enumerate(salvage_queries, start=1)
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": list(salvage_queries),
+                "selective_fetch": {
+                    "max_urls_per_search": 1 if job.effort != "deep" else 2,
+                    "prefer_titles_matching_outline": True,
+                },
+            },
+            "report_outline": [
+                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+                {"section_id": "key-findings", "title": "Key Findings", "goal": "Cover the strongest findings."},
+                {"section_id": "open-questions", "title": "Open Questions", "goal": "Call out remaining gaps."},
+            ],
+            "research_units": [
+                {
+                    "unit_id": f"unit-search-{index}",
+                    "unit_type": "search",
+                    "title": _trim_text(item, limit=96),
+                    "goal": item,
+                    "query": item,
+                    "depends_on": [],
+                    "status": "pending",
+                    "notes": "",
+                }
+                for index, item in enumerate(
+                    salvage_queries[: max(1, config.deep_research_max_concurrency)],
+                    start=1,
+                )
+            ],
+            "planner_metadata": {
+                "planner": "fallback",
+                "used_fallback": True,
+                "fallback_reason": fallback_reason,
+            },
+        }
+        return self._normalize_plan_payload(job, raw_plan, continuation, planner_trace=trace)
+
     def _build_fallback_plan(
         self,
         job: DeepResearchJob,
@@ -2825,17 +3070,14 @@ class DeepResearchRuntime:
             if normalized and normalized not in seen:
                 unique_queries.append(normalized)
                 seen.add(normalized)
-        continuation_focus = _dedupe_preserve_order(
+        continuation_focus = _sanitize_follow_up_surface_items(
             [
-                item
-                for item in (
-                    continuation.continuation_goal,
-                    *continuation.confirmed_claims,
-                    *continuation.open_questions,
-                    *continuation.trusted_source_headers,
-                )
-                if _normalize_whitespace(item)
-            ]
+                continuation.continuation_goal,
+                *continuation.confirmed_claims,
+                *continuation.open_questions,
+                *continuation.trusted_source_headers,
+            ],
+            limit=6,
         )
         if not continuation_focus and _normalize_whitespace(continuation.previous_summary):
             continuation_focus = [continuation.previous_summary]
@@ -3402,32 +3644,50 @@ class DeepResearchRuntime:
         continuation_goal = plan_payload.get("query") or job.query
         source_count = len(carry_forward_sources)
         carry_forward_constraints = _carry_forward_constraints(job=job, plan_payload=plan_payload)
+        confirmed_claims = _collect_confirmed_claims(carry_forward_sections)
+        open_questions = _collect_continuation_open_questions(report)
+        trusted_source_headers = _trusted_source_headers(carry_forward_sources)
+        focused_snapshot = _focused_continuation_snapshot(
+            source_job_id=continue_from_job_id,
+            source_job_status=job.status,
+            checkpoint_key=checkpoint_key,
+            continuation_goal=_trim_text(continuation_goal, limit=200),
+            previous_summary=_trim_text(previous_summary, limit=400),
+            prior_plan_summary=_trim_text(prior_plan_summary, limit=400),
+            confirmed_claims=confirmed_claims,
+            open_questions=open_questions,
+            trusted_source_headers=trusted_source_headers,
+            carry_forward_constraints=carry_forward_constraints,
+            carry_forward_sources=carry_forward_sources,
+            carry_forward_sections=carry_forward_sections,
+            carry_forward_unit_results=carry_forward_unit_results,
+        )
         continuation_identity = _continuation_identity_for_source_job(
-            self.store,
-            job,
-            plan_payload=plan_payload,
+            focused_snapshot,
         )
 
-        return DeepResearchContinuationState(
+        return _hydrate_continuation_snapshot(
+            DeepResearchContinuationState(
             mode="continue",
             source_job_id=continue_from_job_id,
             source_job_status=job.status,
             continuation_identity=continuation_identity,
+            focused_snapshot=focused_snapshot,
             previous_summary=_trim_text(previous_summary, limit=400),
             prior_plan_summary=_trim_text(prior_plan_summary, limit=400),
             continuation_goal=_trim_text(continuation_goal, limit=200),
             source_count=source_count,
             checkpoint_key=checkpoint_key,
             state_version=2,
-            confirmed_claims=_collect_confirmed_claims(carry_forward_sections),
-            open_questions=_collect_continuation_open_questions(report),
-            trusted_source_headers=_trusted_source_headers(carry_forward_sources),
+            confirmed_claims=confirmed_claims,
+            open_questions=open_questions,
+            trusted_source_headers=trusted_source_headers,
             carry_forward_constraints=carry_forward_constraints,
             carry_forward_sources=carry_forward_sources,
             carry_forward_evidence=carry_forward_evidence,
             carry_forward_sections=carry_forward_sections,
             carry_forward_unit_results=carry_forward_unit_results,
-        )
+        ))
 
     def _request_fingerprint(
         self,
@@ -3501,7 +3761,7 @@ class DeepResearchRuntime:
                 "carry_forward_unit_results": raw_state.get("unit_results") or {},
             }
         )
-        return base
+        return _hydrate_continuation_snapshot(base)
 
     def _read_runtime_continuation(self, job: DeepResearchJob) -> DeepResearchContinuationState:
         if not job.continued_from_job_id:
@@ -3509,7 +3769,7 @@ class DeepResearchRuntime:
         continuation_text = self.store.read_artifact_text(job.job_id, "continuation.json")
         if continuation_text:
             try:
-                return DeepResearchContinuationState.model_validate(json.loads(continuation_text))
+                return _hydrate_continuation_snapshot(DeepResearchContinuationState.model_validate(json.loads(continuation_text)))
             except Exception:
                 pass
         checkpoint_continuation = self._continuation_from_planning_checkpoint(job)
@@ -4332,7 +4592,7 @@ async def _execute_research_unit(
         )
 
     if _search_query is _DEFAULT_SEARCH_QUERY_FN:
-        search_result = await _search_query_with_details(unit.query or unit.goal)
+        search_result = await _search_query_with_details(unit.query or unit.goal, effort=plan.effort)
         answer = search_result["answer"]
         sources = search_result["sources"]
     else:
@@ -4627,10 +4887,35 @@ def _coverage_for_report(
     plan: DeepResearchPlan,
     sections: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    answered_section_ids = [str(section.get("section_id", "")).strip() for section in sections if str(section.get("section_id", "")).strip()]
+    answered_section_ids: list[str] = []
     covered_sub_question_ids: list[str] = []
     uncovered_sub_questions: list[str] = []
     sub_question_coverage: list[dict[str, Any]] = []
+    grounded_sections: list[dict[str, Any]] = []
+    for section in sections:
+        section_id = str(section.get("section_id", "")).strip()
+        grounded_claims = [
+            claim
+            for claim in section.get("claims", [])
+            if [citation for citation in claim.get("citations", []) if str(citation).strip()]
+        ]
+        grounded_citations = sorted(
+            {
+                str(citation).strip()
+                for claim in grounded_claims
+                for citation in claim.get("citations", [])
+                if str(citation).strip()
+            }
+        )
+        if grounded_claims and section_id:
+            answered_section_ids.append(section_id)
+        grounded_sections.append(
+            {
+                **dict(section),
+                "claims": grounded_claims,
+                "citations": grounded_citations,
+            }
+        )
     for item in plan.sub_questions:
         question = item.question.strip()
         if not question:
@@ -4639,7 +4924,7 @@ def _coverage_for_report(
         coverage_threshold = max(2, min(4, max(1, len(question_tokens) // 2)))
         matching_section_ids: list[str] = []
         matching_claim_ids: list[str] = []
-        for section in sections:
+        for section in grounded_sections:
             section_id = str(section.get("section_id", "")).strip()
             section_matched = False
             for claim in section.get("claims", []):
@@ -4653,7 +4938,7 @@ def _coverage_for_report(
                     section_matched = True
             if not section_matched:
                 section_text = " ".join([str(section.get("title", "")), str(section.get("summary", ""))])
-                if _count_keyword_overlap(section_text, question_tokens) >= max(coverage_threshold, 3):
+                if section.get("citations") and _count_keyword_overlap(section_text, question_tokens) >= max(coverage_threshold, 3):
                     if section_id and section_id not in matching_section_ids:
                         matching_section_ids.append(section_id)
         covered = bool(matching_claim_ids)
@@ -5056,15 +5341,15 @@ def _build_final_report(
     return "\n".join(lines).strip() + "\n"
 
 
-async def _search_query(query: str) -> tuple[str, list[dict]]:
-    result = await _search_query_with_details(query)
+async def _search_query(query: str, *, effort: str = "standard") -> tuple[str, list[dict]]:
+    result = await _search_query_with_details(query, effort=effort)
     return result["answer"], result["sources"]
 
 
-async def _search_query_with_details(query: str) -> dict[str, Any]:
+async def _search_query_with_details(query: str, *, effort: str = "standard") -> dict[str, Any]:
     from . import server as server_module
 
-    provider, provider_meta = await _build_runtime_grok_provider(config.grok_model)
+    provider, provider_meta = await _build_runtime_grok_provider(effort=effort)
     content, sources = await _provider_search_with_sources(provider, query, min_results=3, max_results=8)
     answer, extracted_sources = split_answer_and_sources(content)
     merged = standardize_sources(merge_sources(sources, extracted_sources))
