@@ -59,6 +59,9 @@ _STOPWORDS = {
     "with",
 }
 _NOISY_EVIDENCE_MARKERS = (
+    "for more information about",
+    "real-world analogy",
+    "think of `",
     "sitemap",
     "open in app",
     "communities for your favorite technologies",
@@ -86,6 +89,7 @@ _NOISY_EVIDENCE_MARKERS = (
     "help you to resolve common issues",
     "following, you can find topics about troubleshooting issues",
     "these topics can help you to resolve common issues",
+    "starts the replication task",
 )
 _PREFERRED_TECHNICAL_TERMS = (
     "checkpoint",
@@ -273,7 +277,9 @@ def _extract_relevant_excerpt(
         overlap = _count_keyword_overlap(line, keywords) if keywords else 0
         ranked.append((overlap, len(line), line))
     ranked.sort(reverse=True)
-    selected = [line for overlap, _, line in ranked if overlap > 0][:line_limit]
+    max_overlap = ranked[0][0] if ranked else 0
+    overlap_threshold = max(1, max_overlap - 1) if max_overlap > 0 else 0
+    selected = [line for overlap, _, line in ranked if overlap >= overlap_threshold and overlap > 0][:line_limit]
     if not selected:
         selected = [line for _, _, line in ranked[:line_limit]]
     separator = "\n" if multiline else " "
@@ -3505,12 +3511,13 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     }
     report_summary = _build_report_summary(plan, citations["sections"])
     runtime_warnings = sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])})
+    report_coverage = _coverage_for_report(plan, citations["sections"])
+    runtime_warnings = sorted({*runtime_warnings, *_coverage_warning_codes(report_coverage)})
     report_status = "degraded" if runtime_warnings or not citations["sections"] or failed_units else "completed"
     report_confidence = _cluster_confidence(
         source_count=len({citation for section in citations["sections"] for citation in section.get("citations", [])}),
         evidence_count=sum(len(section.get("claims", [])) for section in citations["sections"]),
     )
-    report_coverage = _coverage_for_report(plan, citations["sections"])
     report = {
         "query": plan.query,
         "summary": report_summary,
@@ -3787,13 +3794,14 @@ async def _execute_research_unit(
         search_support_sources = list(selected_sources_for_grounding)
     else:
         search_support_sources = selected_sources_for_grounding[: max(1, min(len(selected_sources_for_grounding), fetch_limit))]
+    primary_search_support_source = search_support_sources[:1]
     evidence_items: list[dict[str, Any]] = []
     if not search_result.get("warning_code"):
         evidence_items.append(
             DeepResearchEvidenceItem(
                 evidence_id=f"evidence-{unit.unit_id}-search",
                 unit_id=unit.unit_id,
-                source_urls=[source.get("url", "") for source in search_support_sources if source.get("url")],
+                source_urls=[source.get("url", "") for source in primary_search_support_source if source.get("url")],
                 summary=answer_summary,
                 detail=answer_detail,
                 evidence_kind="search",
@@ -3815,8 +3823,19 @@ async def _execute_research_unit(
                 evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
                 unit_id=unit.unit_id,
                 source_urls=[source["url"]],
-                summary=_summarize_evidence_text(fetched, limit=_MAX_CLAIM_LENGTH),
-                detail=fetched,
+                summary=_extract_relevant_excerpt(
+                    fetched,
+                    reference_texts=reference_texts + [source["url"], enriched_source.get("title", "")],
+                    line_limit=4,
+                    char_limit=_MAX_CLAIM_LENGTH,
+                ),
+                detail=_extract_relevant_excerpt(
+                    fetched,
+                    reference_texts=reference_texts + [source["url"], enriched_source.get("title", "")],
+                    line_limit=8,
+                    char_limit=1200,
+                    multiline=True,
+                ),
                 evidence_kind="fetch",
                 weight=1.0,
                 derived_from_source_url=source["url"],
@@ -4064,6 +4083,12 @@ def _coverage_for_report(
         "covered_sub_question_ids": covered_sub_question_ids,
         "uncovered_sub_questions": uncovered_sub_questions,
     }
+
+
+def _coverage_warning_codes(coverage: dict[str, Any]) -> list[str]:
+    if coverage.get("unanswered_sections") or coverage.get("uncovered_sub_questions"):
+        return ["coverage_incomplete"]
+    return []
 
 
 def _cluster_confidence(*, source_count: int, evidence_count: int, cluster_type: str = "", domain_count: int = 0) -> str:
