@@ -1,0 +1,36 @@
+{
+  "sample": "round8",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "report": {
+    "coverage": {
+      "planned_section_ids": [
+        "executive-summary",
+        "key-findings",
+        "open-questions"
+      ],
+      "answered_section_ids": [
+        "executive-summary"
+      ],
+      "unanswered_sections": [
+        "Key Findings",
+        "Open Questions"
+      ],
+      "planned_sub_question_ids": [
+        "sq1"
+      ],
+      "covered_sub_question_ids": [],
+      "uncovered_sub_questions": [
+        "Compare checkpoint resume and restart semantics in AWS DMS with official docs only"
+      ]
+    }
+  },
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "fail",
+      "reason_tags": [
+        "unanswered_sections",
+        "uncovered_sub_questions"
+      ]
+    }
+  }
+}

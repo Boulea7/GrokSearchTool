@@ -1,0 +1,36 @@
+{
+  "sample": "probe-5/real",
+  "continuation": {
+    "mode": "continue",
+    "source_job_id": "54076d4cd15f463214a08f7e",
+    "source_job_status": "failed",
+    "previous_summary": "Continuation from failed job 54076d4cd15f463214a08f7e.",
+    "prior_plan_summary": "Compare checkpoint resume and restart semantics in database migration tools; Compare checkpoint resume and restart semantics in database migration tools Prefer official vendor docs and concrete runtime semantics.",
+    "continuation_goal": "Compare checkpoint resume and restart semantics in database migration tools",
+    "source_count": 9,
+    "checkpoint_key": "researching-unit-search-2",
+    "carry_forward_sources": [
+      {
+        "source_id": "R1",
+        "domain": "docs.oracle.com",
+        "quality_tier": "official",
+        "url": "https://docs.oracle.com/en/middleware/goldengate/core/21.3/admin/checkpoints.html"
+      },
+      {
+        "source_id": "R2",
+        "domain": "docs.aws.amazon.com",
+        "quality_tier": "official",
+        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"
+      }
+    ]
+  },
+  "golden": {
+    "resume_continue_semantics": {
+      "verdict": "fail",
+      "reason_tags": [
+        "failed_source_job",
+        "generic_previous_summary"
+      ]
+    }
+  }
+}
