@@ -348,8 +348,8 @@ def test_cli_continue_creates_follow_up_job(monkeypatch, tmp_path, capsys):
         phase="finalizing",
         effort="standard",
         context="",
-        include_domains=[],
-        exclude_domains=[],
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
         plan_only=False,
         force_new=False,
         resolved_budget_seconds=240,
@@ -361,6 +361,8 @@ def test_cli_continue_creates_follow_up_job(monkeypatch, tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert payload["continued_from_job_id"] == original.job_id
+    assert payload["include_domains"] == ["docs.aws.amazon.com"]
+    assert payload["exclude_domains"] == ["repost.aws"]
     assert spawned == [payload["job_id"]]
 
 
