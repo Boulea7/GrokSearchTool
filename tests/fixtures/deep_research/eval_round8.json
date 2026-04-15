@@ -27,6 +27,7 @@
   "golden": {
     "coverage_completeness": {
       "verdict": "fail",
+      "score": 0.167,
       "reason_tags": [
         "unanswered_sections",
         "uncovered_sub_questions"

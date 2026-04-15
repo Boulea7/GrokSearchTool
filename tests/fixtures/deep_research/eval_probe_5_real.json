@@ -27,6 +27,7 @@
   "golden": {
     "resume_continue_semantics": {
       "verdict": "fail",
+      "score": 0.1,
       "reason_tags": [
         "failed_source_job",
         "generic_previous_summary"

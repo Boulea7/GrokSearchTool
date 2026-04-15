@@ -55,7 +55,10 @@
   "golden": {
     "citation_faithfulness": {
       "verdict": "pass",
-      "reason_tags": []
+      "score": 0.6,
+      "reason_tags": [
+        "weak_source_alignment"
+      ]
     }
   }
 }

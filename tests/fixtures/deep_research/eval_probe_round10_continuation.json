@@ -80,6 +80,7 @@
   "golden": {
     "planner_boundary": {
       "verdict": "fail",
+      "score": 0.0,
       "reason_tags": [
         "planner_fallback_used",
         "unsafe_plan_fallback",
@@ -89,12 +90,14 @@
     },
     "ranking_noise_suppression": {
       "verdict": "fail",
+      "score": 0.4,
       "reason_tags": [
         "off_domain_source"
       ]
     },
     "diagnostics_consistency": {
       "verdict": "fail",
+      "score": 0.2,
       "reason_tags": [
         "planner_fallback_not_exposed",
         "constraint_violation_not_exposed"

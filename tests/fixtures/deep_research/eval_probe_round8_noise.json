@@ -24,6 +24,7 @@
   "golden": {
     "ranking_noise_suppression": {
       "verdict": "fail",
+      "score": 0.5,
       "reason_tags": [
         "troubleshooting_shell_source"
       ]

@@ -71,12 +71,14 @@
   "golden": {
     "citation_faithfulness": {
       "verdict": "fail",
+      "score": 0.3,
       "reason_tags": [
         "ungrounded_analogy"
       ]
     },
     "coverage_completeness": {
       "verdict": "fail",
+      "score": 0.714,
       "reason_tags": [
         "unanswered_sections"
       ]
