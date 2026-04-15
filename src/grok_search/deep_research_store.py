@@ -470,6 +470,8 @@ class DeepResearchStore:
             job = self._row_to_job(row)
             if job.status in {"draft", "queued", "running"}:
                 return job
+            if job.status == "interrupted" and (job.phase == "finalizing" or job.current_checkpoint == "finalizing"):
+                return job
             if job.status == "completed" and recent_reuse_seconds > 0:
                 finished_at = _parse_utc_iso(job.finished_at)
                 if finished_at is None:

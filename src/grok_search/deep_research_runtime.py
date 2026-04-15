@@ -784,6 +784,47 @@ def _artifact_bundle_differs_from_current(store: DeepResearchStore, job_id: str,
     return current_bundle.get("batch_id") != bundle.get("batch_id")
 
 
+def _artifact_content_type(kind: str) -> str:
+    if kind.endswith(".md"):
+        return "text/markdown"
+    if kind.endswith(".json"):
+        return "application/json"
+    return "text/plain"
+
+
+def _artifact_payloads(
+    store: DeepResearchStore,
+    job_id: str,
+    *,
+    final_bundle: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    current_artifacts = {artifact.kind: artifact for artifact in store.list_artifacts(job_id)}
+    payloads: list[dict[str, Any]] = []
+    ordered_kinds = ["plan.json", "planner_trace.json", "continuation.json", "partial_report.md", *_FINAL_ARTIFACT_KINDS]
+    for kind in ordered_kinds:
+        artifact = current_artifacts.get(kind)
+        if final_bundle is not None and kind in final_bundle.get("paths", {}):
+            path = final_bundle["paths"][kind]
+            payloads.append(
+                {
+                    "job_id": job_id,
+                    "kind": kind,
+                    "path": str(path.relative_to(store.root_dir)),
+                    "content_type": artifact.content_type if artifact is not None else _artifact_content_type(kind),
+                    "created_at": artifact.created_at if artifact is not None else "",
+                    "updated_at": artifact.updated_at if artifact is not None else "",
+                    "metadata": _artifact_metadata(
+                        _read_text_if_exists(path) or "",
+                        batch_id=final_bundle["batch_id"],
+                    ),
+                }
+            )
+            continue
+        if artifact is not None:
+            payloads.append(artifact.model_dump())
+    return payloads
+
+
 def _job_prefers_resolved_final_bundle(job: DeepResearchJob) -> bool:
     if job.status == "completed":
         return True
@@ -1641,7 +1682,7 @@ class DeepResearchRuntime:
             )
             if reused_job is not None and bool(reused_job.plan_only) != bool(plan_only):
                 reused_job = None
-            if reused_job is not None and reused_job.status == "completed":
+            if reused_job is not None and reused_job.status in {"completed", "interrupted"}:
                 if not _final_artifact_bundle_is_usable(self.store, reused_job.job_id):
                     reused_job = None
         if reused_job is not None:
@@ -1718,11 +1759,11 @@ class DeepResearchRuntime:
     async def status(self, job_id: str) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
-        artifacts = [artifact.model_dump() for artifact in self.store.list_artifacts(job_id)]
         payload = self._serialize_job(job)
+        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
+        artifacts = _artifact_payloads(self.store, job_id, final_bundle=final_bundle)
         payload["artifact_kinds"] = [artifact["kind"] for artifact in artifacts]
         payload["artifacts"] = artifacts
-        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
         payload["artifact_fallback_used"] = _artifact_bundle_differs_from_current(self.store, job_id, final_bundle)
         payload["resolved_artifact_batch_id"] = final_bundle["batch_id"] if final_bundle is not None else ""
         return payload
@@ -1811,7 +1852,8 @@ class DeepResearchRuntime:
             "report": report_value,
             "artifact_errors": artifact_errors,
             "artifact_fallback_used": _artifact_bundle_differs_from_current(self.store, job_id, final_bundle),
-            "artifacts": [artifact.model_dump() for artifact in self.store.list_artifacts(job_id)],
+            "resolved_artifact_batch_id": final_bundle["batch_id"] if final_bundle is not None else "",
+            "artifacts": _artifact_payloads(self.store, job_id, final_bundle=final_bundle),
         }
 
     def read_artifact_text(self, job_id: str, kind: str) -> str | None:

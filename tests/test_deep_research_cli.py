@@ -162,6 +162,64 @@ def test_cli_result_artifact_reads_resolved_final_batch_for_interrupted_finalizi
     assert capsys.readouterr().out == "# Final Report\n\nRecovered report.\n\n"
 
 
+def test_cli_status_surfaces_resolved_artifact_batch_id(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="CLI status resolved batch",
+        request_fingerprint="fp-cli-status-resolved-batch",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "CLI status resolved batch"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Good report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nGood report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]),
+        "application/json",
+    )
+
+    exit_code = deep_research_cli.main(["status", job.job_id])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["resolved_artifact_batch_id"]
+    assert payload["artifact_fallback_used"] is True
+
+
 def test_cli_start_spawns_worker_for_background_job(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     spawned = []

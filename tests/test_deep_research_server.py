@@ -86,7 +86,7 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
     listing = await server.deep_research_list()
 
     assert status["status"] == "completed"
-    assert status["artifact_kinds"] == ["citations.json", "final_report.md", "partial_report.md", "plan.json", "planner_trace.json"]
+    assert status["artifact_kinds"] == ["plan.json", "planner_trace.json", "partial_report.md", "citations.json", "final_report.md"]
     assert [event["seq"] for event in events["events"]] == list(range(1, len(events["events"]) + 1))
     assert events["events"][0]["type"] in {"planner_fallback", "job_created"}
     assert events["events"][-1]["type"] == "job_completed"
@@ -243,3 +243,4 @@ async def test_deep_research_result_prefers_resolved_final_batch_over_current_mi
     result = await server.deep_research_result(job.job_id)
 
     assert result["sources"][0]["url"] == "https://good.example.com"
+    assert result["resolved_artifact_batch_id"]
