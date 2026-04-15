@@ -1,14 +1,130 @@
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
 from grok_search import server
 from grok_search import deep_research_runtime
 from grok_search.deep_research_runtime import DeepResearchRuntime
+from grok_search.deep_research_types import utc_now_iso
+
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
 
 
 def build_runtime(tmp_path, runner):
     return DeepResearchRuntime(tmp_path / "deep-research", runner=runner)
+
+
+def load_deep_research_fixture(name: str) -> dict:
+    return json.loads((FIXTURE_DIR / name).read_text())
+
+
+def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
+    continuation_snapshot = load_deep_research_fixture("probe_round11_interrupted_continue_snapshot.json")
+    report_snapshot = load_deep_research_fixture("probe_round11_main_snapshot.json")
+    source = {
+        **report_snapshot["sources"][0],
+        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+    }
+    plan_payload = {
+        "query": continuation_snapshot["query"],
+        "include_domains": continuation_snapshot["include_domains"],
+        "exclude_domains": continuation_snapshot["exclude_domains"],
+        "continuation": continuation_snapshot["continuation"],
+        "brief": {
+            "continuation_focus": continuation_snapshot["continuation"]["continuation_focus"],
+        },
+        "search_strategy": continuation_snapshot["plan"]["search_strategy"],
+        "planner_metadata": continuation_snapshot["planner"],
+    }
+    report_payload = report_snapshot["report"]
+    citations_payload = {
+        "source_registry": {
+            source["source_id"]: source,
+        },
+        "sections": [],
+    }
+    job = runtime.store.create_job(
+        query=continuation_snapshot["query"],
+        request_fingerprint="fp-server-round11-interrupted-parity",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=continuation_snapshot["include_domains"],
+        exclude_domains=continuation_snapshot["exclude_domains"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id=continuation_snapshot["continued_from_job_id"],
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=2,
+        current_checkpoint="finalizing",
+        finished_at=utc_now_iso(),
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps(plan_payload), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([source]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(citations_payload),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps(report_payload),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": f"# Final Report\n\n{report_payload['summary']}\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "report.json",
+        json.dumps({"summary": "stale current report", "runtime": {"warnings": [], "constraint_violations": []}}),
+        "application/json",
+    )
+    runtime.store.append_event(
+        job.job_id,
+        type="phase_started",
+        phase="finalizing",
+        message="Finalizing interrupted round11 snapshot.",
+        data={"resolved_artifact_batch_id": persisted[0]["metadata"]["batch_id"]},
+    )
+    runtime.store.append_event(
+        job.job_id,
+        type="job_interrupted",
+        phase="finalizing",
+        message="Interrupted after resolved final batch was written.",
+        data={"checkpoint": "finalizing"},
+    )
+    return {
+        "job": job,
+        "batch_id": persisted[0]["metadata"]["batch_id"],
+        "source": source,
+        "plan_payload": plan_payload,
+        "report_payload": report_payload,
+    }
 
 
 async def complete_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
@@ -244,3 +360,41 @@ async def test_deep_research_result_prefers_resolved_final_batch_over_current_mi
 
     assert result["sources"][0]["url"] == "https://good.example.com"
     assert result["resolved_artifact_batch_id"]
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round11_interrupted_status_events_and_result_remain_consistent(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round11_interrupted_finalizing_job(runtime)
+    job = seeded["job"]
+
+    status = await server.deep_research_status(job.job_id)
+    events = await server.deep_research_events(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == "interrupted"
+    assert status["phase"] == "finalizing"
+    assert status["current_checkpoint"] == "finalizing"
+    assert status["attempt_count"] == 2
+    assert status["continued_from_job_id"] == job.continued_from_job_id
+    assert status["resolved_artifact_batch_id"] == seeded["batch_id"]
+    assert status["artifact_fallback_used"] is True
+    assert status["planner_fallback_used"] is True
+    assert status["runtime_warnings"] == ["coverage_incomplete", "planner_fallback_used"]
+    assert status["constraint_violations"] == []
+
+    assert [event["type"] for event in events["events"]] == ["phase_started", "job_interrupted"]
+    assert events["next_after_seq"] == 2
+
+    assert result["status"] == "interrupted"
+    assert result["phase"] == "finalizing"
+    assert result["artifact_fallback_used"] is True
+    assert result["resolved_artifact_batch_id"] == seeded["batch_id"]
+    assert result["plan"]["continuation"]["mode"] == "continue"
+    assert result["plan"]["continuation"]["checkpoint_key"] == "finalizing"
+    assert result["plan"]["planner_metadata"]["used_fallback"] is True
+    assert result["report"]["status"] == "degraded"
+    assert result["report"]["summary"] == seeded["report_payload"]["summary"]
+    assert result["sources"] == [seeded["source"]]
+    assert result["final_report"] == f"# Final Report\n\n{seeded['report_payload']['summary']}\n"
