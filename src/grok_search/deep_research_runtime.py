@@ -4062,7 +4062,29 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             return
 
         batch_units = ready_units[: max(1, config.deep_research_max_concurrency)]
-        runtime.store.update_job(job_id, heartbeat_at=utc_now_iso())
+        dispatch_checkpoint_key = f"researching-dispatch-{batch_units[0].unit_id}"
+        dispatch_state = _checkpoint_state_payload(
+            plan=plan,
+            completed_unit_ids=completed_unit_ids,
+            failed_unit_ids=failed_unit_ids,
+            failed_units=failed_units,
+            skipped_unit_ids=skipped_unit_ids,
+            skipped_units=skipped_units,
+            constraint_violations=constraint_violations,
+            coverage_state=coverage_state,
+            unit_results=unit_results,
+            sources=source_registry,
+            evidence_items=evidence_items,
+            sections=sections,
+        ).model_dump()
+        dispatch_state["dispatched_unit_ids"] = [unit.unit_id for unit in batch_units]
+        runtime.store.save_checkpoint(
+            job_id,
+            phase="researching",
+            checkpoint_key=dispatch_checkpoint_key,
+            state=dispatch_state,
+        )
+        runtime.store.update_job(job_id, current_checkpoint=dispatch_checkpoint_key, heartbeat_at=utc_now_iso())
         batch_results = await asyncio.gather(
             *[_execute_research_unit(runtime, plan, unit) for unit in batch_units],
             return_exceptions=True,
