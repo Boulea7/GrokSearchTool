@@ -2422,7 +2422,7 @@ def _build_profile_probe_item(check: dict | None, *, default_message: str) -> di
         "requested_model": check.get("requested_model", ""),
         "effective_model": check.get("effective_model", ""),
         "winning_provider": check.get("winning_provider", ""),
-        "winning_model": check.get("winning_model", ""),
+        "winning_model": check.get("winning_model") or check.get("provider_model", ""),
         "endpoint": check.get("endpoint", ""),
     }
     reason_code = _check_reason_code(check)
@@ -2661,6 +2661,9 @@ def _build_feature_readiness(
         "grok_models",
         "grok_model_selection",
         "grok_model_runtime_fallback",
+        "deep_research_standard_probe",
+        "deep_research_deep_probe",
+        "deep_research_ultra_probe",
     ]
     deep_research_runtime_check_ids = [
         *deep_research_planner_check_ids,
@@ -2677,6 +2680,9 @@ def _build_feature_readiness(
             grok_models,
             grok_model_selection,
             grok_model_runtime_fallback,
+            deep_research_standard_probe,
+            deep_research_deep_probe,
+            deep_research_ultra_probe,
         )
         if check and check["status"] in {"warning", "error"}
     ]
@@ -2709,16 +2715,21 @@ def _build_feature_readiness(
             default_message="Deep research ultra probe unavailable.",
         ),
     }
+    deep_research_profile_probe_issues = [
+        probe
+        for probe in (
+            deep_research_standard_probe,
+            deep_research_deep_probe,
+            deep_research_ultra_probe,
+        )
+        if probe and probe["status"] in {"warning", "error"}
+    ]
     if grok_config["status"] != "ok":
         deep_research_planner_status = "not_ready"
         deep_research_planner_message = grok_config["message"]
-    elif grok_models["status"] != "ok" and (
-        (deep_research_standard_probe and deep_research_standard_probe["status"] != "ok")
-        or (deep_research_deep_probe and deep_research_deep_probe["status"] != "ok")
-        or (deep_research_ultra_probe and deep_research_ultra_probe["status"] != "ok")
-    ):
+    elif deep_research_profile_probe_issues:
         deep_research_planner_status = "degraded"
-        deep_research_planner_message = "Deep research planner 的 profile probe 未全部通过，且 /models 不可用。"
+        deep_research_planner_message = deep_research_profile_probe_issues[0]["message"]
     elif (
         grok_model_runtime_fallback
         and grok_model_runtime_fallback["status"] == "warning"
@@ -2738,13 +2749,9 @@ def _build_feature_readiness(
     if grok_config["status"] != "ok":
         deep_research_runtime_status = "not_ready"
         deep_research_runtime_message = grok_config["message"]
-    elif grok_models["status"] != "ok" and (
-        (deep_research_standard_probe and deep_research_standard_probe["status"] != "ok")
-        or (deep_research_deep_probe and deep_research_deep_probe["status"] != "ok")
-        or (deep_research_ultra_probe and deep_research_ultra_probe["status"] != "ok")
-    ):
+    elif deep_research_profile_probe_issues:
         deep_research_runtime_status = "degraded"
-        deep_research_runtime_message = "Deep research runtime 的 profile probe 未全部通过，且 /models 不可用。"
+        deep_research_runtime_message = deep_research_profile_probe_issues[0]["message"]
     elif (
         grok_model_runtime_fallback
         and grok_model_runtime_fallback["status"] == "warning"
