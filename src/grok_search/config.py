@@ -36,15 +36,17 @@ class Config:
         '"env":{"GROK_API_URL":"https://api.example.com/v1","GROK_API_KEY":"your-api-key"}}\''
     )
     _DEFAULT_MODEL = "grok-4.20-0309"
-    _DEFAULT_WEB_SEARCH_MODEL = "grok-4.20-auto"
+    _DEFAULT_BALANCED_MODEL = "grok-4.20-auto"
+    _DEFAULT_WEB_SEARCH_MODEL = "grok-4.20-fast"
     _DEFAULT_DEEP_RESEARCH_STANDARD_MODEL = "grok-4.20-expert"
     _DEFAULT_DEEP_RESEARCH_DEEP_MODEL = "grok-4.20-expert-4-agent"
     _DEFAULT_DEEP_RESEARCH_ULTRA_MODEL = "grok-4.20-heavy-16-agent"
     _DEFAULT_WEB_SEARCH_FALLBACK_MODELS = (
-        "grok-4.20-fast",
-        "grok-4.20-0309-non-reasoning",
         "grok-4.20-0309",
+        "grok-4.20-auto",
+        "grok-4.20-0309-non-reasoning",
         "grok-4.20-reasoning",
+        "grok-4.20-expert",
     )
     _DEFAULT_DEEP_RESEARCH_STANDARD_FALLBACK_MODELS = (
         "grok-4.20-reasoning",
@@ -469,7 +471,7 @@ class Config:
     def _preferred_model_candidates_for_family(self, provider_family: str, *, profile: str) -> list[str]:
         del provider_family
         profile_defaults = {
-            "balanced_auto": [self._DEFAULT_WEB_SEARCH_MODEL, *self._DEFAULT_WEB_SEARCH_FALLBACK_MODELS],
+            "balanced_auto": [self._DEFAULT_BALANCED_MODEL, *self._DEFAULT_WEB_SEARCH_FALLBACK_MODELS],
             "reasoning": [self._DEFAULT_DEEP_RESEARCH_STANDARD_MODEL, *self._DEFAULT_DEEP_RESEARCH_STANDARD_FALLBACK_MODELS],
             "multi_agent": [self._DEFAULT_DEEP_RESEARCH_DEEP_MODEL, *self._DEFAULT_DEEP_RESEARCH_DEEP_FALLBACK_MODELS],
             "ultra": [self._DEFAULT_DEEP_RESEARCH_ULTRA_MODEL, *self._DEFAULT_DEEP_RESEARCH_ULTRA_FALLBACK_MODELS],
@@ -518,14 +520,10 @@ class Config:
         return self.resolve_default_grok_model_for_url(api_url, profile=selected_profile)
 
     def preferred_web_search_models_for_url(self, api_url: str) -> list[str]:
-        default_candidates = list(
-            self._preferred_model_candidates_for_family(
-                self.provider_family_for_url(api_url),
-                profile=self.grok_model_profile(),
-            )
+        primary = self._tool_profile_model_override("GROK_WEB_SEARCH_MODEL") or self._DEFAULT_WEB_SEARCH_MODEL
+        fallback = self._tool_profile_model_list_override("GROK_WEB_SEARCH_FALLBACK_MODELS") or list(
+            self._DEFAULT_WEB_SEARCH_FALLBACK_MODELS
         )
-        primary = self._tool_profile_model_override("GROK_WEB_SEARCH_MODEL") or self.grok_model
-        fallback = self._tool_profile_model_list_override("GROK_WEB_SEARCH_FALLBACK_MODELS") or default_candidates
         ordered = [primary, *fallback]
         deduped: list[str] = []
         seen: set[str] = set()

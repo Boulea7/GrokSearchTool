@@ -121,6 +121,35 @@ def test_web_search_override_does_not_replace_global_grok_model(monkeypatch, tmp
     assert config.preferred_web_search_models_for_url("https://api.example.com/v1")[0] == "balanced-override"
 
 
+def test_preferred_web_search_models_use_tool_level_defaults_instead_of_global_model(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_WEB_SEARCH_MODEL", raising=False)
+    monkeypatch.delenv("GROK_WEB_SEARCH_FALLBACK_MODELS", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {"model": "persisted-model"})
+
+    assert config.grok_model == "persisted-model"
+    assert config.preferred_web_search_models_for_url("https://api.example.com/v1") == [
+        "grok-4.20-fast",
+        "grok-4.20-0309",
+        "grok-4.20-auto",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-reasoning",
+        "grok-4.20-expert",
+    ]
+    assert config.preferred_web_search_models_for_url("https://openrouter.ai/api/v1") == [
+        "grok-4.20-fast:online",
+        "grok-4.20-0309:online",
+        "grok-4.20-auto:online",
+        "grok-4.20-0309-non-reasoning:online",
+        "grok-4.20-reasoning:online",
+        "grok-4.20-expert:online",
+    ]
+
+
 def test_set_model_does_not_override_env_priority_in_current_process(monkeypatch):
     config = Config()
     config.reset_runtime_state()
