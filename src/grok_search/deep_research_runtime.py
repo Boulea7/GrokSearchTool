@@ -4543,6 +4543,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         coverage=report_coverage,
         grounding=grounding_diagnostics,
         sections=citations["sections"],
+        source_registry=citations["source_registry"],
+        evidence_items=evidence_items,
     )
     release_gate = _build_release_gate(report_coverage, grounding_diagnostics, verifier_diagnostics)
     runtime_warnings = sorted({*runtime_warnings, *_coverage_warning_codes(report_coverage), *release_gate["reason_codes"]})
@@ -5449,9 +5451,29 @@ def _build_verifier_diagnostics(
     coverage: dict[str, Any],
     grounding: dict[str, Any],
     sections: list[dict[str, Any]],
+    source_registry: dict[str, dict[str, Any]] | None = None,
+    evidence_items: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     reason_codes: list[str] = []
     flagged_claim_ids: list[str] = []
+    source_registry = source_registry or {}
+    evidence_items = evidence_items or []
+    evidence_by_id = {
+        str(item.get("evidence_id", "")).strip(): dict(item)
+        for item in evidence_items
+        if isinstance(item, dict) and str(item.get("evidence_id", "")).strip()
+    }
+    seen_claim_keys: set[str] = set()
+    integrity_counts = {
+        "missing_evidence_items": 0,
+        "mismatched_binding_source": 0,
+        "mismatched_binding_evidence": 0,
+        "invalid_source_backed_span": 0,
+        "duplicate_claims": 0,
+        "low_value_claims": 0,
+        "medium_single_source_search_only": 0,
+        "same_domain_off_topic_dominance": 0,
+    }
     hard_coverage_gate_passed = bool(
         coverage.get("hard_coverage_gate_passed", coverage.get("coverage_gate_passed", False))
     )
@@ -5468,19 +5490,110 @@ def _build_verifier_diagnostics(
 
     for section in sections:
         for claim in section.get("claims", []):
+            claim_id = str(claim.get("claim_id", "")).strip()
+            raw_claim_text = str(claim.get("text", "") or "")
+            claim_text = _summarize_evidence_text(raw_claim_text, limit=_MAX_CLAIM_LENGTH)
             confidence = str(claim.get("confidence", "") or "").strip().lower()
             supporting_source_count = int(claim.get("supporting_source_count", 0) or 0)
+            citations = _dedupe_preserve_order(
+                [str(citation).strip() for citation in claim.get("citations", []) if str(citation).strip()]
+            )
+            claim_evidence_ids = _dedupe_preserve_order(
+                [str(evidence_id).strip() for evidence_id in claim.get("evidence_ids", []) if str(evidence_id).strip()]
+            )
             bindings = [binding for binding in claim.get("evidence_bindings", []) if isinstance(binding, dict)]
+            if claim_text:
+                claim_key = _stable_text_key(claim_text)
+                if claim_key in seen_claim_keys:
+                    if claim_id:
+                        flagged_claim_ids.append(claim_id)
+                    integrity_counts["duplicate_claims"] += 1
+                    reason_codes.append("duplicate_claims")
+                else:
+                    seen_claim_keys.add(claim_key)
+                if _is_noisy_text(raw_claim_text) or _is_noisy_text(claim_text):
+                    if claim_id:
+                        flagged_claim_ids.append(claim_id)
+                    integrity_counts["low_value_claims"] += 1
+                    reason_codes.append("low_value_claims")
+            elif raw_claim_text and _is_noisy_text(raw_claim_text):
+                if claim_id:
+                    flagged_claim_ids.append(claim_id)
+                integrity_counts["low_value_claims"] += 1
+                reason_codes.append("low_value_claims")
+            missing_claim_evidence_ids = [evidence_id for evidence_id in claim_evidence_ids if evidence_id not in evidence_by_id]
+            if missing_claim_evidence_ids:
+                if claim_id:
+                    flagged_claim_ids.append(claim_id)
+                integrity_counts["missing_evidence_items"] += len(missing_claim_evidence_ids)
+                reason_codes.append("missing_evidence_items")
+            cited_sources = [source_registry[citation] for citation in citations if citation in source_registry]
+            if cited_sources and all(
+                "same_domain_off_topic" in set(source.get("ranking_penalties") or []) for source in cited_sources
+            ):
+                if claim_id:
+                    flagged_claim_ids.append(claim_id)
+                integrity_counts["same_domain_off_topic_dominance"] += 1
+                reason_codes.append("same_domain_off_topic_dominance")
+            if (
+                hard_coverage_gate_passed
+                and confidence == "medium"
+                and supporting_source_count <= 1
+                and bindings
+                and not any(bool(binding.get("source_backed")) for binding in bindings)
+            ):
+                if claim_id:
+                    flagged_claim_ids.append(claim_id)
+                integrity_counts["medium_single_source_search_only"] += 1
+                reason_codes.append("medium_single_source_search_only")
             if (
                 confidence == "low"
                 and supporting_source_count <= 1
                 and bindings
                 and not any(bool(binding.get("source_backed")) for binding in bindings)
             ):
-                claim_id = str(claim.get("claim_id", "")).strip()
                 if claim_id:
                     flagged_claim_ids.append(claim_id)
                 reason_codes.append("single_source_low_confidence")
+            for binding in bindings:
+                binding_source_id = str(binding.get("source_id", "")).strip()
+                binding_evidence_id = str(binding.get("evidence_id", "")).strip()
+                if source_registry and (binding_source_id not in citations or binding_source_id not in source_registry):
+                    if claim_id:
+                        flagged_claim_ids.append(claim_id)
+                    integrity_counts["mismatched_binding_source"] += 1
+                    reason_codes.append("mismatched_binding_source")
+                evidence_item = evidence_by_id.get(binding_evidence_id)
+                if (
+                    claim_evidence_ids
+                    and (
+                        binding_evidence_id not in claim_evidence_ids
+                        or evidence_item is None
+                        or binding_source_id not in {
+                            str(source_id).strip()
+                            for source_id in evidence_item.get("source_ids", [])
+                            if str(source_id).strip()
+                        }
+                    )
+                ):
+                    if claim_id:
+                        flagged_claim_ids.append(claim_id)
+                    integrity_counts["mismatched_binding_evidence"] += 1
+                    reason_codes.append("mismatched_binding_evidence")
+                if bool(binding.get("source_backed")):
+                    line_start = binding.get("line_start")
+                    line_end = binding.get("line_end")
+                    if (
+                        line_start is None
+                        or line_end is None
+                        or not isinstance(line_start, int)
+                        or not isinstance(line_end, int)
+                        or line_end < line_start
+                    ):
+                        if claim_id:
+                            flagged_claim_ids.append(claim_id)
+                        integrity_counts["invalid_source_backed_span"] += 1
+                        reason_codes.append("invalid_source_backed_span")
 
     return {
         "passed": not reason_codes,
@@ -5494,6 +5607,7 @@ def _build_verifier_diagnostics(
             "source_backed_binding_count": source_backed_binding_count,
             "search_only_binding_count": int(grounding.get("search_only_binding_count", 0) or 0),
             "null_span_binding_count": null_span_binding_count,
+            **integrity_counts,
         },
     }
 

@@ -7562,6 +7562,153 @@ def test_release_gate_rejects_single_source_low_confidence_verifier_findings():
     assert release_gate["reason_codes"] == ["single_source_low_confidence"]
 
 
+def test_verifier_flags_missing_evidence_items_and_mismatched_bindings():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "supporting_source_count": 1,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e2",
+                                "source_id": "R2",
+                                "source_backed": True,
+                                "line_start": 4,
+                                "line_end": 5,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            }
+        },
+        evidence_items=[],
+    )
+
+    assert verifier["passed"] is False
+    assert set(verifier["reason_codes"]) >= {
+        "missing_evidence_items",
+        "mismatched_binding_source",
+        "mismatched_binding_evidence",
+    }
+    assert verifier["flagged_claim_ids"] == ["resume-semantics-claim-1"]
+
+
+def test_verifier_flags_invalid_source_backed_span_duplicate_and_low_value_claims():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding={
+            "total_claims": 2,
+            "ungrounded_claims": 0,
+            "single_source_claims": 2,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "supporting_source_count": 1,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": None,
+                                "line_end": 5,
+                            }
+                        ],
+                    },
+                    {
+                        "claim_id": "resume-semantics-claim-2",
+                        "text": "Topics can help you to resolve common issues using both AWS DMS and selected endpoint databases.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e2"],
+                        "confidence": "medium",
+                        "supporting_source_count": 1,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e2",
+                                "source_id": "R1",
+                                "source_backed": False,
+                            }
+                        ],
+                    },
+                    {
+                        "claim_id": "resume-semantics-claim-3",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e3"],
+                        "confidence": "medium",
+                        "supporting_source_count": 1,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e3",
+                                "source_id": "R1",
+                                "source_backed": False,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            }
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R1"], "evidence_kind": "search"},
+            {"evidence_id": "e3", "source_ids": ["R1"], "evidence_kind": "search"},
+        ],
+    )
+
+    assert verifier["passed"] is False
+    assert set(verifier["reason_codes"]) >= {
+        "invalid_source_backed_span",
+        "duplicate_claims",
+        "low_value_claims",
+        "medium_single_source_search_only",
+    }
+    assert set(verifier["flagged_claim_ids"]) >= {
+        "resume-semantics-claim-1",
+        "resume-semantics-claim-2",
+        "resume-semantics-claim-3",
+    }
+
+
 @pytest.mark.asyncio
 async def test_report_release_gate_fails_job_when_non_summary_sections_are_unanswered(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
@@ -7663,6 +7810,56 @@ async def test_runtime_persists_verifier_artifact_and_blocks_single_source_low_c
     assert "single_source_low_confidence" in verifier["reason_codes"]
     assert "single_source_low_confidence" in result["report"]["runtime"]["verifier"]["reason_codes"]
     assert "single_source_low_confidence" in result["report"]["runtime"]["release_gate"]["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_blocks_medium_single_source_search_only_report(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    query = "Checkpoint resume semantics"
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics using only search-answer support.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume semantics: resume-processing continues from the last durable checkpoint when recovery metadata remains available.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+
+    response = await runtime.start(
+        query=query,
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+    verifier = json.loads(runtime.store.read_artifact_text(response["job_id"], "verifier.json") or "{}")
+
+    assert result["status"] == "failed"
+    assert "medium_single_source_search_only" in verifier["reason_codes"]
+    assert "medium_single_source_search_only" in result["report"]["runtime"]["verifier"]["reason_codes"]
+    assert "medium_single_source_search_only" in result["report"]["runtime"]["release_gate"]["reason_codes"]
 
 
 @pytest.mark.asyncio
