@@ -853,6 +853,10 @@ def _safe_load_json_artifact(value: str | None) -> tuple[Any | None, str | None]
 def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
     if value is None:
         return None
+    if kind == _EVIDENCE_ITEMS_ARTIFACT_KIND:
+        if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+            return "invalid_shape"
+        return None
     if kind == "sources.json":
         if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
             return "invalid_shape"
@@ -1034,13 +1038,17 @@ def _artifact_payloads(
         "continuation.json",
         "partial_report.md",
         *_FINAL_ARTIFACT_KINDS,
+        _EVIDENCE_ITEMS_ARTIFACT_KIND,
         "coverage.json",
         "grounding.json",
+        "verifier.json",
     ]
     for kind in ordered_kinds:
         artifact = current_artifacts.get(kind)
-        if final_bundle is not None and kind in final_bundle.get("paths", {}):
-            path = final_bundle["paths"][kind]
+        bundle_text = _read_batch_artifact_text(final_bundle, kind) if final_bundle is not None else None
+        if final_bundle is not None and bundle_text is not None:
+            anchor_path = next(iter(final_bundle["paths"].values()))
+            path = anchor_path.parent / kind
             payloads.append(
                 {
                     "job_id": job_id,
@@ -1050,7 +1058,7 @@ def _artifact_payloads(
                     "created_at": artifact.created_at if artifact is not None else "",
                     "updated_at": artifact.updated_at if artifact is not None else "",
                     "metadata": _artifact_metadata(
-                        _read_text_if_exists(path) or "",
+                        bundle_text,
                         batch_id=final_bundle["batch_id"],
                     ),
                 }
@@ -1095,7 +1103,9 @@ def _job_runtime_diagnostics(
 def _job_prefers_resolved_final_bundle(job: DeepResearchJob) -> bool:
     if job.status == "completed":
         return True
-    return job.status == "interrupted" and (job.current_checkpoint == "finalizing" or job.phase == "finalizing")
+    return job.status in {"failed", "canceled", "interrupted"} and (
+        job.current_checkpoint == "finalizing" or job.phase == "finalizing"
+    )
 
 
 def _normalize_depends_on(value: Any) -> list[str]:
@@ -2554,6 +2564,13 @@ class DeepResearchRuntime:
             if final_bundle is not None
             else self.store.read_artifact_text(job_id, "citations.json")
         )
+        evidence_items_text = (
+            _read_batch_artifact_text(final_bundle, _EVIDENCE_ITEMS_ARTIFACT_KIND)
+            if final_bundle is not None
+            else self.store.read_artifact_text(job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
+        )
+        if evidence_items_text is None:
+            evidence_items_text = self.store.read_artifact_text(job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
         report_text = (
             _read_text_if_exists(final_bundle["paths"]["report.json"])
             if final_bundle is not None
@@ -2569,6 +2586,7 @@ class DeepResearchRuntime:
         report_value, report_error = _safe_load_json_artifact(report_text)
         sources_value, sources_error = _safe_load_json_artifact(sources_text)
         citations_value, citations_error = _safe_load_json_artifact(citations_text)
+        evidence_items_value, evidence_items_error = _safe_load_json_artifact(evidence_items_text)
         if plan_error:
             artifact_errors["plan.json"] = plan_error
         if report_error:
@@ -2577,11 +2595,14 @@ class DeepResearchRuntime:
             artifact_errors["sources.json"] = sources_error
         if citations_error:
             artifact_errors["citations.json"] = citations_error
+        if evidence_items_error:
+            artifact_errors[_EVIDENCE_ITEMS_ARTIFACT_KIND] = evidence_items_error
         citations = _normalize_citations_payload(citations_value)
         for kind, value in (
             ("report.json", report_value),
             ("sources.json", sources_value),
             ("citations.json", citations),
+            (_EVIDENCE_ITEMS_ARTIFACT_KIND, evidence_items_value),
         ):
             shape_error = _validate_json_artifact_shape(kind, value)
             if shape_error:
@@ -2592,6 +2613,8 @@ class DeepResearchRuntime:
                     sources_value = None
                 elif kind == "citations.json":
                     citations = None
+                elif kind == _EVIDENCE_ITEMS_ARTIFACT_KIND:
+                    evidence_items_value = None
         required = _report_artifact_contract_error(job)
         for kind, error_code in required.items():
             artifact_text = (
@@ -2611,6 +2634,7 @@ class DeepResearchRuntime:
             "final_report": final_text,
             "sources": sources_value,
             "citations": citations,
+            "evidence_items": evidence_items_value,
             "report": report_value,
             "artifact_errors": artifact_errors,
             "artifact_fallback_used": _artifact_bundle_differs_from_current(self.store, job_id, final_bundle),
@@ -2621,8 +2645,12 @@ class DeepResearchRuntime:
     def read_artifact_text(self, job_id: str, kind: str) -> str | None:
         job = self.store.get_job(job_id)
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
-        if final_bundle is not None and kind in final_bundle["paths"]:
-            return _read_text_if_exists(final_bundle["paths"][kind])
+        if final_bundle is not None:
+            if kind in final_bundle["paths"]:
+                return _read_text_if_exists(final_bundle["paths"][kind])
+            batch_text = _read_batch_artifact_text(final_bundle, kind)
+            if batch_text is not None:
+                return batch_text
         return self.store.read_artifact_text(job_id, kind)
 
     async def resume(self, job_id: str, *, schedule: bool = True) -> dict[str, Any]:
@@ -3630,6 +3658,11 @@ class DeepResearchRuntime:
             if use_final_bundle
             else self.store.read_artifact_text(continue_from_job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
         ) or ""
+        if use_final_bundle and not evidence_items_text:
+            evidence_items_text = self.store.read_artifact_text(
+                continue_from_job_id,
+                _EVIDENCE_ITEMS_ARTIFACT_KIND,
+            ) or ""
         report: dict[str, Any] = {}
         if report_text:
             report_value, _ = _safe_load_json_artifact(report_text)
@@ -4461,6 +4494,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "must_cover_count": len(plan.brief.must_cover),
                 "uncovered_sub_question_count": len(report_coverage.get("uncovered_sub_questions", [])),
                 "unanswered_section_count": len(report_coverage.get("unanswered_sections", [])),
+                "hard_uncovered_target_count": len(report_coverage.get("hard_uncovered_targets", [])),
             },
             "grounding": {
                 "total_claims": grounding_diagnostics["total_claims"],
@@ -5061,6 +5095,8 @@ def _coverage_for_report(
     sub_question_coverage: list[dict[str, Any]] = []
     grounded_sections: list[dict[str, Any]] = []
     section_coverage: list[dict[str, Any]] = []
+    hard_target_coverage: list[dict[str, Any]] = []
+    hard_uncovered_targets: list[str] = []
     for section in sections:
         section_id = str(section.get("section_id", "")).strip()
         grounded_claims = [
@@ -5138,7 +5174,41 @@ def _coverage_for_report(
         for section in plan.report_outline
         if section.section_id not in answered_section_ids
     ]
+    for target in _stop_policy_targets(plan):
+        target_tokens = _tokenize_keywords(target)
+        coverage_threshold = max(2, min(4, max(1, len(target_tokens) // 2)))
+        matching_section_ids: list[str] = []
+        matching_claim_ids: list[str] = []
+        for section in grounded_sections:
+            section_id = str(section.get("section_id", "")).strip()
+            section_matched = False
+            for claim in section.get("claims", []):
+                claim_text = str(claim.get("text", ""))
+                if _count_keyword_overlap(claim_text, target_tokens) >= coverage_threshold:
+                    if section_id and section_id not in matching_section_ids:
+                        matching_section_ids.append(section_id)
+                    claim_id = str(claim.get("claim_id", "")).strip()
+                    if claim_id and claim_id not in matching_claim_ids:
+                        matching_claim_ids.append(claim_id)
+                    section_matched = True
+            if not section_matched:
+                section_text = " ".join([str(section.get("title", "")), str(section.get("summary", ""))])
+                if section.get("citations") and _count_keyword_overlap(section_text, target_tokens) >= max(coverage_threshold, 3):
+                    if section_id and section_id not in matching_section_ids:
+                        matching_section_ids.append(section_id)
+        covered = bool(matching_claim_ids)
+        if not covered:
+            hard_uncovered_targets.append(target)
+        hard_target_coverage.append(
+            {
+                "target": target,
+                "covered": covered,
+                "section_ids": matching_section_ids,
+                "claim_ids": matching_claim_ids,
+            }
+        )
     coverage_gate_passed = not unanswered_sections and not uncovered_sub_questions
+    hard_coverage_gate_passed = not hard_uncovered_targets
     return {
         "planned_section_ids": [section.section_id for section in plan.report_outline],
         "answered_section_ids": answered_section_ids,
@@ -5148,6 +5218,9 @@ def _coverage_for_report(
         "uncovered_sub_questions": uncovered_sub_questions,
         "sub_questions": sub_question_coverage,
         "section_coverage": section_coverage,
+        "hard_coverage_targets": hard_target_coverage,
+        "hard_uncovered_targets": hard_uncovered_targets,
+        "hard_coverage_gate_passed": hard_coverage_gate_passed,
         "coverage_gate_passed": coverage_gate_passed,
     }
 
@@ -5170,6 +5243,11 @@ def _build_grounding_diagnostics(
     single_source_claims = 0
     low_confidence_claims = 0
     missing_evidence_binding_claims = 0
+    total_evidence_bindings = 0
+    source_backed_binding_count = 0
+    search_only_binding_count = 0
+    null_span_binding_count = 0
+    grounded_claims_without_source_backed_binding = 0
     for section in sections:
         claims = section.get("claims", [])
         claim_diagnostics: list[dict[str, Any]] = []
@@ -5185,6 +5263,17 @@ def _build_grounding_diagnostics(
                 and str(binding.get("source_id", "")).strip() in set(citation_ids)
                 and str(binding.get("source_id", "")).strip() in source_registry
             ]
+            source_backed_bindings = [
+                binding for binding in valid_evidence_bindings if bool(binding.get("source_backed"))
+            ]
+            search_only_bindings = [
+                binding for binding in valid_evidence_bindings if not bool(binding.get("source_backed"))
+            ]
+            null_span_bindings = [
+                binding
+                for binding in source_backed_bindings
+                if binding.get("line_start") is None or binding.get("line_end") is None
+            ]
             if grounded:
                 grounded_claims += 1
             if len(set(citation_ids)) <= 1:
@@ -5193,6 +5282,12 @@ def _build_grounding_diagnostics(
                 low_confidence_claims += 1
             if grounded and not valid_evidence_bindings:
                 missing_evidence_binding_claims += 1
+            if grounded and valid_evidence_bindings and not source_backed_bindings:
+                grounded_claims_without_source_backed_binding += 1
+            total_evidence_bindings += len(valid_evidence_bindings)
+            source_backed_binding_count += len(source_backed_bindings)
+            search_only_binding_count += len(search_only_bindings)
+            null_span_binding_count += len(null_span_bindings)
             claim_id = str(claim.get("claim_id", "")).strip()
             section_id = str(section.get("section_id", "")).strip()
             for citation_id in citation_ids:
@@ -5209,6 +5304,9 @@ def _build_grounding_diagnostics(
                     "supporting_domain_count": _supporting_domain_count(citation_ids, source_registry),
                     "confidence": claim.get("confidence", ""),
                     "evidence_binding_count": len(valid_evidence_bindings),
+                    "source_backed_binding_count": len(source_backed_bindings),
+                    "search_only_binding_count": len(search_only_bindings),
+                    "null_span_binding_count": len(null_span_bindings),
                 }
             )
         section_diagnostics.append(
@@ -5227,6 +5325,11 @@ def _build_grounding_diagnostics(
         "single_source_claims": single_source_claims,
         "low_confidence_claims": low_confidence_claims,
         "missing_evidence_binding_claims": missing_evidence_binding_claims,
+        "total_evidence_bindings": total_evidence_bindings,
+        "source_backed_binding_count": source_backed_binding_count,
+        "search_only_binding_count": search_only_binding_count,
+        "null_span_binding_count": null_span_binding_count,
+        "grounded_claims_without_source_backed_binding": grounded_claims_without_source_backed_binding,
         "sections": section_diagnostics,
         "sources": [
             {
@@ -5248,7 +5351,10 @@ def _build_release_gate(
     verifier: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     reason_codes: list[str] = []
-    if not coverage.get("coverage_gate_passed", False):
+    hard_coverage_gate_passed = bool(
+        coverage.get("hard_coverage_gate_passed", coverage.get("coverage_gate_passed", False))
+    )
+    if not hard_coverage_gate_passed:
         reason_codes.append("coverage_incomplete")
     if int(grounding.get("ungrounded_claims", 0) or 0) > 0:
         reason_codes.append("ungrounded_claims")
@@ -5270,12 +5376,19 @@ def _build_verifier_diagnostics(
 ) -> dict[str, Any]:
     reason_codes: list[str] = []
     flagged_claim_ids: list[str] = []
-    if not coverage.get("coverage_gate_passed", False):
+    hard_coverage_gate_passed = bool(
+        coverage.get("hard_coverage_gate_passed", coverage.get("coverage_gate_passed", False))
+    )
+    if not hard_coverage_gate_passed:
         reason_codes.append("coverage_incomplete")
     if int(grounding.get("missing_evidence_binding_claims", 0) or 0) > 0:
         reason_codes.append("missing_evidence_bindings")
     if int(grounding.get("ungrounded_claims", 0) or 0) > 0:
         reason_codes.append("ungrounded_claims")
+    source_backed_binding_count = int(grounding.get("source_backed_binding_count", 0) or 0)
+    null_span_binding_count = int(grounding.get("null_span_binding_count", 0) or 0)
+    if source_backed_binding_count > 0 and (null_span_binding_count / source_backed_binding_count) > 0.5:
+        reason_codes.append("high_null_span_ratio")
 
     for section in sections:
         for claim in section.get("claims", []):
@@ -5302,6 +5415,9 @@ def _build_verifier_diagnostics(
             "total_claims": int(grounding.get("total_claims", 0) or 0),
             "low_confidence_claims": int(grounding.get("low_confidence_claims", 0) or 0),
             "single_source_claims": int(grounding.get("single_source_claims", 0) or 0),
+            "source_backed_binding_count": source_backed_binding_count,
+            "search_only_binding_count": int(grounding.get("search_only_binding_count", 0) or 0),
+            "null_span_binding_count": null_span_binding_count,
         },
     }
 
