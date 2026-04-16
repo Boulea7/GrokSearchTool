@@ -1,0 +1,88 @@
+{
+  "sample": "probe-round14-main-snapshot",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "planner": {
+    "planner": "model",
+    "used_fallback": false
+  },
+  "report": {
+    "status": "failed",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied"
+      ],
+      "release_gate": {
+        "passed": false,
+        "reason_codes": [
+          "coverage_incomplete"
+        ]
+      },
+      "constraint_violations": [
+        {
+          "unit_id": "ru5",
+          "removed_source_count": 1,
+          "reason": "domain_constraints_applied"
+        }
+      ]
+    },
+    "coverage": {
+      "planned_section_ids": [
+        "summary-of-dms-task-start-resume-restart-operations",
+        "checkpoints-definition-storage-retrieval-and-recovery-role",
+        "resume-processing-semantics-by-migration-type-with-quotes",
+        "restart-reload-target-semantics-vs-resume-with-behaviors",
+        "key-differences-table-progress-preservation-full-load-impact-cdc-start-artifact-recreation-risks",
+        "task-settings-source-specific-notes-e-g-postgres-slots-and-best-practices",
+        "official-references-direct-doc-links-only"
+      ],
+      "answered_section_ids": [
+        "summary-of-dms-task-start-resume-restart-operations",
+        "checkpoints-definition-storage-retrieval-and-recovery-role",
+        "resume-processing-semantics-by-migration-type-with-quotes",
+        "restart-reload-target-semantics-vs-resume-with-behaviors",
+        "key-differences-table-progress-preservation-full-load-impact-cdc-start-artifact-recreation-risks"
+      ],
+      "unanswered_sections": [
+        "Task Settings, Source-Specific Notes (e.g. Postgres Slots), and Best Practices",
+        "Official References (direct doc links only)"
+      ],
+      "planned_sub_question_ids": [
+        "sq1",
+        "sq2",
+        "sq3",
+        "sq4",
+        "sq5"
+      ],
+      "covered_sub_question_ids": [
+        "sq2",
+        "sq3",
+        "sq5"
+      ],
+      "uncovered_sub_questions": [
+        "What is a DMS checkpoint, how is it generated/retrieved (console, metadata table, DescribeReplicationTasks), and its role as CDC recovery point?",
+        "What are documented risks (data errors, PK violations, duplication) and mitigations when choosing resume vs. restart/reload?"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R8",
+      "domain": "docs.aws.amazon.com",
+      "title": "Change Processing Tuning Settings",
+      "quality_tier": "official"
+    },
+    {
+      "source_id": "R10",
+      "domain": "docs.aws.amazon.com",
+      "title": "Troubleshooting and Restart Behavior",
+      "quality_tier": "official"
+    },
+    {
+      "source_id": "R3",
+      "domain": "docs.aws.amazon.com",
+      "title": "Browse StartReplicationTask API Reference",
+      "quality_tier": "official"
+    }
+  ]
+}

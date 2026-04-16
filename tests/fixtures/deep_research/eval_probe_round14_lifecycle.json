@@ -1,0 +1,62 @@
+{
+  "sample": "probe-round14-lifecycle",
+  "query": "Focus on checkpoint identity, worker_restarted fencing, and finalizing-after-interrupt semantics",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: dropped_unknown_dependency:s6->s1"
+    }
+  },
+  "continuation": {
+    "mode": "continue",
+    "source_job_id": "8659613566e3ed1aa6e18bdf",
+    "source_job_status": "interrupted",
+    "checkpoint_key": "researching-s5",
+    "source_count": 9,
+    "continuation_identity": "699c4cac73121835a36fb763668a1685f48f7cdb088bf5c7899e0986feaaf09e",
+    "carry_forward_sources": [
+      {
+        "source_id": "R12",
+        "url": "https://ai.google.dev/gemini-api/docs/deep-research"
+      },
+      {
+        "source_id": "R1",
+        "url": "https://docs.langchain.com/oss/python/langgraph/interrupts"
+      },
+      {
+        "source_id": "R4",
+        "url": "https://docs.langchain.com/oss/python/langgraph/persistence"
+      }
+    ],
+    "previous_summary": "**This pattern requires a checkpointer for every HITL graph; without it, interrupts cannot persist state between pause and resume.** In production, prefer durable options like `Po…"
+  },
+  "plan": {
+    "brief": {
+      "continuation_focus": [
+        "Investigate interrupted, continue, and resume semantics for deep research jobs",
+        "1 (ai.google.dev)",
+        "4 (docs.langchain.com)",
+        "3 (docs.langchain.com)",
+        "5 (docs.langchain.com)"
+      ]
+    }
+  },
+  "report": {
+    "status": "failed",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "planner_fallback_used"
+      ]
+    }
+  },
+  "golden": {
+    "resume_continue_semantics": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

@@ -409,6 +409,8 @@ def test_citation_faithfulness_probe_goldens(fixture_name):
         "eval_probe_final.json",
         "eval_probe_round12_main_snapshot.json",
         "eval_probe_round13_main_snapshot.json",
+        "eval_probe_round14_main_snapshot.json",
+        "eval_probe_round15_main_snapshot.json",
     ],
 )
 def test_coverage_completeness_probe_goldens(fixture_name):
@@ -428,6 +430,7 @@ def test_coverage_completeness_probe_goldens(fixture_name):
         "eval_probe_round11_interrupted_continue.json",
         "eval_probe_round12_continue_resume.json",
         "eval_probe_round13_continue_resume.json",
+        "eval_probe_round14_lifecycle.json",
     ],
 )
 def test_resume_continue_semantics_probe_goldens(fixture_name):
@@ -450,6 +453,8 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
         "eval_probe_round12_continue_resume.json",
         "eval_probe_round13_main_snapshot.json",
         "eval_probe_round13_continue_resume.json",
+        "eval_probe_round14_main_snapshot.json",
+        "eval_probe_round15_main_snapshot.json",
     ],
 )
 def test_planner_boundary_probe_goldens(fixture_name):
@@ -470,6 +475,8 @@ def test_planner_boundary_probe_goldens(fixture_name):
         "eval_probe_round11_interrupted_continue.json",
         "eval_probe_round12_main_snapshot.json",
         "eval_probe_round13_main_snapshot.json",
+        "eval_probe_round14_main_snapshot.json",
+        "eval_probe_round15_main_snapshot.json",
     ],
 )
 def test_ranking_noise_suppression_probe_goldens(fixture_name):
@@ -492,6 +499,8 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
         "eval_probe_round12_continue_resume.json",
         "eval_probe_round13_main_snapshot.json",
         "eval_probe_round13_continue_resume.json",
+        "eval_probe_round14_main_snapshot.json",
+        "eval_probe_round15_main_snapshot.json",
     ],
 )
 def test_diagnostics_consistency_probe_goldens(fixture_name):
