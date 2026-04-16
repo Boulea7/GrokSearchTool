@@ -1,0 +1,86 @@
+{
+  "sample": "probe-round19-aws-dms",
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
+  "planner": {
+    "used_fallback": false
+  },
+  "plan": {
+    "brief": {
+      "scope": {
+        "include_domains": ["docs.aws.amazon.com"],
+        "exclude_domains": ["repost.aws"],
+        "allowed_sources": ["docs.aws.amazon.com"]
+      },
+      "must_cover": [
+        "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior"
+      ],
+      "coverage_checklist": [
+        "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior"
+      ],
+      "continuation_focus": []
+    }
+  },
+  "report": {
+    "status": "failed",
+    "coverage": {
+      "planned_section_ids": [
+        "executive-summary",
+        "key-findings"
+      ],
+      "answered_section_ids": [
+        "executive-summary"
+      ],
+      "unanswered_sections": [
+        "Key Findings"
+      ],
+      "planned_sub_question_ids": [
+        "sq1"
+      ],
+      "covered_sub_question_ids": [],
+      "uncovered_sub_questions": [
+        "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior"
+      ]
+    },
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete"
+      ],
+      "release_gate": {
+        "passed": false,
+        "reason_codes": [
+          "coverage_incomplete"
+        ]
+      },
+      "verifier": {
+        "reason_codes": []
+      }
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+      "title": "Creating tasks for ongoing replication using AWS DMS",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": ["allowlisted_domain", "official_docs"],
+      "ranking_penalties": []
+    }
+  ],
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "fail",
+      "score": 0.25,
+      "reason_tags": ["unanswered_sections", "uncovered_sub_questions"]
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
