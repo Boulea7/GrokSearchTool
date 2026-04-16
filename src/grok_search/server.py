@@ -3216,6 +3216,28 @@ async def get_config_info(
                     skipped_reason="missing_grok_config",
                 )
             )
+    for effort in ("standard", "deep", "ultra"):
+        probe = next((check for check in checks if check.get("check_id") == _deep_research_probe_check_id(effort)), None)
+        if probe is None or probe["status"] not in {"warning", "error"}:
+            continue
+        recommendation = (
+            f"检查 deep research {effort} profile 的默认模型、端点和 provider routing 是否可用；"
+            "必要时调整 profile 配置或回退到已验证模型。"
+        )
+        _append_recommendation(
+            recommendations,
+            recommendation,
+            recommendation_details=recommendation_details,
+            check_id=probe["check_id"],
+            feature="deep_research_runtime",
+            severity="error" if probe["status"] == "error" else "warning",
+            extra_detail_fields={
+                "profile": effort,
+                "winning_provider": probe.get("provider_name", ""),
+                "winning_model": probe.get("provider_model", ""),
+                "endpoint": probe.get("endpoint", ""),
+            },
+        )
 
     if config.tavily_enabled and config.tavily_api_key:
         tavily_extract = await _probe_json_endpoint(
