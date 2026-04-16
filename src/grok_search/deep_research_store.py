@@ -498,9 +498,15 @@ class DeepResearchStore:
                     return job
         return None
 
-    def reconcile_incomplete_jobs(self, *, stale_after_seconds: int = 0) -> list[DeepResearchJob]:
+    def reconcile_incomplete_jobs(
+        self,
+        *,
+        stale_after_seconds: int = 0,
+        exclude_job_ids: set[str] | None = None,
+    ) -> list[DeepResearchJob]:
         interrupted_at = utc_now_iso()
         now = dt.datetime.now(dt.UTC)
+        excluded = {item.strip() for item in (exclude_job_ids or set()) if item and item.strip()}
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -511,6 +517,8 @@ class DeepResearchStore:
             ).fetchall()
         recovered: list[DeepResearchJob] = []
         for row in rows:
+            if row["job_id"] in excluded:
+                continue
             if bool(row["cancel_requested"]):
                 job = self.update_job(
                     row["job_id"],

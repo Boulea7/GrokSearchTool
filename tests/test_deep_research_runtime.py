@@ -927,11 +927,80 @@ async def test_status_reconciles_stale_running_job_before_read(tmp_path):
             ("2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", stale_job.job_id),
         )
 
-    status = await runtime.status(stale_job.job_id)
-    events = await runtime.events(stale_job.job_id)
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+    status = await other_runtime.status(stale_job.job_id)
+    events = await other_runtime.events(stale_job.job_id)
 
     assert status["status"] == "interrupted"
     assert any(event["type"] == "job_interrupted" for event in events["events"])
+
+
+@pytest.mark.asyncio
+async def test_status_does_not_reconcile_fresh_running_job_from_another_runtime(tmp_path):
+    runtime = build_runtime(tmp_path)
+    fresh_job = runtime.store.create_job(
+        query="Fresh running job",
+        request_fingerprint="fp-fresh-running-read",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        fresh_job.job_id,
+        current_checkpoint="researching-unit-search-1",
+        heartbeat_at=utc_now_iso(),
+        started_at=utc_now_iso(),
+    )
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+
+    status = await other_runtime.status(fresh_job.job_id)
+    events = await other_runtime.events(fresh_job.job_id)
+
+    assert status["status"] == "running"
+    assert not any(event["type"] == "job_interrupted" for event in events["events"])
+    assert runtime.store.get_job(fresh_job.job_id).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_start_keeps_job_draft_until_planning_artifacts_are_persisted(tmp_path):
+    runtime = build_runtime(tmp_path)
+    planner_entered = asyncio.Event()
+    allow_finish = asyncio.Event()
+
+    async def blocked_planner(job, continuation):
+        planner_entered.set()
+        await allow_finish.wait()
+        return structured_plan_payload(job, continuation)
+
+    runtime._generate_plan_with_model = blocked_planner
+
+    start_task = asyncio.create_task(runtime.start(query="Draft planning window", force_new=True, schedule=False))
+    await planner_entered.wait()
+
+    jobs = runtime.store.list_jobs(limit=10)
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert job.status == "draft"
+
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+    status = await other_runtime.status(job.job_id)
+    events = await other_runtime.events(job.job_id)
+
+    assert status["status"] == "draft"
+    assert not any(event["type"] == "job_interrupted" for event in events["events"])
+
+    allow_finish.set()
+    response = await start_task
+
+    assert response["status"] == "queued"
+    assert runtime.store.get_job(job.job_id).status == "queued"
 
 
 @pytest.mark.asyncio
@@ -2270,6 +2339,8 @@ async def test_continuation_plan_stays_compact_while_artifact_keeps_full_state(t
         "source_job_id",
         "source_job_status",
         "continuation_identity",
+        "compaction_policy",
+        "compaction_reason_codes",
         "previous_summary",
         "prior_plan_summary",
         "continuation_goal",
@@ -2277,6 +2348,8 @@ async def test_continuation_plan_stays_compact_while_artifact_keeps_full_state(t
         "checkpoint_key",
     }.issubset(plan_continuation)
     assert plan_continuation["state_version"] >= 2
+    assert plan_continuation["compaction_policy"] == "focused_snapshot_v1"
+    assert "current_artifacts" in plan_continuation["compaction_reason_codes"]
     assert plan_continuation["confirmed_claims"] == ["Claim"]
     assert plan_continuation["carry_forward_constraints"] == {
         "include_domains": [],
@@ -4186,7 +4259,7 @@ async def test_continue_from_canceled_job_without_recoverable_surfaces_is_reject
     )
     runtime.store.update_job(source.job_id, finished_at=utc_now_iso())
 
-    with pytest.raises(ValueError, match="canceled continuation source is not recoverable"):
+    with pytest.raises(ValueError, match="continue_from_job_id source is not recoverable"):
         await runtime.start(
             query="Follow up canceled continuation without artifacts",
             continue_from_job_id=source.job_id,
@@ -4196,6 +4269,52 @@ async def test_continue_from_canceled_job_without_recoverable_surfaces_is_reject
         )
 
     assert [job.job_id for job in runtime.store.list_jobs(limit=20)] == [source.job_id]
+
+
+@pytest.mark.asyncio
+async def test_continue_rejects_dispatch_only_source_without_material_carry_forward_state(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = runtime.store.create_job(
+        query="Dispatch-only continuation source",
+        request_fingerprint="fp-dispatch-only-continuation",
+        status="interrupted",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        source.job_id,
+        current_checkpoint="researching-dispatch-a1-unit-search-1",
+        last_error="worker_restarted",
+    )
+    runtime.store.save_checkpoint(
+        source.job_id,
+        phase="researching",
+        checkpoint_key="researching-dispatch-a1-unit-search-1",
+        state={
+            "plan": structured_plan_payload(source, {"mode": "fresh"}),
+            "completed_unit_ids": [],
+            "sources": [],
+            "evidence_items": [],
+            "sections": [],
+            "unit_results": {},
+        },
+    )
+
+    with pytest.raises(ValueError, match="continue_from_job_id source is not recoverable"):
+        await runtime.start(
+            query="Follow up dispatch-only continuation source",
+            continue_from_job_id=source.job_id,
+            plan_only=True,
+            force_new=True,
+            schedule=False,
+        )
 
 
 @pytest.mark.asyncio
@@ -4220,8 +4339,12 @@ async def test_startup_reconcile_resolves_worker_restarted_finalizing_job_with_u
         current_checkpoint="finalizing",
         heartbeat_at="2000-01-01T00:00:00Z",
         started_at="2000-01-01T00:00:00Z",
-        updated_at="2000-01-01T00:00:00Z",
     )
+    with runtime.store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ? WHERE job_id = ?",
+            ("2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", job.job_id),
+        )
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Startup reconcile resolved final batch"}), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
@@ -4252,10 +4375,11 @@ async def test_startup_reconcile_resolves_worker_restarted_finalizing_job_with_u
         ),
     )
 
-    await runtime._ensure_startup_reconciled()
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+    await other_runtime._ensure_startup_reconciled()
 
-    reconciled = runtime.store.get_job(job.job_id)
-    events = await runtime.events(job.job_id)
+    reconciled = other_runtime.store.get_job(job.job_id)
+    events = await other_runtime.events(job.job_id)
     batch_id = persisted[0]["metadata"]["batch_id"]
 
     assert reconciled.status == "completed"
@@ -4291,8 +4415,12 @@ async def test_startup_reconcile_preserves_canceled_finalizing_job_with_usable_f
         current_checkpoint="finalizing",
         heartbeat_at="2000-01-01T00:00:00Z",
         started_at="2000-01-01T00:00:00Z",
-        updated_at="2000-01-01T00:00:00Z",
     )
+    with runtime.store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ? WHERE job_id = ?",
+            ("2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", job.job_id),
+        )
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Startup reconcile canceled final batch"}), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
@@ -4323,11 +4451,12 @@ async def test_startup_reconcile_preserves_canceled_finalizing_job_with_usable_f
         ),
     )
 
-    await runtime._ensure_startup_reconciled()
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+    await other_runtime._ensure_startup_reconciled()
 
-    reconciled = runtime.store.get_job(job.job_id)
-    status = await runtime.status(job.job_id)
-    events = await runtime.events(job.job_id)
+    reconciled = other_runtime.store.get_job(job.job_id)
+    status = await other_runtime.status(job.job_id)
+    events = await other_runtime.events(job.job_id)
     batch_id = persisted[0]["metadata"]["batch_id"]
 
     assert reconciled.status == "canceled"
@@ -8448,6 +8577,66 @@ async def test_runtime_blocks_medium_single_source_search_only_report(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_runtime_flags_high_null_span_ratio_in_release_gate(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume behavior.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume-processing continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nResume-processing continues from the last durable checkpoint."
+
+    def fake_extract(text, reference_texts, *, line_limit=2, char_limit=400, multiline=False):
+        return (
+            "Resume-processing continues from the last durable checkpoint.",
+            None,
+            None,
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+    monkeypatch.setattr("grok_search.deep_research_runtime._extract_relevant_excerpt_with_span", fake_extract)
+
+    response = await runtime.start(
+        query="checkpoint resume semantics",
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+    verifier = json.loads(runtime.store.read_artifact_text(response["job_id"], "verifier.json") or "{}")
+
+    assert result["status"] == "failed"
+    assert "high_null_span_ratio" in result["report"]["runtime"]["warnings"]
+    assert "high_null_span_ratio" in result["report"]["runtime"]["release_gate"]["reason_codes"]
+    assert "invalid_source_backed_span" in verifier["reason_codes"]
+
+
+@pytest.mark.asyncio
 async def test_runtime_report_exposes_provider_winners(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -9747,10 +9936,15 @@ async def test_selective_fetch_avoids_same_domain_off_topic_page(monkeypatch, tm
 
     response = await runtime.start(query="AWS DMS checkpoint resume restart semantics", force_new=True, schedule=False)
     result = await runtime.run_job(response["job_id"])
+    source_registry = result["citations"]["source_registry"]
 
     assert "Resume-processing continues from the last checkpoint" in result["final_report"]
     assert "Flink restart restores a job graph from a savepoint" not in result["final_report"]
     assert "jobruns-flink-restart.html" not in result["final_report"]
+    assert all(
+        "same_domain_off_topic" not in set(source.get("ranking_penalties") or [])
+        for source in source_registry.values()
+    )
 
 
 @pytest.mark.asyncio

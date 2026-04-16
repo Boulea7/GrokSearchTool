@@ -452,6 +452,8 @@ def _compact_continuation(continuation: DeepResearchContinuationState) -> DeepRe
         source_job_id=continuation.source_job_id,
         source_job_status=continuation.source_job_status,
         continuation_identity=continuation.continuation_identity,
+        compaction_policy=continuation.compaction_policy,
+        compaction_reason_codes=list(continuation.compaction_reason_codes),
         focused_snapshot=dict(continuation.focused_snapshot),
         previous_summary=continuation.previous_summary,
         prior_plan_summary=continuation.prior_plan_summary,
@@ -535,6 +537,98 @@ def _focused_continuation_snapshot(
             if _summarize_evidence_text(str(result.get("summary") or result.get("detail") or ""), limit=180)
         },
     }
+
+
+def _append_reason_code(reason_codes: list[str], value: str) -> None:
+    normalized = _normalize_whitespace(value)
+    if normalized and normalized not in reason_codes:
+        reason_codes.append(normalized)
+
+
+def _continuation_has_material_carry_forward_state(continuation: DeepResearchContinuationState) -> bool:
+    return any(
+        (
+            continuation.source_count > 0,
+            bool(continuation.carry_forward_sources),
+            bool(continuation.carry_forward_evidence),
+            bool(continuation.carry_forward_sections),
+            bool(continuation.carry_forward_unit_results),
+        )
+    )
+
+
+def _checkpoint_state_has_material_carry_forward(state: dict[str, Any]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    return any(
+        (
+            bool(state.get("completed_unit_ids")),
+            bool(state.get("sources")),
+            bool(state.get("evidence_items")),
+            bool(state.get("sections")),
+            bool(state.get("unit_results")),
+        )
+    )
+
+
+def _continuation_compaction_reason_codes(
+    *,
+    source_job: DeepResearchJob,
+    use_final_bundle: bool,
+    bundle_candidate_used: bool,
+    current_sources_used: bool,
+    citations_registry_fallback_used: bool,
+    checkpoint_sources_used: bool,
+    latest_state_sources_used: bool,
+    checkpoint_sections_used: bool,
+    latest_state_sections_used: bool,
+    checkpoint_unit_results_used: bool,
+    latest_state_unit_results_used: bool,
+    checkpoint_evidence_used: bool,
+    latest_state_evidence_used: bool,
+    reconstructed_evidence_used: bool,
+    filtered_to_focused_sources: bool,
+    confirmed_claims_filtered: bool,
+    open_questions_filtered: bool,
+) -> list[str]:
+    reason_codes: list[str] = []
+    _append_reason_code(reason_codes, "focused_snapshot_v1")
+    _append_reason_code(reason_codes, f"source_job_status:{source_job.status}")
+    if use_final_bundle:
+        _append_reason_code(reason_codes, "resolved_final_bundle")
+    elif bundle_candidate_used:
+        _append_reason_code(reason_codes, "latest_complete_batch_candidate")
+    else:
+        _append_reason_code(reason_codes, "current_artifacts")
+    if current_sources_used:
+        _append_reason_code(reason_codes, "sources_from_current_artifacts")
+    if citations_registry_fallback_used:
+        _append_reason_code(reason_codes, "sources_from_citations_registry")
+    if checkpoint_sources_used:
+        _append_reason_code(reason_codes, "sources_from_checkpoint_state")
+    if latest_state_sources_used:
+        _append_reason_code(reason_codes, "sources_from_latest_checkpoint_snapshot")
+    if checkpoint_sections_used:
+        _append_reason_code(reason_codes, "sections_from_checkpoint_state")
+    if latest_state_sections_used:
+        _append_reason_code(reason_codes, "sections_from_latest_checkpoint_snapshot")
+    if checkpoint_unit_results_used:
+        _append_reason_code(reason_codes, "unit_results_from_checkpoint_state")
+    if latest_state_unit_results_used:
+        _append_reason_code(reason_codes, "unit_results_from_latest_checkpoint_snapshot")
+    if checkpoint_evidence_used:
+        _append_reason_code(reason_codes, "evidence_from_checkpoint_state")
+    if latest_state_evidence_used:
+        _append_reason_code(reason_codes, "evidence_from_latest_checkpoint_snapshot")
+    if reconstructed_evidence_used:
+        _append_reason_code(reason_codes, "evidence_reconstructed_from_sections")
+    if filtered_to_focused_sources:
+        _append_reason_code(reason_codes, "focused_source_subset")
+    if confirmed_claims_filtered:
+        _append_reason_code(reason_codes, "confirmed_claims_filtered")
+    if open_questions_filtered:
+        _append_reason_code(reason_codes, "open_questions_filtered")
+    return reason_codes
 
 
 def _continuation_identity_from_snapshot(snapshot: dict[str, Any]) -> str:
@@ -1081,22 +1175,20 @@ def _continuation_source_is_recoverable(
     final_bundle = _resolve_final_artifact_bundle(store, source_job.job_id)
     if _artifact_bundle_is_usable(final_bundle):
         return True
-    if store.list_checkpoints(source_job.job_id):
+    if _continuation_has_material_carry_forward_state(continuation):
         return True
-    if continuation.carry_forward_sources:
+    if source_job.status == "completed" and any(
+        (
+            _normalize_whitespace(continuation.previous_summary),
+            _normalize_whitespace(continuation.prior_plan_summary),
+        )
+    ):
         return True
-    if continuation.carry_forward_evidence:
-        return True
-    if continuation.carry_forward_sections:
-        return True
-    if continuation.carry_forward_unit_results:
-        return True
-    if continuation.confirmed_claims:
-        return True
-    if continuation.open_questions:
-        return True
-    if continuation.trusted_source_headers:
-        return True
+    for checkpoint in store.list_checkpoints(source_job.job_id):
+        if _checkpoint_kind(checkpoint.checkpoint_key) != "research_unit":
+            continue
+        if _checkpoint_state_has_material_carry_forward(checkpoint.state or {}):
+            return True
     return False
 
 
@@ -2500,10 +2592,9 @@ class DeepResearchRuntime:
         continuation = self._build_continuation_context(continue_from_job_id)
         if (
             source_job is not None
-            and source_job.status == "canceled"
             and not _continuation_source_is_recoverable(self.store, source_job, continuation)
         ):
-            raise ValueError("canceled continuation source is not recoverable")
+            raise ValueError("continue_from_job_id source is not recoverable")
         request_fingerprint = self._request_fingerprint(
             query=query,
             context=context,
@@ -2549,11 +2640,10 @@ class DeepResearchRuntime:
                     )
             return self._job_payload(reused_job, reused=True)
 
-        initial_status = "draft" if plan_only else "queued"
         job = self.store.create_job(
             query=query,
             request_fingerprint=request_fingerprint,
-            status=initial_status,
+            status="draft",
             phase="planning",
             effort=effort,
             context=context,
@@ -2609,6 +2699,12 @@ class DeepResearchRuntime:
             message="Deep research job created.",
             data={"plan_only": plan_only, "continuation_mode": continuation.mode},
         )
+        if not plan_only:
+            job = self.store.update_job(
+                job.job_id,
+                status="queued",
+                heartbeat_at=utc_now_iso(),
+            )
         job = self.store.get_job(job.job_id)
 
         if not plan_only and schedule:
@@ -2902,7 +2998,7 @@ class DeepResearchRuntime:
         }
 
     async def run_job(self, job_id: str) -> dict[str, Any]:
-        await self._ensure_startup_reconciled()
+        await self._ensure_startup_reconciled(exclude_job_ids={job_id})
         job = self.store.get_job(job_id)
         if job.plan_only:
             self.store.append_event(
@@ -2959,10 +3055,13 @@ class DeepResearchRuntime:
             persisted.append(artifact.model_dump())
         return persisted
 
-    async def _ensure_startup_reconciled(self) -> None:
+    async def _ensure_startup_reconciled(self, *, exclude_job_ids: set[str] | None = None) -> None:
         if self._startup_reconciled:
             return
-        recovered_jobs = self.store.reconcile_incomplete_jobs(stale_after_seconds=0)
+        recovered_jobs = self.store.reconcile_incomplete_jobs(
+            stale_after_seconds=_RUNTIME_RECONCILE_STALE_SECONDS,
+            exclude_job_ids=exclude_job_ids,
+        )
         for job in recovered_jobs:
             refreshed = self.store.get_job(job.job_id)
             if not _job_prefers_resolved_final_bundle(refreshed):
@@ -3803,7 +3902,11 @@ class DeepResearchRuntime:
 
     def _build_continuation_context(self, continue_from_job_id: str) -> DeepResearchContinuationState:
         if not continue_from_job_id:
-            return DeepResearchContinuationState(mode="fresh")
+            return DeepResearchContinuationState(
+                mode="fresh",
+                compaction_policy="focused_snapshot_v1",
+                compaction_reason_codes=["fresh_query"],
+            )
         job = self.store.get_job(continue_from_job_id)
 
         final_bundle = _resolve_final_artifact_bundle(self.store, continue_from_job_id)
@@ -3813,6 +3916,7 @@ class DeepResearchRuntime:
             if final_bundle is None
             else final_bundle
         )
+        bundle_candidate_used = bool(bundle_candidate is not None and not use_final_bundle)
         current_report_text = self.store.read_artifact_text(continue_from_job_id, "report.json") or ""
         current_final_report = self.store.read_artifact_text(continue_from_job_id, "final_report.md") or ""
         current_sources_text = self.store.read_artifact_text(continue_from_job_id, "sources.json") or "[]"
@@ -3892,10 +3996,15 @@ class DeepResearchRuntime:
                 )
 
         carry_forward_sources: list[dict[str, Any]] = []
+        current_sources_used = False
+        citations_registry_fallback_used = False
+        checkpoint_sources_used = False
+        latest_state_sources_used = False
         if sources_text:
             sources_value, _ = _safe_load_json_artifact(sources_text)
             if _validate_json_artifact_shape("sources.json", sources_value) is None and isinstance(sources_value, list):
                 carry_forward_sources = list(sources_value)
+                current_sources_used = True
         if not carry_forward_sources and citations_text:
             citations_value, _ = _safe_load_json_artifact(citations_text)
             normalized_citations = _normalize_citations_payload(citations_value)
@@ -3905,37 +4014,54 @@ class DeepResearchRuntime:
                 and isinstance(normalized_citations.get("source_registry"), dict)
             ):
                 carry_forward_sources = list(normalized_citations["source_registry"].values())
+                citations_registry_fallback_used = True
 
         if not carry_forward_sources and not use_final_bundle and checkpoint_state:
             carry_forward_sources = list(checkpoint_state.sources)
+            checkpoint_sources_used = bool(carry_forward_sources)
         elif not carry_forward_sources and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_sources = list(latest_state.get("sources") or [])
+            latest_state_sources_used = bool(carry_forward_sources)
         source_count = len(carry_forward_sources)
 
         carry_forward_sections = list(report.get("sections") or []) if isinstance(report.get("sections"), list) else []
+        checkpoint_sections_used = False
+        latest_state_sections_used = False
         if not carry_forward_sections and not use_final_bundle and checkpoint_state:
             carry_forward_sections = list(checkpoint_state.sections)
+            checkpoint_sections_used = bool(carry_forward_sections)
         elif not carry_forward_sections and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_sections = list(latest_state.get("sections") or [])
+            latest_state_sections_used = bool(carry_forward_sections)
 
         report_unit_results = report.get("unit_results") if isinstance(report.get("unit_results"), dict) else {}
         carry_forward_unit_results = dict(report_unit_results or {})
+        checkpoint_unit_results_used = False
+        latest_state_unit_results_used = False
         if not carry_forward_unit_results and not use_final_bundle and checkpoint_state:
             carry_forward_unit_results = dict(checkpoint_state.unit_results)
+            checkpoint_unit_results_used = bool(carry_forward_unit_results)
         elif not carry_forward_unit_results and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_unit_results = dict(latest_state.get("unit_results") or {})
+            latest_state_unit_results_used = bool(carry_forward_unit_results)
 
         carry_forward_evidence = []
+        checkpoint_evidence_used = False
+        latest_state_evidence_used = False
         if evidence_items_text:
             evidence_value, evidence_error = _safe_load_json_artifact(evidence_items_text)
             if evidence_error is None and isinstance(evidence_value, list):
                 carry_forward_evidence = list(evidence_value)
         if not carry_forward_evidence and not use_final_bundle and checkpoint_state:
             carry_forward_evidence = list(checkpoint_state.evidence_items)
+            checkpoint_evidence_used = bool(carry_forward_evidence)
         elif not carry_forward_evidence and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_evidence = list(latest_state.get("evidence_items") or [])
+            latest_state_evidence_used = bool(carry_forward_evidence)
+        reconstructed_evidence_used = False
         if not carry_forward_evidence:
             carry_forward_evidence = _build_carry_forward_evidence(carry_forward_unit_results, carry_forward_sections)
+            reconstructed_evidence_used = bool(carry_forward_evidence)
         carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
         carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
@@ -3944,10 +4070,21 @@ class DeepResearchRuntime:
             carry_forward_evidence,
             carry_forward_sections,
         )
+        original_source_ids = {
+            str(item.get("source_id", "")).strip()
+            for item in carry_forward_sources
+            if str(item.get("source_id", "")).strip()
+        }
         carry_forward_sources = _focused_continuation_sources(
             carry_forward_sources,
             used_source_ids=used_source_ids,
         )
+        focused_source_ids = {
+            str(item.get("source_id", "")).strip()
+            for item in carry_forward_sources
+            if str(item.get("source_id", "")).strip()
+        }
+        filtered_to_focused_sources = focused_source_ids != original_source_ids
         carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
         carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
@@ -3970,6 +4107,12 @@ class DeepResearchRuntime:
         confirmed_claims = _collect_confirmed_claims(carry_forward_sections)
         open_questions = _collect_continuation_open_questions(report)
         trusted_source_headers = _trusted_source_headers(carry_forward_sources)
+        confirmed_claims_filtered = bool(carry_forward_sections) and not bool(confirmed_claims)
+        open_questions_filtered = bool(
+            isinstance(report.get("coverage"), dict)
+            and (report["coverage"].get("uncovered_sub_questions") or report["coverage"].get("unanswered_sections"))
+            and not open_questions
+        )
         focused_snapshot = _focused_continuation_snapshot(
             source_job_id=continue_from_job_id,
             source_job_status=job.status,
@@ -3988,6 +4131,25 @@ class DeepResearchRuntime:
         continuation_identity = _continuation_identity_for_source_job(
             focused_snapshot,
         )
+        compaction_reason_codes = _continuation_compaction_reason_codes(
+            source_job=job,
+            use_final_bundle=use_final_bundle,
+            bundle_candidate_used=bundle_candidate_used,
+            current_sources_used=current_sources_used,
+            citations_registry_fallback_used=citations_registry_fallback_used,
+            checkpoint_sources_used=checkpoint_sources_used,
+            latest_state_sources_used=latest_state_sources_used,
+            checkpoint_sections_used=checkpoint_sections_used,
+            latest_state_sections_used=latest_state_sections_used,
+            checkpoint_unit_results_used=checkpoint_unit_results_used,
+            latest_state_unit_results_used=latest_state_unit_results_used,
+            checkpoint_evidence_used=checkpoint_evidence_used,
+            latest_state_evidence_used=latest_state_evidence_used,
+            reconstructed_evidence_used=reconstructed_evidence_used,
+            filtered_to_focused_sources=filtered_to_focused_sources,
+            confirmed_claims_filtered=confirmed_claims_filtered,
+            open_questions_filtered=open_questions_filtered,
+        )
 
         return _hydrate_continuation_snapshot(
             DeepResearchContinuationState(
@@ -3995,6 +4157,8 @@ class DeepResearchRuntime:
             source_job_id=continue_from_job_id,
             source_job_status=job.status,
             continuation_identity=continuation_identity,
+            compaction_policy="focused_snapshot_v1",
+            compaction_reason_codes=compaction_reason_codes,
             focused_snapshot=focused_snapshot,
             previous_summary=_trim_text(previous_summary, limit=400),
             prior_plan_summary=_trim_text(prior_plan_summary, limit=400),

@@ -1,0 +1,99 @@
+{
+  "sample": "probe-round18-lifecycle",
+  "query": "Focus on checkpoint identity, worker_restarted fencing, and finalizing-after-interrupt semantics",
+  "planner": {
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: dropped_unknown_dependency:u4->u1"
+    }
+  },
+  "continuation": {
+    "mode": "continue",
+    "source_job_id": "4c7879d456ed266dc3d3a97c",
+    "source_job_status": "interrupted",
+    "continuation_identity": "d934f1676839b2ee7814cd5835dd606f3c95344748e7ce3cf687fd81d53d3958",
+    "checkpoint_key": "researching-u3",
+    "source_count": 7,
+    "carry_forward_sources": [
+      {"source_id": "R15", "url": "https://docs.temporal.io/tctl-v1/workflow"},
+      {"source_id": "R1", "url": "https://docs.langchain.com/oss/python/langgraph/persistence"}
+    ],
+    "previous_summary": "**LangGraph enables robust \"deep research\" agents through a persistence layer of checkpoints",
+    "compaction_policy": "focused_snapshot_v1",
+    "compaction_reason_codes": [
+      "focused_snapshot_v1",
+      "source_job_status:interrupted",
+      "current_artifacts",
+      "sources_from_current_artifacts",
+      "sources_from_checkpoint_state",
+      "unit_results_from_checkpoint_state",
+      "evidence_from_checkpoint_state",
+      "focused_source_subset"
+    ]
+  },
+  "plan": {
+    "brief": {
+      "scope": {
+        "include_domains": [],
+        "exclude_domains": [],
+        "allowed_sources": []
+      },
+      "continuation_focus": [
+        "Investigate interrupted, continue, and resume semantics for deep research jobs",
+        "5 (docs.temporal.io)",
+        "1 (docs.langchain.com)"
+      ]
+    }
+  },
+  "report": {
+    "status": "failed",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "mismatched_binding_evidence",
+        "planner_fallback_used",
+        "unbound_citation_sources",
+        "unbound_evidence_ids"
+      ],
+      "release_gate": {
+        "passed": false,
+        "reason_codes": [
+          "coverage_incomplete",
+          "unbound_citation_sources",
+          "unbound_evidence_ids",
+          "mismatched_binding_evidence"
+        ]
+      },
+      "verifier": {
+        "reason_codes": [
+          "coverage_incomplete",
+          "unbound_citation_sources",
+          "unbound_evidence_ids",
+          "mismatched_binding_evidence"
+        ]
+      }
+    }
+  },
+  "golden": {
+    "resume_continue_semantics": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "planner_boundary": {
+      "verdict": "fail",
+      "score": 0.2,
+      "reason_tags": [
+        "missing_constraint_inheritance",
+        "planner_fallback_used",
+        "unsafe_plan_fallback"
+      ]
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
