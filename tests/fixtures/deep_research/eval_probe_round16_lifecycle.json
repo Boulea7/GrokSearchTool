@@ -1,0 +1,79 @@
+{
+  "sample": "probe-round16-lifecycle",
+  "query": "Focus on checkpoint identity, worker_restarted fencing, and finalizing-after-interrupt semantics",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: dropped_unknown_dependency:u7->u1"
+    }
+  },
+  "continuation": {
+    "mode": "continue",
+    "source_job_id": "8f247a254b474ec57ad40f96",
+    "source_job_status": "interrupted",
+    "checkpoint_key": "researching-u6",
+    "source_count": 13,
+    "continuation_identity": "2acad62ef0d48e20ab96808228a3eb35ebaf4d9e28b5d36560c812ec228b1c25",
+    "carry_forward_sources": [
+      {
+        "source_id": "R1",
+        "url": "https://docs.langchain.com/oss/python/langgraph/interrupts"
+      },
+      {
+        "source_id": "R27",
+        "url": "https://github.com/cloudwego/eino-examples/blob/main/quickstart/chatwitheino/docs/ch07_interrupt_resume.md"
+      },
+      {
+        "source_id": "R4",
+        "url": "https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/"
+      }
+    ],
+    "previous_summary": "Think of a video game with autosaves. The **thread_id** is your save file (\"MyCampaign.save\"). The **checkpoint_id** is a specific autosave slot or chapter marker inside that file…"
+  },
+  "plan": {
+    "include_domains": [
+      "docs.langchain.com",
+      "github.com",
+      "redis.io"
+    ],
+    "exclude_domains": [],
+    "brief": {
+      "continuation_focus": [
+        "Investigate interrupted, continue, and resume semantics for deep research jobs",
+        "1 (docs.langchain.com)",
+        "6 (github.com)",
+        "10 (redis.io)",
+        "Browse LangGraph persistence and checkpoint docs (python.langchain.com)"
+      ]
+    }
+  },
+  "report": {
+    "status": "failed",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "high_null_span_ratio",
+        "mismatched_binding_evidence",
+        "invalid_source_backed_span",
+        "planner_fallback_used"
+      ]
+    }
+  },
+  "golden": {
+    "resume_continue_semantics": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "planner_boundary": {
+      "verdict": "fail",
+      "score": 0.6,
+      "reason_tags": [
+        "planner_fallback_used",
+        "unsafe_plan_fallback"
+      ]
+    }
+  }
+}

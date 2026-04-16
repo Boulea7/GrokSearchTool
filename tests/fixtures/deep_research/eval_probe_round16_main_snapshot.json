@@ -1,0 +1,101 @@
+{
+  "sample": "probe-round16-main-snapshot",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "planner": {
+    "planner": "model",
+    "used_fallback": false
+  },
+  "report": {
+    "status": "failed",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "high_null_span_ratio",
+        "medium_single_source_search_only",
+        "invalid_source_backed_span"
+      ]
+    },
+    "coverage": {
+      "planned_section_ids": [
+        "executive-summary",
+        "what-are-dms-checkpoints-how-are-they-generated-stored-retrieved-and-their-role-as-cdc-recove",
+        "what-does-resume-processing-from-checkpoint-do-for-full-load-cdc-and-full-load-cdc-tasks-pe",
+        "how-does-restart-reload-target-semantics-differ-in-terms-of-reprocessing-data-resource-recreat",
+        "what-are-recovery-semantics-including-recoverytimeout-auto-recovery-on-errors-assessments-for",
+        "key-official-distinctions-resume-preserves-state-vs-restart-resets-and-recommendations-for-fa"
+      ],
+      "answered_section_ids": [
+        "executive-summary",
+        "what-are-dms-checkpoints-how-are-they-generated-stored-retrieved-and-their-role-as-cdc-recove",
+        "what-does-resume-processing-from-checkpoint-do-for-full-load-cdc-and-full-load-cdc-tasks-pe",
+        "how-does-restart-reload-target-semantics-differ-in-terms-of-reprocessing-data-resource-recreat"
+      ],
+      "unanswered_sections": [
+        "What are recovery semantics including RecoveryTimeout, auto-recovery on errors, assessments for…",
+        "Key official distinctions (resume preserves state vs restart resets) and recommendations for fa…"
+      ],
+      "planned_sub_question_ids": [
+        "sq1",
+        "sq2",
+        "sq3",
+        "sq4",
+        "sq5"
+      ],
+      "covered_sub_question_ids": [],
+      "uncovered_sub_questions": [
+        "What are DMS checkpoints, how are they generated/stored/retrieved, and their role as CDC recovery points?",
+        "What does resume-processing (from checkpoint) do for full-load, CDC, and full-load+CDC tasks per API and user guide?",
+        "How does restart/reload-target semantics differ in terms of reprocessing data, resource recreation (slots), and target impact?",
+        "What are recovery semantics including RecoveryTimeout, auto-recovery on errors, assessments for consistency, and risks like data duplication or PK violations?",
+        "Key official distinctions (resume preserves state vs restart resets) and recommendations for failed task recovery."
+      ]
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R11",
+      "domain": "docs.aws.amazon.com",
+      "title": "Troubleshooting and Restart Behavior",
+      "quality_tier": "official"
+    },
+    {
+      "source_id": "R3",
+      "domain": "docs.aws.amazon.com",
+      "title": "StartReplicationTask API",
+      "quality_tier": "official"
+    },
+    {
+      "source_id": "R12",
+      "domain": "docs.aws.amazon.com",
+      "title": "Change processing tuning settings",
+      "quality_tier": "official"
+    }
+  ],
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "fail",
+      "score": 0.333,
+      "reason_tags": [
+        "unanswered_sections",
+        "uncovered_sub_questions"
+      ]
+    },
+    "planner_boundary": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "ranking_noise_suppression": {
+      "verdict": "fail",
+      "score": 0.5,
+      "reason_tags": [
+        "troubleshooting_shell_source"
+      ]
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

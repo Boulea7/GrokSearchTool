@@ -64,6 +64,97 @@ def structured_plan_payload(job, continuation):
     }
 
 
+def with_minimal_provenance_artifacts(
+    artifacts: list[dict],
+    *,
+    query: str,
+    evidence_items: list[dict] | None = None,
+):
+    payload = list(artifacts)
+    normalized_evidence_items = [] if evidence_items is None else evidence_items
+    payload.extend(
+        [
+            {
+                "kind": "coverage.json",
+                "content": json.dumps(
+                    {
+                        "query": query,
+                        "planned_section_ids": [],
+                        "answered_section_ids": [],
+                        "unanswered_sections": [],
+                        "planned_sub_question_ids": [],
+                        "covered_sub_question_ids": [],
+                        "uncovered_sub_questions": [],
+                        "coverage_gate_passed": True,
+                        "hard_coverage_gate_passed": True,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": json.dumps(
+                    {
+                        "total_claims": 0,
+                        "grounded_claims": 0,
+                        "ungrounded_claims": 0,
+                        "single_source_claims": 0,
+                        "low_confidence_claims": 0,
+                        "missing_evidence_binding_claims": 0,
+                        "total_evidence_bindings": 0,
+                        "source_backed_binding_count": 0,
+                        "search_only_binding_count": 0,
+                        "null_span_binding_count": 0,
+                        "grounded_claims_without_source_backed_binding": 0,
+                        "sections": [],
+                        "sources": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verifier.json",
+                "content": json.dumps(
+                    {
+                        "passed": True,
+                        "reason_codes": [],
+                        "flagged_claim_ids": [],
+                        "summary": {
+                            "section_count": 0,
+                            "total_claims": 0,
+                            "low_confidence_claims": 0,
+                            "single_source_claims": 0,
+                            "source_backed_binding_count": 0,
+                            "search_only_binding_count": 0,
+                            "null_span_binding_count": 0,
+                            "missing_evidence_items": 0,
+                            "mismatched_binding_source": 0,
+                            "mismatched_binding_evidence": 0,
+                            "invalid_source_backed_span": 0,
+                            "duplicate_claims": 0,
+                            "low_value_claims": 0,
+                            "medium_single_source_search_only": 0,
+                            "same_domain_off_topic_dominance": 0,
+                            "unbound_citation_sources": 0,
+                            "unbound_evidence_ids": 0
+                        }
+                    }
+                ),
+                "content_type": "application/json",
+            },
+        ]
+    )
+    if not any(item.get("kind") == "evidence_items.json" for item in payload):
+        payload.append(
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(normalized_evidence_items),
+                "content_type": "application/json",
+            }
+        )
+    return payload
+
+
 def summary_lines(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.startswith("summary:")]
 
@@ -90,7 +181,13 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
         "search_strategy": continuation_snapshot["plan"]["search_strategy"],
         "planner_metadata": continuation_snapshot["planner"],
     }
-    report_payload = report_snapshot["report"]
+    report_payload = {
+        "summary": "Checkpoint resume summary.",
+        "status": report_snapshot["report"]["status"],
+        "runtime": dict(report_snapshot["report"].get("runtime") or {}),
+        "sections": [],
+        "unit_results": {},
+    }
     citations_payload = {
         "source_registry": {
             source["source_id"]: source,
@@ -120,7 +217,8 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
     runtime.write_artifact(job.job_id, "plan.json", json.dumps(plan_payload), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([source]),
@@ -141,19 +239,9 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
                 "content": f"# Final Report\n\n{report_payload['summary']}\n",
                 "content_type": "text/markdown",
             },
-        ],
-    )
-    runtime.write_artifact(
-        job.job_id,
-        "sources.json",
-        json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]),
-        "application/json",
-    )
-    runtime.write_artifact(
-        job.job_id,
-        "report.json",
-        json.dumps({"summary": "stale current report", "runtime": {"warnings": [], "constraint_violations": []}}),
-        "application/json",
+            ],
+            query=continuation_snapshot["query"],
+        ),
     )
     runtime.store.append_event(
         job.job_id,
@@ -216,7 +304,8 @@ def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Canceled finalizing visibility"}), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
@@ -252,7 +341,10 @@ def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
                 "content": json.dumps(evidence_items),
                 "content_type": "application/json",
             },
-        ],
+            ],
+            query="Canceled finalizing visibility",
+            evidence_items=evidence_items,
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -292,6 +384,56 @@ def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
         "evidence_items": evidence_items,
         "evidence_text": json.dumps(evidence_items),
     }
+
+
+def seed_round12_continue_resume_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round12_continue_resume_snapshot.json")
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-cli-round12-continue-resume-parity",
+        status=snapshot["continue_status"]["status"],
+        phase=snapshot["continue_status"]["phase"],
+        effort="standard",
+        context="",
+        include_domains=snapshot["include_domains"],
+        exclude_domains=snapshot["exclude_domains"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id=snapshot["source_job_id"],
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=snapshot["continue_status"]["attempt_count"],
+        current_checkpoint=snapshot["continue_status"]["checkpoint"],
+        last_error=snapshot["continue_status"]["last_error"],
+        finished_at=utc_now_iso(),
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "query": snapshot["query"],
+                "include_domains": snapshot["include_domains"],
+                "exclude_domains": snapshot["exclude_domains"],
+                "continuation": snapshot["continuation"],
+                "brief": {"must_cover": snapshot["plan"]["must_cover"]},
+                "search_strategy": {"search_queries": snapshot["plan"]["search_queries"]},
+                "planner_metadata": snapshot["planner"],
+            }
+        ),
+        "application/json",
+    )
+    for event_type in snapshot["events"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event_type,
+            phase=snapshot["continue_status"]["phase"],
+            message=event_type,
+            data={},
+        )
+    return {"job": job, "snapshot": snapshot}
 
 
 def test_cli_plan_only_start_prints_draft_job(monkeypatch, tmp_path, capsys):
@@ -383,7 +525,8 @@ def test_cli_result_artifact_prefers_resolved_final_batch(monkeypatch, tmp_path,
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Artifact batch job"}), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
@@ -404,7 +547,9 @@ def test_cli_result_artifact_prefers_resolved_final_batch(monkeypatch, tmp_path,
                 "content": "# Final Report\n\nGood report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Artifact batch job",
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -446,28 +591,31 @@ def test_cli_result_artifact_reads_resolved_final_batch_for_interrupted_finalizi
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Interrupted artifact batch job"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
-            {
-                "kind": "sources.json",
-                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "citations.json",
-                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "report.json",
-                "content": json.dumps({"summary": "Recovered report", "sections": [], "unit_results": {}}),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "final_report.md",
-                "content": "# Final Report\n\nRecovered report.\n",
-                "content_type": "text/markdown",
-            },
-        ],
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Recovered report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Interrupted artifact batch job",
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -502,28 +650,31 @@ def test_cli_status_surfaces_resolved_artifact_batch_id(monkeypatch, tmp_path, c
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "CLI status resolved batch"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
-            {
-                "kind": "sources.json",
-                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "citations.json",
-                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "report.json",
-                "content": json.dumps({"summary": "Good report", "sections": [], "unit_results": {}}),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "final_report.md",
-                "content": "# Final Report\n\nGood report.\n",
-                "content_type": "text/markdown",
-            },
-        ],
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Good report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nGood report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="CLI status resolved batch",
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -679,7 +830,8 @@ def test_cli_start_does_not_spawn_worker_for_reused_completed_job(monkeypatch, t
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Reuse me"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -700,7 +852,9 @@ def test_cli_start_does_not_spawn_worker_for_reused_completed_job(monkeypatch, t
                 "content": "# Final Report\n\nCheckpoint resume summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Reuse me",
+        ),
     )
 
     exit_code = deep_research_cli.main(["start", "Reuse me"])
@@ -914,12 +1068,12 @@ def test_cli_round11_interrupted_status_events_and_result_remain_consistent(monk
     assert status_payload["attempt_count"] == 2
     assert status_payload["continued_from_job_id"] == job.continued_from_job_id
     assert status_payload["resolved_artifact_batch_id"] == seeded["batch_id"]
-    assert status_payload["artifact_fallback_used"] is True
+    assert status_payload["artifact_fallback_used"] is False
     assert status_payload["planner_fallback_used"] is True
     assert status_payload["runtime_warnings"] == ["coverage_incomplete", "planner_fallback_used"]
     assert status_payload["constraint_violations"] == []
     assert summary_lines(status_captured.err) == [
-        f"summary: job={job.job_id} status=interrupted phase=finalizing progress=0.0% checkpoint=finalizing attempts=2 cancel_requested=false continued_from={job.continued_from_job_id} resolved_batch={seeded['batch_id']} artifact_fallback=true planner_fallback=true warnings=2"
+        f"summary: job={job.job_id} status=interrupted phase=finalizing progress=0.0% checkpoint=finalizing attempts=2 cancel_requested=false continued_from={job.continued_from_job_id} resolved_batch={seeded['batch_id']} artifact_fallback=false planner_fallback=true warnings=2"
     ]
 
     exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "0", "--limit", "10"])
@@ -939,7 +1093,7 @@ def test_cli_round11_interrupted_status_events_and_result_remain_consistent(monk
     assert exit_code == 0
     assert result_payload["status"] == "interrupted"
     assert result_payload["phase"] == "finalizing"
-    assert result_payload["artifact_fallback_used"] is True
+    assert result_payload["artifact_fallback_used"] is False
     assert result_payload["resolved_artifact_batch_id"] == seeded["batch_id"]
     assert result_payload["plan"]["continuation"]["mode"] == "continue"
     assert result_payload["plan"]["continuation"]["checkpoint_key"] == "finalizing"
@@ -979,6 +1133,36 @@ def test_cli_canceled_finalizing_status_and_evidence_artifact_use_resolved_final
     assert summary_lines(result_captured.err) == [
         f"summary: job={job.job_id} status=canceled phase=finalizing progress=0.0% checkpoint=finalizing attempts=0 cancel_requested=true continued_from=- resolved_batch={seeded['batch_id']} artifact_fallback=true artifact=evidence_items.json bytes={len(seeded['evidence_text'].encode('utf-8'))}"
     ]
+
+
+def test_cli_round12_continue_resume_status_and_events_match_fixture(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    seeded = seed_round12_continue_resume_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    exit_code = deep_research_cli.main(["status", job.job_id])
+    status_captured = capsys.readouterr()
+    status_payload = json.loads(status_captured.out)
+
+    assert exit_code == 0
+    assert status_payload["status"] == snapshot["continue_status"]["status"]
+    assert status_payload["phase"] == snapshot["continue_status"]["phase"]
+    assert status_payload["attempt_count"] == snapshot["continue_status"]["attempt_count"]
+    assert status_payload["current_checkpoint"] == snapshot["continue_status"]["checkpoint"]
+    assert status_payload["continued_from_job_id"] == snapshot["source_job_id"]
+    assert status_payload["planner_fallback_used"] is True
+    assert summary_lines(status_captured.err) == [
+        f"summary: job={job.job_id} status={snapshot['continue_status']['status']} phase={snapshot['continue_status']['phase']} progress=0.0% checkpoint={snapshot['continue_status']['checkpoint']} attempts={snapshot['continue_status']['attempt_count']} cancel_requested=false continued_from={snapshot['source_job_id']} resolved_batch=- artifact_fallback=false planner_fallback=true"
+    ]
+
+    exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "0", "--limit", "20"])
+    events_captured = capsys.readouterr()
+    events_payload = json.loads(events_captured.out)
+
+    assert exit_code == 0
+    assert [event["type"] for event in events_payload["events"]] == snapshot["events"]
 
 
 def test_spawn_worker_writes_logs_to_worker_log_dir(monkeypatch, tmp_path):
