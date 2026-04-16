@@ -7,6 +7,8 @@ import pytest
 from grok_search import server
 from grok_search.deep_research_runtime import (
     DeepResearchRuntime,
+    _build_grounding_diagnostics,
+    _build_release_gate,
     _build_report_summary,
     _coverage_for_report,
     _search_query,
@@ -5554,6 +5556,10 @@ async def test_search_only_evidence_does_not_claim_multi_source_corroboration(mo
     assert claim["cluster_type"] == "single_source"
     assert claim["supporting_source_count"] == 1
     assert len(claim["citations"]) == 1
+    assert claim["evidence_bindings"][0]["line_start"] is None
+    assert claim["evidence_bindings"][0]["line_end"] is None
+    assert claim["evidence_bindings"][0]["excerpt_origin"] == "search_answer"
+    assert claim["evidence_bindings"][0]["source_backed"] is False
 
 
 @pytest.mark.asyncio
@@ -7007,6 +7013,49 @@ async def test_claims_include_evidence_bindings_in_final_report(monkeypatch, tmp
     assert claim["evidence_bindings"][0]["line_end"] == 3
     assert claim["evidence_bindings"][0]["evidence_kind"] == "fetch"
     assert claim["evidence_bindings"][0]["winner_provider"] == "grok"
+    assert claim["evidence_bindings"][0]["excerpt_origin"] == "source_text"
+    assert claim["evidence_bindings"][0]["source_backed"] is True
+
+
+def test_release_gate_rejects_claim_with_stale_evidence_binding():
+    sections = [
+        {
+            "section_id": "resume-semantics",
+            "title": "Resume Semantics",
+            "claims": [
+                {
+                    "claim_id": "resume-semantics-claim-1",
+                    "text": "Resume continues from the last checkpoint.",
+                    "citations": ["R1"],
+                    "confidence": "medium",
+                    "evidence_bindings": [
+                        {
+                            "evidence_id": "e1",
+                            "source_id": "R2",
+                            "source_url": "https://docs.example.com/runtime/stale",
+                            "evidence_kind": "fetch",
+                            "excerpt": "Resume continues from the last checkpoint.",
+                        }
+                    ],
+                }
+            ],
+            "citations": ["R1"],
+        }
+    ]
+    source_registry = {
+        "R1": {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/checkpoints",
+            "domain": "docs.example.com",
+        }
+    }
+
+    grounding = _build_grounding_diagnostics(sections, source_registry)
+    release_gate = _build_release_gate({"coverage_gate_passed": True}, grounding)
+
+    assert grounding["missing_evidence_binding_claims"] == 1
+    assert release_gate["passed"] is False
+    assert release_gate["reason_codes"] == ["missing_evidence_bindings"]
 
 
 @pytest.mark.asyncio
