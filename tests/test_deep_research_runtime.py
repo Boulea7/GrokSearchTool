@@ -7865,6 +7865,62 @@ async def test_status_surfaces_continuation_capsule_artifact(monkeypatch, tmp_pa
     status = await runtime.status(response["job_id"])
 
     assert "continuation_capsule.json" in status["artifact_kinds"]
+    assert status["artifact_kinds"].count("continuation_capsule.json") == 1
+
+
+@pytest.mark.asyncio
+async def test_status_artifact_kinds_do_not_duplicate_provenance_sidecars(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Duplicate artifact kinds probe",
+        request_fingerprint="fp-duplicate-artifact-kinds-probe",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Duplicate artifact kinds probe"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Recovered report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered report.\n",
+                    "content_type": "text/markdown",
+                }
+            ],
+            query="Duplicate artifact kinds probe",
+        ),
+    )
+
+    status = await runtime.status(job.job_id)
+
+    assert status["artifact_kinds"].count("evidence_items.json") == 1
+    assert status["artifact_kinds"].count("coverage.json") == 1
+    assert status["artifact_kinds"].count("grounding.json") == 1
+    assert status["artifact_kinds"].count("verifier.json") == 1
 
 
 @pytest.mark.asyncio
