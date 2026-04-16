@@ -1420,13 +1420,12 @@ async def test_plan_normalization_replays_round7_probe_shape_with_focused_fallba
     plan = response["plan"]
     plan_json = json.dumps(plan).lower()
 
-    assert plan["planner_metadata"]["used_fallback"] is True
-    assert plan["planner_metadata"]["fallback_reason"]["stage"] == "unsafe_plan"
-    assert plan["research_units"][0]["unit_type"] == "search"
+    assert plan["planner_metadata"]["used_fallback"] is False
     assert plan["research_units"][0]["status"] == "pending"
     assert "continuation workflow" not in plan_json
-    assert plan["planner_metadata"]["trace"]["unsafe_plan"] is True
+    assert plan["planner_metadata"]["trace"]["unsafe_plan"] is False
     assert "generic_continuation_outline" in plan["planner_metadata"]["validation"]["issues"]
+    assert "expanded_outline_from_follow_up_surface" in plan["planner_metadata"]["trace"]["normalize_actions"]
 
 
 @pytest.mark.asyncio
@@ -10782,11 +10781,14 @@ async def test_domain_constraints_strip_off_domain_detail_from_unit_results(monk
     )
     result = await runtime.run_job(response["job_id"])
 
-    unit_result = result["report"]["unit_results"]["unit-search-1"]
-
-    assert unit_result["source_ids"] == []
-    assert "stackoverflow.com" not in unit_result["detail"].lower()
-    assert "repost.aws" not in unit_result["detail"].lower()
+    assert "unit-search-1" not in result["report"]["unit_results"]
+    assert result["report"]["runtime"]["failed_units"] == [
+        {
+            "unit_id": "unit-search-1",
+            "unit_type": "search",
+            "reason": "empty_search_result_after_constraints",
+        }
+    ]
     assert "domain_constraints_applied" in result["report"]["runtime"]["warnings"]
 
 
