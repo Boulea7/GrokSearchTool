@@ -75,6 +75,97 @@ def structured_plan_payload(job, continuation):
     }
 
 
+def with_minimal_provenance_artifacts(
+    artifacts: list[dict],
+    *,
+    query: str,
+    evidence_items: list[dict] | None = None,
+    total_claims: int = 0,
+    section_count: int = 0,
+):
+    payload = list(artifacts)
+    normalized_evidence_items = [] if evidence_items is None else evidence_items
+    payload.extend(
+        [
+            {
+                "kind": "coverage.json",
+                "content": json.dumps(
+                    {
+                        "query": query,
+                        "planned_section_ids": [],
+                        "answered_section_ids": [],
+                        "unanswered_sections": [],
+                        "planned_sub_question_ids": [],
+                        "covered_sub_question_ids": [],
+                        "uncovered_sub_questions": [],
+                        "coverage_gate_passed": True,
+                        "hard_coverage_gate_passed": True,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": json.dumps(
+                    {
+                        "total_claims": total_claims,
+                        "grounded_claims": total_claims,
+                        "ungrounded_claims": 0,
+                        "single_source_claims": total_claims,
+                        "low_confidence_claims": 0,
+                        "missing_evidence_binding_claims": 0,
+                        "total_evidence_bindings": 0,
+                        "source_backed_binding_count": 0,
+                        "search_only_binding_count": 0,
+                        "null_span_binding_count": 0,
+                        "grounded_claims_without_source_backed_binding": 0,
+                        "sections": [],
+                        "sources": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verifier.json",
+                "content": json.dumps(
+                    {
+                        "passed": True,
+                        "reason_codes": [],
+                        "flagged_claim_ids": [],
+                        "summary": {
+                            "section_count": section_count,
+                            "total_claims": total_claims,
+                            "low_confidence_claims": 0,
+                            "single_source_claims": total_claims,
+                            "source_backed_binding_count": 0,
+                            "search_only_binding_count": 0,
+                            "null_span_binding_count": 0,
+                            "missing_evidence_items": 0,
+                            "mismatched_binding_source": 0,
+                            "mismatched_binding_evidence": 0,
+                            "invalid_source_backed_span": 0,
+                            "duplicate_claims": 0,
+                            "low_value_claims": 0,
+                            "medium_single_source_search_only": 0,
+                            "same_domain_off_topic_dominance": 0,
+                        },
+                    }
+                ),
+                "content_type": "application/json",
+            },
+        ]
+    )
+    if not any(item.get("kind") == "evidence_items.json" for item in payload):
+        payload.append(
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(normalized_evidence_items),
+                "content_type": "application/json",
+            }
+        )
+    return payload
+
+
 @pytest.mark.asyncio
 async def test_plan_brief_includes_focused_scope_fields(tmp_path):
     runtime = build_runtime(tmp_path)
@@ -109,6 +200,7 @@ def create_completed_source_job(
     checkpoint_sections: list[dict] | None = None,
     checkpoint_sources: list[dict] | None = None,
     checkpoint_unit_results: dict | None = None,
+    include_provenance_bundle: bool = True,
 ):
     job = runtime.store.create_job(
         query=query,
@@ -176,31 +268,115 @@ def create_completed_source_job(
         "sections": sections,
         "unit_results": unit_results,
     }
-    runtime.write_artifact_batch(
-        job.job_id,
-        [
-            {
-                "kind": "sources.json",
-                "content": sources_content if sources_content is not None else json.dumps(source_registry),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "citations.json",
-                "content": json.dumps(citations),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "report.json",
-                "content": json.dumps(report),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "final_report.md",
-                "content": "# Final Report\n\nResume continues from the last checkpoint.",
-                "content_type": "text/markdown",
-            },
-        ],
-    )
+    evidence_items = [
+        {
+            "evidence_id": "evidence-unit-search-1-search",
+            "unit_id": "unit-search-1",
+            "summary": "Resume continues from the last checkpoint.",
+            "detail": "Resume continues from the last checkpoint.",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+        }
+    ]
+    artifacts = [
+        {
+            "kind": "sources.json",
+            "content": sources_content if sources_content is not None else json.dumps(source_registry),
+            "content_type": "application/json",
+        },
+        {
+            "kind": "citations.json",
+            "content": json.dumps(citations),
+            "content_type": "application/json",
+        },
+        {
+            "kind": "report.json",
+            "content": json.dumps(report),
+            "content_type": "application/json",
+        },
+        {
+            "kind": "final_report.md",
+            "content": "# Final Report\n\nResume continues from the last checkpoint.",
+            "content_type": "text/markdown",
+        },
+    ]
+    if include_provenance_bundle:
+        artifacts.extend(
+            [
+                {
+                    "kind": "evidence_items.json",
+                    "content": json.dumps(evidence_items),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "coverage.json",
+                    "content": json.dumps(
+                        {
+                            "query": query,
+                            "planned_section_ids": [section["section_id"] for section in sections],
+                            "answered_section_ids": [section["section_id"] for section in sections],
+                            "unanswered_sections": [],
+                            "planned_sub_question_ids": ["sq1"],
+                            "covered_sub_question_ids": ["sq1"],
+                            "uncovered_sub_questions": [],
+                            "coverage_gate_passed": True,
+                            "hard_coverage_gate_passed": True,
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "grounding.json",
+                    "content": json.dumps(
+                        {
+                            "total_claims": sum(len(section.get("claims", [])) for section in sections),
+                            "grounded_claims": sum(len(section.get("claims", [])) for section in sections),
+                            "ungrounded_claims": 0,
+                            "single_source_claims": sum(len(section.get("claims", [])) for section in sections),
+                            "low_confidence_claims": 0,
+                            "missing_evidence_binding_claims": 0,
+                            "total_evidence_bindings": 0,
+                            "source_backed_binding_count": 0,
+                            "search_only_binding_count": 0,
+                            "null_span_binding_count": 0,
+                            "grounded_claims_without_source_backed_binding": 0,
+                            "sections": [],
+                            "sources": [],
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "verifier.json",
+                    "content": json.dumps(
+                        {
+                            "passed": True,
+                            "reason_codes": [],
+                            "flagged_claim_ids": [],
+                            "summary": {
+                                "section_count": len(sections),
+                                "total_claims": sum(len(section.get("claims", [])) for section in sections),
+                                "low_confidence_claims": 0,
+                                "single_source_claims": sum(len(section.get("claims", [])) for section in sections),
+                                "source_backed_binding_count": 0,
+                                "search_only_binding_count": 0,
+                                "null_span_binding_count": 0,
+                                "missing_evidence_items": 0,
+                                "mismatched_binding_source": 0,
+                                "mismatched_binding_evidence": 0,
+                                "invalid_source_backed_span": 0,
+                                "duplicate_claims": 0,
+                                "low_value_claims": 0,
+                                "medium_single_source_search_only": 0,
+                                "same_domain_off_topic_dominance": 0,
+                            },
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+            ]
+        )
+    runtime.write_artifact_batch(job.job_id, artifacts)
     runtime.store.save_checkpoint(
         job.job_id,
         phase="finalizing",
@@ -210,16 +386,7 @@ def create_completed_source_job(
             "completed_unit_ids": list(unit_results),
             "unit_results": unit_results,
             "sources": source_registry,
-            "evidence_items": [
-                {
-                    "evidence_id": "evidence-unit-search-1-search",
-                    "unit_id": "unit-search-1",
-                    "summary": "Resume continues from the last checkpoint.",
-                    "detail": "Resume continues from the last checkpoint.",
-                    "source_ids": ["R1"],
-                    "source_urls": ["https://docs.example.com/runtime/checkpoints"],
-                }
-            ],
+            "evidence_items": evidence_items,
             "sections": sections,
         },
     )
@@ -2973,7 +3140,8 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
     original = create_completed_source_job(runtime, query="Original research")
     runtime.write_artifact_batch(
         original.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -2994,7 +3162,9 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
                 "content": "# Final Report\n\nCheckpoint resume summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Original research",
+        ),
     )
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
 
@@ -3008,7 +3178,8 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
     runtime.store.update_job(follow_up["job_id"], status="completed", phase="finalizing", finished_at=utc_now_iso())
     runtime.write_artifact_batch(
         follow_up["job_id"],
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -3029,7 +3200,9 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
                 "content": "# Final Report\n\nCheckpoint resume summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Follow up query",
+        ),
     )
 
     response = await runtime.start(
@@ -3159,7 +3332,8 @@ async def test_reused_start_payload_surfaces_resolved_artifact_diagnostics(tmp_p
     source = create_completed_source_job(runtime, query="Reuse diagnostics source")
     runtime.write_artifact_batch(
         source.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -3180,7 +3354,9 @@ async def test_reused_start_payload_surfaces_resolved_artifact_diagnostics(tmp_p
                 "content": "# Final Report\n\nReusable summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Reuse diagnostics source",
+        ),
     )
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
     first = await runtime.start(
@@ -3192,7 +3368,8 @@ async def test_reused_start_payload_surfaces_resolved_artifact_diagnostics(tmp_p
     runtime.store.update_job(first["job_id"], status="completed", phase="finalizing", finished_at=utc_now_iso())
     runtime.write_artifact_batch(
         first["job_id"],
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -3213,7 +3390,9 @@ async def test_reused_start_payload_surfaces_resolved_artifact_diagnostics(tmp_p
                 "content": "# Final Report\n\nReusable follow-up summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Reuse diagnostics follow-up",
+        ),
     )
     runtime.write_artifact(first["job_id"], "sources.json", json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]), "application/json")
 
@@ -3309,6 +3488,10 @@ async def test_result_returns_artifact_errors_instead_of_raising_for_corrupt_jso
         "sources.json": "invalid_json",
         "citations.json": "invalid_json",
         "final_report.md": "missing_required_artifact",
+        "evidence_items.json": "missing_required_artifact",
+        "coverage.json": "missing_required_artifact",
+        "grounding.json": "missing_required_artifact",
+        "verifier.json": "missing_required_artifact",
     }
 
 
@@ -3332,7 +3515,8 @@ async def test_result_prefers_resolved_final_batch_over_current_mixed_artifacts(
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Mixed final artifacts"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
@@ -3353,7 +3537,9 @@ async def test_result_prefers_resolved_final_batch_over_current_mixed_artifacts(
                 "content": "# Final Report\n\nGood report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Mixed final artifacts",
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -3387,6 +3573,12 @@ async def test_result_prefers_resolved_final_batch_from_fixture(tmp_path):
             serialized = content if isinstance(content, str) else json.dumps(content)
             content_type = "text/markdown" if kind.endswith(".md") else "application/json"
             artifacts.append({"kind": kind, "content": serialized, "content_type": content_type})
+        evidence_items = batch.get("evidence_items.json", [])
+        artifacts = with_minimal_provenance_artifacts(
+            artifacts,
+            query=fixture["job"]["query"],
+            evidence_items=evidence_items,
+        )
         persisted_batches.append(runtime.write_artifact_batch(job.job_id, artifacts))
 
     for kind, content in fixture.get("current_artifacts", {}).items():
@@ -3420,7 +3612,8 @@ async def test_result_falls_back_to_older_usable_final_batch_when_latest_complet
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Older usable batch fallback"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
@@ -3441,11 +3634,14 @@ async def test_result_falls_back_to_older_usable_final_batch_when_latest_complet
                 "content": "# Final Report\n\nOlder good report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Older usable batch fallback",
+        ),
     )
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R2", "url": "https://bad.example.com"}]),
@@ -3466,7 +3662,9 @@ async def test_result_falls_back_to_older_usable_final_batch_when_latest_complet
                 "content": "# Final Report\n\nBad report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Older usable batch fallback",
+        ),
     )
 
     result = await runtime.result(job.job_id)
@@ -3570,12 +3768,15 @@ async def test_status_exposes_resolved_artifact_batch_when_current_artifacts_are
     )
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {"kind": "sources.json", "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]), "content_type": "application/json"},
             {"kind": "citations.json", "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}), "content_type": "application/json"},
-            {"kind": "report.json", "content": json.dumps({"summary": "Good batch", "sections": [], "unit_results": {}}), "content_type": "application/json"},
-            {"kind": "final_report.md", "content": "# Final Report\n\nGood batch.", "content_type": "text/markdown"},
-        ],
+            {"kind": "report.json", "content": json.dumps({"summary": "Good batch summary", "sections": [], "unit_results": {}}), "content_type": "application/json"},
+            {"kind": "final_report.md", "content": "# Final Report\n\nGood batch summary.", "content_type": "text/markdown"},
+            ],
+            query="Artifact status fallback",
+        ),
     )
     runtime.write_artifact(job.job_id, "sources.json", json.dumps([{"source_id": "R999", "url": "https://stale.example.com"}]), "application/json")
 
@@ -3609,7 +3810,8 @@ async def test_interrupted_finalizing_job_reads_resolved_final_batch(tmp_path):
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Interrupted finalizing visibility"}), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
@@ -3630,7 +3832,9 @@ async def test_interrupted_finalizing_job_reads_resolved_final_batch(tmp_path):
                 "content": "# Final Report\n\nRecovered final report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Interrupted finalizing visibility",
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -3694,7 +3898,8 @@ async def test_canceled_finalizing_job_prefers_resolved_final_batch_and_exposes_
     ]
     persisted = runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
@@ -3730,7 +3935,10 @@ async def test_canceled_finalizing_job_prefers_resolved_final_batch_and_exposes_
                 "content": json.dumps(evidence_items),
                 "content_type": "application/json",
             },
-        ],
+            ],
+            query="Canceled finalizing visibility",
+            evidence_items=evidence_items,
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -3870,7 +4078,8 @@ async def test_startup_reconcile_resolves_worker_restarted_finalizing_job_with_u
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Startup reconcile resolved final batch"}), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
@@ -3891,7 +4100,9 @@ async def test_startup_reconcile_resolves_worker_restarted_finalizing_job_with_u
                 "content": "# Final Report\n\nRecovered final batch report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Startup reconcile resolved final batch",
+        ),
     )
 
     await runtime._ensure_startup_reconciled()
@@ -3938,7 +4149,8 @@ async def test_startup_reconcile_preserves_canceled_finalizing_job_with_usable_f
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Startup reconcile canceled final batch"}), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
@@ -3959,7 +4171,9 @@ async def test_startup_reconcile_preserves_canceled_finalizing_job_with_usable_f
                 "content": "# Final Report\n\nRecovered final batch report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Startup reconcile canceled final batch",
+        ),
     )
 
     await runtime._ensure_startup_reconciled()
@@ -4015,7 +4229,8 @@ async def test_start_reuses_interrupted_finalizing_job_with_usable_final_batch(t
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Reuse interrupted final batch"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
@@ -4036,7 +4251,9 @@ async def test_start_reuses_interrupted_finalizing_job_with_usable_final_batch(t
                 "content": "# Final Report\n\nRecovered report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Reuse interrupted final batch",
+        ),
     )
 
     response = await runtime.start(query="Reuse interrupted final batch", force_new=False, schedule=False)
@@ -4067,28 +4284,31 @@ async def test_resume_interrupted_finalizing_job_with_invalid_final_batch_does_n
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Interrupted finalizing invalid bundle"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
-            {
-                "kind": "sources.json",
-                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "citations.json",
-                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "report.json",
-                "content": "{bad-json",
-                "content_type": "application/json",
-            },
-            {
-                "kind": "final_report.md",
-                "content": "# Final Report\n\nBroken report.\n",
-                "content_type": "text/markdown",
-            },
-        ],
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": "{bad-json",
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nBroken report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Interrupted finalizing invalid bundle",
+        ),
     )
 
     resumed = await runtime.resume(job.job_id, schedule=False)
@@ -4118,28 +4338,31 @@ async def test_resume_interrupted_finalizing_job_with_usable_final_batch_short_c
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Interrupted finalizing resume"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
-            {
-                "kind": "sources.json",
-                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "citations.json",
-                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "report.json",
-                "content": json.dumps({"summary": "Recovered final report", "sections": [], "unit_results": {}}),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "final_report.md",
-                "content": "# Final Report\n\nRecovered final report.\n",
-                "content_type": "text/markdown",
-            },
-        ],
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Recovered final report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered final report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Interrupted finalizing resume",
+        ),
     )
 
     resumed = await runtime.resume(job.job_id, schedule=False)
@@ -5440,7 +5663,8 @@ async def test_continuation_does_not_mix_checkpoint_state_into_selected_final_ba
     runtime.write_artifact(source.job_id, "plan.json", json.dumps({"query": "Single tier continuation source"}), "application/json")
     runtime.write_artifact_batch(
         source.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -5461,7 +5685,9 @@ async def test_continuation_does_not_mix_checkpoint_state_into_selected_final_ba
                 "content": "# Final Report\n\nSelected final batch summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Single tier continuation source",
+        ),
     )
     runtime.store.save_checkpoint(
         source.job_id,
@@ -5603,7 +5829,8 @@ async def test_continuation_falls_back_to_older_usable_final_batch_when_latest_c
     runtime.write_artifact(original.job_id, "plan.json", json.dumps({"query": "Older usable continuation source"}), "application/json")
     runtime.write_artifact_batch(
         original.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -5624,11 +5851,14 @@ async def test_continuation_falls_back_to_older_usable_final_batch_when_latest_c
                 "content": "# Final Report\n\nGood continuation report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Older usable continuation source",
+        ),
     )
     runtime.write_artifact_batch(
         original.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R2", "url": "https://docs.example.com/runtime/bad"}]),
@@ -5649,7 +5879,9 @@ async def test_continuation_falls_back_to_older_usable_final_batch_when_latest_c
                 "content": "# Final Report\n\nBad continuation report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Older usable continuation source",
+        ),
     )
 
     response = await runtime.start(
@@ -8085,7 +8317,8 @@ async def test_continuation_prefers_evidence_artifact_over_reconstructed_evidenc
     }
     runtime.write_artifact_batch(
         source.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps(source_registry),
@@ -8138,7 +8371,25 @@ async def test_continuation_prefers_evidence_artifact_over_reconstructed_evidenc
                 ),
                 "content_type": "application/json",
             },
-        ],
+            ],
+            query="Evidence artifact continuation source",
+            evidence_items=[
+                {
+                    "evidence_id": "evidence-unit-search-1-fetch",
+                    "unit_id": "unit-search-1",
+                    "summary": "Resume continues from the last checkpoint.",
+                    "detail": "Resume continues from the last checkpoint.",
+                    "source_ids": ["R1"],
+                    "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                    "evidence_kind": "fetch",
+                    "derived_from_source_url": "https://docs.example.com/runtime/checkpoints",
+                    "line_start": 7,
+                    "line_end": 9,
+                }
+            ],
+            total_claims=1,
+            section_count=1,
+        ),
     )
     runtime.store.save_checkpoint(
         source.job_id,
@@ -8173,7 +8424,7 @@ async def test_continuation_prefers_evidence_artifact_over_reconstructed_evidenc
 
 
 @pytest.mark.asyncio
-async def test_continuation_prefers_current_evidence_artifact_when_resolved_final_batch_has_no_evidence_items(tmp_path):
+async def test_continuation_prefers_resolved_batch_evidence_over_current_artifact(tmp_path):
     runtime = build_runtime(tmp_path)
     source = create_completed_source_job(runtime, query="Continuation current evidence artifact fallback")
     current_evidence = [
@@ -8199,7 +8450,16 @@ async def test_continuation_prefers_current_evidence_artifact_when_resolved_fina
 
     continuation = runtime._build_continuation_context(source.job_id)
 
-    assert continuation.carry_forward_evidence == current_evidence
+    assert continuation.carry_forward_evidence == [
+        {
+            "evidence_id": "evidence-unit-search-1-search",
+            "unit_id": "unit-search-1",
+            "summary": "Resume continues from the last checkpoint.",
+            "detail": "Resume continues from the last checkpoint.",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -8252,6 +8512,134 @@ async def test_runtime_persists_evidence_items_artifact_in_final_batch(monkeypat
     assert fetch_items
     assert fetch_items[0]["line_start"] == 3
     assert fetch_items[0]["line_end"] == 3
+
+
+@pytest.mark.asyncio
+async def test_completed_result_requires_full_provenance_bundle_for_resolved_batch(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(
+        runtime,
+        query="Completed bundle provenance contract",
+        include_provenance_bundle=False,
+    )
+
+    status = await runtime.status(source.job_id)
+    result = await runtime.result(source.job_id)
+
+    assert status["resolved_artifact_batch_id"] == ""
+    assert result["resolved_artifact_batch_id"] == ""
+    assert result["artifact_errors"]["evidence_items.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["coverage.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["grounding.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["verifier.json"] == "missing_required_artifact"
+
+
+@pytest.mark.asyncio
+async def test_finalizing_result_does_not_resolve_partial_batch_with_current_provenance(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Interrupted partial bundle provenance contract",
+        request_fingerprint="fp-interrupted-partial-bundle-provenance",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="finalizing",
+        finished_at=utc_now_iso(),
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {
+                            "R1": {
+                                "source_id": "R1",
+                                "url": "https://good.example.com/runtime/recovery",
+                            }
+                        },
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(
+                    [
+                        {
+                            "evidence_id": "evidence-unit-search-1-fetch",
+                            "unit_id": "unit-search-1",
+                            "summary": "Recovered final batch evidence.",
+                            "detail": "Recovered final batch evidence.",
+                            "source_ids": ["R1"],
+                            "source_urls": ["https://good.example.com/runtime/recovery"],
+                            "evidence_kind": "fetch",
+                            "derived_from_source_url": "https://good.example.com/runtime/recovery",
+                            "line_start": 3,
+                            "line_end": 4,
+                        }
+                    ]
+                ),
+                "content_type": "application/json",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "coverage.json",
+        json.dumps({"query": job.query, "planned_section_ids": ["s1"], "answered_section_ids": []}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "grounding.json",
+        json.dumps({"total_claims": 99, "ungrounded_claims": 99}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "verifier.json",
+        json.dumps({"passed": False, "reason_codes": ["stale_current_only"]}),
+        "application/json",
+    )
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+
+    assert persisted[0]["metadata"]["batch_id"]
+    assert status["resolved_artifact_batch_id"] == ""
+    assert result["resolved_artifact_batch_id"] == ""
+    assert result["artifact_errors"]["coverage.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["grounding.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["verifier.json"] == "missing_required_artifact"
 
 
 @pytest.mark.asyncio
@@ -9317,7 +9705,8 @@ async def test_reused_job_payload_tolerates_invalid_plan_json(tmp_path):
     runtime.write_artifact(job.job_id, "plan.json", "{bad-json", "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -9338,7 +9727,9 @@ async def test_reused_job_payload_tolerates_invalid_plan_json(tmp_path):
                 "content": "# Final Report\n\nCheckpoint resume summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Reuse invalid plan",
+        ),
     )
 
     response = await runtime.start(query="Reuse invalid plan", force_new=False, schedule=False)

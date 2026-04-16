@@ -149,8 +149,15 @@ _UNSAFE_VALIDATION_ISSUES = {
     "unknown_dependency",
     "forward_or_cyclic_dependency",
 }
-_FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 _EVIDENCE_ITEMS_ARTIFACT_KIND = "evidence_items.json"
+_CORE_FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
+_PROVENANCE_FINAL_ARTIFACT_KINDS = (
+    _EVIDENCE_ITEMS_ARTIFACT_KIND,
+    "coverage.json",
+    "grounding.json",
+    "verifier.json",
+)
+_FINAL_ARTIFACT_KINDS = _CORE_FINAL_ARTIFACT_KINDS + _PROVENANCE_FINAL_ARTIFACT_KINDS
 _DEFAULT_SEARCH_QUERY_FN = None
 _RUNTIME_RECONCILE_STALE_SECONDS = 30
 
@@ -780,8 +787,8 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
 
 def _report_artifact_contract_error(job: DeepResearchJob) -> dict[str, str]:
     errors: dict[str, str] = {}
-    if job.status == "completed":
-        for kind in ("sources.json", "citations.json", "report.json", "final_report.md"):
+    if job.status == "completed" or _job_prefers_resolved_final_bundle(job):
+        for kind in _FINAL_ARTIFACT_KINDS:
             errors[kind] = "missing_required_artifact"
     return errors
 
@@ -927,6 +934,34 @@ def _current_final_artifact_bundle(store: DeepResearchStore, job_id: str) -> dic
     return {"batch_id": batch_id, "paths": paths}
 
 
+def _batch_bundle_candidate_from_dir(batch_dir: Path) -> dict[str, Any]:
+    return {
+        "batch_id": batch_dir.name,
+        "paths": {
+            kind: batch_dir / kind
+            for kind in _FINAL_ARTIFACT_KINDS
+            if (batch_dir / kind).exists()
+        },
+    }
+
+
+def _batch_bundle_candidates(store: DeepResearchStore, job_id: str) -> list[dict[str, Any]]:
+    batches_dir = store.artifacts_dir / job_id / "batches"
+    if not batches_dir.exists():
+        return []
+    candidates = sorted(
+        (path for path in batches_dir.iterdir() if path.is_dir()),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+        reverse=True,
+    )
+    return [_batch_bundle_candidate_from_dir(path) for path in candidates]
+
+
+def _latest_batch_bundle_candidate(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
+    candidates = _batch_bundle_candidates(store, job_id)
+    return candidates[0] if candidates else None
+
+
 def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
     if bundle is None:
         return False
@@ -952,6 +987,9 @@ def _read_batch_artifact_text(bundle: dict[str, Any] | None, kind: str) -> str |
     if bundle is None:
         return None
     paths = bundle.get("paths") or {}
+    direct_path = paths.get(kind)
+    if direct_path is not None:
+        return _read_text_if_exists(direct_path)
     anchor_path = next(iter(paths.values()), None)
     if anchor_path is None:
         return None
@@ -959,19 +997,11 @@ def _read_batch_artifact_text(bundle: dict[str, Any] | None, kind: str) -> str |
 
 
 def _complete_batch_bundles(store: DeepResearchStore, job_id: str) -> list[dict[str, Any]]:
-    batches_dir = store.artifacts_dir / job_id / "batches"
-    if not batches_dir.exists():
-        return []
-    candidates = sorted(
-        (path for path in batches_dir.iterdir() if path.is_dir()),
-        key=lambda path: (path.stat().st_mtime_ns, path.name),
-        reverse=True,
-    )
     bundles: list[dict[str, Any]] = []
-    for batch_dir in candidates:
-        paths = {kind: batch_dir / kind for kind in _FINAL_ARTIFACT_KINDS}
-        if all(_read_text_if_exists(path) is not None for path in paths.values()):
-            bundles.append({"batch_id": batch_dir.name, "paths": paths})
+    for bundle in _batch_bundle_candidates(store, job_id):
+        paths = bundle.get("paths") or {}
+        if all(paths.get(kind) is not None and _read_text_if_exists(paths[kind]) is not None for kind in _FINAL_ARTIFACT_KINDS):
+            bundles.append(bundle)
     return bundles
 
 
@@ -984,15 +1014,12 @@ def _resolve_final_artifact_bundle(store: DeepResearchStore, job_id: str) -> dic
     current_bundle = _current_final_artifact_bundle(store, job_id)
     if _artifact_bundle_is_usable(current_bundle):
         return current_bundle
-    first_candidate: dict[str, Any] | None = None
     for candidate in _complete_batch_bundles(store, job_id):
-        if first_candidate is None:
-            first_candidate = candidate
         if current_bundle is not None and candidate.get("batch_id") == current_bundle.get("batch_id"):
             continue
         if _artifact_bundle_is_usable(candidate):
             return candidate
-    return current_bundle or first_candidate
+    return current_bundle if _artifact_bundle_is_usable(current_bundle) else None
 
 
 def _final_artifact_bundle_is_usable(store: DeepResearchStore, job_id: str) -> bool:
@@ -1056,6 +1083,7 @@ def _artifact_payloads(
     job_id: str,
     *,
     final_bundle: dict[str, Any] | None = None,
+    bundle_candidate: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     current_artifacts = {artifact.kind: artifact for artifact in store.list_artifacts(job_id)}
     payloads: list[dict[str, Any]] = []
@@ -1072,9 +1100,10 @@ def _artifact_payloads(
     ]
     for kind in ordered_kinds:
         artifact = current_artifacts.get(kind)
-        bundle_text = _read_batch_artifact_text(final_bundle, kind) if final_bundle is not None else None
-        if final_bundle is not None and bundle_text is not None:
-            anchor_path = next(iter(final_bundle["paths"].values()))
+        candidate_bundle = final_bundle or bundle_candidate
+        bundle_text = _read_batch_artifact_text(candidate_bundle, kind) if candidate_bundle is not None else None
+        if candidate_bundle is not None and bundle_text is not None:
+            anchor_path = next(iter(candidate_bundle["paths"].values()))
             path = anchor_path.parent / kind
             payloads.append(
                 {
@@ -1086,10 +1115,12 @@ def _artifact_payloads(
                     "updated_at": artifact.updated_at if artifact is not None else "",
                     "metadata": _artifact_metadata(
                         bundle_text,
-                        batch_id=final_bundle["batch_id"],
+                        batch_id=candidate_bundle["batch_id"],
                     ),
                 }
             )
+            continue
+        if candidate_bundle is not None and kind in _FINAL_ARTIFACT_KINDS:
             continue
         if artifact is not None:
             payloads.append(artifact.model_dump())
@@ -2561,7 +2592,17 @@ class DeepResearchRuntime:
         payload = self._serialize_job(job)
         payload["current_checkpoint_kind"] = _checkpoint_kind(job.current_checkpoint)
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
-        artifacts = _artifact_payloads(self.store, job_id, final_bundle=final_bundle)
+        bundle_candidate = (
+            _latest_batch_bundle_candidate(self.store, job_id)
+            if _job_prefers_resolved_final_bundle(job) and final_bundle is None
+            else None
+        )
+        artifacts = _artifact_payloads(
+            self.store,
+            job_id,
+            final_bundle=final_bundle,
+            bundle_candidate=bundle_candidate,
+        )
         payload["artifact_kinds"] = [artifact["kind"] for artifact in artifacts]
         payload["artifacts"] = artifacts
         payload["artifact_fallback_used"] = _artifact_bundle_differs_from_current(self.store, job_id, final_bundle)
@@ -2587,31 +2628,46 @@ class DeepResearchRuntime:
         plan_text = self.store.read_artifact_text(job_id, "plan.json")
         partial_text = self.store.read_artifact_text(job_id, "partial_report.md") if include_partial else None
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
+        bundle_candidate = (
+            _latest_batch_bundle_candidate(self.store, job_id)
+            if _job_prefers_resolved_final_bundle(job) and final_bundle is None
+            else None
+        )
         final_text = (
             _read_text_if_exists(final_bundle["paths"]["final_report.md"])
             if final_bundle is not None
+            else _read_batch_artifact_text(bundle_candidate, "final_report.md")
+            if bundle_candidate is not None
             else self.store.read_artifact_text(job_id, "final_report.md")
         )
         citations_text = (
             _read_text_if_exists(final_bundle["paths"]["citations.json"])
             if final_bundle is not None
+            else _read_batch_artifact_text(bundle_candidate, "citations.json")
+            if bundle_candidate is not None
             else self.store.read_artifact_text(job_id, "citations.json")
         )
         evidence_items_text = (
             _read_batch_artifact_text(final_bundle, _EVIDENCE_ITEMS_ARTIFACT_KIND)
             if final_bundle is not None
+            else _read_batch_artifact_text(bundle_candidate, _EVIDENCE_ITEMS_ARTIFACT_KIND)
+            if bundle_candidate is not None
             else self.store.read_artifact_text(job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
         )
-        if evidence_items_text is None:
+        if evidence_items_text is None and bundle_candidate is None:
             evidence_items_text = self.store.read_artifact_text(job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
         report_text = (
             _read_text_if_exists(final_bundle["paths"]["report.json"])
             if final_bundle is not None
+            else _read_batch_artifact_text(bundle_candidate, "report.json")
+            if bundle_candidate is not None
             else self.store.read_artifact_text(job_id, "report.json")
         )
         sources_text = (
             _read_text_if_exists(final_bundle["paths"]["sources.json"])
             if final_bundle is not None
+            else _read_batch_artifact_text(bundle_candidate, "sources.json")
+            if bundle_candidate is not None
             else self.store.read_artifact_text(job_id, "sources.json")
         )
         artifact_errors: dict[str, str] = {}
@@ -2653,6 +2709,8 @@ class DeepResearchRuntime:
             artifact_text = (
                 _read_text_if_exists(final_bundle["paths"][kind])
                 if final_bundle is not None and kind in final_bundle["paths"]
+                else _read_batch_artifact_text(bundle_candidate, kind)
+                if bundle_candidate is not None
                 else self.store.read_artifact_text(job_id, kind)
             )
             if artifact_text is None:
@@ -2672,18 +2730,30 @@ class DeepResearchRuntime:
             "artifact_errors": artifact_errors,
             "artifact_fallback_used": _artifact_bundle_differs_from_current(self.store, job_id, final_bundle),
             "resolved_artifact_batch_id": final_bundle["batch_id"] if final_bundle is not None else "",
-            "artifacts": _artifact_payloads(self.store, job_id, final_bundle=final_bundle),
+            "artifacts": _artifact_payloads(
+                self.store,
+                job_id,
+                final_bundle=final_bundle,
+                bundle_candidate=bundle_candidate,
+            ),
         }
 
     def read_artifact_text(self, job_id: str, kind: str) -> str | None:
         job = self.store.get_job(job_id)
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
+        bundle_candidate = (
+            _latest_batch_bundle_candidate(self.store, job_id)
+            if _job_prefers_resolved_final_bundle(job) and final_bundle is None
+            else None
+        )
         if final_bundle is not None:
             if kind in final_bundle["paths"]:
                 return _read_text_if_exists(final_bundle["paths"][kind])
             batch_text = _read_batch_artifact_text(final_bundle, kind)
             if batch_text is not None:
                 return batch_text
+        if bundle_candidate is not None and kind in _FINAL_ARTIFACT_KINDS:
+            return _read_batch_artifact_text(bundle_candidate, kind)
         return self.store.read_artifact_text(job_id, kind)
 
     async def resume(self, job_id: str, *, schedule: bool = True) -> dict[str, Any]:
@@ -3700,6 +3770,11 @@ class DeepResearchRuntime:
 
         final_bundle = _resolve_final_artifact_bundle(self.store, continue_from_job_id)
         use_final_bundle = _artifact_bundle_is_usable(final_bundle)
+        bundle_candidate = (
+            _latest_batch_bundle_candidate(self.store, continue_from_job_id)
+            if final_bundle is None
+            else final_bundle
+        )
         current_report_text = self.store.read_artifact_text(continue_from_job_id, "report.json") or ""
         current_final_report = self.store.read_artifact_text(continue_from_job_id, "final_report.md") or ""
         current_sources_text = self.store.read_artifact_text(continue_from_job_id, "sources.json") or "[]"
@@ -3711,27 +3786,37 @@ class DeepResearchRuntime:
         report_text = (
             _read_text_if_exists(final_bundle["paths"]["report.json"])
             if use_final_bundle
+            else _read_batch_artifact_text(bundle_candidate, "report.json")
+            if bundle_candidate is not None
             else current_report_text
         )
         final_report = (
             _read_text_if_exists(final_bundle["paths"]["final_report.md"])
             if use_final_bundle
+            else _read_batch_artifact_text(bundle_candidate, "final_report.md")
+            if bundle_candidate is not None
             else current_final_report
         )
         partial_report = self.store.read_artifact_text(continue_from_job_id, "partial_report.md") or ""
         sources_text = (
             _read_text_if_exists(final_bundle["paths"]["sources.json"])
             if use_final_bundle
+            else _read_batch_artifact_text(bundle_candidate, "sources.json")
+            if bundle_candidate is not None
             else current_sources_text
         ) or "[]"
         citations_text = (
             _read_text_if_exists(final_bundle["paths"]["citations.json"])
             if use_final_bundle
+            else _read_batch_artifact_text(bundle_candidate, "citations.json")
+            if bundle_candidate is not None
             else current_citations_text
         ) or ""
         evidence_items_text = (
             _read_batch_artifact_text(final_bundle, _EVIDENCE_ITEMS_ARTIFACT_KIND)
             if use_final_bundle
+            else _read_batch_artifact_text(bundle_candidate, _EVIDENCE_ITEMS_ARTIFACT_KIND)
+            if bundle_candidate is not None
             else self.store.read_artifact_text(continue_from_job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
         ) or ""
         if use_final_bundle and not evidence_items_text:
@@ -4619,6 +4704,21 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             {
                 "kind": _EVIDENCE_ITEMS_ARTIFACT_KIND,
                 "content": _json_markdown_block(evidence_items),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "coverage.json",
+                "content": _json_markdown_block(coverage_diagnostics),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": _json_markdown_block(grounding_diagnostics),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verifier.json",
+                "content": _json_markdown_block(verifier_diagnostics),
                 "content_type": "application/json",
             },
         ],
