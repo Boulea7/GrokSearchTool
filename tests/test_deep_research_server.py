@@ -691,6 +691,19 @@ async def test_deep_research_canceled_finalizing_status_and_result_expose_resolv
 
 
 @pytest.mark.asyncio
+async def test_deep_research_result_forwards_include_partial_flag(monkeypatch, tmp_path):
+    class FakeRuntime:
+        async def result(self, job_id, *, include_partial=True):
+            return {"job_id": job_id, "include_partial": include_partial}
+
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", FakeRuntime())
+
+    result = await server.deep_research_result("job-include-partial", include_partial=False)
+
+    assert result == {"job_id": "job-include-partial", "include_partial": False}
+
+
+@pytest.mark.asyncio
 async def test_deep_research_round13_failed_source_continuation_result_matches_fixture(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path, complete_runner)
     monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
