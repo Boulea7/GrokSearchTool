@@ -37,7 +37,7 @@ class Config:
     )
     _DEFAULT_MODEL = "grok-4.20-0309"
     _DEFAULT_WEB_SEARCH_MODEL = "grok-4.20-auto"
-    _DEFAULT_DEEP_RESEARCH_STANDARD_MODEL = "grok-4.20-reasoning"
+    _DEFAULT_DEEP_RESEARCH_STANDARD_MODEL = "grok-4.20-expert"
     _DEFAULT_DEEP_RESEARCH_DEEP_MODEL = "grok-4.20-expert-4-agent"
     _DEFAULT_DEEP_RESEARCH_ULTRA_MODEL = "grok-4.20-heavy-16-agent"
     _DEFAULT_WEB_SEARCH_FALLBACK_MODELS = (
@@ -47,8 +47,7 @@ class Config:
         "grok-4.20-reasoning",
     )
     _DEFAULT_DEEP_RESEARCH_STANDARD_FALLBACK_MODELS = (
-        "grok-4.20-0309-reasoning",
-        "grok-4.20-expert",
+        "grok-4.20-reasoning",
         "grok-4.20-auto",
         "grok-4.20-fast",
     )
@@ -56,13 +55,11 @@ class Config:
         "grok-4.20-expert",
         "grok-4.20-multi-agent",
         "grok-4.20-reasoning",
-        "grok-4.20-heavy",
     )
     _DEFAULT_DEEP_RESEARCH_ULTRA_FALLBACK_MODELS = (
         "grok-4.20-heavy",
         "grok-4.20-expert-4-agent",
         "grok-4.20-expert",
-        "grok-4.20-multi-agent",
         "grok-4.20-reasoning",
     )
     _DEFAULT_MODEL_PROFILE = "balanced_auto"

@@ -471,6 +471,42 @@ def test_resolve_deep_research_model_for_deep_prefers_expert_4_agent_on_relay(mo
     assert config.resolve_deep_research_model_for_url("https://grok2api.example.com/v1", effort="deep") == "grok-4.20-expert-4-agent"
 
 
+def test_resolve_deep_research_model_for_standard_defaults_to_expert(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.resolve_deep_research_model_for_url("https://api.x.ai/v1", effort="standard") == "grok-4.20-expert"
+    assert config.resolve_deep_research_model_for_url("https://grok2api.example.com/v1", effort="standard") == "grok-4.20-expert"
+
+
+def test_preferred_deep_research_standard_models_use_unified_tool_strategy(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.preferred_deep_research_models_for_url("https://api.x.ai/v1", effort="standard") == [
+        "grok-4.20-expert",
+        "grok-4.20-reasoning",
+        "grok-4.20-auto",
+        "grok-4.20-fast",
+    ]
+    assert config.preferred_deep_research_models_for_url("https://openrouter.ai/api/v1", effort="standard") == [
+        "grok-4.20-expert:online",
+        "grok-4.20-reasoning:online",
+        "grok-4.20-auto:online",
+        "grok-4.20-fast:online",
+    ]
+
+
 def test_resolve_deep_research_model_for_ultra_prefers_heavy_16_agent_on_relay(monkeypatch, tmp_path):
     config = Config()
     config.reset_runtime_state()

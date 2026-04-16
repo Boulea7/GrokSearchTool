@@ -223,8 +223,8 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式，推荐显式包含 `/v1` 后缀；代码层不会仅因省略 `/v1` 就预先拦截，但多数 OpenAI 兼容端点仍可能因此在运行时失败，并通常伴随兼容性 warning） |
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
 | `GROK_MODEL` | 否 | `grok-4.20-0309` | 默认模型；优先级见下方说明（进程 env > 项目 `.env.local` > 项目 `.env` > 持久化 config > 代码默认值） |
-| `GROK_MODEL_PROFILE` | 否 | `balanced_auto` | 当未显式设置 `GROK_MODEL` 时，按 provider family 解析默认模型；当前优先兼容官方 xAI、OpenRouter、常见 OpenAI-compatible relay 与 `grok2api` 风格反代 |
-| `GROK_DEEP_RESEARCH_STANDARD_PROFILE` | 否 | `reasoning` | `deep research` 的 `standard` 档默认 profile；不可用时会自动回落 |
+| `GROK_MODEL_PROFILE` | 否 | `balanced_auto` | 当未显式设置 `GROK_MODEL` 时，按统一工具级策略解析默认模型；provider 只影响 suffix、endpoint path 与兼容性诊断 |
+| `GROK_DEEP_RESEARCH_STANDARD_PROFILE` | 否 | `reasoning` | `deep research` 的 `standard` 档默认 profile；当前默认主模型为 `grok-4.20-expert`，不可用时按统一 fallback 顺序自动回落 |
 | `GROK_DEEP_RESEARCH_DEEP_PROFILE` | 否 | `multi_agent` | `deep research` 的 `deep` 档默认 profile；若当前 provider / relay / 账户不支持多 agent，会自动回落到单 agent |
 | `GROK_DEEP_RESEARCH_ULTRA_PROFILE` | 否 | `ultra` | `deep research` 的 `ultra` 档默认 profile；显式请求时优先尝试 `grok-4.20-heavy-16-agent`，不可用时会自动降级到更轻的多 agent / 单 agent 模型 |
 | `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | 否 | - | 第 2 个 Grok 供应商；当主供应商失败时会自动切到该供应商继续重试 |
@@ -265,13 +265,13 @@ claude mcp add-json grok-search --scope user '{
 
 > 当前默认首选模型是 `grok-4.20-0309`。运行时模型选择对 Grok 4.1+ 族会保持弹性：如果显式或隐式请求的模型不在 `/models` 返回列表里，但列表中存在兼容的 Grok 4.1+ 可用模型，系统会优先回退到更合适的可用模型，而不是仅因后缀不匹配而直接失败。
 
-> 当没有显式 `GROK_MODEL` 时，运行时当前会按 `GROK_MODEL_PROFILE` 做 provider-aware 默认解析；`get_config_info` 基础快照会额外返回 `GROK_MODEL_PROFILE`、`GROK_DEEP_RESEARCH_STANDARD_PROFILE`、`GROK_DEEP_RESEARCH_DEEP_PROFILE`、`GROK_DEEP_RESEARCH_ULTRA_PROFILE` 与 `GROK_PROVIDER_FAMILY`，便于排查官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代的差异。
+> 当没有显式 `GROK_MODEL` 时，运行时当前会按统一工具级策略解析默认模型；同一工具的主模型与 fallback 顺序不会因 provider family 改变。provider 当前只影响 `:online` suffix、`/chat/completions` vs `/responses` 路径选择，以及 capability / availability / diagnostics metadata。`get_config_info` 基础快照会额外返回 `GROK_MODEL_PROFILE`、`GROK_DEEP_RESEARCH_STANDARD_PROFILE`、`GROK_DEEP_RESEARCH_DEEP_PROFILE`、`GROK_DEEP_RESEARCH_ULTRA_PROFILE` 与 `GROK_PROVIDER_FAMILY`，便于排查兼容层差异。
 
 > `get_config_info` 的基础快照现在还会返回 `GROK_ROUTING_DIAGNOSTICS`。其中会列出当前 active provider、编号 provider chain、各 profile 解析出的默认模型、预期会走 `/chat/completions` 还是 `/responses`，以及 multi-agent 相关 routing signals，方便判断官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代在当前配置下到底会怎么走。
 
 > 当前 Grok 路由已支持 `/chat/completions` 与 `/responses` 双通道。多 agent 家族与部分 response-only relay 模型会优先走 `/responses`；OpenRouter 与多数兼容 relay 仍优先 `chat/completions`。
 
-> `deep research` 当前默认采用 `standard` 单 agent、`deep` 多 agent 优先、`ultra` 超强多 agent 优先的策略；`ultra` 只会在显式指定 `effort=ultra` 时启用，默认优先尝试 `grok-4.20-heavy-16-agent`。若当前 provider、relay、账户套餐或单模型配置不支持更高档位，会自动回落到更轻的多 agent 或单 agent。多 agent 通常会带来更高时延，单次大约可能在 `10` 秒到 `2` 分钟之间，`ultra` 通常还会更慢。
+> `deep research` 当前默认采用统一工具级模型策略：`standard` 默认主模型 `grok-4.20-expert`，fallback 为 `grok-4.20-reasoning -> grok-4.20-auto -> grok-4.20-fast`；`deep` 默认主模型 `grok-4.20-expert-4-agent`，fallback 为 `grok-4.20-expert -> grok-4.20-multi-agent -> grok-4.20-reasoning`；`ultra` 默认主模型 `grok-4.20-heavy-16-agent`，fallback 为 `grok-4.20-heavy -> grok-4.20-expert-4-agent -> grok-4.20-expert -> grok-4.20-reasoning`。provider / relay 不改变同一工具的工具层策略，只负责路径、suffix 与兼容性落地。多 agent 通常会带来更高时延，单次大约可能在 `10` 秒到 `2` 分钟之间，`ultra` 通常还会更慢。
 
 > `GROK_TIME_CONTEXT_MODE` 默认是 `always`，保持当前“全量注入本地时间上下文”的行为；如需节省上下文，可改为 `auto` 或 `never`。
 
