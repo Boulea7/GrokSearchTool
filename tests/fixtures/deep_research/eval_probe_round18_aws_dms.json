@@ -1,0 +1,94 @@
+{
+  "sample": "probe-round18-aws-dms",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "planner": {
+    "used_fallback": false
+  },
+  "plan": {
+    "brief": {
+      "scope": {
+        "include_domains": ["docs.aws.amazon.com"],
+        "exclude_domains": ["repost.aws"],
+        "allowed_sources": ["docs.aws.amazon.com"]
+      },
+      "must_cover": ["Compare checkpoint resume and restart semantics in AWS DMS with official docs only"],
+      "coverage_checklist": ["Compare checkpoint resume and restart semantics in AWS DMS with official docs only"],
+      "continuation_focus": []
+    }
+  },
+  "report": {
+    "status": "failed",
+    "coverage": {
+      "planned_section_ids": [
+        "overview-of-dms-checkpoints-and-recovery-model",
+        "resume-processing-semantics-checkpoint-based-continuation",
+        "restart-reload-semantics-reset-behaviors",
+        "comparison-table-recovery-source-impact-full-load-cdc-differences",
+        "source-backed-spans-and-checkpoint-mechanics",
+        "error-handling-retries-persistence-options-and-limitations",
+        "summary-of-key-semantic-differences-and-best-practices"
+      ],
+      "answered_section_ids": [
+        "overview-of-dms-checkpoints-and-recovery-model",
+        "resume-processing-semantics-checkpoint-based-continuation",
+        "restart-reload-semantics-reset-behaviors",
+        "comparison-table-recovery-source-impact-full-load-cdc-differences"
+      ],
+      "unanswered_sections": [
+        "Source-Backed Spans and Checkpoint Mechanics",
+        "Error Handling, Retries, Persistence Options, and Limitations",
+        "Summary of Key Semantic Differences and Best Practices"
+      ],
+      "planned_sub_question_ids": ["sq1", "sq2", "sq3", "sq4", "sq5", "sq6"],
+      "covered_sub_question_ids": ["sq1", "sq2", "sq3", "sq4", "sq5"],
+      "uncovered_sub_questions": [
+        "Role of supporting features like awsdms_txn_state table, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior?"
+      ]
+    },
+    "runtime": {
+      "warnings": ["coverage_incomplete"],
+      "release_gate": {
+        "passed": false,
+        "reason_codes": ["coverage_incomplete"]
+      },
+      "verifier": {
+        "reason_codes": ["coverage_incomplete"]
+      }
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+      "title": "Runtime checkpoints",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": ["allowlisted_domain", "official_docs"],
+      "ranking_penalties": []
+    },
+    {
+      "source_id": "R2",
+      "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+      "title": "StartReplicationTask",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": ["allowlisted_domain", "official_docs"],
+      "ranking_penalties": []
+    }
+  ],
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "fail",
+      "score": 0.702,
+      "reason_tags": ["unanswered_sections", "uncovered_sub_questions"]
+    },
+    "ranking_noise_suppression": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

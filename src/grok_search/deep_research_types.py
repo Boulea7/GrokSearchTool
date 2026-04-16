@@ -125,6 +125,8 @@ class DeepResearchContinuation(BaseModel):
     source_job_id: str = ""
     source_job_status: str = ""
     continuation_identity: str = ""
+    compaction_policy: str = ""
+    compaction_reason_codes: list[str] = Field(default_factory=list)
     focused_snapshot: dict[str, Any] = Field(default_factory=dict)
     previous_summary: str = ""
     prior_plan_summary: str = ""

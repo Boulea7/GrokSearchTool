@@ -570,6 +570,71 @@ def test_cli_result_artifact_prefers_resolved_final_batch(monkeypatch, tmp_path,
     ]
 
 
+def test_cli_result_artifact_prefers_resolved_final_batch_for_citations(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="Artifact batch citations job",
+        request_fingerprint="fp-artifact-batch-citations",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Artifact batch citations job"}), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Good report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nGood report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Artifact batch citations job",
+        ),
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "citations.json",
+        json.dumps({"source_registry": {"R9": {"source_id": "R9", "url": "https://stale.example.com"}}, "sections": []}),
+        "application/json",
+    )
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--artifact", "citations.json"])
+    captured = capsys.readouterr()
+    batch_id = persisted[0]["metadata"]["batch_id"]
+    artifact_content = '{"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}'
+
+    assert exit_code == 0
+    assert captured.out == artifact_content + "\n"
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch={batch_id} artifact_fallback=true artifact=citations.json bytes={len(artifact_content.encode('utf-8'))}"
+    ]
+
+
 def test_cli_result_artifact_reads_resolved_final_batch_for_interrupted_finalizing_job(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
@@ -1212,3 +1277,65 @@ def test_cli_worker_returns_nonzero_when_job_is_interrupted(monkeypatch, tmp_pat
     exit_code = deep_research_cli.main(["_worker", "job-123"])
 
     assert exit_code == 1
+
+
+def test_cli_worker_does_not_interrupt_fresh_target_job_during_startup_reconcile(monkeypatch, tmp_path):
+    seed_runtime = build_runtime(tmp_path)
+    job = seed_runtime.store.create_job(
+        query="CLI worker fresh target",
+        request_fingerprint="fp-cli-worker-fresh-target",
+        status="queued",
+        phase="planning",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    seed_runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps({"query": "CLI worker fresh target"}),
+        "application/json",
+    )
+
+    async def fake_runner(current_runtime, job_id):
+        current_runtime.store.append_event(
+            job_id,
+            type="phase_started",
+            phase="planning",
+            message="Planning started.",
+            data={},
+        )
+        current_runtime.store.update_job(
+            job_id,
+            status="completed",
+            phase="finalizing",
+            progress_pct=100.0,
+            finished_at=utc_now_iso(),
+            heartbeat_at=utc_now_iso(),
+            last_error="",
+        )
+        current_runtime.store.append_event(
+            job_id,
+            type="job_completed",
+            phase="finalizing",
+            message="Done.",
+            data={},
+        )
+
+    worker_runtime = DeepResearchRuntime(seed_runtime.store.root_dir, runner=fake_runner)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: worker_runtime)
+
+    exit_code = deep_research_cli.main(["_worker", job.job_id])
+    events = worker_runtime.store.list_events(job.job_id, limit=20)
+    event_types = [event.type for event in events]
+    refreshed = worker_runtime.store.get_job(job.job_id)
+
+    assert exit_code == 0
+    assert "job_interrupted" not in event_types
+    assert event_types == ["phase_started", "job_completed"]
+    assert refreshed.status == "completed"
