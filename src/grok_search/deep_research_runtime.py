@@ -2704,6 +2704,14 @@ class DeepResearchRuntime:
                     citations = None
                 elif kind == _EVIDENCE_ITEMS_ARTIFACT_KIND:
                     evidence_items_value = None
+        artifact_errors.update(
+            _validate_provenance_bundle(
+                report_value=report_value,
+                sources_value=sources_value,
+                citations_value=citations,
+                evidence_items_value=evidence_items_value,
+            )
+        )
         required = _report_artifact_contract_error(job)
         for kind, error_code in required.items():
             artifact_text = (
@@ -5546,6 +5554,90 @@ def _build_release_gate(
     }
 
 
+def _claim_provenance_details(
+    claim: dict[str, Any],
+    *,
+    source_registry: dict[str, dict[str, Any]],
+    evidence_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    citations = _dedupe_preserve_order(
+        [str(citation).strip() for citation in claim.get("citations", []) if str(citation).strip()]
+    )
+    claim_evidence_ids = _dedupe_preserve_order(
+        [str(evidence_id).strip() for evidence_id in claim.get("evidence_ids", []) if str(evidence_id).strip()]
+    )
+    bindings = [binding for binding in claim.get("evidence_bindings", []) if isinstance(binding, dict)]
+    valid_bindings: list[dict[str, Any]] = []
+    source_backed_bindings: list[dict[str, Any]] = []
+    search_only_bindings: list[dict[str, Any]] = []
+    null_span_bindings: list[dict[str, Any]] = []
+    mismatched_binding_source_count = 0
+    mismatched_binding_evidence_count = 0
+
+    for binding in bindings:
+        binding_source_id = str(binding.get("source_id", "")).strip()
+        binding_evidence_id = str(binding.get("evidence_id", "")).strip()
+        source_ok = not source_registry or (binding_source_id in citations and binding_source_id in source_registry)
+        if not source_ok:
+            mismatched_binding_source_count += 1
+        evidence_ok = True
+        evidence_item = evidence_by_id.get(binding_evidence_id)
+        if claim_evidence_ids:
+            evidence_ok = (
+                binding_evidence_id in claim_evidence_ids
+                and evidence_item is not None
+                and binding_source_id in {
+                    str(source_id).strip()
+                    for source_id in evidence_item.get("source_ids", [])
+                    if str(source_id).strip()
+                }
+            )
+            if not evidence_ok:
+                mismatched_binding_evidence_count += 1
+        if not (source_ok and evidence_ok):
+            continue
+        valid_bindings.append(binding)
+        if bool(binding.get("source_backed")):
+            source_backed_bindings.append(binding)
+            line_start = binding.get("line_start")
+            line_end = binding.get("line_end")
+            if (
+                line_start is None
+                or line_end is None
+                or not isinstance(line_start, int)
+                or not isinstance(line_end, int)
+                or line_end < line_start
+            ):
+                null_span_bindings.append(binding)
+        else:
+            search_only_bindings.append(binding)
+
+    bound_citation_ids = _dedupe_preserve_order(
+        [str(binding.get("source_id", "")).strip() for binding in valid_bindings if str(binding.get("source_id", "")).strip()]
+    )
+    bound_evidence_ids = _dedupe_preserve_order(
+        [
+            str(binding.get("evidence_id", "")).strip()
+            for binding in valid_bindings
+            if str(binding.get("evidence_id", "")).strip() in claim_evidence_ids
+        ]
+    )
+    return {
+        "citations": citations,
+        "claim_evidence_ids": claim_evidence_ids,
+        "valid_bindings": valid_bindings,
+        "source_backed_bindings": source_backed_bindings,
+        "search_only_bindings": search_only_bindings,
+        "null_span_bindings": null_span_bindings,
+        "derived_supporting_source_count": len(set(citations)),
+        "derived_supporting_domain_count": _supporting_domain_count(citations, source_registry),
+        "unbound_citation_ids": [citation for citation in citations if citation not in set(bound_citation_ids)],
+        "unbound_evidence_ids": [evidence_id for evidence_id in claim_evidence_ids if evidence_id not in set(bound_evidence_ids)],
+        "mismatched_binding_source_count": mismatched_binding_source_count,
+        "mismatched_binding_evidence_count": mismatched_binding_evidence_count,
+    }
+
+
 def _build_verifier_diagnostics(
     *,
     coverage: dict[str, Any],
@@ -5573,6 +5665,8 @@ def _build_verifier_diagnostics(
         "low_value_claims": 0,
         "medium_single_source_search_only": 0,
         "same_domain_off_topic_dominance": 0,
+        "unbound_citation_sources": 0,
+        "unbound_evidence_ids": 0,
     }
     hard_coverage_gate_passed = bool(
         coverage.get("hard_coverage_gate_passed", coverage.get("coverage_gate_passed", False))
@@ -5594,14 +5688,18 @@ def _build_verifier_diagnostics(
             raw_claim_text = str(claim.get("text", "") or "")
             claim_text = _summarize_evidence_text(raw_claim_text, limit=_MAX_CLAIM_LENGTH)
             confidence = str(claim.get("confidence", "") or "").strip().lower()
-            supporting_source_count = int(claim.get("supporting_source_count", 0) or 0)
-            citations = _dedupe_preserve_order(
-                [str(citation).strip() for citation in claim.get("citations", []) if str(citation).strip()]
+            provenance = _claim_provenance_details(
+                claim,
+                source_registry=source_registry,
+                evidence_by_id=evidence_by_id,
             )
-            claim_evidence_ids = _dedupe_preserve_order(
-                [str(evidence_id).strip() for evidence_id in claim.get("evidence_ids", []) if str(evidence_id).strip()]
-            )
-            bindings = [binding for binding in claim.get("evidence_bindings", []) if isinstance(binding, dict)]
+            citations = provenance["citations"]
+            claim_evidence_ids = provenance["claim_evidence_ids"]
+            bindings = provenance["valid_bindings"]
+            source_backed_bindings = provenance["source_backed_bindings"]
+            search_only_bindings = provenance["search_only_bindings"]
+            null_span_bindings = provenance["null_span_bindings"]
+            supporting_source_count = provenance["derived_supporting_source_count"]
             if claim_text:
                 claim_key = _stable_text_key(claim_text)
                 if claim_key in seen_claim_keys:
@@ -5627,6 +5725,16 @@ def _build_verifier_diagnostics(
                     flagged_claim_ids.append(claim_id)
                 integrity_counts["missing_evidence_items"] += len(missing_claim_evidence_ids)
                 reason_codes.append("missing_evidence_items")
+            if provenance["unbound_citation_ids"]:
+                if claim_id:
+                    flagged_claim_ids.append(claim_id)
+                integrity_counts["unbound_citation_sources"] += 1
+                reason_codes.append("unbound_citation_sources")
+            if provenance["unbound_evidence_ids"]:
+                if claim_id:
+                    flagged_claim_ids.append(claim_id)
+                integrity_counts["unbound_evidence_ids"] += 1
+                reason_codes.append("unbound_evidence_ids")
             cited_sources = [source_registry[citation] for citation in citations if citation in source_registry]
             if cited_sources and all(
                 "same_domain_off_topic" in set(source.get("ranking_penalties") or []) for source in cited_sources
@@ -5650,50 +5758,26 @@ def _build_verifier_diagnostics(
                 confidence == "low"
                 and supporting_source_count <= 1
                 and bindings
-                and not any(bool(binding.get("source_backed")) for binding in bindings)
+                and not source_backed_bindings
             ):
                 if claim_id:
                     flagged_claim_ids.append(claim_id)
                 reason_codes.append("single_source_low_confidence")
-            for binding in bindings:
-                binding_source_id = str(binding.get("source_id", "")).strip()
-                binding_evidence_id = str(binding.get("evidence_id", "")).strip()
-                if source_registry and (binding_source_id not in citations or binding_source_id not in source_registry):
-                    if claim_id:
-                        flagged_claim_ids.append(claim_id)
-                    integrity_counts["mismatched_binding_source"] += 1
-                    reason_codes.append("mismatched_binding_source")
-                evidence_item = evidence_by_id.get(binding_evidence_id)
-                if (
-                    claim_evidence_ids
-                    and (
-                        binding_evidence_id not in claim_evidence_ids
-                        or evidence_item is None
-                        or binding_source_id not in {
-                            str(source_id).strip()
-                            for source_id in evidence_item.get("source_ids", [])
-                            if str(source_id).strip()
-                        }
-                    )
-                ):
-                    if claim_id:
-                        flagged_claim_ids.append(claim_id)
-                    integrity_counts["mismatched_binding_evidence"] += 1
-                    reason_codes.append("mismatched_binding_evidence")
-                if bool(binding.get("source_backed")):
-                    line_start = binding.get("line_start")
-                    line_end = binding.get("line_end")
-                    if (
-                        line_start is None
-                        or line_end is None
-                        or not isinstance(line_start, int)
-                        or not isinstance(line_end, int)
-                        or line_end < line_start
-                    ):
-                        if claim_id:
-                            flagged_claim_ids.append(claim_id)
-                        integrity_counts["invalid_source_backed_span"] += 1
-                        reason_codes.append("invalid_source_backed_span")
+            if provenance["mismatched_binding_source_count"] > 0:
+                if claim_id:
+                    flagged_claim_ids.append(claim_id)
+                integrity_counts["mismatched_binding_source"] += provenance["mismatched_binding_source_count"]
+                reason_codes.append("mismatched_binding_source")
+            if provenance["mismatched_binding_evidence_count"] > 0:
+                if claim_id:
+                    flagged_claim_ids.append(claim_id)
+                integrity_counts["mismatched_binding_evidence"] += provenance["mismatched_binding_evidence_count"]
+                reason_codes.append("mismatched_binding_evidence")
+            if null_span_bindings:
+                if claim_id:
+                    flagged_claim_ids.append(claim_id)
+                integrity_counts["invalid_source_backed_span"] += len(null_span_bindings)
+                reason_codes.append("invalid_source_backed_span")
 
     return {
         "passed": not reason_codes,
@@ -5710,6 +5794,58 @@ def _build_verifier_diagnostics(
             **integrity_counts,
         },
     }
+
+
+def _validate_provenance_bundle(
+    *,
+    report_value: dict[str, Any] | None,
+    sources_value: list[dict[str, Any]] | None,
+    citations_value: dict[str, Any] | None,
+    evidence_items_value: list[dict[str, Any]] | None,
+) -> dict[str, str]:
+    if (
+        not isinstance(report_value, dict)
+        or not isinstance(sources_value, list)
+        or not isinstance(citations_value, dict)
+        or not isinstance(evidence_items_value, list)
+    ):
+        return {}
+    errors: dict[str, str] = {}
+    source_ids = {
+        str(item.get("source_id", "")).strip()
+        for item in sources_value
+        if isinstance(item, dict) and str(item.get("source_id", "")).strip()
+    }
+    source_registry = citations_value.get("source_registry")
+    sections = citations_value.get("sections")
+    report_sections = report_value.get("sections")
+    if not isinstance(source_registry, dict) or not isinstance(sections, list) or not isinstance(report_sections, list):
+        return errors
+    registry_ids = {str(source_id).strip() for source_id in source_registry if str(source_id).strip()}
+    if source_ids != registry_ids:
+        errors["sources.json"] = "invalid_provenance_bundle"
+        errors["citations.json"] = "invalid_provenance_bundle"
+    if report_sections != sections:
+        errors["report.json"] = "invalid_provenance_bundle"
+        errors["citations.json"] = "invalid_provenance_bundle"
+    grounding = _build_grounding_diagnostics(sections, source_registry)
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding=grounding,
+        sections=sections,
+        source_registry=source_registry,
+        evidence_items=evidence_items_value,
+    )
+    structural_reason_codes = {
+        "missing_evidence_items",
+        "mismatched_binding_source",
+        "mismatched_binding_evidence",
+        "unbound_citation_sources",
+        "unbound_evidence_ids",
+    }
+    if structural_reason_codes & set(verifier.get("reason_codes", [])):
+        errors["report.json"] = "invalid_provenance_bundle"
+    return errors
 
 
 def _cluster_confidence(*, source_count: int, evidence_count: int, cluster_type: str = "", domain_count: int = 0) -> str:

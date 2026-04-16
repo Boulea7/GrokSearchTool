@@ -3749,6 +3749,151 @@ async def test_result_surfaces_invalid_nested_claim_shape_errors(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_result_surfaces_invalid_provenance_bundle_for_partially_bound_claim_graph(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Invalid provenance bundle handling",
+        request_fingerprint="fp-invalid-provenance-bundle",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Invalid provenance bundle handling"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps(
+                        [
+                            {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"},
+                            {"source_id": "R2", "url": "https://docs.example.com/runtime/state"},
+                        ]
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps(
+                        {
+                            "source_registry": {
+                                "R1": {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"},
+                                "R2": {"source_id": "R2", "url": "https://docs.example.com/runtime/state"},
+                            },
+                            "sections": [
+                                {
+                                    "section_id": "resume-semantics",
+                                    "title": "Resume Semantics",
+                                    "summary": "Resume continues from the last checkpoint and preserves downstream state.",
+                                    "claims": [
+                                        {
+                                            "claim_id": "resume-semantics-claim-1",
+                                            "text": "Resume continues from the last checkpoint and preserves downstream state.",
+                                            "citations": ["R1", "R2"],
+                                            "evidence_ids": ["e1", "e2"],
+                                            "evidence_bindings": [
+                                                {
+                                                    "evidence_id": "e1",
+                                                    "source_id": "R1",
+                                                    "source_backed": True,
+                                                    "line_start": 3,
+                                                    "line_end": 4,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                    "citations": ["R1", "R2"],
+                                }
+                            ],
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps(
+                        {
+                            "summary": "Resume continues from the last checkpoint and preserves downstream state.",
+                            "sections": [
+                                {
+                                    "section_id": "resume-semantics",
+                                    "title": "Resume Semantics",
+                                    "summary": "Resume continues from the last checkpoint and preserves downstream state.",
+                                    "claims": [
+                                        {
+                                            "claim_id": "resume-semantics-claim-1",
+                                            "text": "Resume continues from the last checkpoint and preserves downstream state.",
+                                            "citations": ["R1", "R2"],
+                                            "evidence_ids": ["e1", "e2"],
+                                            "evidence_bindings": [
+                                                {
+                                                    "evidence_id": "e1",
+                                                    "source_id": "R1",
+                                                    "source_backed": True,
+                                                    "line_start": 3,
+                                                    "line_end": 4,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                    "citations": ["R1", "R2"],
+                                }
+                            ],
+                            "unit_results": {},
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nResume continues from the last checkpoint and preserves downstream state.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Invalid provenance bundle handling",
+            evidence_items=[
+                {
+                    "evidence_id": "e1",
+                    "unit_id": "unit-search-1",
+                    "summary": "Resume continues from the last checkpoint.",
+                    "detail": "Resume continues from the last checkpoint.",
+                    "source_ids": ["R1"],
+                    "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                    "evidence_kind": "fetch",
+                    "line_start": 3,
+                    "line_end": 4,
+                },
+                {
+                    "evidence_id": "e2",
+                    "unit_id": "unit-search-1",
+                    "summary": "Preserves downstream state.",
+                    "detail": "Preserves downstream state.",
+                    "source_ids": ["R2"],
+                    "source_urls": ["https://docs.example.com/runtime/state"],
+                    "evidence_kind": "fetch",
+                    "line_start": 8,
+                    "line_end": 9,
+                },
+            ],
+            total_claims=1,
+            section_count=1,
+        ),
+    )
+
+    result = await runtime.result(job.job_id)
+
+    assert result["artifact_errors"]["report.json"] == "invalid_provenance_bundle"
+
+
+@pytest.mark.asyncio
 async def test_status_exposes_resolved_artifact_batch_when_current_artifacts_are_mixed(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -7939,6 +8084,118 @@ def test_verifier_flags_invalid_source_backed_span_duplicate_and_low_value_claim
         "resume-semantics-claim-2",
         "resume-semantics-claim-3",
     }
+
+
+def test_verifier_derives_single_source_search_only_from_citations_not_claim_metadata():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 0,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "supporting_source_count": 4,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": False,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            }
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "search"},
+        ],
+    )
+
+    assert "medium_single_source_search_only" in verifier["reason_codes"]
+    assert verifier["summary"]["medium_single_source_search_only"] == 1
+
+
+def test_verifier_flags_unbound_citation_sources_and_evidence_ids():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 0,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 1,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last checkpoint and preserves downstream state.",
+                        "citations": ["R1", "R2"],
+                        "evidence_ids": ["e1", "e2"],
+                        "confidence": "medium",
+                        "supporting_source_count": 2,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 3,
+                                "line_end": 4,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            },
+            "R2": {
+                "source_id": "R2",
+                "url": "https://docs.example.com/runtime/state",
+                "domain": "docs.example.com",
+            },
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R2"], "evidence_kind": "fetch"},
+        ],
+    )
+
+    assert "unbound_citation_sources" in verifier["reason_codes"]
+    assert "unbound_evidence_ids" in verifier["reason_codes"]
+    assert verifier["summary"]["unbound_citation_sources"] == 1
+    assert verifier["summary"]["unbound_evidence_ids"] == 1
 
 
 @pytest.mark.asyncio
