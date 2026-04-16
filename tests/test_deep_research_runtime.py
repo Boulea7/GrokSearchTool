@@ -813,6 +813,57 @@ async def test_planner_preselects_available_grok_model_for_deep_research(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_standard_effort_prefers_expert_before_fallback(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    observed_models = []
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-expert", "grok-4.20-reasoning", "grok-4.20-auto"]
+
+    async def fake_execute(self, headers, payload, ctx=None, render_sources=False):
+        observed_models.append(payload["model"])
+        return json.dumps(
+            {
+                "brief": {"objective": "Standard effort", "deliverable": "A cited report.", "success_criteria": ["Produce a structured report."]},
+                "sub_questions": [{"id": "sq1", "question": "Standard effort", "reason": "Cover the primary question."}],
+                "search_strategy": {
+                    "approach": "targeted",
+                    "search_queries": ["Standard effort"],
+                    "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+                },
+                "report_outline": [{"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."}],
+                "research_units": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "unit_type": "search",
+                        "title": "Primary search",
+                        "goal": "Standard effort",
+                        "query": "Standard effort",
+                        "depends_on": [],
+                        "status": "pending",
+                        "notes": "",
+                    }
+                ],
+                "planner_metadata": {"planner": "test", "used_fallback": False},
+            }
+        ), []
+
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.delenv("GROK_DEEP_RESEARCH_STANDARD_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {})
+    server.config.reset_runtime_state()
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
+
+    await runtime.start(query="Standard effort", effort="standard", plan_only=True, force_new=True, schedule=False)
+
+    assert observed_models == ["grok-4.20-expert"]
+
+
+@pytest.mark.asyncio
 async def test_deep_effort_prefers_multi_agent_default_and_preserves_single_agent_fallback(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     observed_models = []
