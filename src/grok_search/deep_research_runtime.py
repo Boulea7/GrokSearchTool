@@ -5171,13 +5171,20 @@ def _build_grounding_diagnostics(
             citation_ids = [citation for citation in claim.get("citations", []) if citation in source_registry]
             grounded = bool(citation_ids)
             evidence_bindings = claim.get("evidence_bindings", []) or []
+            valid_evidence_bindings = [
+                binding
+                for binding in evidence_bindings
+                if isinstance(binding, dict)
+                and str(binding.get("source_id", "")).strip() in set(citation_ids)
+                and str(binding.get("source_id", "")).strip() in source_registry
+            ]
             if grounded:
                 grounded_claims += 1
             if len(set(citation_ids)) <= 1:
                 single_source_claims += 1
             if str(claim.get("confidence", "")).lower() == "low":
                 low_confidence_claims += 1
-            if grounded and not evidence_bindings:
+            if grounded and not valid_evidence_bindings:
                 missing_evidence_binding_claims += 1
             claim_id = str(claim.get("claim_id", "")).strip()
             section_id = str(section.get("section_id", "")).strip()
@@ -5194,7 +5201,7 @@ def _build_grounding_diagnostics(
                     "supporting_source_count": len(set(citation_ids)),
                     "supporting_domain_count": _supporting_domain_count(citation_ids, source_registry),
                     "confidence": claim.get("confidence", ""),
-                    "evidence_binding_count": len(evidence_bindings),
+                    "evidence_binding_count": len(valid_evidence_bindings),
                 }
             )
         section_diagnostics.append(
@@ -5287,6 +5294,7 @@ def _build_claim_evidence_bindings(
             source_url = str(source.get("url", "") or "").strip()
             if not source_url:
                 source_url = next((str(url).strip() for url in item.source_urls if str(url).strip()), "")
+            source_backed = item.evidence_kind != "search"
             bindings.append(
                 {
                     "evidence_id": item.evidence_id,
@@ -5296,8 +5304,10 @@ def _build_claim_evidence_bindings(
                     "evidence_kind": item.evidence_kind,
                     "excerpt": excerpt,
                     "excerpt_hash": excerpt_hash,
-                    "line_start": item.line_start,
-                    "line_end": item.line_end,
+                    "excerpt_origin": "search_answer" if item.evidence_kind == "search" else "source_text",
+                    "source_backed": source_backed,
+                    "line_start": item.line_start if source_backed else None,
+                    "line_end": item.line_end if source_backed else None,
                 }
             )
     return bindings
