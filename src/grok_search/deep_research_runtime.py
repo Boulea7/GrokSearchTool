@@ -150,6 +150,7 @@ _UNSAFE_VALIDATION_ISSUES = {
     "forward_or_cyclic_dependency",
 }
 _FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
+_EVIDENCE_ITEMS_ARTIFACT_KIND = "evidence_items.json"
 _DEFAULT_SEARCH_QUERY_FN = None
 _RUNTIME_RECONCILE_STALE_SECONDS = 30
 
@@ -941,6 +942,16 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
             if not _final_report_text_is_meaningful(text, report_value=report_value):
                 return False
     return True
+
+
+def _read_batch_artifact_text(bundle: dict[str, Any] | None, kind: str) -> str | None:
+    if bundle is None:
+        return None
+    paths = bundle.get("paths") or {}
+    anchor_path = next(iter(paths.values()), None)
+    if anchor_path is None:
+        return None
+    return _read_text_if_exists(anchor_path.parent / kind)
 
 
 def _complete_batch_bundles(store: DeepResearchStore, job_id: str) -> list[dict[str, Any]]:
@@ -1802,6 +1813,9 @@ def _collect_confirmed_claims(sections: list[dict[str, Any]], *, limit: int = 4)
     claims: list[str] = []
     for section in sections:
         for claim in section.get("claims", []):
+            citations = [citation for citation in claim.get("citations", []) if str(citation).strip()]
+            if not citations:
+                continue
             text = _summarize_evidence_text(str(claim.get("text") or ""), limit=180)
             if not text or _is_noisy_text(text):
                 continue
@@ -3611,6 +3625,11 @@ class DeepResearchRuntime:
             if use_final_bundle
             else current_citations_text
         ) or ""
+        evidence_items_text = (
+            _read_batch_artifact_text(final_bundle, _EVIDENCE_ITEMS_ARTIFACT_KIND)
+            if use_final_bundle
+            else self.store.read_artifact_text(continue_from_job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
+        ) or ""
         report: dict[str, Any] = {}
         if report_text:
             report_value, _ = _safe_load_json_artifact(report_text)
@@ -3675,9 +3694,13 @@ class DeepResearchRuntime:
             carry_forward_unit_results = dict(latest_state.get("unit_results") or {})
 
         carry_forward_evidence = []
-        if not use_final_bundle and checkpoint_state:
+        if evidence_items_text:
+            evidence_value, evidence_error = _safe_load_json_artifact(evidence_items_text)
+            if evidence_error is None and isinstance(evidence_value, list):
+                carry_forward_evidence = list(evidence_value)
+        if not carry_forward_evidence and not use_final_bundle and checkpoint_state:
             carry_forward_evidence = list(checkpoint_state.evidence_items)
-        elif not use_final_bundle and isinstance(latest_state, dict):
+        elif not carry_forward_evidence and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_evidence = list(latest_state.get("evidence_items") or [])
         if not carry_forward_evidence:
             carry_forward_evidence = _build_carry_forward_evidence(carry_forward_unit_results, carry_forward_sections)
@@ -4474,6 +4497,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             {"kind": "citations.json", "content": _json_markdown_block(citations), "content_type": "application/json"},
             {"kind": "report.json", "content": _json_markdown_block(report), "content_type": "application/json"},
             {"kind": "final_report.md", "content": final_report, "content_type": "text/markdown"},
+            {
+                "kind": _EVIDENCE_ITEMS_ARTIFACT_KIND,
+                "content": _json_markdown_block(evidence_items),
+                "content_type": "application/json",
+            },
         ],
     )
     artifact_batch_id = next(
