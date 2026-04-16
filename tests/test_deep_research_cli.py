@@ -604,7 +604,56 @@ def test_cli_result_artifact_prefers_resolved_final_batch_for_citations(monkeypa
                 },
                 {
                     "kind": "report.json",
-                    "content": json.dumps({"summary": "Good report", "sections": [], "unit_results": {}}),
+                    "content": json.dumps(
+                        {
+                            "summary": "Good report",
+                            "sections": [],
+                            "unit_results": {},
+                            "coverage": {
+                                "planned_section_ids": [],
+                                "answered_section_ids": [],
+                                "unanswered_sections": [],
+                                "planned_sub_question_ids": [],
+                                "covered_sub_question_ids": [],
+                                "uncovered_sub_questions": [],
+                                "coverage_gate_passed": True,
+                                "hard_coverage_gate_passed": True,
+                            },
+                            "runtime": {
+                                "warnings": [],
+                                "grounding": {
+                                    "total_claims": 0,
+                                    "ungrounded_claims": 0,
+                                    "single_source_claims": 0,
+                                    "missing_evidence_binding_claims": 0,
+                                },
+                                "verifier": {
+                                    "passed": True,
+                                    "reason_codes": [],
+                                    "flagged_claim_ids": [],
+                                    "summary": {
+                                        "section_count": 0,
+                                        "total_claims": 0,
+                                        "low_confidence_claims": 0,
+                                        "single_source_claims": 0,
+                                        "source_backed_binding_count": 0,
+                                        "search_only_binding_count": 0,
+                                        "null_span_binding_count": 0,
+                                        "missing_evidence_items": 0,
+                                        "mismatched_binding_source": 0,
+                                        "mismatched_binding_evidence": 0,
+                                        "invalid_source_backed_span": 0,
+                                        "duplicate_claims": 0,
+                                        "low_value_claims": 0,
+                                        "medium_single_source_search_only": 0,
+                                        "same_domain_off_topic_dominance": 0,
+                                        "unbound_citation_sources": 0,
+                                        "unbound_evidence_ids": 0,
+                                    },
+                                },
+                            },
+                        }
+                    ),
                     "content_type": "application/json",
                 },
                 {
@@ -632,6 +681,131 @@ def test_cli_result_artifact_prefers_resolved_final_batch_for_citations(monkeypa
     assert captured.out == artifact_content + "\n"
     assert summary_lines(captured.err) == [
         f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch={batch_id} artifact_fallback=true artifact=citations.json bytes={len(artifact_content.encode('utf-8'))}"
+    ]
+
+
+def test_cli_result_artifact_prefers_resolved_final_batch_for_verifier(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="Artifact batch verifier job",
+        request_fingerprint="fp-artifact-batch-verifier",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Artifact batch verifier job"}), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps(
+                        {
+                            "summary": "Good report",
+                            "sections": [],
+                            "unit_results": {},
+                            "coverage": {
+                                "planned_section_ids": [],
+                                "answered_section_ids": [],
+                                "unanswered_sections": [],
+                                "planned_sub_question_ids": [],
+                                "covered_sub_question_ids": [],
+                                "uncovered_sub_questions": [],
+                                "coverage_gate_passed": True,
+                                "hard_coverage_gate_passed": True,
+                            },
+                            "runtime": {
+                                "warnings": [],
+                                "grounding": {
+                                    "total_claims": 0,
+                                    "ungrounded_claims": 0,
+                                    "single_source_claims": 0,
+                                    "missing_evidence_binding_claims": 0,
+                                },
+                                "verifier": {
+                                    "passed": True,
+                                    "reason_codes": [],
+                                    "flagged_claim_ids": [],
+                                    "summary": {
+                                        "section_count": 0,
+                                        "total_claims": 0,
+                                        "low_confidence_claims": 0,
+                                        "single_source_claims": 0,
+                                        "source_backed_binding_count": 0,
+                                        "search_only_binding_count": 0,
+                                        "null_span_binding_count": 0,
+                                        "missing_evidence_items": 0,
+                                        "mismatched_binding_source": 0,
+                                        "mismatched_binding_evidence": 0,
+                                        "invalid_source_backed_span": 0,
+                                        "duplicate_claims": 0,
+                                        "low_value_claims": 0,
+                                        "medium_single_source_search_only": 0,
+                                        "same_domain_off_topic_dominance": 0,
+                                        "unbound_citation_sources": 0,
+                                        "unbound_evidence_ids": 0,
+                                    },
+                                },
+                            },
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nGood report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Artifact batch verifier job",
+        ),
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "verifier.json",
+        json.dumps({"passed": False, "reason_codes": ["stale_current_only"]}),
+        "application/json",
+    )
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--artifact", "verifier.json"])
+    captured = capsys.readouterr()
+    batch_id = persisted[0]["metadata"]["batch_id"]
+    artifact_content = (
+        '{"passed": true, "reason_codes": [], "flagged_claim_ids": [], "summary": '
+        '{"section_count": 0, "total_claims": 0, "low_confidence_claims": 0, '
+        '"single_source_claims": 0, "source_backed_binding_count": 0, '
+        '"search_only_binding_count": 0, "null_span_binding_count": 0, '
+        '"missing_evidence_items": 0, "mismatched_binding_source": 0, '
+        '"mismatched_binding_evidence": 0, "invalid_source_backed_span": 0, '
+        '"duplicate_claims": 0, "low_value_claims": 0, '
+        '"medium_single_source_search_only": 0, '
+        '"same_domain_off_topic_dominance": 0, '
+        '"unbound_citation_sources": 0, "unbound_evidence_ids": 0}}'
+    )
+
+    assert exit_code == 0
+    assert captured.out == artifact_content + "\n"
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch={batch_id} artifact_fallback=true artifact=verifier.json bytes={len(artifact_content.encode('utf-8'))}"
     ]
 
 
