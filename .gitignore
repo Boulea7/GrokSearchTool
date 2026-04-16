@@ -13,6 +13,18 @@ uv.lock
 .codex/
 .claude/
 .worktrees/
+AGENTS.md
+AGENTS_*.md
+CLAUDE.md
+CLAUDE_*.md
+GEMINI.md
+GEMINI_*.md
+**/AGENTS.md
+**/AGENTS_*.md
+**/CLAUDE.md
+**/CLAUDE_*.md
+**/GEMINI.md
+**/GEMINI_*.md
 *.pem
 *.key
 *.p12
@@ -21,5 +33,7 @@ credentials*
 *secret*
 *api_key*
 
-# Local-only development docs
+# Local-only development docs and private AI collaboration notes
 .local/
+.local/docs/
+.local/docs/**
