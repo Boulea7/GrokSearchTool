@@ -674,6 +674,140 @@ async def test_get_config_info_deep_research_runtime_degrades_on_body_quality_wa
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_deep_research_profile_probe_failure_degrades_planner_and_runtime_while_web_search_stays_ready(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        return server._build_doctor_check(
+            "grok_search_probe",
+            "ok",
+            "真实搜索探针成功。",
+            provider_name="provider_1",
+            provider_model="grok-4.1-fast",
+            endpoint="https://api.example.com/v1/chat/completions",
+        )
+
+    async def fake_probe_deep_research_profile(api_url, api_key, *, effort):
+        if effort == "deep":
+            return server._build_doctor_check(
+                server._deep_research_probe_check_id(effort),
+                "error",
+                "Deep research deep 探针失败: upstream timeout",
+                error_kind="probe_failed",
+                provider_name="provider_1",
+                provider_model="grok-4.20-expert-4-agent",
+                endpoint="https://api.example.com/v1/chat/completions",
+            )
+        return server._build_doctor_check(
+            server._deep_research_probe_check_id(effort),
+            "ok",
+            f"Deep research {effort} 探针成功。",
+            provider_name="provider_1",
+            provider_model=f"grok-{effort}",
+            endpoint="https://api.example.com/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+    monkeypatch.setattr(server, "_probe_deep_research_profile", fake_probe_deep_research_profile)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+    planner = payload["feature_readiness"]["deep_research_planner"]
+    runtime = payload["feature_readiness"]["deep_research_runtime"]
+
+    assert checks["grok_search_probe"]["status"] == "ok"
+    assert checks["deep_research_deep_probe"]["status"] == "error"
+    assert payload["feature_readiness"]["web_search"]["status"] == "ready"
+    assert payload["doctor"]["status"] == "partial"
+    assert planner["status"] == "degraded"
+    assert runtime["status"] == "degraded"
+    assert planner["profile_probes"]["standard"]["status"] == "ready"
+    assert planner["profile_probes"]["deep"] == {
+        "status": "degraded",
+        "message": "Deep research deep 探针失败: upstream timeout",
+        "check_id": "deep_research_deep_probe",
+        "requested_model": "",
+        "effective_model": "",
+        "winning_provider": "",
+        "winning_model": "grok-4.20-expert-4-agent",
+        "endpoint": "https://api.example.com/v1/chat/completions",
+        "reason_code": "probe_failed",
+    }
+    assert runtime["profile_probes"]["deep"] == planner["profile_probes"]["deep"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_deep_research_profile_probe_failure_is_reflected_in_planner_and_runtime_causes(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        return server._build_doctor_check(
+            "grok_search_probe",
+            "ok",
+            "真实搜索探针成功。",
+        )
+
+    async def fake_probe_deep_research_profile(api_url, api_key, *, effort):
+        if effort == "ultra":
+            return server._build_doctor_check(
+                server._deep_research_probe_check_id(effort),
+                "warning",
+                "Deep research ultra 探针返回质量警告: 只返回了信源列表。",
+                warning_code="body_missing_sources_only",
+                provider_name="provider_2",
+                provider_model="grok-4.20-heavy-16-agent",
+                endpoint="https://api.example.com/v1/responses",
+            )
+        return server._build_doctor_check(
+            server._deep_research_probe_check_id(effort),
+            "ok",
+            f"Deep research {effort} 探针成功。",
+            provider_name="provider_2",
+            provider_model=f"grok-{effort}",
+            endpoint="https://api.example.com/v1/responses",
+        )
+
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+    monkeypatch.setattr(server, "_probe_deep_research_profile", fake_probe_deep_research_profile)
+
+    payload = await load_config_info()
+    planner = payload["feature_readiness"]["deep_research_planner"]
+    runtime = payload["feature_readiness"]["deep_research_runtime"]
+    expected_cause = {
+        "check_id": "deep_research_ultra_probe",
+        "status": "warning",
+        "reason_code": "body_missing_sources_only",
+    }
+
+    assert payload["feature_readiness"]["web_search"]["status"] == "ready"
+    assert planner["status"] == "degraded"
+    assert runtime["status"] == "degraded"
+    assert "deep_research_standard_probe" in planner["based_on_checks"]
+    assert "deep_research_deep_probe" in planner["based_on_checks"]
+    assert "deep_research_ultra_probe" in planner["based_on_checks"]
+    assert expected_cause in planner["degraded_by"]
+    assert expected_cause in runtime["degraded_by"]
+    assert planner["profile_probes"]["ultra"]["status"] == "degraded"
+    assert planner["profile_probes"]["ultra"]["reason_code"] == "body_missing_sources_only"
+    assert runtime["profile_probes"]["ultra"]["status"] == "degraded"
+    assert runtime["profile_probes"]["ultra"]["reason_code"] == "body_missing_sources_only"
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_deep_research_runtime_and_planner_degrade_when_models_probe_unhealthy(monkeypatch):
     async def fake_fetch_available_models(api_url, api_key):
         return []
