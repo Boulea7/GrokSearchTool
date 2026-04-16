@@ -15,7 +15,7 @@ from grok_search.deep_research_runtime import (
     _search_query,
 )
 from grok_search.providers.grok import GrokSearchProvider
-from grok_search.deep_research_types import DeepResearchPlan, utc_now_iso
+from grok_search.deep_research_types import DeepResearchContinuationState, DeepResearchPlan, utc_now_iso
 
 
 def build_runtime(tmp_path):
@@ -7860,6 +7860,115 @@ async def test_runtime_blocks_medium_single_source_search_only_report(monkeypatc
     assert "medium_single_source_search_only" in verifier["reason_codes"]
     assert "medium_single_source_search_only" in result["report"]["runtime"]["verifier"]["reason_codes"]
     assert "medium_single_source_search_only" in result["report"]["runtime"]["release_gate"]["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_report_exposes_provider_winners(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    async def search_with_details(query, *, effort="standard"):
+        return {
+            "answer": "Checkpoint resume semantics: resume-processing continues from the last durable checkpoint.",
+            "sources": [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint docs.",
+                    "provider": "provider_2",
+                }
+            ],
+            "warning_code": None,
+            "requested_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+            "provider_name": "provider_2",
+            "provider_model": "grok-4.20-expert",
+            "provider_api_url": "https://api.example.com/v1",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query_with_details", search_with_details)
+
+    response = await runtime.start(query="Checkpoint resume semantics", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    winners = result["report"]["runtime"]["provider_winners"]
+
+    assert winners == [
+        {
+            "unit_id": "unit-search-1",
+            "provider_name": "provider_2",
+            "provider_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_plan_with_model_exposes_requested_and_effective_model_trace(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    class FakePlannerProvider:
+        def __init__(self):
+            self.model = "grok-4.20-expert"
+            self._last_success_provider_name = "provider_2"
+            self._last_success_provider_model = "grok-4.20-expert"
+            self._last_success_provider_api_url = "https://api.example.com/v1"
+
+        def _build_api_headers(self):
+            return {}
+
+        async def _execute_completion_with_retry_result(self, headers, payload, render_sources=False):
+            return (
+                json.dumps(structured_plan_payload(payload_job, payload_continuation.model_dump())),
+                {},
+            )
+
+    payload_job = None
+    payload_continuation = None
+
+    async def fake_build_provider(*, effort="standard"):
+        return (
+            FakePlannerProvider(),
+            {
+                "requested_model": "grok-4.20-auto",
+                "effective_model": "grok-4.20-expert",
+                "resolution": "preferred_profile_match",
+                "available_models": ["grok-4.20-expert"],
+            },
+        )
+
+    monkeypatch.setattr("grok_search.deep_research_runtime._build_runtime_grok_provider", fake_build_provider)
+    job = runtime.store.create_job(
+        query="Planner trace model selection",
+        request_fingerprint="fp-planner-trace-model-selection",
+        status="draft",
+        phase="planning",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=True,
+        force_new=True,
+        resolved_budget_seconds=120,
+        continued_from_job_id="",
+    )
+    payload_job = job
+    payload_continuation = DeepResearchContinuationState(mode="fresh")
+
+    _, trace = await runtime._generate_plan_with_model(job, payload_continuation)
+
+    assert trace["requested_model"] == "grok-4.20-auto"
+    assert trace["effective_model"] == "grok-4.20-expert"
+    assert trace["model_resolution"] == "preferred_profile_match"
+    assert trace["provider_name"] == "provider_2"
+    assert trace["provider_model"] == "grok-4.20-expert"
 
 
 @pytest.mark.asyncio
