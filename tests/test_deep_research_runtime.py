@@ -7098,6 +7098,225 @@ async def test_continuation_confirmed_claims_filter_low_value_boilerplate(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_continuation_confirmed_claims_require_grounded_claims(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(
+        runtime,
+        query="Continuation grounded claims source",
+        checkpoint_sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "summary": "Checkpoint resume continues from the last durable checkpoint.",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Checkpoint resume continues from the last durable checkpoint.",
+                        "citations": ["R1"],
+                        "confidence": "medium",
+                    },
+                    {
+                        "claim_id": "resume-semantics-claim-2",
+                        "text": "Restart always preserves target state without any replay cost.",
+                        "citations": [],
+                        "confidence": "high",
+                    },
+                ],
+                "citations": ["R1"],
+                "confidence": "medium",
+            }
+        ],
+    )
+
+    continuation = runtime._build_continuation_context(source.job_id)
+
+    assert continuation.confirmed_claims == ["Checkpoint resume continues from the last durable checkpoint."]
+
+
+@pytest.mark.asyncio
+async def test_continuation_prefers_evidence_artifact_over_reconstructed_evidence(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(runtime, query="Evidence artifact continuation source")
+    plan_payload = structured_plan_payload(source, {"mode": "fresh"})
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/checkpoints",
+            "title": "Runtime checkpoints",
+            "domain": "docs.example.com",
+            "source_type": "official_docs",
+            "ranking_reasons": ["official_docs"],
+        }
+    ]
+    sections = [
+        {
+            "section_id": "resume-semantics",
+            "title": "Resume Semantics",
+            "summary": "Resume continues from the last checkpoint.",
+            "claims": [
+                {
+                    "claim_id": "resume-semantics-claim-1",
+                    "text": "Resume continues from the last checkpoint.",
+                    "citations": ["R1"],
+                    "unit_id": "unit-search-1",
+                    "evidence_ids": ["evidence-unit-search-1-fetch"],
+                    "confidence": "medium",
+                }
+            ],
+            "citations": ["R1"],
+            "confidence": "medium",
+        }
+    ]
+    unit_results = {
+        "unit-search-1": {
+            "summary": "Resume continues from the last checkpoint.",
+            "detail": "Resume continues from the last checkpoint.",
+            "source_ids": ["R1"],
+            "citations": ["R1"],
+        }
+    }
+    runtime.write_artifact_batch(
+        source.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps(source_registry),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {item["source_id"]: item for item in source_registry},
+                        "sections": sections,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps(
+                    {
+                        "query": source.query,
+                        "summary": "Resume continues from the last checkpoint.",
+                        "sections": sections,
+                        "unit_results": unit_results,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nResume continues from the last checkpoint.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(
+                    [
+                        {
+                            "evidence_id": "evidence-unit-search-1-fetch",
+                            "unit_id": "unit-search-1",
+                            "summary": "Resume continues from the last checkpoint.",
+                            "detail": "Resume continues from the last checkpoint.",
+                            "source_ids": ["R1"],
+                            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                            "evidence_kind": "fetch",
+                            "derived_from_source_url": "https://docs.example.com/runtime/checkpoints",
+                            "line_start": 7,
+                            "line_end": 9,
+                        }
+                    ]
+                ),
+                "content_type": "application/json",
+            },
+        ],
+    )
+    runtime.store.save_checkpoint(
+        source.job_id,
+        phase="finalizing",
+        checkpoint_key="finalizing",
+        state={
+            "plan": plan_payload,
+            "completed_unit_ids": ["unit-search-1"],
+            "unit_results": unit_results,
+            "sources": source_registry,
+            "evidence_items": [],
+            "sections": sections,
+        },
+    )
+
+    continuation = runtime._build_continuation_context(source.job_id)
+
+    assert continuation.carry_forward_evidence == [
+        {
+            "evidence_id": "evidence-unit-search-1-fetch",
+            "unit_id": "unit-search-1",
+            "summary": "Resume continues from the last checkpoint.",
+            "detail": "Resume continues from the last checkpoint.",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+            "evidence_kind": "fetch",
+            "derived_from_source_url": "https://docs.example.com/runtime/checkpoints",
+            "line_start": 7,
+            "line_end": 9,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_persists_evidence_items_artifact_in_final_batch(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume behavior.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nResume continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Persist evidence artifact probe", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+
+    persisted = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_items.json") or "[]")
+
+    assert persisted
+    fetch_items = [item for item in persisted if item.get("evidence_kind") == "fetch"]
+
+    assert fetch_items
+    assert fetch_items[0]["line_start"] == 3
+    assert fetch_items[0]["line_end"] == 3
+
+
+@pytest.mark.asyncio
 async def test_stop_policy_does_not_skip_pending_unit_when_only_one_completed_unit_mentions_all_targets(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     search_calls: list[str] = []
