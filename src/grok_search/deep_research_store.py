@@ -511,19 +511,6 @@ class DeepResearchStore:
             ).fetchall()
         recovered: list[DeepResearchJob] = []
         for row in rows:
-            if stale_after_seconds > 0:
-                candidate_times = [
-                    _parse_utc_iso(row["heartbeat_at"]),
-                    _parse_utc_iso(row["updated_at"]),
-                    _parse_utc_iso(row["started_at"]),
-                    _parse_utc_iso(row["created_at"]),
-                ]
-                visible_times = [item.astimezone(dt.UTC) for item in candidate_times if item is not None]
-                if visible_times:
-                    newest = max(visible_times)
-                    age_seconds = (now - newest).total_seconds()
-                    if age_seconds < stale_after_seconds:
-                        continue
             if bool(row["cancel_requested"]):
                 job = self.update_job(
                     row["job_id"],
@@ -543,25 +530,39 @@ class DeepResearchStore:
                         "checkpoint_kind": _checkpoint_kind(row["current_checkpoint"]),
                     },
                 )
-            else:
-                job = self.update_job(
-                    row["job_id"],
-                    status="interrupted",
-                    last_error="worker_restarted",
-                    finished_at=interrupted_at,
-                    heartbeat_at=interrupted_at,
-                )
-                self.append_event(
-                    row["job_id"],
-                    type="job_interrupted",
-                    phase=row["phase"],
-                    message="Deep research interrupted during worker recovery.",
-                    data={
-                        "reason": "worker_restarted",
-                        "checkpoint_key": row["current_checkpoint"],
-                        "checkpoint_kind": _checkpoint_kind(row["current_checkpoint"]),
-                    },
-                )
+                recovered.append(job)
+                continue
+            if stale_after_seconds > 0:
+                candidate_times = [
+                    _parse_utc_iso(row["heartbeat_at"]),
+                    _parse_utc_iso(row["updated_at"]),
+                    _parse_utc_iso(row["started_at"]),
+                    _parse_utc_iso(row["created_at"]),
+                ]
+                visible_times = [item.astimezone(dt.UTC) for item in candidate_times if item is not None]
+                if visible_times:
+                    newest = max(visible_times)
+                    age_seconds = (now - newest).total_seconds()
+                    if age_seconds < stale_after_seconds:
+                        continue
+            job = self.update_job(
+                row["job_id"],
+                status="interrupted",
+                last_error="worker_restarted",
+                finished_at=interrupted_at,
+                heartbeat_at=interrupted_at,
+            )
+            self.append_event(
+                row["job_id"],
+                type="job_interrupted",
+                phase=row["phase"],
+                message="Deep research interrupted during worker recovery.",
+                data={
+                    "reason": "worker_restarted",
+                    "checkpoint_key": row["current_checkpoint"],
+                    "checkpoint_kind": _checkpoint_kind(row["current_checkpoint"]),
+                },
+            )
             recovered.append(job)
         return recovered
 
