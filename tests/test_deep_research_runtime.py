@@ -87,72 +87,124 @@ def with_minimal_provenance_artifacts(
 ):
     payload = list(artifacts)
     normalized_evidence_items = [] if evidence_items is None else evidence_items
+    coverage_payload = {
+        "query": query,
+        "planned_section_ids": [],
+        "answered_section_ids": [],
+        "unanswered_sections": [],
+        "planned_sub_question_ids": [],
+        "covered_sub_question_ids": [],
+        "uncovered_sub_questions": [],
+        "coverage_gate_passed": True,
+        "hard_coverage_gate_passed": True,
+    }
+    grounding_payload = {
+        "total_claims": total_claims,
+        "grounded_claims": total_claims,
+        "ungrounded_claims": 0,
+        "single_source_claims": total_claims,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0,
+        "total_evidence_bindings": 0,
+        "source_backed_binding_count": 0,
+        "search_only_binding_count": 0,
+        "null_span_binding_count": 0,
+        "grounded_claims_without_source_backed_binding": 0,
+        "sections": [],
+        "sources": [],
+    }
+    verifier_payload = {
+        "passed": True,
+        "reason_codes": [],
+        "flagged_claim_ids": [],
+        "summary": {
+            "section_count": section_count,
+            "total_claims": total_claims,
+            "low_confidence_claims": 0,
+            "single_source_claims": total_claims,
+            "source_backed_binding_count": 0,
+            "search_only_binding_count": 0,
+            "null_span_binding_count": 0,
+            "missing_evidence_items": 0,
+            "mismatched_binding_source": 0,
+            "mismatched_binding_evidence": 0,
+            "invalid_source_backed_span": 0,
+            "duplicate_claims": 0,
+            "low_value_claims": 0,
+            "medium_single_source_search_only": 0,
+            "same_domain_off_topic_dominance": 0,
+            "unbound_citation_sources": 0,
+            "unbound_evidence_ids": 0,
+        },
+    }
+    for item in payload:
+        if item.get("kind") != "report.json":
+            continue
+        try:
+            report_payload = json.loads(item.get("content") or "")
+        except Exception:
+            continue
+        if not isinstance(report_payload, dict):
+            continue
+        report_payload.setdefault("sections", [])
+        report_payload.setdefault("unit_results", {})
+        coverage_report = report_payload.setdefault("coverage", {})
+        if isinstance(coverage_report, dict):
+            for key, value in coverage_payload.items():
+                coverage_report.setdefault(key, value)
+        else:
+            report_payload["coverage"] = dict(coverage_payload)
+        runtime_payload = report_payload.setdefault("runtime", {})
+        runtime_payload.setdefault("warnings", [])
+        grounding_report = runtime_payload.setdefault(
+            "grounding",
+            {
+                key: grounding_payload[key]
+                for key in (
+                    "total_claims",
+                    "ungrounded_claims",
+                    "single_source_claims",
+                    "missing_evidence_binding_claims",
+                )
+            },
+        )
+        if isinstance(grounding_report, dict):
+            for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims"):
+                grounding_report.setdefault(key, grounding_payload[key])
+        else:
+            runtime_payload["grounding"] = {
+                key: grounding_payload[key]
+                for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims")
+            }
+        verifier_report = runtime_payload.setdefault("verifier", {})
+        if isinstance(verifier_report, dict):
+            verifier_report.setdefault("passed", verifier_payload["passed"])
+            verifier_report.setdefault("reason_codes", list(verifier_payload["reason_codes"]))
+            verifier_report.setdefault("flagged_claim_ids", list(verifier_payload["flagged_claim_ids"]))
+            verifier_summary = verifier_report.setdefault("summary", {})
+            if isinstance(verifier_summary, dict):
+                for key, value in verifier_payload["summary"].items():
+                    verifier_summary.setdefault(key, value)
+            else:
+                verifier_report["summary"] = dict(verifier_payload["summary"])
+        else:
+            runtime_payload["verifier"] = json.loads(json.dumps(verifier_payload))
+        item["content"] = json.dumps(report_payload)
     payload.extend(
         [
             {
                 "kind": "coverage.json",
-                "content": json.dumps(
-                    {
-                        "query": query,
-                        "planned_section_ids": [],
-                        "answered_section_ids": [],
-                        "unanswered_sections": [],
-                        "planned_sub_question_ids": [],
-                        "covered_sub_question_ids": [],
-                        "uncovered_sub_questions": [],
-                        "coverage_gate_passed": True,
-                        "hard_coverage_gate_passed": True,
-                    }
-                ),
+                "content": json.dumps(coverage_payload),
                 "content_type": "application/json",
             },
             {
                 "kind": "grounding.json",
-                "content": json.dumps(
-                    {
-                        "total_claims": total_claims,
-                        "grounded_claims": total_claims,
-                        "ungrounded_claims": 0,
-                        "single_source_claims": total_claims,
-                        "low_confidence_claims": 0,
-                        "missing_evidence_binding_claims": 0,
-                        "total_evidence_bindings": 0,
-                        "source_backed_binding_count": 0,
-                        "search_only_binding_count": 0,
-                        "null_span_binding_count": 0,
-                        "grounded_claims_without_source_backed_binding": 0,
-                        "sections": [],
-                        "sources": [],
-                    }
-                ),
+                "content": json.dumps(grounding_payload),
                 "content_type": "application/json",
             },
             {
                 "kind": "verifier.json",
-                "content": json.dumps(
-                    {
-                        "passed": True,
-                        "reason_codes": [],
-                        "flagged_claim_ids": [],
-                        "summary": {
-                            "section_count": section_count,
-                            "total_claims": total_claims,
-                            "low_confidence_claims": 0,
-                            "single_source_claims": total_claims,
-                            "source_backed_binding_count": 0,
-                            "search_only_binding_count": 0,
-                            "null_span_binding_count": 0,
-                            "missing_evidence_items": 0,
-                            "mismatched_binding_source": 0,
-                            "mismatched_binding_evidence": 0,
-                            "invalid_source_backed_span": 0,
-                            "duplicate_claims": 0,
-                            "low_value_claims": 0,
-                            "medium_single_source_search_only": 0,
-                            "same_domain_off_topic_dominance": 0,
-                        },
-                    }
-                ),
+                "content": json.dumps(verifier_payload),
                 "content_type": "application/json",
             },
         ]
@@ -1682,7 +1734,7 @@ async def test_run_job_outputs_consistent_sources_citations_and_report(monkeypat
     citations = result["citations"]
     report = result["report"]
 
-    assert result["status"] == "failed"
+    assert result["status"] == "completed"
     assert sources[0]["source_id"] == "R1"
     assert citations["source_registry"]["R1"]["url"] == "https://example.com/resume"
     assert citations["sections"][0]["claims"]
@@ -3229,7 +3281,54 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
             },
             {
                 "kind": "report.json",
-                "content": json.dumps({"summary": "Checkpoint resume summary.", "sections": [], "unit_results": {}}),
+                "content": json.dumps(
+                    {
+                        "summary": "Checkpoint resume summary.",
+                        "sections": [],
+                        "unit_results": {},
+                        "coverage": {
+                            "planned_section_ids": [],
+                            "answered_section_ids": [],
+                            "unanswered_sections": [],
+                            "planned_sub_question_ids": [],
+                            "covered_sub_question_ids": [],
+                            "uncovered_sub_questions": [],
+                            "coverage_gate_passed": True,
+                            "hard_coverage_gate_passed": True,
+                        },
+                        "runtime": {
+                            "warnings": [],
+                            "grounding": {
+                                "total_claims": 0,
+                                "ungrounded_claims": 0,
+                                "single_source_claims": 0,
+                                "missing_evidence_binding_claims": 0,
+                            },
+                            "verifier": {
+                                "passed": True,
+                                "reason_codes": [],
+                                "flagged_claim_ids": [],
+                                "summary": {
+                                    "section_count": 0,
+                                    "total_claims": 0,
+                                    "low_confidence_claims": 0,
+                                    "single_source_claims": 0,
+                                    "source_backed_binding_count": 0,
+                                    "search_only_binding_count": 0,
+                                    "null_span_binding_count": 0,
+                                    "missing_evidence_items": 0,
+                                    "mismatched_binding_source": 0,
+                                    "mismatched_binding_evidence": 0,
+                                    "invalid_source_backed_span": 0,
+                                    "duplicate_claims": 0,
+                                    "low_value_claims": 0,
+                                    "medium_single_source_search_only": 0,
+                                    "same_domain_off_topic_dominance": 0,
+                                },
+                            },
+                        },
+                    }
+                ),
                 "content_type": "application/json",
             },
             {
@@ -3267,7 +3366,54 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
             },
             {
                 "kind": "report.json",
-                "content": json.dumps({"summary": "Checkpoint resume summary.", "sections": [], "unit_results": {}}),
+                "content": json.dumps(
+                    {
+                        "summary": "Checkpoint resume summary.",
+                        "sections": [],
+                        "unit_results": {},
+                        "coverage": {
+                            "planned_section_ids": [],
+                            "answered_section_ids": [],
+                            "unanswered_sections": [],
+                            "planned_sub_question_ids": [],
+                            "covered_sub_question_ids": [],
+                            "uncovered_sub_questions": [],
+                            "coverage_gate_passed": True,
+                            "hard_coverage_gate_passed": True,
+                        },
+                        "runtime": {
+                            "warnings": [],
+                            "grounding": {
+                                "total_claims": 0,
+                                "ungrounded_claims": 0,
+                                "single_source_claims": 0,
+                                "missing_evidence_binding_claims": 0,
+                            },
+                            "verifier": {
+                                "passed": True,
+                                "reason_codes": [],
+                                "flagged_claim_ids": [],
+                                "summary": {
+                                    "section_count": 0,
+                                    "total_claims": 0,
+                                    "low_confidence_claims": 0,
+                                    "single_source_claims": 0,
+                                    "source_backed_binding_count": 0,
+                                    "search_only_binding_count": 0,
+                                    "null_span_binding_count": 0,
+                                    "missing_evidence_items": 0,
+                                    "mismatched_binding_source": 0,
+                                    "mismatched_binding_evidence": 0,
+                                    "invalid_source_backed_span": 0,
+                                    "duplicate_claims": 0,
+                                    "low_value_claims": 0,
+                                    "medium_single_source_search_only": 0,
+                                    "same_domain_off_topic_dominance": 0,
+                                },
+                            },
+                        },
+                    }
+                ),
                 "content_type": "application/json",
             },
             {
@@ -3421,7 +3567,54 @@ async def test_reused_start_payload_surfaces_resolved_artifact_diagnostics(tmp_p
             },
             {
                 "kind": "report.json",
-                "content": json.dumps({"summary": "Reusable summary.", "sections": [], "unit_results": {}}),
+                "content": json.dumps(
+                    {
+                        "summary": "Reusable summary.",
+                        "sections": [],
+                        "unit_results": {},
+                        "coverage": {
+                            "planned_section_ids": [],
+                            "answered_section_ids": [],
+                            "unanswered_sections": [],
+                            "planned_sub_question_ids": [],
+                            "covered_sub_question_ids": [],
+                            "uncovered_sub_questions": [],
+                            "coverage_gate_passed": True,
+                            "hard_coverage_gate_passed": True,
+                        },
+                        "runtime": {
+                            "warnings": [],
+                            "grounding": {
+                                "total_claims": 0,
+                                "ungrounded_claims": 0,
+                                "single_source_claims": 0,
+                                "missing_evidence_binding_claims": 0,
+                            },
+                            "verifier": {
+                                "passed": True,
+                                "reason_codes": [],
+                                "flagged_claim_ids": [],
+                                "summary": {
+                                    "section_count": 0,
+                                    "total_claims": 0,
+                                    "low_confidence_claims": 0,
+                                    "single_source_claims": 0,
+                                    "source_backed_binding_count": 0,
+                                    "search_only_binding_count": 0,
+                                    "null_span_binding_count": 0,
+                                    "missing_evidence_items": 0,
+                                    "mismatched_binding_source": 0,
+                                    "mismatched_binding_evidence": 0,
+                                    "invalid_source_backed_span": 0,
+                                    "duplicate_claims": 0,
+                                    "low_value_claims": 0,
+                                    "medium_single_source_search_only": 0,
+                                    "same_domain_off_topic_dominance": 0,
+                                },
+                            },
+                        },
+                    }
+                ),
                 "content_type": "application/json",
             },
             {
@@ -3457,7 +3650,54 @@ async def test_reused_start_payload_surfaces_resolved_artifact_diagnostics(tmp_p
             },
             {
                 "kind": "report.json",
-                "content": json.dumps({"summary": "Reusable follow-up summary.", "sections": [], "unit_results": {}}),
+                "content": json.dumps(
+                    {
+                        "summary": "Reusable follow-up summary.",
+                        "sections": [],
+                        "unit_results": {},
+                        "coverage": {
+                            "planned_section_ids": [],
+                            "answered_section_ids": [],
+                            "unanswered_sections": [],
+                            "planned_sub_question_ids": [],
+                            "covered_sub_question_ids": [],
+                            "uncovered_sub_questions": [],
+                            "coverage_gate_passed": True,
+                            "hard_coverage_gate_passed": True,
+                        },
+                        "runtime": {
+                            "warnings": [],
+                            "grounding": {
+                                "total_claims": 0,
+                                "ungrounded_claims": 0,
+                                "single_source_claims": 0,
+                                "missing_evidence_binding_claims": 0,
+                            },
+                            "verifier": {
+                                "passed": True,
+                                "reason_codes": [],
+                                "flagged_claim_ids": [],
+                                "summary": {
+                                    "section_count": 0,
+                                    "total_claims": 0,
+                                    "low_confidence_claims": 0,
+                                    "single_source_claims": 0,
+                                    "source_backed_binding_count": 0,
+                                    "search_only_binding_count": 0,
+                                    "null_span_binding_count": 0,
+                                    "missing_evidence_items": 0,
+                                    "mismatched_binding_source": 0,
+                                    "mismatched_binding_evidence": 0,
+                                    "invalid_source_backed_span": 0,
+                                    "duplicate_claims": 0,
+                                    "low_value_claims": 0,
+                                    "medium_single_source_search_only": 0,
+                                    "same_domain_off_topic_dominance": 0,
+                                },
+                            },
+                        },
+                    }
+                ),
                 "content_type": "application/json",
             },
             {
@@ -8579,6 +8819,74 @@ async def test_hard_coverage_gate_respects_runtime_coverage_state_for_broad_targ
 
 
 @pytest.mark.asyncio
+async def test_hard_coverage_gate_does_not_accept_runtime_coverage_without_grounded_report_section():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "brief": {
+                "objective": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+                "must_cover": [
+                    "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+                ],
+                "coverage_checklist": [
+                    "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+                ],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                    "reason": "Primary question.",
+                }
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": [
+                    "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+                ],
+                "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {
+                    "section_id": "durable-runtime-semantics",
+                    "title": "Durable Runtime Semantics",
+                    "goal": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                }
+            ],
+            "research_units": [],
+            "continuation": {"mode": "fresh"},
+            "planner_metadata": {},
+        }
+    )
+
+    coverage = _coverage_for_report(
+        plan,
+        [],
+        coverage_state={
+            "items": [
+                {
+                    "target": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                    "matched_unit_ids": ["unit-search-1"],
+                    "grounded_source_ids": ["R1"],
+                    "candidate_section_ids": [],
+                    "satisfied": True,
+                }
+            ]
+        },
+    )
+
+    assert coverage["hard_coverage_gate_passed"] is False
+    assert coverage["hard_uncovered_targets"] == [
+        "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+    ]
+
+
+@pytest.mark.asyncio
 async def test_runtime_persists_verifier_artifact_and_blocks_single_source_low_confidence_report(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -9452,6 +9760,274 @@ async def test_resolved_final_batch_rejects_latest_batch_with_mismatched_provena
     assert json.loads(verifier_text or "{}")["reason_codes"] == []
     assert result["report"]["runtime"]["verifier"]["reason_codes"] == []
     assert bad_batch[0]["metadata"]["batch_id"] != good_batch[0]["metadata"]["batch_id"]
+
+
+@pytest.mark.asyncio
+async def test_resolved_final_batch_rejects_latest_batch_with_unknown_provenance_sidecar_keys(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Resolved batch provenance unknown key parity",
+        request_fingerprint="fp-resolved-batch-provenance-unknown-key-parity",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+
+    good_batch = runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps(
+                        {
+                            "source_registry": {
+                                "R1": {
+                                    "source_id": "R1",
+                                    "url": "https://good.example.com/runtime/recovery",
+                                }
+                            },
+                            "sections": [],
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps(
+                        {
+                            "summary": "Recovered final batch report",
+                            "sections": [],
+                            "unit_results": {},
+                            "coverage": {
+                                "planned_section_ids": [],
+                                "answered_section_ids": [],
+                                "unanswered_sections": [],
+                                "planned_sub_question_ids": [],
+                                "covered_sub_question_ids": [],
+                                "uncovered_sub_questions": [],
+                                "coverage_gate_passed": True,
+                                "hard_coverage_gate_passed": True,
+                            },
+                            "runtime": {
+                                "warnings": [],
+                                "grounding": {
+                                    "total_claims": 0,
+                                    "ungrounded_claims": 0,
+                                    "single_source_claims": 0,
+                                    "missing_evidence_binding_claims": 0,
+                                },
+                                "verifier": {
+                                    "passed": True,
+                                    "reason_codes": [],
+                                    "flagged_claim_ids": [],
+                                    "summary": {
+                                        "section_count": 0,
+                                        "total_claims": 0,
+                                        "low_confidence_claims": 0,
+                                        "single_source_claims": 0,
+                                        "source_backed_binding_count": 0,
+                                        "search_only_binding_count": 0,
+                                        "null_span_binding_count": 0,
+                                        "missing_evidence_items": 0,
+                                        "mismatched_binding_source": 0,
+                                        "mismatched_binding_evidence": 0,
+                                        "invalid_source_backed_span": 0,
+                                        "duplicate_claims": 0,
+                                        "low_value_claims": 0,
+                                        "medium_single_source_search_only": 0,
+                                        "same_domain_off_topic_dominance": 0,
+                                    },
+                                },
+                            },
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered final batch report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query=job.query,
+        ),
+    )
+
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {
+                            "R1": {
+                                "source_id": "R1",
+                                "url": "https://good.example.com/runtime/recovery",
+                            }
+                        },
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps(
+                    {
+                        "summary": "Recovered final batch report",
+                        "sections": [],
+                        "unit_results": {},
+                        "coverage": {
+                            "planned_section_ids": [],
+                            "answered_section_ids": [],
+                            "unanswered_sections": [],
+                            "planned_sub_question_ids": [],
+                            "covered_sub_question_ids": [],
+                            "uncovered_sub_questions": [],
+                            "coverage_gate_passed": True,
+                            "hard_coverage_gate_passed": True,
+                        },
+                        "runtime": {
+                            "warnings": [],
+                            "grounding": {
+                                "total_claims": 0,
+                                "ungrounded_claims": 0,
+                                "single_source_claims": 0,
+                                "missing_evidence_binding_claims": 0,
+                            },
+                            "verifier": {
+                                "passed": True,
+                                "reason_codes": [],
+                                "flagged_claim_ids": [],
+                                "summary": {
+                                    "section_count": 0,
+                                    "total_claims": 0,
+                                    "low_confidence_claims": 0,
+                                    "single_source_claims": 0,
+                                    "source_backed_binding_count": 0,
+                                    "search_only_binding_count": 0,
+                                    "null_span_binding_count": 0,
+                                    "missing_evidence_items": 0,
+                                    "mismatched_binding_source": 0,
+                                    "mismatched_binding_evidence": 0,
+                                    "invalid_source_backed_span": 0,
+                                    "duplicate_claims": 0,
+                                    "low_value_claims": 0,
+                                    "medium_single_source_search_only": 0,
+                                    "same_domain_off_topic_dominance": 0,
+                                },
+                            },
+                        },
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "coverage.json",
+                "content": json.dumps(
+                    {
+                        "query": job.query,
+                        "planned_section_ids": [],
+                        "answered_section_ids": [],
+                        "unanswered_sections": [],
+                        "planned_sub_question_ids": [],
+                        "covered_sub_question_ids": [],
+                        "uncovered_sub_questions": [],
+                        "coverage_gate_passed": True,
+                        "hard_coverage_gate_passed": True,
+                        "stale_extra_key": "should invalidate batch",
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": json.dumps(
+                    {
+                        "total_claims": 0,
+                        "grounded_claims": 0,
+                        "ungrounded_claims": 0,
+                        "single_source_claims": 0,
+                        "low_confidence_claims": 0,
+                        "missing_evidence_binding_claims": 0,
+                        "total_evidence_bindings": 0,
+                        "source_backed_binding_count": 0,
+                        "search_only_binding_count": 0,
+                        "null_span_binding_count": 0,
+                        "grounded_claims_without_source_backed_binding": 0,
+                        "sections": [],
+                        "sources": [],
+                        "legacy_drift": {"stale": True},
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verifier.json",
+                "content": json.dumps(
+                    {
+                        "passed": True,
+                        "reason_codes": [],
+                        "flagged_claim_ids": [],
+                        "summary": {
+                            "section_count": 0,
+                            "total_claims": 0,
+                            "low_confidence_claims": 0,
+                            "single_source_claims": 0,
+                            "source_backed_binding_count": 0,
+                            "search_only_binding_count": 0,
+                            "null_span_binding_count": 0,
+                            "missing_evidence_items": 0,
+                            "mismatched_binding_source": 0,
+                            "mismatched_binding_evidence": 0,
+                            "invalid_source_backed_span": 0,
+                            "duplicate_claims": 0,
+                            "low_value_claims": 0,
+                            "medium_single_source_search_only": 0,
+                            "same_domain_off_topic_dominance": 0,
+                        },
+                    }
+                ),
+                "content_type": "application/json",
+            },
+        ],
+    )
+
+    status = await runtime.status(job.job_id)
+
+    assert status["resolved_artifact_batch_id"] == good_batch[0]["metadata"]["batch_id"]
+    assert status["artifact_fallback_used"] is True
 
 
 @pytest.mark.asyncio

@@ -29,74 +29,119 @@ def with_minimal_provenance_artifacts(
 ):
     payload = list(artifacts)
     normalized_evidence_items = [] if evidence_items is None else evidence_items
+    coverage_payload = {
+        "query": query,
+        "planned_section_ids": [],
+        "answered_section_ids": [],
+        "unanswered_sections": [],
+        "planned_sub_question_ids": [],
+        "covered_sub_question_ids": [],
+        "uncovered_sub_questions": [],
+        "coverage_gate_passed": True,
+        "hard_coverage_gate_passed": True,
+    }
+    grounding_payload = {
+        "total_claims": 0,
+        "grounded_claims": 0,
+        "ungrounded_claims": 0,
+        "single_source_claims": 0,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0,
+        "total_evidence_bindings": 0,
+        "source_backed_binding_count": 0,
+        "search_only_binding_count": 0,
+        "null_span_binding_count": 0,
+        "grounded_claims_without_source_backed_binding": 0,
+        "sections": [],
+        "sources": [],
+    }
+    verifier_payload = {
+        "passed": True,
+        "reason_codes": [],
+        "flagged_claim_ids": [],
+        "summary": {
+            "section_count": 0,
+            "total_claims": 0,
+            "low_confidence_claims": 0,
+            "single_source_claims": 0,
+            "source_backed_binding_count": 0,
+            "search_only_binding_count": 0,
+            "null_span_binding_count": 0,
+            "missing_evidence_items": 0,
+            "mismatched_binding_source": 0,
+            "mismatched_binding_evidence": 0,
+            "invalid_source_backed_span": 0,
+            "duplicate_claims": 0,
+            "low_value_claims": 0,
+            "medium_single_source_search_only": 0,
+            "same_domain_off_topic_dominance": 0,
+            "unbound_citation_sources": 0,
+            "unbound_evidence_ids": 0,
+        },
+    }
+    for item in payload:
+        if item.get("kind") != "report.json":
+            continue
+        try:
+            report_payload = json.loads(item.get("content") or "")
+        except Exception:
+            continue
+        if not isinstance(report_payload, dict):
+            continue
+        report_payload.setdefault("sections", [])
+        report_payload.setdefault("unit_results", {})
+        coverage_report = report_payload.setdefault("coverage", {})
+        if isinstance(coverage_report, dict):
+            for key, value in coverage_payload.items():
+                coverage_report.setdefault(key, value)
+        else:
+            report_payload["coverage"] = dict(coverage_payload)
+        runtime_payload = report_payload.setdefault("runtime", {})
+        runtime_payload.setdefault("warnings", [])
+        grounding_report = runtime_payload.setdefault(
+            "grounding",
+            {
+                key: grounding_payload[key]
+                for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims")
+            },
+        )
+        if isinstance(grounding_report, dict):
+            for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims"):
+                grounding_report.setdefault(key, grounding_payload[key])
+        else:
+            runtime_payload["grounding"] = {
+                key: grounding_payload[key]
+                for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims")
+            }
+        verifier_report = runtime_payload.setdefault("verifier", {})
+        if isinstance(verifier_report, dict):
+            verifier_report.setdefault("passed", verifier_payload["passed"])
+            verifier_report.setdefault("reason_codes", list(verifier_payload["reason_codes"]))
+            verifier_report.setdefault("flagged_claim_ids", list(verifier_payload["flagged_claim_ids"]))
+            verifier_summary = verifier_report.setdefault("summary", {})
+            if isinstance(verifier_summary, dict):
+                for key, value in verifier_payload["summary"].items():
+                    verifier_summary.setdefault(key, value)
+            else:
+                verifier_report["summary"] = dict(verifier_payload["summary"])
+        else:
+            runtime_payload["verifier"] = json.loads(json.dumps(verifier_payload))
+        item["content"] = json.dumps(report_payload)
     payload.extend(
         [
             {
                 "kind": "coverage.json",
-                "content": json.dumps(
-                    {
-                        "query": query,
-                        "planned_section_ids": [],
-                        "answered_section_ids": [],
-                        "unanswered_sections": [],
-                        "planned_sub_question_ids": [],
-                        "covered_sub_question_ids": [],
-                        "uncovered_sub_questions": [],
-                        "coverage_gate_passed": True,
-                        "hard_coverage_gate_passed": True,
-                    }
-                ),
+                "content": json.dumps(coverage_payload),
                 "content_type": "application/json",
             },
             {
                 "kind": "grounding.json",
-                "content": json.dumps(
-                    {
-                        "total_claims": 0,
-                        "grounded_claims": 0,
-                        "ungrounded_claims": 0,
-                        "single_source_claims": 0,
-                        "low_confidence_claims": 0,
-                        "missing_evidence_binding_claims": 0,
-                        "total_evidence_bindings": 0,
-                        "source_backed_binding_count": 0,
-                        "search_only_binding_count": 0,
-                        "null_span_binding_count": 0,
-                        "grounded_claims_without_source_backed_binding": 0,
-                        "sections": [],
-                        "sources": [],
-                    }
-                ),
+                "content": json.dumps(grounding_payload),
                 "content_type": "application/json",
             },
             {
                 "kind": "verifier.json",
-                "content": json.dumps(
-                    {
-                        "passed": True,
-                        "reason_codes": [],
-                        "flagged_claim_ids": [],
-                        "summary": {
-                            "section_count": 0,
-                            "total_claims": 0,
-                            "low_confidence_claims": 0,
-                            "single_source_claims": 0,
-                            "source_backed_binding_count": 0,
-                            "search_only_binding_count": 0,
-                            "null_span_binding_count": 0,
-                            "missing_evidence_items": 0,
-                            "mismatched_binding_source": 0,
-                            "mismatched_binding_evidence": 0,
-                            "invalid_source_backed_span": 0,
-                            "duplicate_claims": 0,
-                            "low_value_claims": 0,
-                            "medium_single_source_search_only": 0,
-                            "same_domain_off_topic_dominance": 0,
-                            "unbound_citation_sources": 0,
-                            "unbound_evidence_ids": 0
-                        }
-                    }
-                ),
+                "content": json.dumps(verifier_payload),
                 "content_type": "application/json",
             },
         ]

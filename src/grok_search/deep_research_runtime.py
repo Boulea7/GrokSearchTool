@@ -1097,6 +1097,39 @@ def _provenance_sidecars_match_report(
     grounding_value: dict[str, Any] | None,
     verifier_value: dict[str, Any] | None,
 ) -> bool:
+    allowed_coverage_keys = {
+        "query",
+        "must_cover",
+        "coverage_checklist",
+        "coverage_state",
+        "planned_section_ids",
+        "answered_section_ids",
+        "unanswered_sections",
+        "planned_sub_question_ids",
+        "covered_sub_question_ids",
+        "uncovered_sub_questions",
+        "sub_questions",
+        "section_coverage",
+        "hard_coverage_targets",
+        "hard_uncovered_targets",
+        "hard_coverage_gate_passed",
+        "coverage_gate_passed",
+    }
+    allowed_grounding_keys = {
+        "total_claims",
+        "grounded_claims",
+        "ungrounded_claims",
+        "single_source_claims",
+        "low_confidence_claims",
+        "missing_evidence_binding_claims",
+        "total_evidence_bindings",
+        "source_backed_binding_count",
+        "search_only_binding_count",
+        "null_span_binding_count",
+        "grounded_claims_without_source_backed_binding",
+        "sections",
+        "sources",
+    }
     if not isinstance(report_value, dict):
         return False
     runtime_payload = report_value.get("runtime")
@@ -1108,6 +1141,10 @@ def _provenance_sidecars_match_report(
     if not isinstance(report_grounding, dict) or not isinstance(report_verifier, dict):
         return False
     if not isinstance(coverage_value, dict) or not isinstance(grounding_value, dict) or not isinstance(verifier_value, dict):
+        return False
+    if set(coverage_value) - allowed_coverage_keys:
+        return False
+    if set(grounding_value) - allowed_grounding_keys:
         return False
     for key, value in report_coverage.items():
         if coverage_value.get(key) != value:
@@ -5625,7 +5662,22 @@ def _coverage_for_report(
             for unit_id in coverage_item.get("matched_unit_ids", [])
             if str(unit_id).strip()
         ]
-        covered = bool(matching_claim_ids) or bool(coverage_item.get("satisfied"))
+        grounded_source_ids = {
+            str(source_id).strip()
+            for source_id in coverage_item.get("grounded_source_ids", [])
+            if str(source_id).strip()
+        }
+        if not matching_claim_ids and grounded_source_ids:
+            for section in grounded_sections:
+                section_id = str(section.get("section_id", "")).strip()
+                section_citations = {
+                    str(citation).strip()
+                    for citation in section.get("citations", [])
+                    if str(citation).strip()
+                }
+                if section_id and section_citations & grounded_source_ids and section_id not in matching_section_ids:
+                    matching_section_ids.append(section_id)
+        covered = bool(matching_claim_ids) or bool(matching_section_ids)
         if not covered:
             hard_uncovered_targets.append(target)
         hard_target_coverage.append(
