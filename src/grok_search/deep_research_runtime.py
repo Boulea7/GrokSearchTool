@@ -1370,10 +1370,6 @@ def _artifact_payloads(
         "continuation_capsule.json",
         "partial_report.md",
         *_FINAL_ARTIFACT_KINDS,
-        _EVIDENCE_ITEMS_ARTIFACT_KIND,
-        "coverage.json",
-        "grounding.json",
-        "verifier.json",
     ]
     for kind in ordered_kinds:
         artifact = current_artifacts.get(kind)
