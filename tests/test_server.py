@@ -676,10 +676,24 @@ async def test_get_config_info_deep_research_runtime_degrades_on_body_quality_wa
 @pytest.mark.asyncio
 async def test_get_config_info_deep_research_profile_probe_failure_degrades_planner_and_runtime_while_web_search_stays_ready(monkeypatch):
     monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
             200,
             json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
         ),
     }
     patch_async_client(monkeypatch, responses)
@@ -725,7 +739,9 @@ async def test_get_config_info_deep_research_profile_probe_failure_degrades_plan
     assert checks["grok_search_probe"]["status"] == "ok"
     assert checks["deep_research_deep_probe"]["status"] == "error"
     assert payload["feature_readiness"]["web_search"]["status"] == "ready"
-    assert payload["doctor"]["status"] == "partial"
+    assert payload["doctor"]["status"] == "ok"
+    assert payload["feature_readiness"]["deep_research_planner"]["advanced_optional"] is True
+    assert payload["feature_readiness"]["deep_research_runtime"]["advanced_optional"] is True
     assert planner["status"] == "degraded"
     assert runtime["status"] == "degraded"
     assert planner["profile_probes"]["standard"]["status"] == "ready"

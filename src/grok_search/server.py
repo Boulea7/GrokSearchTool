@@ -2822,6 +2822,7 @@ def _build_feature_readiness(
         "deep_research_planner": {
             "status": deep_research_planner_status,
             "message": deep_research_planner_message,
+            "advanced_optional": True,
             "based_on_checks": deep_research_planner_check_ids,
             "probe_scope": "deep_research_planner",
             "degraded_by": deep_research_planner_degraded_by,
@@ -2840,6 +2841,7 @@ def _build_feature_readiness(
         "deep_research_runtime": {
             "status": deep_research_runtime_status,
             "message": deep_research_runtime_message,
+            "advanced_optional": True,
             "based_on_checks": deep_research_runtime_check_ids,
             "probe_scope": "deep_research_runtime",
             "degraded_by": deep_research_runtime_degraded_by,
@@ -2859,7 +2861,16 @@ def _build_feature_readiness(
 
 
 def _feature_affects_overall_doctor_status(item: dict) -> bool:
-    return not item.get("client_specific", False) and not item.get("transient", False)
+    return (
+        not item.get("client_specific", False)
+        and not item.get("transient", False)
+        and not item.get("advanced_optional", False)
+    )
+
+
+def _check_affects_overall_doctor_status(check: dict) -> bool:
+    check_id = str(check.get("check_id") or "")
+    return not check_id.startswith("deep_research_")
 
 
 def _build_doctor_payload(
@@ -2871,7 +2882,11 @@ def _build_doctor_payload(
     web_search_status = feature_readiness["web_search"]["status"]
     if web_search_status == "not_ready":
         doctor_status = "error"
-    elif any(check["status"] in {"error", "warning"} for check in checks) or any(
+    elif any(
+        check["status"] in {"error", "warning"}
+        for check in checks
+        if _check_affects_overall_doctor_status(check)
+    ) or any(
         item["status"] in {"partial_ready", "degraded", "not_ready"}
         for item in feature_readiness.values()
         if _feature_affects_overall_doctor_status(item)
