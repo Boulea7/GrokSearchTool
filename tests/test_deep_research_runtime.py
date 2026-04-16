@@ -7,11 +7,13 @@ import pytest
 from grok_search import server
 from grok_search.deep_research_runtime import (
     DeepResearchRuntime,
+    _build_section_citations,
     _build_grounding_diagnostics,
     _build_release_gate,
     _build_report_summary,
     _build_verifier_diagnostics,
     _coverage_for_report,
+    _extract_relevant_excerpt_with_span,
     _search_query,
 )
 from grok_search.providers.grok import GrokSearchProvider
@@ -8196,6 +8198,100 @@ def test_verifier_flags_unbound_citation_sources_and_evidence_ids():
     assert "unbound_evidence_ids" in verifier["reason_codes"]
     assert verifier["summary"]["unbound_citation_sources"] == 1
     assert verifier["summary"]["unbound_evidence_ids"] == 1
+
+
+def test_extract_relevant_excerpt_with_span_tracks_original_line_range():
+    excerpt, line_start, line_end = _extract_relevant_excerpt_with_span(
+        "# Runtime checkpoints\n\n"
+        "Unrelated overview.\n"
+        "Checkpoint resume continues from the last durable checkpoint.\n"
+        "Operational filler.\n"
+        "Restart replays from a fresh starting point when checkpoint metadata is lost.\n",
+        reference_texts=["checkpoint resume semantics", "restart trade-offs"],
+        line_limit=2,
+        char_limit=400,
+        multiline=False,
+    )
+
+    assert "Checkpoint resume continues" in excerpt
+    assert "Restart replays" in excerpt
+    assert line_start == 4
+    assert line_end == 6
+
+
+def test_section_citations_prefer_source_backed_cluster_over_search_only_cluster():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Checkpoint resume semantics",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "brief": {
+                "objective": "Checkpoint resume semantics",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [{"id": "sq1", "question": "Checkpoint resume semantics", "reason": "Primary question."}],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["checkpoint resume semantics"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {
+                    "section_id": "resume-semantics",
+                    "title": "Resume Semantics",
+                    "goal": "Explain checkpoint resume semantics.",
+                }
+            ],
+            "research_units": [],
+            "continuation": {"mode": "fresh"},
+            "planner_metadata": {},
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/checkpoints",
+            "title": "Runtime checkpoints",
+            "domain": "docs.example.com",
+            "source_type": "official_docs",
+            "ranking_reasons": ["official_docs"],
+        }
+    ]
+    sections = _build_section_citations(
+        plan,
+        [
+            {
+                "evidence_id": "e-search",
+                "unit_id": "unit-search-1",
+                "summary": "Checkpoint resume semantics checkpoint resume semantics checkpoint trade-offs.",
+                "detail": "Checkpoint resume semantics checkpoint resume semantics checkpoint trade-offs.",
+                "source_ids": ["R1"],
+                "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                "evidence_kind": "search",
+                "weight": 0.9,
+            },
+            {
+                "evidence_id": "e-fetch",
+                "unit_id": "unit-search-1",
+                "summary": "Resume continues from the last durable checkpoint.",
+                "detail": "Resume continues from the last durable checkpoint.",
+                "source_ids": ["R1"],
+                "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                "evidence_kind": "fetch",
+                "weight": 1.0,
+                "line_start": 10,
+                "line_end": 11,
+            },
+        ],
+        source_registry,
+    )
+
+    claim = sections[0]["claims"][0]
+
+    assert claim["text"] == "Resume continues from the last durable checkpoint."
+    assert any(binding["source_backed"] for binding in claim["evidence_bindings"])
 
 
 @pytest.mark.asyncio

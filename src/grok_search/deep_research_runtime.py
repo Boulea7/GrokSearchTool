@@ -309,26 +309,56 @@ def _extract_relevant_excerpt(
     char_limit: int,
     multiline: bool = False,
 ) -> str:
-    lines = _extract_meaningful_lines(value)
-    if not lines:
-        if multiline:
-            return _sanitize_detail_text(value, limit=char_limit)
-        return _summarize_evidence_text(value, limit=char_limit)
+    excerpt, _, _ = _extract_relevant_excerpt_with_span(
+        value,
+        reference_texts=reference_texts,
+        line_limit=line_limit,
+        char_limit=char_limit,
+        multiline=multiline,
+    )
+    return excerpt
+
+
+def _extract_relevant_excerpt_with_span(
+    value: str,
+    *,
+    reference_texts: list[str],
+    line_limit: int,
+    char_limit: int,
+    multiline: bool = False,
+) -> tuple[str, int | None, int | None]:
+    meaningful_lines: list[tuple[int, str]] = []
+    for index, raw_line in enumerate((value or "").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            continue
+        if _is_noisy_text(line):
+            continue
+        meaningful_lines.append((index, line))
+    if not meaningful_lines:
+        fallback = _sanitize_detail_text(value, limit=char_limit) if multiline else _summarize_evidence_text(value, limit=char_limit)
+        return fallback, None, None
     keywords = _dedupe_preserve_order(
         [token for text in reference_texts for token in _tokenize_keywords(text)]
     )
-    ranked: list[tuple[int, int, str]] = []
-    for line in lines:
+    ranked: list[tuple[int, int, int, str]] = []
+    for index, line in meaningful_lines:
         overlap = _count_keyword_overlap(line, keywords) if keywords else 0
-        ranked.append((overlap, len(line), line))
-    ranked.sort(reverse=True)
+        ranked.append((overlap, len(line), index, line))
+    ranked.sort(key=lambda item: (item[0], item[1], -item[2]), reverse=True)
     max_overlap = ranked[0][0] if ranked else 0
     overlap_threshold = max(1, max_overlap - 1) if max_overlap > 0 else 0
-    selected = [line for overlap, _, line in ranked if overlap >= overlap_threshold and overlap > 0][:line_limit]
+    selected = [item for item in ranked if item[0] >= overlap_threshold and item[0] > 0][:line_limit]
     if not selected:
-        selected = [line for _, _, line in ranked[:line_limit]]
+        selected = ranked[:line_limit]
+    selected.sort(key=lambda item: item[2])
     separator = "\n" if multiline else " "
-    return _trim_text(separator.join(selected), limit=char_limit)
+    excerpt = _trim_text(separator.join(item[3] for item in selected), limit=char_limit)
+    if not excerpt:
+        return excerpt, None, None
+    return excerpt, selected[0][2], selected[-1][2]
 
 
 def _find_excerpt_line_span(source_text: str, excerpt: str) -> tuple[int | None, int | None]:
@@ -4826,13 +4856,13 @@ async def _execute_research_unit(
                 [],
                 [],
             )
-        summary_text = _extract_relevant_excerpt(
+        summary_text, summary_line_start, summary_line_end = _extract_relevant_excerpt_with_span(
             fetched,
             reference_texts=reference_texts,
             line_limit=4,
             char_limit=_MAX_CLAIM_LENGTH,
         )
-        detail = _extract_relevant_excerpt(
+        detail, detail_line_start, detail_line_end = _extract_relevant_excerpt_with_span(
             fetched,
             reference_texts=reference_texts,
             line_limit=8,
@@ -4840,7 +4870,8 @@ async def _execute_research_unit(
             multiline=True,
         )
         summary = _trim_text(summary_text, limit=180)
-        line_start, line_end = _find_excerpt_line_span(fetched, summary_text or detail)
+        line_start = summary_line_start or detail_line_start
+        line_end = detail_line_end or summary_line_end
         source = {"url": unit.url, "title": unit.title}
         return (
             {"summary": summary, "detail": detail},
@@ -4870,20 +4901,21 @@ async def _execute_research_unit(
                 [],
             )
         mapped_raw = mapped
-        summary_text = _extract_relevant_excerpt(
+        summary_text, summary_line_start, summary_line_end = _extract_relevant_excerpt_with_span(
             mapped,
             reference_texts=reference_texts,
             line_limit=4,
             char_limit=_MAX_CLAIM_LENGTH,
         )
-        detail = _extract_relevant_excerpt(
+        detail, detail_line_start, detail_line_end = _extract_relevant_excerpt_with_span(
             mapped,
             reference_texts=reference_texts,
             line_limit=8,
             char_limit=1200,
             multiline=True,
         )
-        line_start, line_end = _find_excerpt_line_span(mapped_raw, summary_text or detail)
+        line_start = summary_line_start or detail_line_start
+        line_end = detail_line_end or summary_line_end
         sources = [{"url": unit.url, "title": unit.title}]
         evidence_items = [
             DeepResearchEvidenceItem(
@@ -4916,45 +4948,31 @@ async def _execute_research_unit(
                 fetched,
             )
             sources.append(fetched_source)
+            candidate_summary, candidate_line_start, candidate_line_end = _extract_relevant_excerpt_with_span(
+                fetched,
+                reference_texts=reference_texts + [candidate_url, fetched_source.get("title", "")],
+                line_limit=4,
+                char_limit=_MAX_CLAIM_LENGTH,
+            )
+            candidate_detail, candidate_detail_start, candidate_detail_end = _extract_relevant_excerpt_with_span(
+                fetched,
+                reference_texts=reference_texts + [candidate_url, fetched_source.get("title", "")],
+                line_limit=8,
+                char_limit=1200,
+                multiline=True,
+            )
             evidence_items.append(
                 DeepResearchEvidenceItem(
                     evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
                     unit_id=unit.unit_id,
                     source_urls=[candidate_url],
-                    summary=_extract_relevant_excerpt(
-                        fetched,
-                        reference_texts=reference_texts + [candidate_url, fetched_source.get("title", "")],
-                        line_limit=4,
-                        char_limit=_MAX_CLAIM_LENGTH,
-                    ),
-                    detail=_extract_relevant_excerpt(
-                        fetched,
-                        reference_texts=reference_texts + [candidate_url, fetched_source.get("title", "")],
-                        line_limit=8,
-                        char_limit=1200,
-                        multiline=True,
-                    ),
+                    summary=candidate_summary,
+                    detail=candidate_detail,
                     evidence_kind="fetch",
                     weight=1.0,
                     derived_from_source_url=candidate_url,
-                    line_start=_find_excerpt_line_span(
-                        fetched,
-                        _extract_relevant_excerpt(
-                            fetched,
-                            reference_texts=reference_texts + [candidate_url, fetched_source.get("title", "")],
-                            line_limit=4,
-                            char_limit=_MAX_CLAIM_LENGTH,
-                        ),
-                    )[0],
-                    line_end=_find_excerpt_line_span(
-                        fetched,
-                        _extract_relevant_excerpt(
-                            fetched,
-                            reference_texts=reference_texts + [candidate_url, fetched_source.get("title", "")],
-                            line_limit=4,
-                            char_limit=_MAX_CLAIM_LENGTH,
-                        ),
-                    )[1],
+                    line_start=candidate_line_start or candidate_detail_start,
+                    line_end=candidate_detail_end or candidate_line_end,
                 ).model_dump()
             )
         return (
@@ -4987,13 +5005,13 @@ async def _execute_research_unit(
             "provider_model": "",
             "provider_api_url": "",
         }
-    answer_summary = _extract_relevant_excerpt(
+    answer_summary, search_line_start, search_line_end = _extract_relevant_excerpt_with_span(
         search_result["answer"],
         reference_texts=reference_texts,
         line_limit=4,
         char_limit=_MAX_CLAIM_LENGTH,
     )
-    answer_detail = _extract_relevant_excerpt(
+    answer_detail, search_detail_start, search_detail_end = _extract_relevant_excerpt_with_span(
         search_result["answer"],
         reference_texts=reference_texts,
         line_limit=8,
@@ -5010,7 +5028,6 @@ async def _execute_research_unit(
     primary_search_support_source = search_support_sources[:1]
     evidence_items: list[dict[str, Any]] = []
     if not search_result.get("warning_code"):
-        search_line_start, search_line_end = _find_excerpt_line_span(search_result["answer"], answer_summary or answer_detail)
         evidence_items.append(
             DeepResearchEvidenceItem(
                 evidence_id=f"evidence-{unit.unit_id}-search",
@@ -5020,8 +5037,8 @@ async def _execute_research_unit(
                 detail=answer_detail,
                 evidence_kind="search",
                 weight=0.9,
-                line_start=search_line_start,
-                line_end=search_line_end,
+                line_start=search_line_start or search_detail_start,
+                line_end=search_detail_end or search_line_end,
             ).model_dump()
         )
     fetched_evidence_items: list[dict[str, Any]] = []
@@ -5034,20 +5051,19 @@ async def _execute_research_unit(
             if original_source.get("url") == enriched_source.get("url"):
                 sources[index] = enriched_source
                 break
-        fetched_summary = _extract_relevant_excerpt(
+        fetched_summary, fetched_line_start, fetched_line_end = _extract_relevant_excerpt_with_span(
             fetched,
             reference_texts=reference_texts + [source["url"], enriched_source.get("title", "")],
             line_limit=4,
             char_limit=_MAX_CLAIM_LENGTH,
         )
-        fetched_detail = _extract_relevant_excerpt(
+        fetched_detail, fetched_detail_start, fetched_detail_end = _extract_relevant_excerpt_with_span(
             fetched,
             reference_texts=reference_texts + [source["url"], enriched_source.get("title", "")],
             line_limit=8,
             char_limit=1200,
             multiline=True,
         )
-        line_start, line_end = _find_excerpt_line_span(fetched, fetched_summary or fetched_detail)
         fetched_evidence_items.append(
             DeepResearchEvidenceItem(
                 evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
@@ -5058,8 +5074,8 @@ async def _execute_research_unit(
                 evidence_kind="fetch",
                 weight=1.0,
                 derived_from_source_url=source["url"],
-                line_start=line_start,
-                line_end=line_end,
+                line_start=fetched_line_start or fetched_detail_start,
+                line_end=fetched_detail_end or fetched_line_end,
             ).model_dump()
         )
     evidence_items.extend(fetched_evidence_items)
@@ -5913,6 +5929,7 @@ def _best_cluster_claim_text(items: list[DeepResearchEvidenceItem]) -> str:
     ranked = sorted(
         items,
         key=lambda item: (
+            1 if item.evidence_kind != "search" else 0,
             item.weight,
             len(item.source_ids),
             len(_summarize_evidence_text(item.summary or item.detail, limit=_MAX_CLAIM_LENGTH)),
@@ -6014,6 +6031,7 @@ def _build_section_citations(
         ranked_clusters = sorted(
             clusters,
             key=lambda cluster: (
+                max(1 if item.evidence_kind != "search" else 0 for item in cluster),
                 max(_count_keyword_overlap(f"{item.summary} {item.detail}", section_keywords) for item in cluster),
                 sum(item.weight for item in cluster),
                 len({source_id for item in cluster for source_id in item.source_ids}),
