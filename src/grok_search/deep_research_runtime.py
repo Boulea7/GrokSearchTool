@@ -5713,7 +5713,6 @@ def _build_verifier_diagnostics(
             claim_evidence_ids = provenance["claim_evidence_ids"]
             bindings = provenance["valid_bindings"]
             source_backed_bindings = provenance["source_backed_bindings"]
-            search_only_bindings = provenance["search_only_bindings"]
             null_span_bindings = provenance["null_span_bindings"]
             supporting_source_count = provenance["derived_supporting_source_count"]
             if claim_text:
