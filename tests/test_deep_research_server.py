@@ -21,6 +21,188 @@ def load_deep_research_fixture(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text())
 
 
+def with_minimal_provenance_artifacts(
+    artifacts: list[dict],
+    *,
+    query: str,
+    evidence_items: list[dict] | None = None,
+):
+    payload = list(artifacts)
+    normalized_evidence_items = [] if evidence_items is None else evidence_items
+    payload.extend(
+        [
+            {
+                "kind": "coverage.json",
+                "content": json.dumps(
+                    {
+                        "query": query,
+                        "planned_section_ids": [],
+                        "answered_section_ids": [],
+                        "unanswered_sections": [],
+                        "planned_sub_question_ids": [],
+                        "covered_sub_question_ids": [],
+                        "uncovered_sub_questions": [],
+                        "coverage_gate_passed": True,
+                        "hard_coverage_gate_passed": True,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": json.dumps(
+                    {
+                        "total_claims": 0,
+                        "grounded_claims": 0,
+                        "ungrounded_claims": 0,
+                        "single_source_claims": 0,
+                        "low_confidence_claims": 0,
+                        "missing_evidence_binding_claims": 0,
+                        "total_evidence_bindings": 0,
+                        "source_backed_binding_count": 0,
+                        "search_only_binding_count": 0,
+                        "null_span_binding_count": 0,
+                        "grounded_claims_without_source_backed_binding": 0,
+                        "sections": [],
+                        "sources": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verifier.json",
+                "content": json.dumps(
+                    {
+                        "passed": True,
+                        "reason_codes": [],
+                        "flagged_claim_ids": [],
+                        "summary": {
+                            "section_count": 0,
+                            "total_claims": 0,
+                            "low_confidence_claims": 0,
+                            "single_source_claims": 0,
+                            "source_backed_binding_count": 0,
+                            "search_only_binding_count": 0,
+                            "null_span_binding_count": 0,
+                            "missing_evidence_items": 0,
+                            "mismatched_binding_source": 0,
+                            "mismatched_binding_evidence": 0,
+                            "invalid_source_backed_span": 0,
+                            "duplicate_claims": 0,
+                            "low_value_claims": 0,
+                            "medium_single_source_search_only": 0,
+                            "same_domain_off_topic_dominance": 0,
+                            "unbound_citation_sources": 0,
+                            "unbound_evidence_ids": 0
+                        }
+                    }
+                ),
+                "content_type": "application/json",
+            },
+        ]
+    )
+    if not any(item.get("kind") == "evidence_items.json" for item in payload):
+        payload.append(
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(normalized_evidence_items),
+                "content_type": "application/json",
+            }
+        )
+    return payload
+
+
+def with_minimal_provenance_artifacts(
+    artifacts: list[dict],
+    *,
+    query: str,
+    evidence_items: list[dict] | None = None,
+):
+    payload = list(artifacts)
+    normalized_evidence_items = [] if evidence_items is None else evidence_items
+    payload.extend(
+        [
+            {
+                "kind": "coverage.json",
+                "content": json.dumps(
+                    {
+                        "query": query,
+                        "planned_section_ids": [],
+                        "answered_section_ids": [],
+                        "unanswered_sections": [],
+                        "planned_sub_question_ids": [],
+                        "covered_sub_question_ids": [],
+                        "uncovered_sub_questions": [],
+                        "coverage_gate_passed": True,
+                        "hard_coverage_gate_passed": True,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": json.dumps(
+                    {
+                        "total_claims": 0,
+                        "grounded_claims": 0,
+                        "ungrounded_claims": 0,
+                        "single_source_claims": 0,
+                        "low_confidence_claims": 0,
+                        "missing_evidence_binding_claims": 0,
+                        "total_evidence_bindings": 0,
+                        "source_backed_binding_count": 0,
+                        "search_only_binding_count": 0,
+                        "null_span_binding_count": 0,
+                        "grounded_claims_without_source_backed_binding": 0,
+                        "sections": [],
+                        "sources": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verifier.json",
+                "content": json.dumps(
+                    {
+                        "passed": True,
+                        "reason_codes": [],
+                        "flagged_claim_ids": [],
+                        "summary": {
+                            "section_count": 0,
+                            "total_claims": 0,
+                            "low_confidence_claims": 0,
+                            "single_source_claims": 0,
+                            "source_backed_binding_count": 0,
+                            "search_only_binding_count": 0,
+                            "null_span_binding_count": 0,
+                            "missing_evidence_items": 0,
+                            "mismatched_binding_source": 0,
+                            "mismatched_binding_evidence": 0,
+                            "invalid_source_backed_span": 0,
+                            "duplicate_claims": 0,
+                            "low_value_claims": 0,
+                            "medium_single_source_search_only": 0,
+                            "same_domain_off_topic_dominance": 0,
+                            "unbound_citation_sources": 0,
+                            "unbound_evidence_ids": 0
+                        }
+                    }
+                ),
+                "content_type": "application/json",
+            },
+        ]
+    )
+    if not any(item.get("kind") == "evidence_items.json" for item in payload):
+        payload.append(
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(normalized_evidence_items),
+                "content_type": "application/json",
+            }
+        )
+    return payload
+
+
 def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
     continuation_snapshot = load_deep_research_fixture("probe_round11_interrupted_continue_snapshot.json")
     report_snapshot = load_deep_research_fixture("probe_round11_main_snapshot.json")
@@ -39,7 +221,13 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
         "search_strategy": continuation_snapshot["plan"]["search_strategy"],
         "planner_metadata": continuation_snapshot["planner"],
     }
-    report_payload = report_snapshot["report"]
+    report_payload = {
+        "summary": "Checkpoint resume summary.",
+        "status": report_snapshot["report"]["status"],
+        "runtime": dict(report_snapshot["report"].get("runtime") or {}),
+        "sections": [],
+        "unit_results": {},
+    }
     citations_payload = {
         "source_registry": {
             source["source_id"]: source,
@@ -69,7 +257,8 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
     runtime.write_artifact(job.job_id, "plan.json", json.dumps(plan_payload), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([source]),
@@ -90,19 +279,9 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
                 "content": f"# Final Report\n\n{report_payload['summary']}\n",
                 "content_type": "text/markdown",
             },
-        ],
-    )
-    runtime.write_artifact(
-        job.job_id,
-        "sources.json",
-        json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]),
-        "application/json",
-    )
-    runtime.write_artifact(
-        job.job_id,
-        "report.json",
-        json.dumps({"summary": "stale current report", "runtime": {"warnings": [], "constraint_violations": []}}),
-        "application/json",
+            ],
+            query=continuation_snapshot["query"],
+        ),
     )
     runtime.store.append_event(
         job.job_id,
@@ -165,7 +344,8 @@ def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Canceled finalizing visibility"}), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
@@ -201,7 +381,10 @@ def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
                 "content": json.dumps(evidence_items),
                 "content_type": "application/json",
             },
-        ],
+            ],
+            query="Canceled finalizing visibility",
+            evidence_items=evidence_items,
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -240,6 +423,57 @@ def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
         "batch_id": persisted[0]["metadata"]["batch_id"],
         "evidence_items": evidence_items,
     }
+
+
+def seed_round13_failed_continuation_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round13_continue_resume_snapshot.json")
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-server-round13-failed-continuation-parity",
+        status="failed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=snapshot["plan"]["include_domains"],
+        exclude_domains=snapshot["plan"]["exclude_domains"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id=snapshot["continuation"]["source_job_id"],
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint=snapshot["continuation"]["checkpoint_key"],
+        finished_at=utc_now_iso(),
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "query": snapshot["query"],
+                "include_domains": snapshot["plan"]["include_domains"],
+                "exclude_domains": snapshot["plan"]["exclude_domains"],
+                "continuation": snapshot["continuation"],
+                "brief": snapshot["plan"]["brief"],
+                "planner_metadata": snapshot["planner"],
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "report.json",
+        json.dumps(snapshot["report"]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "continuation.json",
+        json.dumps(snapshot["continuation"]),
+        "application/json",
+    )
+    return {"job": job, "snapshot": snapshot}
 
 
 async def complete_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
@@ -417,6 +651,10 @@ async def test_deep_research_result_surfaces_artifact_errors(monkeypatch, tmp_pa
         "sources.json": "invalid_json",
         "citations.json": "invalid_json",
         "final_report.md": "missing_required_artifact",
+        "evidence_items.json": "missing_required_artifact",
+        "coverage.json": "missing_required_artifact",
+        "grounding.json": "missing_required_artifact",
+        "verifier.json": "missing_required_artifact",
     }
 
 
@@ -441,7 +679,8 @@ async def test_deep_research_result_prefers_resolved_final_batch_over_current_mi
     runtime.write_artifact(job.job_id, "plan.json", '{"query": "Mixed artifact server result"}', "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": '[{"source_id":"R1","url":"https://good.example.com"}]',
@@ -454,15 +693,17 @@ async def test_deep_research_result_prefers_resolved_final_batch_over_current_mi
             },
             {
                 "kind": "report.json",
-                "content": '{"summary":"Good report","sections":[],"unit_results":{}}',
+                "content": '{"summary":"Good report summary","sections":[],"unit_results":{}}',
                 "content_type": "application/json",
             },
             {
                 "kind": "final_report.md",
-                "content": "# Final Report\n\nGood report.\n",
+                "content": "# Final Report\n\nGood report summary.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Mixed artifact server result",
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -494,7 +735,7 @@ async def test_deep_research_round11_interrupted_status_events_and_result_remain
     assert status["attempt_count"] == 2
     assert status["continued_from_job_id"] == job.continued_from_job_id
     assert status["resolved_artifact_batch_id"] == seeded["batch_id"]
-    assert status["artifact_fallback_used"] is True
+    assert status["artifact_fallback_used"] is False
     assert status["planner_fallback_used"] is True
     assert status["runtime_warnings"] == ["coverage_incomplete", "planner_fallback_used"]
     assert status["constraint_violations"] == []
@@ -504,7 +745,7 @@ async def test_deep_research_round11_interrupted_status_events_and_result_remain
 
     assert result["status"] == "interrupted"
     assert result["phase"] == "finalizing"
-    assert result["artifact_fallback_used"] is True
+    assert result["artifact_fallback_used"] is False
     assert result["resolved_artifact_batch_id"] == seeded["batch_id"]
     assert result["plan"]["continuation"]["mode"] == "continue"
     assert result["plan"]["continuation"]["checkpoint_key"] == "finalizing"
@@ -538,3 +779,24 @@ async def test_deep_research_canceled_finalizing_status_and_result_expose_resolv
     assert result["report"]["summary"] == "Recovered final batch report"
     assert result["sources"][0]["url"] == "https://good.example.com/runtime/recovery"
     assert any(artifact["kind"] == "evidence_items.json" for artifact in result["artifacts"])
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round13_failed_source_continuation_result_matches_fixture(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round13_failed_continuation_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == "failed"
+    assert status["phase"] == "finalizing"
+    assert status["continued_from_job_id"] == snapshot["continuation"]["source_job_id"]
+    assert result["plan"]["continuation"]["mode"] == "continue"
+    assert result["plan"]["continuation"]["source_job_status"] == "failed"
+    assert result["plan"]["continuation"]["carry_forward_sources"] == snapshot["continuation"]["carry_forward_sources"]
+    assert result["report"]["status"] == "failed"
+    assert result["report"]["runtime"]["warnings"] == snapshot["report"]["runtime"]["warnings"]
