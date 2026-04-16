@@ -3785,6 +3785,207 @@ async def test_canceled_finalizing_job_prefers_resolved_final_batch_and_exposes_
 
 
 @pytest.mark.asyncio
+async def test_continue_from_canceled_job_with_resolved_final_batch_builds_continuation_state(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = create_completed_source_job(runtime, query="Canceled continuation source")
+    runtime.store.update_job(
+        source.job_id,
+        status="canceled",
+        cancel_requested=True,
+        current_checkpoint="finalizing",
+        finished_at=utc_now_iso(),
+    )
+
+    response = await runtime.start(
+        query="Follow up canceled continuation source",
+        continue_from_job_id=source.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    assert response["plan"]["continuation"]["mode"] == "continue"
+    assert response["plan"]["continuation"]["source_job_id"] == source.job_id
+    assert response["plan"]["continuation"]["source_job_status"] == "canceled"
+    assert response["plan"]["continuation"]["source_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_continue_from_canceled_job_without_recoverable_surfaces_is_rejected_without_orphan(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = runtime.store.create_job(
+        query="Canceled continuation without artifacts",
+        request_fingerprint="fp-canceled-continuation-without-artifacts",
+        status="canceled",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(source.job_id, finished_at=utc_now_iso())
+
+    with pytest.raises(ValueError, match="canceled continuation source is not recoverable"):
+        await runtime.start(
+            query="Follow up canceled continuation without artifacts",
+            continue_from_job_id=source.job_id,
+            plan_only=True,
+            force_new=True,
+            schedule=False,
+        )
+
+    assert [job.job_id for job in runtime.store.list_jobs(limit=20)] == [source.job_id]
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_resolves_worker_restarted_finalizing_job_with_usable_final_batch(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Startup reconcile resolved final batch",
+        request_fingerprint="fp-startup-reconcile-resolved-final-batch",
+        status="running",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="finalizing",
+        heartbeat_at="2000-01-01T00:00:00Z",
+        started_at="2000-01-01T00:00:00Z",
+        updated_at="2000-01-01T00:00:00Z",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Startup reconcile resolved final batch"}), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+
+    await runtime._ensure_startup_reconciled()
+
+    reconciled = runtime.store.get_job(job.job_id)
+    events = await runtime.events(job.job_id)
+    batch_id = persisted[0]["metadata"]["batch_id"]
+
+    assert reconciled.status == "completed"
+    assert reconciled.phase == "finalizing"
+    assert reconciled.last_error == ""
+    assert any(
+        event["type"] == "job_resolved_from_final_batch"
+        and event["data"]["resolved_artifact_batch_id"] == batch_id
+        for event in events["events"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_preserves_canceled_finalizing_job_with_usable_final_batch(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Startup reconcile canceled final batch",
+        request_fingerprint="fp-startup-reconcile-canceled-final-batch",
+        status="running",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        cancel_requested=True,
+        current_checkpoint="finalizing",
+        heartbeat_at="2000-01-01T00:00:00Z",
+        started_at="2000-01-01T00:00:00Z",
+        updated_at="2000-01-01T00:00:00Z",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Startup reconcile canceled final batch"}), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+
+    await runtime._ensure_startup_reconciled()
+
+    reconciled = runtime.store.get_job(job.job_id)
+    status = await runtime.status(job.job_id)
+    events = await runtime.events(job.job_id)
+    batch_id = persisted[0]["metadata"]["batch_id"]
+
+    assert reconciled.status == "canceled"
+    assert reconciled.phase == "finalizing"
+    assert status["resolved_artifact_batch_id"] == batch_id
+    assert any(
+        event["type"] == "job_canceled"
+        and event["data"]["reason"] == "cancel_requested_during_recovery"
+        for event in events["events"]
+    )
+    assert any(
+        event["type"] == "job_resolved_from_final_batch"
+        and event["data"]["resolved_artifact_batch_id"] == batch_id
+        and event["data"]["resolved_status"] == "canceled"
+        for event in events["events"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_start_reuses_interrupted_finalizing_job_with_usable_final_batch(tmp_path):
     runtime = build_runtime(tmp_path)
     fingerprint = runtime._request_fingerprint(
@@ -4618,6 +4819,29 @@ async def test_reconciled_interrupted_job_cannot_be_completed_by_stale_worker(mo
 
 
 @pytest.mark.asyncio
+async def test_stale_worker_exception_after_reconcile_does_not_overwrite_terminal_state(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+
+    async def stale_runner(current_runtime, job_id):
+        current_runtime.store.reconcile_incomplete_jobs()
+        raise RuntimeError("stale boom")
+
+    runtime._runner = stale_runner
+    response = await runtime.start(query="Stale worker exception fencing", force_new=True, schedule=False)
+
+    await runtime._run(response["job_id"])
+
+    job = runtime.store.get_job(response["job_id"])
+    events = await runtime.events(response["job_id"])
+
+    assert job.status == "interrupted"
+    assert job.last_error == "worker_restarted"
+    assert any(event["type"] == "job_interrupted" for event in events["events"])
+    assert not any(event["type"] == "job_failed" for event in events["events"])
+
+
+@pytest.mark.asyncio
 async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoint_for_resume(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     fixture = load_deep_research_fixture("round13_worker_restarted_dispatch.json")
@@ -4680,6 +4904,60 @@ async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoi
     assert resumed_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")
     assert resumed_events[-1]["data"]["checkpoint_kind"] == "research_dispatch"
     assert runtime.store.read_artifact_text(response["job_id"], "final_report.md") is not None
+
+
+@pytest.mark.asyncio
+async def test_resume_keeps_distinct_dispatch_checkpoint_identities_across_attempts(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    did_reconcile = False
+
+    async def reconciling_search(query):
+        nonlocal did_reconcile
+        if not did_reconcile:
+            did_reconcile = True
+            runtime.store.reconcile_incomplete_jobs()
+        return (
+            "Recovered answer",
+            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
+        )
+
+    async def stable_search(query):
+        return (
+            "Recovered answer",
+            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", reconciling_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query="Distinct dispatch checkpoint identities", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", stable_search)
+    await runtime.resume(response["job_id"], schedule=False)
+    await runtime.run_job(response["job_id"])
+
+    dispatch_keys = [
+        checkpoint.checkpoint_key
+        for checkpoint in runtime.store.list_checkpoints(response["job_id"])
+        if checkpoint.checkpoint_key.startswith("researching-dispatch-")
+    ]
+
+    assert len(dispatch_keys) >= 2
+    assert len(set(dispatch_keys)) == len(dispatch_keys)
 
 
 @pytest.mark.asyncio

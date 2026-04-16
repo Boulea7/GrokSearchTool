@@ -1016,6 +1016,33 @@ def _artifact_bundle_identity(store: DeepResearchStore, job_id: str) -> str:
     return ""
 
 
+def _continuation_source_is_recoverable(
+    store: DeepResearchStore,
+    source_job: DeepResearchJob,
+    continuation: DeepResearchContinuationState,
+) -> bool:
+    final_bundle = _resolve_final_artifact_bundle(store, source_job.job_id)
+    if _artifact_bundle_is_usable(final_bundle):
+        return True
+    if store.list_checkpoints(source_job.job_id):
+        return True
+    if continuation.carry_forward_sources:
+        return True
+    if continuation.carry_forward_evidence:
+        return True
+    if continuation.carry_forward_sections:
+        return True
+    if continuation.carry_forward_unit_results:
+        return True
+    if continuation.confirmed_claims:
+        return True
+    if continuation.open_questions:
+        return True
+    if continuation.trusted_source_headers:
+        return True
+    return False
+
+
 def _artifact_content_type(kind: str) -> str:
     if kind.endswith(".md"):
         return "text/markdown"
@@ -2410,6 +2437,12 @@ class DeepResearchRuntime:
             normalized_exclude_domains = list(exclude_domains or [])
         resolved_budget_seconds = self._resolve_budget_seconds(time_budget_seconds, effort)
         continuation = self._build_continuation_context(continue_from_job_id)
+        if (
+            source_job is not None
+            and source_job.status == "canceled"
+            and not _continuation_source_is_recoverable(self.store, source_job, continuation)
+        ):
+            raise ValueError("canceled continuation source is not recoverable")
         request_fingerprint = self._request_fingerprint(
             query=query,
             context=context,
@@ -2821,7 +2854,44 @@ class DeepResearchRuntime:
     async def _ensure_startup_reconciled(self) -> None:
         if self._startup_reconciled:
             return
-        self.store.reconcile_incomplete_jobs(stale_after_seconds=_RUNTIME_RECONCILE_STALE_SECONDS)
+        recovered_jobs = self.store.reconcile_incomplete_jobs(stale_after_seconds=0)
+        for job in recovered_jobs:
+            refreshed = self.store.get_job(job.job_id)
+            if not _job_prefers_resolved_final_bundle(refreshed):
+                continue
+            final_bundle = _resolve_final_artifact_bundle(self.store, refreshed.job_id)
+            if not _artifact_bundle_is_usable(final_bundle):
+                continue
+            if refreshed.status == "interrupted" and refreshed.last_error == "worker_restarted":
+                refreshed = self.store.update_job(
+                    refreshed.job_id,
+                    status="completed",
+                    phase="finalizing",
+                    progress_pct=100.0,
+                    finished_at=refreshed.finished_at or utc_now_iso(),
+                    heartbeat_at=utc_now_iso(),
+                    last_error="",
+                )
+            elif refreshed.status == "canceled":
+                refreshed = self.store.update_job(
+                    refreshed.job_id,
+                    phase="finalizing",
+                    progress_pct=100.0,
+                    current_checkpoint="finalizing",
+                    finished_at=refreshed.finished_at or utc_now_iso(),
+                    heartbeat_at=utc_now_iso(),
+                )
+            self.store.append_event(
+                refreshed.job_id,
+                type="job_resolved_from_final_batch",
+                phase="finalizing",
+                message="Deep research recovered a usable final artifact batch during startup recovery.",
+                data={
+                    "resolved_artifact_batch_id": final_bundle["batch_id"],
+                    "resolved_status": refreshed.status,
+                    "recovery_reason": job.last_error or ("cancel_requested_during_recovery" if job.cancel_requested else ""),
+                },
+            )
         self._startup_reconciled = True
 
     async def _schedule(self, job_id: str) -> None:
@@ -2834,6 +2904,7 @@ class DeepResearchRuntime:
     async def _run(self, job_id: str) -> None:
         try:
             job = self.store.get_job(job_id)
+            baseline_attempt_count = job.attempt_count
             if job.cancel_requested:
                 _mark_canceled(self, job_id, job.phase, data={"reason": "cancel_requested_before_start"})
                 return
@@ -2842,6 +2913,11 @@ class DeepResearchRuntime:
             current_job = self.store.get_job(job_id)
             if current_job.cancel_requested:
                 _mark_canceled(self, job_id, current_job.phase, data={"error": str(exc), "reason": "cancel_requested"})
+                return
+            if (
+                current_job.status in {"queued", "interrupted", "canceled", "completed", "failed"}
+                or current_job.attempt_count > (baseline_attempt_count + 1)
+            ):
                 return
             self.store.update_job(
                 job_id,
@@ -4191,7 +4267,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             return
 
         batch_units = ready_units[: max(1, config.deep_research_max_concurrency)]
-        dispatch_checkpoint_key = f"researching-dispatch-{batch_units[0].unit_id}"
+        dispatch_checkpoint_key = f"researching-dispatch-a{worker_attempt_count}-{batch_units[0].unit_id}"
         dispatch_state = _checkpoint_state_payload(
             plan=plan,
             completed_unit_ids=completed_unit_ids,
