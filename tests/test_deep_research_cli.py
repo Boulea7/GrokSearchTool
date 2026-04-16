@@ -1,4 +1,5 @@
 import json
+import asyncio
 from pathlib import Path
 
 from grok_search import deep_research_cli
@@ -10,7 +11,57 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
 
 
 def build_runtime(tmp_path):
-    return DeepResearchRuntime(tmp_path / "deep-research")
+    runtime = DeepResearchRuntime(tmp_path / "deep-research")
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    return runtime
+
+
+def structured_plan_payload(job, continuation):
+    return {
+        "query": job.query,
+        "context": job.context,
+        "effort": job.effort,
+        "time_budget_seconds": job.resolved_budget_seconds,
+        "include_domains": [],
+        "exclude_domains": [],
+        "brief": {
+            "objective": job.query,
+            "deliverable": "A cited report.",
+            "success_criteria": ["Produce a structured report."],
+        },
+        "sub_questions": [
+            {"id": "sq1", "question": job.query, "reason": "Cover the primary question."},
+        ],
+        "search_strategy": {
+            "approach": "targeted",
+            "search_queries": [job.query],
+            "selective_fetch": {
+                "max_urls_per_search": 1,
+                "prefer_titles_matching_outline": True,
+            },
+        },
+        "report_outline": [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+        ],
+        "research_units": [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Primary search",
+                "goal": job.query,
+                "query": job.query,
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+        ],
+        "continuation": continuation,
+        "planner_metadata": {"planner": "test", "used_fallback": False},
+    }
 
 
 def summary_lines(text: str) -> list[str]:
@@ -815,6 +866,7 @@ def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, t
 
 def test_cli_events_prints_operator_batch_summary(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
+    runtime._startup_reconciled = True
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
 
     job = runtime.store.create_job(
