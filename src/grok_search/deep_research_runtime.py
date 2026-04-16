@@ -1030,6 +1030,10 @@ def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
             ):
                 return "invalid_shape"
         return None
+    if kind in {"coverage.json", "grounding.json", "verifier.json"}:
+        if not isinstance(value, dict):
+            return "invalid_shape"
+        return None
     return None
 
 
@@ -1086,11 +1090,44 @@ def _latest_batch_bundle_candidate(store: DeepResearchStore, job_id: str) -> dic
     return candidates[0] if candidates else None
 
 
+def _provenance_sidecars_match_report(
+    *,
+    report_value: dict[str, Any] | None,
+    coverage_value: dict[str, Any] | None,
+    grounding_value: dict[str, Any] | None,
+    verifier_value: dict[str, Any] | None,
+) -> bool:
+    if not isinstance(report_value, dict):
+        return False
+    runtime_payload = report_value.get("runtime")
+    report_coverage = report_value.get("coverage")
+    if not isinstance(runtime_payload, dict) or not isinstance(report_coverage, dict):
+        return False
+    report_grounding = runtime_payload.get("grounding")
+    report_verifier = runtime_payload.get("verifier")
+    if not isinstance(report_grounding, dict) or not isinstance(report_verifier, dict):
+        return False
+    if not isinstance(coverage_value, dict) or not isinstance(grounding_value, dict) or not isinstance(verifier_value, dict):
+        return False
+    for key, value in report_coverage.items():
+        if coverage_value.get(key) != value:
+            return False
+    for key, value in report_grounding.items():
+        if grounding_value.get(key) != value:
+            return False
+    if verifier_value != report_verifier:
+        return False
+    return True
+
+
 def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
     if bundle is None:
         return False
     paths = bundle.get("paths") or {}
     report_value: dict[str, Any] | None = None
+    coverage_value: dict[str, Any] | None = None
+    grounding_value: dict[str, Any] | None = None
+    verifier_value: dict[str, Any] | None = None
     for kind in _FINAL_ARTIFACT_KINDS:
         text = _read_text_if_exists(paths.get(kind))
         if text is None:
@@ -1101,9 +1138,22 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
                 return False
             if kind == "report.json" and isinstance(value, dict):
                 report_value = value
+            elif kind == "coverage.json" and isinstance(value, dict):
+                coverage_value = value
+            elif kind == "grounding.json" and isinstance(value, dict):
+                grounding_value = value
+            elif kind == "verifier.json" and isinstance(value, dict):
+                verifier_value = value
         elif kind == "final_report.md":
             if not _final_report_text_is_meaningful(text, report_value=report_value):
                 return False
+    if not _provenance_sidecars_match_report(
+        report_value=report_value,
+        coverage_value=coverage_value,
+        grounding_value=grounding_value,
+        verifier_value=verifier_value,
+    ):
+        return False
     return True
 
 
@@ -2683,6 +2733,13 @@ class DeepResearchRuntime:
                 _json_markdown_block(continuation.model_dump()),
                 "application/json",
             )
+        self.store.append_event(
+            job.job_id,
+            type="job_created",
+            phase="planning",
+            message="Deep research job created.",
+            data={"plan_only": plan_only, "continuation_mode": continuation.mode},
+        )
         fallback_reason = plan.planner_metadata.get("fallback_reason")
         if isinstance(fallback_reason, dict):
             self.store.append_event(
@@ -2692,13 +2749,6 @@ class DeepResearchRuntime:
                 message="Planner fell back to the deterministic backup plan.",
                 data=fallback_reason,
             )
-        self.store.append_event(
-            job.job_id,
-            type="job_created",
-            phase="planning",
-            message="Deep research job created.",
-            data={"plan_only": plan_only, "continuation_mode": continuation.mode},
-        )
         if not plan_only:
             job = self.store.update_job(
                 job.job_id,
@@ -4817,7 +4867,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "sections": _sanitize_sections(sections, source_registry),
     }
     runtime_warnings = sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])})
-    report_coverage = _coverage_for_report(plan, citations["sections"])
+    report_coverage = _coverage_for_report(plan, citations["sections"], coverage_state=coverage_state)
     coverage_diagnostics = {
         "query": plan.query,
         "must_cover": list(plan.brief.must_cover),
@@ -5230,7 +5280,7 @@ async def _execute_research_unit(
         )
         fetched_evidence_items.append(
             DeepResearchEvidenceItem(
-                evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
+                evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items) + len(fetched_evidence_items)}",
                 unit_id=unit.unit_id,
                 source_urls=[source["url"]],
                 summary=fetched_summary,
@@ -5454,6 +5504,8 @@ def _supporting_domain_count(source_ids: list[str], source_registry: dict[str, d
 def _coverage_for_report(
     plan: DeepResearchPlan,
     sections: list[dict[str, Any]],
+    *,
+    coverage_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     answered_section_ids: list[str] = []
     covered_sub_question_ids: list[str] = []
@@ -5540,6 +5592,11 @@ def _coverage_for_report(
         for section in plan.report_outline
         if section.section_id not in answered_section_ids
     ]
+    coverage_items_by_target = {
+        _normalize_whitespace(str(item.get("target", ""))): item
+        for item in (coverage_state or {}).get("items", [])
+        if isinstance(item, dict) and _normalize_whitespace(str(item.get("target", "")))
+    }
     for target in _stop_policy_targets(plan):
         target_tokens = _tokenize_keywords(target)
         coverage_threshold = max(2, min(4, max(1, len(target_tokens) // 2)))
@@ -5562,7 +5619,13 @@ def _coverage_for_report(
                 if section.get("citations") and _count_keyword_overlap(section_text, target_tokens) >= max(coverage_threshold, 3):
                     if section_id and section_id not in matching_section_ids:
                         matching_section_ids.append(section_id)
-        covered = bool(matching_claim_ids)
+        coverage_item = coverage_items_by_target.get(_normalize_whitespace(target), {})
+        matched_unit_ids = [
+            str(unit_id).strip()
+            for unit_id in coverage_item.get("matched_unit_ids", [])
+            if str(unit_id).strip()
+        ]
+        covered = bool(matching_claim_ids) or bool(coverage_item.get("satisfied"))
         if not covered:
             hard_uncovered_targets.append(target)
         hard_target_coverage.append(
@@ -5571,6 +5634,7 @@ def _coverage_for_report(
                 "covered": covered,
                 "section_ids": matching_section_ids,
                 "claim_ids": matching_claim_ids,
+                "matched_unit_ids": matched_unit_ids,
             }
         )
     coverage_gate_passed = not unanswered_sections and not uncovered_sub_questions

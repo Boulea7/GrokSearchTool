@@ -4240,6 +4240,37 @@ async def test_continue_from_canceled_job_with_resolved_final_batch_builds_conti
 
 
 @pytest.mark.asyncio
+async def test_continue_from_interrupted_finalizing_job_with_resolved_final_batch_builds_continuation_state(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = create_completed_source_job(runtime, query="Interrupted finalizing continuation source")
+    runtime.store.update_job(
+        source.job_id,
+        status="interrupted",
+        current_checkpoint="finalizing",
+        phase="finalizing",
+        last_error="worker_restarted",
+        finished_at=utc_now_iso(),
+    )
+
+    response = await runtime.start(
+        query="Follow up interrupted finalizing continuation source",
+        continue_from_job_id=source.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    continuation = response["plan"]["continuation"]
+
+    assert continuation["mode"] == "continue"
+    assert continuation["source_job_id"] == source.job_id
+    assert continuation["source_job_status"] == "interrupted"
+    assert continuation["checkpoint_key"] == "finalizing"
+    assert continuation["source_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_continue_from_canceled_job_without_recoverable_surfaces_is_rejected_without_orphan(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -8478,6 +8509,76 @@ async def test_report_release_gate_fails_job_when_non_summary_sections_are_unans
 
 
 @pytest.mark.asyncio
+async def test_hard_coverage_gate_respects_runtime_coverage_state_for_broad_targets(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["brief"]["must_cover"] = [
+            "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+        ]
+        payload["brief"]["coverage_checklist"] = list(payload["brief"]["must_cover"])
+        payload["report_outline"] = [
+            {
+                "section_id": "durable-runtime-semantics",
+                "title": "Durable Runtime Semantics",
+                "goal": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 2,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint identity uses stable thread_id and checkpoint_id boundaries, while safe interrupt resume restores durable state before replaying the interrupted node.",
+            [
+                {
+                    "url": "https://docs.example.com/checkpoint-identity",
+                    "title": "Checkpoint identity",
+                    "description": "Checkpoint identity reference.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.example.com/interrupt-resume",
+                    "title": "Interrupt resume",
+                    "description": "Interrupt resume reference.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "checkpoint-identity" in url:
+            return (
+                "# Checkpoint identity\n\n"
+                "Checkpoint identity is anchored by thread_id and checkpoint_id.\n"
+            )
+        return (
+            "# Interrupt resume\n\n"
+            "Interrupt resume restores durable state before replaying the interrupted node.\n"
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(
+        query="Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+
+    assert result["status"] == "completed"
+    assert result["report"]["runtime"]["release_gate"]["passed"] is True
+    assert result["report"]["coverage"]["hard_coverage_gate_passed"] is True
+    assert result["report"]["coverage"]["hard_uncovered_targets"] == []
+
+
+@pytest.mark.asyncio
 async def test_runtime_persists_verifier_artifact_and_blocks_single_source_low_confidence_report(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -9074,6 +9175,283 @@ async def test_completed_result_requires_full_provenance_bundle_for_resolved_bat
     assert result["artifact_errors"]["coverage.json"] == "missing_required_artifact"
     assert result["artifact_errors"]["grounding.json"] == "missing_required_artifact"
     assert result["artifact_errors"]["verifier.json"] == "missing_required_artifact"
+
+
+@pytest.mark.asyncio
+async def test_resolved_final_batch_rejects_latest_batch_with_mismatched_provenance_sidecars(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Resolved batch provenance sidecar parity",
+        request_fingerprint="fp-resolved-batch-provenance-sidecar-parity",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+
+    good_batch = runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps(
+                        {
+                            "source_registry": {
+                                "R1": {
+                                    "source_id": "R1",
+                                    "url": "https://good.example.com/runtime/recovery",
+                                }
+                            },
+                            "sections": [],
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps(
+                        {
+                            "summary": "Recovered final batch report",
+                            "sections": [],
+                            "unit_results": {},
+                            "coverage": {
+                                "planned_section_ids": [],
+                                "answered_section_ids": [],
+                                "unanswered_sections": [],
+                                "planned_sub_question_ids": [],
+                                "covered_sub_question_ids": [],
+                                "uncovered_sub_questions": [],
+                                "coverage_gate_passed": True,
+                                "hard_coverage_gate_passed": True,
+                            },
+                            "runtime": {
+                                "warnings": [],
+                                "grounding": {
+                                    "total_claims": 0,
+                                    "ungrounded_claims": 0,
+                                    "single_source_claims": 0,
+                                    "missing_evidence_binding_claims": 0,
+                                },
+                                "verifier": {
+                                    "passed": True,
+                                    "reason_codes": [],
+                                    "flagged_claim_ids": [],
+                                    "summary": {
+                                        "section_count": 0,
+                                        "total_claims": 0,
+                                        "low_confidence_claims": 0,
+                                        "single_source_claims": 0,
+                                        "source_backed_binding_count": 0,
+                                        "search_only_binding_count": 0,
+                                        "null_span_binding_count": 0,
+                                        "missing_evidence_items": 0,
+                                        "mismatched_binding_source": 0,
+                                        "mismatched_binding_evidence": 0,
+                                        "invalid_source_backed_span": 0,
+                                        "duplicate_claims": 0,
+                                        "low_value_claims": 0,
+                                        "medium_single_source_search_only": 0,
+                                        "same_domain_off_topic_dominance": 0,
+                                    },
+                                },
+                            },
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered final batch report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query=job.query,
+        ),
+    )
+
+    bad_batch = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {
+                            "R1": {
+                                "source_id": "R1",
+                                "url": "https://good.example.com/runtime/recovery",
+                            }
+                        },
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps(
+                    {
+                        "summary": "Recovered final batch report",
+                        "sections": [],
+                        "unit_results": {},
+                        "coverage": {
+                            "planned_section_ids": [],
+                            "answered_section_ids": [],
+                            "unanswered_sections": [],
+                            "planned_sub_question_ids": [],
+                            "covered_sub_question_ids": [],
+                            "uncovered_sub_questions": [],
+                            "coverage_gate_passed": True,
+                            "hard_coverage_gate_passed": True,
+                        },
+                        "runtime": {
+                            "warnings": [],
+                            "grounding": {
+                                "total_claims": 0,
+                                "ungrounded_claims": 0,
+                                "single_source_claims": 0,
+                                "missing_evidence_binding_claims": 0,
+                            },
+                            "verifier": {
+                                "passed": True,
+                                "reason_codes": [],
+                                "flagged_claim_ids": [],
+                                "summary": {
+                                    "section_count": 0,
+                                    "total_claims": 0,
+                                    "low_confidence_claims": 0,
+                                    "single_source_claims": 0,
+                                    "source_backed_binding_count": 0,
+                                    "search_only_binding_count": 0,
+                                    "null_span_binding_count": 0,
+                                    "missing_evidence_items": 0,
+                                    "mismatched_binding_source": 0,
+                                    "mismatched_binding_evidence": 0,
+                                    "invalid_source_backed_span": 0,
+                                    "duplicate_claims": 0,
+                                    "low_value_claims": 0,
+                                    "medium_single_source_search_only": 0,
+                                    "same_domain_off_topic_dominance": 0,
+                                },
+                            },
+                        },
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "coverage.json",
+                "content": json.dumps(
+                    {
+                        "query": job.query,
+                        "planned_section_ids": ["stale-section"],
+                        "answered_section_ids": [],
+                        "unanswered_sections": ["Stale Section"],
+                        "planned_sub_question_ids": [],
+                        "covered_sub_question_ids": [],
+                        "uncovered_sub_questions": [],
+                        "coverage_gate_passed": False,
+                        "hard_coverage_gate_passed": False,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": json.dumps(
+                    {
+                        "total_claims": 9,
+                        "grounded_claims": 0,
+                        "ungrounded_claims": 9,
+                        "single_source_claims": 9,
+                        "low_confidence_claims": 9,
+                        "missing_evidence_binding_claims": 9,
+                        "total_evidence_bindings": 0,
+                        "source_backed_binding_count": 0,
+                        "search_only_binding_count": 0,
+                        "null_span_binding_count": 0,
+                        "grounded_claims_without_source_backed_binding": 0,
+                        "sections": [],
+                        "sources": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verifier.json",
+                "content": json.dumps(
+                    {
+                        "passed": False,
+                        "reason_codes": ["stale_current_only"],
+                        "flagged_claim_ids": [],
+                        "summary": {
+                            "section_count": 9,
+                            "total_claims": 9,
+                            "low_confidence_claims": 9,
+                            "single_source_claims": 9,
+                            "source_backed_binding_count": 0,
+                            "search_only_binding_count": 0,
+                            "null_span_binding_count": 0,
+                            "missing_evidence_items": 9,
+                            "mismatched_binding_source": 9,
+                            "mismatched_binding_evidence": 9,
+                            "invalid_source_backed_span": 9,
+                            "duplicate_claims": 9,
+                            "low_value_claims": 9,
+                            "medium_single_source_search_only": 9,
+                            "same_domain_off_topic_dominance": 9,
+                            "unbound_citation_sources": 9,
+                            "unbound_evidence_ids": 9,
+                        },
+                    }
+                ),
+                "content_type": "application/json",
+            },
+        ],
+    )
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+    coverage_text = runtime.read_artifact_text(job.job_id, "coverage.json")
+    verifier_text = runtime.read_artifact_text(job.job_id, "verifier.json")
+
+    assert status["resolved_artifact_batch_id"] == good_batch[0]["metadata"]["batch_id"]
+    assert status["artifact_fallback_used"] is True
+    assert result["resolved_artifact_batch_id"] == good_batch[0]["metadata"]["batch_id"]
+    assert result["artifact_fallback_used"] is True
+    assert json.loads(coverage_text or "{}")["coverage_gate_passed"] is True
+    assert json.loads(verifier_text or "{}")["reason_codes"] == []
+    assert result["report"]["runtime"]["verifier"]["reason_codes"] == []
+    assert bad_batch[0]["metadata"]["batch_id"] != good_batch[0]["metadata"]["batch_id"]
 
 
 @pytest.mark.asyncio
@@ -10129,6 +10507,83 @@ async def test_noisy_marketing_fetch_is_filtered_and_official_docs_rank_first(mo
 
 
 @pytest.mark.asyncio
+async def test_multi_fetch_search_unit_uses_unique_evidence_ids_and_keeps_provenance_consistent(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["brief"]["must_cover"] = ["Explain checkpoint identity and interrupt resume semantics."]
+        payload["brief"]["coverage_checklist"] = ["Explain checkpoint identity and interrupt resume semantics."]
+        payload["report_outline"] = [
+            {
+                "section_id": "checkpoint-semantics",
+                "title": "Checkpoint Semantics",
+                "goal": "Explain checkpoint identity and interrupt resume semantics.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 2,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint identity and interrupt resume semantics are documented in official LangGraph references.",
+            [
+                {
+                    "url": "https://docs.example.com/checkpoint-identity",
+                    "title": "Checkpoint identity",
+                    "description": "Checkpoint identity reference.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.example.com/interrupt-resume",
+                    "title": "Interrupt resume",
+                    "description": "Interrupt resume reference.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "checkpoint-identity" in url:
+            return (
+                "# Checkpoint identity\n\n"
+                "Checkpoint identity is defined by thread_id and checkpoint_id in the durable runtime.\n"
+            )
+        return (
+            "# Interrupt resume\n\n"
+            "Interrupt resume replays the interrupted node after restoring state from the durable checkpoint.\n"
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(
+        query="Explain checkpoint identity and interrupt resume semantics.",
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+    evidence_items = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_items.json") or "[]")
+    verifier = result["report"]["runtime"]["verifier"]
+
+    fetch_evidence_ids = [
+        item["evidence_id"]
+        for item in evidence_items
+        if item.get("unit_id") == "unit-search-1" and item.get("evidence_kind") == "fetch"
+    ]
+
+    assert len(fetch_evidence_ids) == 2
+    assert len(fetch_evidence_ids) == len(set(fetch_evidence_ids))
+    assert "mismatched_binding_evidence" not in verifier["reason_codes"]
+    assert "unbound_citation_sources" not in verifier["reason_codes"]
+    assert "unbound_evidence_ids" not in verifier["reason_codes"]
+
+
+@pytest.mark.asyncio
 async def test_cookie_banner_text_is_filtered_from_summary_and_final_report(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -10307,6 +10762,7 @@ async def test_fallback_plan_records_generation_failure_in_metadata_and_events(t
     assert response["plan"]["planner_metadata"]["used_fallback"] is True
     assert response["plan"]["planner_metadata"]["fallback_reason"]["stage"] == "generation"
     assert "planner exploded" in response["plan"]["planner_metadata"]["fallback_reason"]["error"]
+    assert [event["type"] for event in events["events"][:2]] == ["job_created", "planner_fallback"]
     assert any(
         event["type"] == "planner_fallback" and event["data"]["stage"] == "generation"
         for event in events["events"]
