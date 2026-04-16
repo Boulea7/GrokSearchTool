@@ -417,6 +417,9 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
                 "report.json",
                 "final_report.md",
                 "evidence_items.json",
+                "coverage.json",
+                "grounding.json",
+                "verifier.json",
             }
         ]
         mismatched = [
@@ -836,6 +839,27 @@ def test_resolved_batch_parity_detects_mixed_batch_artifacts():
             {"kind": "citations.json", "metadata": {"batch_id": "batch-bad"}},
             {"kind": "report.json", "metadata": {"batch_id": "batch-good"}},
             {"kind": "final_report.md", "metadata": {"batch_id": "batch-good"}},
+        ],
+    }
+
+    result = evaluate_case_metric(case, "resolved_batch_parity")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["mixed_batch_artifacts"]
+
+
+def test_resolved_batch_parity_detects_mixed_batch_provenance_sidecars():
+    case = {
+        "resolved_artifact_batch_id": "batch-good",
+        "artifacts": [
+            {"kind": "sources.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "citations.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "report.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "final_report.md", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "evidence_items.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "coverage.json", "metadata": {"batch_id": "batch-bad"}},
+            {"kind": "grounding.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "verifier.json", "metadata": {"batch_id": "batch-good"}},
         ],
     }
 

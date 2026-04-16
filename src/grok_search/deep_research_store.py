@@ -264,18 +264,18 @@ class DeepResearchStore:
     ) -> DeepResearchEvent:
         timestamp = utc_now_iso()
         with self._connect() as connection:
-            row = connection.execute(
-                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM job_events WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
-            seq = int(row["max_seq"]) + 1
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 INSERT INTO job_events (job_id, seq, timestamp, type, phase, message, data_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?
+                FROM job_events
+                WHERE job_id = ?
                 """,
-                (job_id, seq, timestamp, type, phase, message, _json_dumps(data or {})),
+                (job_id, timestamp, type, phase, message, _json_dumps(data or {}), job_id),
             )
+            row = connection.execute("SELECT seq FROM job_events WHERE rowid = last_insert_rowid()").fetchone()
+            seq = int(row["seq"])
         event = DeepResearchEvent(
             job_id=job_id,
             seq=seq,
