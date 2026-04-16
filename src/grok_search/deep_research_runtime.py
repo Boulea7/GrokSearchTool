@@ -4430,7 +4430,12 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         **report_coverage,
     }
     grounding_diagnostics = _build_grounding_diagnostics(citations["sections"], citations["source_registry"])
-    release_gate = _build_release_gate(report_coverage, grounding_diagnostics)
+    verifier_diagnostics = _build_verifier_diagnostics(
+        coverage=report_coverage,
+        grounding=grounding_diagnostics,
+        sections=citations["sections"],
+    )
+    release_gate = _build_release_gate(report_coverage, grounding_diagnostics, verifier_diagnostics)
     runtime_warnings = sorted({*runtime_warnings, *_coverage_warning_codes(report_coverage), *release_gate["reason_codes"]})
     if plan.planner_metadata.get("used_fallback"):
         runtime_warnings = sorted({*runtime_warnings, "planner_fallback_used"})
@@ -4463,6 +4468,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "single_source_claims": grounding_diagnostics["single_source_claims"],
                 "missing_evidence_binding_claims": grounding_diagnostics["missing_evidence_binding_claims"],
             },
+            "verifier": verifier_diagnostics,
             "release_gate": release_gate,
             "constraint_violations": constraint_violations,
             "failed_units": failed_units,
@@ -4482,6 +4488,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     final_report = _build_final_report(plan, citations["sections"], citations["source_registry"], report_summary)
     runtime.write_artifact(job_id, "coverage.json", _json_markdown_block(coverage_diagnostics), "application/json")
     runtime.write_artifact(job_id, "grounding.json", _json_markdown_block(grounding_diagnostics), "application/json")
+    runtime.write_artifact(job_id, "verifier.json", _json_markdown_block(verifier_diagnostics), "application/json")
     runtime.store.update_job(job_id, phase="finalizing", progress_pct=94.0, heartbeat_at=utc_now_iso())
     runtime.store.append_event(
         job_id,
@@ -5238,6 +5245,7 @@ def _build_grounding_diagnostics(
 def _build_release_gate(
     coverage: dict[str, Any],
     grounding: dict[str, Any],
+    verifier: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     reason_codes: list[str] = []
     if not coverage.get("coverage_gate_passed", False):
@@ -5246,9 +5254,55 @@ def _build_release_gate(
         reason_codes.append("ungrounded_claims")
     if int(grounding.get("missing_evidence_binding_claims", 0) or 0) > 0:
         reason_codes.append("missing_evidence_bindings")
+    if isinstance(verifier, dict):
+        reason_codes.extend(str(code) for code in verifier.get("reason_codes", []) if str(code).strip())
     return {
         "passed": not reason_codes,
-        "reason_codes": reason_codes,
+        "reason_codes": _dedupe_preserve_order(reason_codes),
+    }
+
+
+def _build_verifier_diagnostics(
+    *,
+    coverage: dict[str, Any],
+    grounding: dict[str, Any],
+    sections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    reason_codes: list[str] = []
+    flagged_claim_ids: list[str] = []
+    if not coverage.get("coverage_gate_passed", False):
+        reason_codes.append("coverage_incomplete")
+    if int(grounding.get("missing_evidence_binding_claims", 0) or 0) > 0:
+        reason_codes.append("missing_evidence_bindings")
+    if int(grounding.get("ungrounded_claims", 0) or 0) > 0:
+        reason_codes.append("ungrounded_claims")
+
+    for section in sections:
+        for claim in section.get("claims", []):
+            confidence = str(claim.get("confidence", "") or "").strip().lower()
+            supporting_source_count = int(claim.get("supporting_source_count", 0) or 0)
+            bindings = [binding for binding in claim.get("evidence_bindings", []) if isinstance(binding, dict)]
+            if (
+                confidence == "low"
+                and supporting_source_count <= 1
+                and bindings
+                and not any(bool(binding.get("source_backed")) for binding in bindings)
+            ):
+                claim_id = str(claim.get("claim_id", "")).strip()
+                if claim_id:
+                    flagged_claim_ids.append(claim_id)
+                reason_codes.append("single_source_low_confidence")
+
+    return {
+        "passed": not reason_codes,
+        "reason_codes": _dedupe_preserve_order(reason_codes),
+        "flagged_claim_ids": _dedupe_preserve_order(flagged_claim_ids),
+        "summary": {
+            "section_count": len(sections),
+            "total_claims": int(grounding.get("total_claims", 0) or 0),
+            "low_confidence_claims": int(grounding.get("low_confidence_claims", 0) or 0),
+            "single_source_claims": int(grounding.get("single_source_claims", 0) or 0),
+        },
     }
 
 

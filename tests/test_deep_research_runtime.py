@@ -10,6 +10,7 @@ from grok_search.deep_research_runtime import (
     _build_grounding_diagnostics,
     _build_release_gate,
     _build_report_summary,
+    _build_verifier_diagnostics,
     _coverage_for_report,
     _search_query,
 )
@@ -7058,6 +7059,45 @@ def test_release_gate_rejects_claim_with_stale_evidence_binding():
     assert release_gate["reason_codes"] == ["missing_evidence_bindings"]
 
 
+def test_release_gate_rejects_single_source_low_confidence_verifier_findings():
+    grounding = {
+        "total_claims": 1,
+        "ungrounded_claims": 0,
+        "single_source_claims": 1,
+        "low_confidence_claims": 1,
+        "missing_evidence_binding_claims": 0,
+    }
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding=grounding,
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "confidence": "low",
+                        "supporting_source_count": 1,
+                        "evidence_bindings": [
+                            {
+                                "source_id": "R1",
+                                "source_backed": False,
+                                "excerpt_origin": "search_answer",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+    release_gate = _build_release_gate({"coverage_gate_passed": True}, grounding, verifier)
+
+    assert verifier["reason_codes"] == ["single_source_low_confidence"]
+    assert release_gate["passed"] is False
+    assert release_gate["reason_codes"] == ["single_source_low_confidence"]
+
+
 @pytest.mark.asyncio
 async def test_report_release_gate_fails_job_when_non_summary_sections_are_unanswered(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
@@ -7110,6 +7150,55 @@ async def test_report_release_gate_fails_job_when_non_summary_sections_are_unans
     assert "coverage_incomplete" in result["report"]["runtime"]["warnings"]
     assert any(event["type"] == "job_failed" for event in events["events"])
     assert not any(event["type"] == "job_completed" for event in events["events"])
+
+
+@pytest.mark.asyncio
+async def test_runtime_persists_verifier_artifact_and_blocks_single_source_low_confidence_report(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain restart trade-offs that still need confirmation.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "The exact restart trade-off is unclear and needs confirmation from deeper source material.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+
+    response = await runtime.start(
+        query="Explain restart trade-offs that still need confirmation.",
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+    verifier = json.loads(runtime.store.read_artifact_text(response["job_id"], "verifier.json") or "{}")
+
+    assert result["status"] == "failed"
+    assert "single_source_low_confidence" in verifier["reason_codes"]
+    assert "single_source_low_confidence" in result["report"]["runtime"]["verifier"]["reason_codes"]
+    assert "single_source_low_confidence" in result["report"]["runtime"]["release_gate"]["reason_codes"]
 
 
 @pytest.mark.asyncio
