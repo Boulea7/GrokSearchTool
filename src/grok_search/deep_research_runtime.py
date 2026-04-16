@@ -214,6 +214,16 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
     return unique
 
 
+def _stable_string_list(items: list[str]) -> list[str]:
+    return sorted(
+        {
+            _normalize_whitespace(item).lower()
+            for item in items
+            if _normalize_whitespace(item)
+        }
+    )
+
+
 def _stable_text_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
@@ -632,7 +642,64 @@ def _continuation_compaction_reason_codes(
 
 
 def _continuation_identity_from_snapshot(snapshot: dict[str, Any]) -> str:
-    return hashlib.sha256(_json_markdown_block(snapshot).encode("utf-8")).hexdigest()
+    return hashlib.sha256(json.dumps(_canonicalize_identity_value(snapshot), ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _canonicalize_identity_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _canonicalize_identity_value(item)
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, list):
+        canonical_items = [_canonicalize_identity_value(item) for item in value]
+        if all(isinstance(item, (str, int, float, bool)) or item is None for item in canonical_items):
+            return sorted(canonical_items, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True))
+        if all(isinstance(item, dict) for item in canonical_items):
+            return sorted(
+                canonical_items,
+                key=lambda item: (
+                    str(item.get("source_id", "")),
+                    str(item.get("section_id", "")),
+                    str(item.get("evidence_id", "")),
+                    str(item.get("unit_id", "")),
+                    str(item.get("url", "")),
+                    str(item.get("title", "")),
+                    json.dumps(item, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+        return canonical_items
+    if isinstance(value, str):
+        return _normalize_whitespace(value)
+    return value
+
+
+def _continuation_capsule(continuation: DeepResearchContinuationState) -> dict[str, Any]:
+    return {
+        "mode": continuation.mode,
+        "source_job_id": continuation.source_job_id,
+        "source_job_status": continuation.source_job_status,
+        "continuation_identity": continuation.continuation_identity,
+        "checkpoint_key": continuation.checkpoint_key,
+        "continuation_goal": continuation.continuation_goal,
+        "source_count": continuation.source_count,
+        "compaction_policy": continuation.compaction_policy,
+        "compaction_reason_codes": list(continuation.compaction_reason_codes),
+        "confirmed_claims": list(continuation.confirmed_claims[:4]),
+        "open_questions": list(continuation.open_questions[:4]),
+        "trusted_source_headers": list(continuation.trusted_source_headers[:4]),
+        "carry_forward_constraints": dict(continuation.carry_forward_constraints),
+        "carry_forward_source_ids": [
+            str(item.get("source_id", "")).strip()
+            for item in continuation.carry_forward_sources[:5]
+            if str(item.get("source_id", "")).strip()
+        ],
+        "carry_forward_section_ids": [
+            str(item.get("section_id", "")).strip()
+            for item in continuation.carry_forward_sections[:5]
+            if str(item.get("section_id", "")).strip()
+        ],
+    }
 
 
 def _hydrate_continuation_snapshot(continuation: DeepResearchContinuationState) -> DeepResearchContinuationState:
@@ -1300,6 +1367,7 @@ def _artifact_payloads(
         "plan.json",
         "planner_trace.json",
         "continuation.json",
+        "continuation_capsule.json",
         "partial_report.md",
         *_FINAL_ARTIFACT_KINDS,
         _EVIDENCE_ITEMS_ARTIFACT_KIND,
@@ -1600,7 +1668,11 @@ def _unsafe_plan_reason(
     for issue in validation_issues:
         if issue in _UNSAFE_VALIDATION_ISSUES:
             return {"issue": issue, "reason": "unsafe_validation_issue"}
-        if continuation.mode == "continue" and issue == "generic_continuation_outline":
+        if (
+            continuation.mode == "continue"
+            and issue == "generic_continuation_outline"
+            and "expanded_outline_from_follow_up_surface" not in normalize_actions
+        ):
             return {"issue": issue, "reason": "unsafe_continuation_outline"}
     if blocked_reasons:
         return {"issue": blocked_reasons[0], "reason": "blocked_plan_dependency"}
@@ -1829,6 +1901,42 @@ def _outline_from_sub_questions(
         return outline
     _append_unique(validation_issues, "generic_outline_for_sub_questions")
     _append_unique(normalize_actions, "expanded_outline_from_sub_questions")
+    return expanded
+
+
+def _outline_from_follow_up_surface(
+    outline: list[dict[str, Any]],
+    *,
+    continuation_focus: list[str],
+    normalize_actions: list[str],
+) -> list[dict[str, Any]]:
+    if not _is_generic_outline(outline):
+        return outline
+    focused_titles = [
+        _trim_text(_normalize_whitespace(item.rstrip(" ?")), limit=96)
+        for item in continuation_focus
+        if _trim_text(_normalize_whitespace(item.rstrip(" ?")), limit=96)
+    ]
+    if not focused_titles:
+        return outline
+    expanded = [outline[0]]
+    used_section_ids = {str(outline[0].get("section_id", "")).strip()}
+    for title in focused_titles:
+        section_id = _slugify(title)
+        candidate_id = section_id
+        suffix = 2
+        while candidate_id in used_section_ids:
+            candidate_id = f"{section_id}-{suffix}"
+            suffix += 1
+        used_section_ids.add(candidate_id)
+        expanded.append(
+            {
+                "section_id": candidate_id,
+                "title": title[:1].upper() + title[1:] if title and title[0].islower() else title,
+                "goal": title,
+            }
+        )
+    _append_unique(normalize_actions, "expanded_outline_from_follow_up_surface")
     return expanded
 
 
@@ -2419,7 +2527,7 @@ def _hydrate_evidence_source_ids(
 
 
 def _planner_continuation_payload(continuation: DeepResearchContinuationState) -> dict[str, Any]:
-    payload = _compact_continuation(continuation).model_dump()
+    payload = _continuation_capsule(continuation)
     if continuation.mode != "continue":
         return payload
     payload["carry_forward_sources"] = [
@@ -2455,8 +2563,6 @@ def _planner_continuation_payload(continuation: DeepResearchContinuationState) -
     payload["open_questions"] = list(continuation.open_questions[:4])
     payload["trusted_source_headers"] = list(continuation.trusted_source_headers[:4])
     payload["carry_forward_constraints"] = dict(continuation.carry_forward_constraints)
-    payload.pop("previous_summary", None)
-    payload.pop("prior_plan_summary", None)
     return payload
 
 
@@ -2768,6 +2874,12 @@ class DeepResearchRuntime:
                 job.job_id,
                 "continuation.json",
                 _json_markdown_block(continuation.model_dump()),
+                "application/json",
+            )
+            self.write_artifact(
+                job.job_id,
+                "continuation_capsule.json",
+                _json_markdown_block(_continuation_capsule(continuation)),
                 "application/json",
             )
         self.store.append_event(
@@ -3331,6 +3443,7 @@ class DeepResearchRuntime:
                 "include_domains": job.include_domains,
                 "exclude_domains": job.exclude_domains,
                 "continuation": _planner_continuation_payload(continuation),
+                "continuation_capsule": _continuation_capsule(continuation),
             }
         )
         headers = provider._build_api_headers()
@@ -3667,6 +3780,11 @@ class DeepResearchRuntime:
             continuation=continuation,
             normalize_actions=normalize_actions,
         )
+        requested_continuation_focus = _normalize_string_list(
+            (raw_plan.get("brief") or {}).get("continuation_focus")
+            if isinstance(raw_plan.get("brief"), dict)
+            else None
+        )
         sub_questions = raw_plan.get("sub_questions") or []
         if isinstance(sub_questions, dict):
             normalize_actions.append("dict_sub_questions_wrapped")
@@ -3723,11 +3841,6 @@ class DeepResearchRuntime:
         if saw_string_report_outline:
             validation_issues.append("string_report_outline_items")
         if continuation.mode == "continue" and _is_generic_outline(report_outline):
-            report_outline = [
-                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the follow-up answer."},
-                {"section_id": "follow-up-findings", "title": "Follow-up Findings", "goal": "Extend or revise prior findings with new evidence."},
-                {"section_id": "remaining-gaps", "title": "Remaining Gaps", "goal": "Call out what still needs confirmation."},
-            ]
             validation_issues.append("generic_continuation_outline")
         research_units = raw_plan.get("research_units") or []
         if isinstance(research_units, dict):
@@ -3929,6 +4042,11 @@ class DeepResearchRuntime:
             continuation=continuation,
             sub_questions=sub_questions,
             strategy=strategy,
+        )
+        normalized_outline = _outline_from_follow_up_surface(
+            normalized_outline,
+            continuation_focus=requested_continuation_focus or list(normalized_brief.get("continuation_focus") or []),
+            normalize_actions=normalize_actions,
         )
 
         raw_planner_metadata = raw_plan.get("planner_metadata")
@@ -4279,8 +4397,8 @@ class DeepResearchRuntime:
             "query": query.strip(),
             "context": context.strip(),
             "effort": effort.strip(),
-            "include_domains": include_domains,
-            "exclude_domains": exclude_domains,
+            "include_domains": _stable_string_list(include_domains),
+            "exclude_domains": _stable_string_list(exclude_domains),
             "continue_from_job_id": continue_from_job_id.strip(),
             "plan_only": bool(plan_only),
             "continuation_identity": continuation_identity.strip(),
@@ -4706,13 +4824,16 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     "summary": "",
                     "detail": "",
                 }
-            if unit.unit_type in {"fetch", "map"} and not unit_result.get("summary") and not constrained_sources and not new_evidence:
+                if unit.unit_type == "search":
+                    new_evidence = []
+            if unit.unit_type in {"fetch", "map", "search"} and not unit_result.get("summary") and not constrained_sources and not new_evidence:
+                error_code = f"empty_{unit.unit_type}_result_after_constraints" if unit.unit_type == "search" else f"empty_{unit.unit_type}_result"
                 failed_unit_ids.append(unit.unit_id)
                 failed_units.append(
                     {
                         "unit_id": unit.unit_id,
                         "unit_type": unit.unit_type,
-                        "reason": f"empty_{unit.unit_type}_result",
+                        "reason": error_code,
                     }
                 )
                 runtime.store.append_event(
@@ -4720,7 +4841,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     type="research_unit_failed",
                     phase="researching",
                     message=f"Failed {unit.unit_id}.",
-                    data={"unit_type": unit.unit_type, "error": f"empty_{unit.unit_type}_result"},
+                    data={"unit_type": unit.unit_type, "error": error_code},
                 )
                 progress = 20.0 + ((len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids)) / unit_total) * 50.0
                 runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
@@ -6228,6 +6349,7 @@ def _build_section_citations(
     source_registry: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     outline = plan.report_outline
+    outline_position = {section.section_id: index for index, section in enumerate(outline)}
     registry_by_id = {item["source_id"]: item for item in source_registry if item.get("source_id")}
     claims_pool = [
         DeepResearchEvidenceItem.model_validate(item)
@@ -6249,7 +6371,14 @@ def _build_section_citations(
     used_evidence_ids: set[str] = set()
     used_claim_keys: set[str] = set()
     query_keywords = _tokenize_keywords(plan.query)
-    for section in outline:
+    prioritized_outline = sorted(
+        outline,
+        key=lambda section: (
+            1 if section.title.lower() in {"executive summary", "key findings", "summary"} else 0,
+            outline_position.get(section.section_id, 0),
+        ),
+    )
+    for section in prioritized_outline:
         if _is_gap_section(section) and not any(
             _has_gap_signal(item.summary) or _has_gap_signal(item.detail) for item in claims_pool
         ):
@@ -6376,7 +6505,7 @@ def _build_section_citations(
             supporting_domain_count=section_domain_count,
         )
         sections.append(section_model.model_dump())
-    return sections
+    return sorted(sections, key=lambda section: outline_position.get(str(section.get("section_id", "")), 10_000))
 
 
 def _build_section_summary(section_claims: list[dict[str, Any]]) -> str:
