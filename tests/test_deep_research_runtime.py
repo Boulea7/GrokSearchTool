@@ -3650,6 +3650,141 @@ async def test_interrupted_finalizing_job_reads_resolved_final_batch(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_canceled_finalizing_job_prefers_resolved_final_batch_and_exposes_evidence_artifact(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Canceled finalizing visibility",
+        request_fingerprint="fp-canceled-finalizing-visibility",
+        status="canceled",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        cancel_requested=True,
+        current_checkpoint="finalizing",
+        finished_at=utc_now_iso(),
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps({"query": "Canceled finalizing visibility"}),
+        "application/json",
+    )
+    evidence_items = [
+        {
+            "evidence_id": "evidence-unit-search-1-fetch",
+            "unit_id": "unit-search-1",
+            "summary": "Recovered final batch evidence.",
+            "detail": "Recovered final batch evidence.",
+            "source_ids": ["R1"],
+            "source_urls": ["https://good.example.com/runtime/recovery"],
+            "evidence_kind": "fetch",
+            "derived_from_source_url": "https://good.example.com/runtime/recovery",
+            "line_start": 3,
+            "line_end": 4,
+        }
+    ]
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {
+                            "R1": {
+                                "source_id": "R1",
+                                "url": "https://good.example.com/runtime/recovery",
+                            }
+                        },
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(evidence_items),
+                "content_type": "application/json",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "report.json",
+        json.dumps({"summary": "stale current report", "sections": [], "unit_results": {}}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "evidence_items.json",
+        json.dumps(
+            [
+                {
+                    "evidence_id": "evidence-stale-current",
+                    "unit_id": "unit-search-stale",
+                    "summary": "stale current evidence",
+                    "detail": "stale current evidence",
+                    "source_ids": ["R9"],
+                    "source_urls": ["https://stale.example.com"],
+                    "evidence_kind": "search",
+                    "line_start": 99,
+                    "line_end": 100,
+                }
+            ]
+        ),
+        "application/json",
+    )
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+    evidence_text = runtime.read_artifact_text(job.job_id, "evidence_items.json")
+    batch_id = persisted[0]["metadata"]["batch_id"]
+
+    assert status["status"] == "canceled"
+    assert status["resolved_artifact_batch_id"] == batch_id
+    assert status["artifact_fallback_used"] is True
+    assert "evidence_items.json" in status["artifact_kinds"]
+    assert any(artifact["kind"] == "evidence_items.json" for artifact in status["artifacts"])
+    assert result["status"] == "canceled"
+    assert result["resolved_artifact_batch_id"] == batch_id
+    assert result["artifact_fallback_used"] is True
+    assert result["report"]["summary"] == "Recovered final batch report"
+    assert result["sources"][0]["url"] == "https://good.example.com/runtime/recovery"
+    assert any(artifact["kind"] == "evidence_items.json" for artifact in result["artifacts"])
+    assert json.loads(evidence_text or "[]") == evidence_items
+
+
+@pytest.mark.asyncio
 async def test_start_reuses_interrupted_finalizing_job_with_usable_final_batch(tmp_path):
     runtime = build_runtime(tmp_path)
     fingerprint = runtime._request_fingerprint(
@@ -7451,6 +7586,36 @@ async def test_continuation_prefers_evidence_artifact_over_reconstructed_evidenc
             "line_end": 9,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_continuation_prefers_current_evidence_artifact_when_resolved_final_batch_has_no_evidence_items(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(runtime, query="Continuation current evidence artifact fallback")
+    current_evidence = [
+        {
+            "evidence_id": "evidence-unit-search-1-current",
+            "unit_id": "unit-search-1",
+            "summary": "Current artifact evidence should outrank checkpoint fallback.",
+            "detail": "Current artifact evidence should outrank checkpoint fallback.",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+            "evidence_kind": "fetch",
+            "derived_from_source_url": "https://docs.example.com/runtime/checkpoints",
+            "line_start": 41,
+            "line_end": 44,
+        }
+    ]
+    runtime.write_artifact(
+        source.job_id,
+        "evidence_items.json",
+        json.dumps(current_evidence),
+        "application/json",
+    )
+
+    continuation = runtime._build_continuation_context(source.job_id)
+
+    assert continuation.carry_forward_evidence == current_evidence
 
 
 @pytest.mark.asyncio
