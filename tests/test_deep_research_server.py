@@ -260,11 +260,11 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
     }
 
 
-def seed_round20_lifecycle_resume_replay_job(runtime: DeepResearchRuntime):
-    snapshot = load_deep_research_fixture("probe_round20_lifecycle_resume_replay.json")
+def seed_round21_stale_worker_reconnect_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round21_stale_worker_reconnect.json")
     job = runtime.store.create_job(
         query=snapshot["query"],
-        request_fingerprint="fp-server-round20-lifecycle-replay",
+        request_fingerprint="fp-server-round21-stale-worker-reconnect",
         status=snapshot["resume_run"]["status"],
         phase=snapshot["resume_run"]["phase"],
         effort="deep",
@@ -290,7 +290,7 @@ def seed_round20_lifecycle_resume_replay_job(runtime: DeepResearchRuntime):
             phase=event["phase"],
             message=event.get("message") or event["type"],
             data=event.get("data") or {},
-        )
+    )
     return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot}
 
 
@@ -574,16 +574,20 @@ async def test_deep_research_cancel_updates_job_state(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_deep_research_events_after_seq_matches_round20_resume_replay_fixture(monkeypatch, tmp_path):
+async def test_deep_research_events_after_seq_matches_round21_stale_worker_reconnect_fixture(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path, complete_runner)
     monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
-    seeded = seed_round20_lifecycle_resume_replay_job(runtime)
+    seeded = seed_round21_stale_worker_reconnect_job(runtime)
     job = seeded["job"]
     snapshot = seeded["snapshot"]
 
-    payload = await server.deep_research_events(job.job_id, after_seq=7, limit=20)
+    payload = await server.deep_research_events(
+        job.job_id,
+        after_seq=snapshot["resume_window"]["after_seq"],
+        limit=20,
+    )
 
-    assert payload["next_after_seq"] == 13
+    assert payload["next_after_seq"] == snapshot["resume_window"]["next_after_seq"]
     assert [
         (event["seq"], event["type"], event["phase"])
         for event in payload["events"]
@@ -591,6 +595,10 @@ async def test_deep_research_events_after_seq_matches_round20_resume_replay_fixt
         (event["seq"], event["type"], event["phase"])
         for event in snapshot["resume_events_after_seq_7"]
     ]
+    assert payload["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
+    assert payload["events"][0]["data"]["checkpoint_kind"] == snapshot["expected"]["checkpoint_kind"]
+    assert payload["events"][1]["type"] == "checkpoint_restored"
+    assert payload["events"][1]["data"]["checkpoint_kind"] == snapshot["expected"]["checkpoint_kind"]
     assert not any(
         event["type"] == "phase_started" and event["phase"] == "planning"
         for event in payload["events"]

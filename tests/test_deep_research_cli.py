@@ -311,11 +311,11 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
     }
 
 
-def seed_round20_lifecycle_resume_replay_job(runtime: DeepResearchRuntime):
-    snapshot = load_deep_research_fixture("probe_round20_lifecycle_resume_replay.json")
+def seed_round21_stale_worker_reconnect_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round21_stale_worker_reconnect.json")
     job = runtime.store.create_job(
         query=snapshot["query"],
-        request_fingerprint="fp-cli-round20-lifecycle-replay",
+        request_fingerprint="fp-cli-round21-stale-worker-reconnect",
         status=snapshot["resume_run"]["status"],
         phase=snapshot["resume_run"]["phase"],
         effort="deep",
@@ -1483,14 +1483,16 @@ def test_cli_round12_continue_resume_status_and_events_match_fixture(monkeypatch
     assert [event["type"] for event in events_payload["events"]] == snapshot["events"]
 
 
-def test_cli_events_after_seq_replay_matches_round20_resume_fixture(monkeypatch, tmp_path, capsys):
+def test_cli_events_after_seq_replay_matches_round21_stale_worker_reconnect_fixture(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
-    seeded = seed_round20_lifecycle_resume_replay_job(runtime)
+    seeded = seed_round21_stale_worker_reconnect_job(runtime)
     job = seeded["job"]
     snapshot = seeded["snapshot"]
 
-    exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "7", "--limit", "20"])
+    exit_code = deep_research_cli.main(
+        ["events", job.job_id, "--after-seq", str(snapshot["resume_window"]["after_seq"]), "--limit", "20"]
+    )
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
 
@@ -1502,8 +1504,12 @@ def test_cli_events_after_seq_replay_matches_round20_resume_fixture(monkeypatch,
         (event["seq"], event["type"], event["phase"])
         for event in snapshot["resume_events_after_seq_7"]
     ]
+    assert payload["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
+    assert payload["events"][0]["data"]["checkpoint_kind"] == snapshot["expected"]["checkpoint_kind"]
+    assert payload["events"][1]["type"] == "checkpoint_restored"
+    assert payload["events"][1]["data"]["checkpoint_kind"] == snapshot["expected"]["checkpoint_kind"]
     assert summary_lines(captured.err) == [
-        f"summary: job={job.job_id} events=6 after_seq=7 next_after_seq=13 last_event=job_interrupted terminal=true"
+        f"summary: job={job.job_id} events=5 after_seq={snapshot['resume_window']['after_seq']} next_after_seq={snapshot['resume_window']['next_after_seq']} last_event=job_interrupted terminal=true"
     ]
 
 
