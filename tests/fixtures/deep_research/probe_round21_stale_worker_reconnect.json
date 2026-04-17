@@ -1,0 +1,166 @@
+{
+  "sample": "probe-round21-stale-worker-reconnect",
+  "query": "Investigate stale-worker reconnect lifecycle for deep research jobs",
+  "first_run": {
+    "status": "interrupted",
+    "phase": "researching",
+    "current_checkpoint": "researching-u1",
+    "current_checkpoint_kind": "research_unit",
+    "attempt_count": 1,
+    "last_error": "time_budget_exceeded"
+  },
+  "reconnect_reconcile": {
+    "status": "interrupted",
+    "phase": "researching",
+    "current_checkpoint": "researching-u1",
+    "current_checkpoint_kind": "research_unit",
+    "attempt_count": 2,
+    "last_error": "worker_restarted"
+  },
+  "resume_run": {
+    "status": "interrupted",
+    "phase": "researching",
+    "current_checkpoint": "researching-u2",
+    "current_checkpoint_kind": "research_unit",
+    "attempt_count": 3,
+    "last_error": "time_budget_exceeded"
+  },
+  "resume_window": {
+    "after_seq": 7,
+    "next_after_seq": 12
+  },
+  "expected": {
+    "interrupted_reason": "worker_restarted",
+    "resume_source": "worker_restarted",
+    "checkpoint_kind": "research_unit"
+  },
+  "initial_events": [
+    {
+      "seq": 1,
+      "type": "job_created",
+      "phase": "planning"
+    },
+    {
+      "seq": 2,
+      "type": "phase_started",
+      "phase": "planning"
+    },
+    {
+      "seq": 3,
+      "type": "phase_started",
+      "phase": "researching"
+    },
+    {
+      "seq": 4,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u1.",
+      "data": {
+        "unit_type": "search",
+        "sources_count": 1
+      }
+    },
+    {
+      "seq": 5,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research paused after reaching the time budget.",
+      "data": {
+        "reason": "time_budget_exceeded",
+        "checkpoint_key": "researching-u1",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 3,
+        "attempt_count": 1,
+        "completed_units_count": 1
+      }
+    },
+    {
+      "seq": 6,
+      "type": "job_resumed",
+      "phase": "researching",
+      "message": "Deep research job resumed from checkpoint.",
+      "data": {
+        "checkpoint_key": "researching-u1",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 3,
+        "resume_source": "interrupted_resume",
+        "attempt_count": 2,
+        "completed_units_count": 1
+      }
+    },
+    {
+      "seq": 7,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research interrupted during worker recovery.",
+      "data": {
+        "reason": "worker_restarted",
+        "checkpoint_key": "researching-u1",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 3,
+        "attempt_count": 2
+      }
+    }
+  ],
+  "resume_events_after_seq_7": [
+    {
+      "seq": 8,
+      "type": "job_resumed",
+      "phase": "researching",
+      "message": "Deep research job resumed from checkpoint.",
+      "data": {
+        "checkpoint_key": "researching-u1",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 3,
+        "resume_source": "worker_restarted",
+        "attempt_count": 3,
+        "completed_units_count": 1
+      }
+    },
+    {
+      "seq": 9,
+      "type": "checkpoint_restored",
+      "phase": "researching",
+      "message": "Deep research restored execution from the latest durable checkpoint.",
+      "data": {
+        "checkpoint_key": "researching-u1",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 3,
+        "attempt_count": 3,
+        "completed_units_count": 1
+      }
+    },
+    {
+      "seq": 10,
+      "type": "phase_started",
+      "phase": "researching",
+      "data": {
+        "completed_units": 1
+      }
+    },
+    {
+      "seq": 11,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u2.",
+      "data": {
+        "unit_type": "search",
+        "sources_count": 1
+      }
+    },
+    {
+      "seq": 12,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research paused after reaching the time budget.",
+      "data": {
+        "reason": "time_budget_exceeded",
+        "checkpoint_key": "researching-u2",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 5,
+        "attempt_count": 3,
+        "completed_units_count": 2
+      }
+    }
+  ]
+}
