@@ -160,6 +160,7 @@ _UNSAFE_VALIDATION_ISSUES = {
     "unknown_dependency",
     "forward_or_cyclic_dependency",
 }
+_NON_BLOCKING_VERIFIER_REASON_CODES = {"medium_single_source_search_only"}
 _EVIDENCE_ITEMS_ARTIFACT_KIND = "evidence_items.json"
 _CORE_FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 _PROVENANCE_FINAL_ARTIFACT_KINDS = (
@@ -2961,7 +2962,6 @@ class DeepResearchRuntime:
         await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
         payload = self._serialize_job(job)
-        payload["current_checkpoint_kind"] = _checkpoint_kind(job.current_checkpoint)
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
         bundle_candidate = (
             _latest_batch_bundle_candidate(self.store, job_id)
@@ -2996,6 +2996,7 @@ class DeepResearchRuntime:
     async def result(self, job_id: str, *, include_partial: bool = True) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
+        current_checkpoint = self.store.get_checkpoint(job_id, job.current_checkpoint) if job.current_checkpoint else None
         plan_text = self.store.read_artifact_text(job_id, "plan.json")
         partial_text = self.store.read_artifact_text(job_id, "partial_report.md") if include_partial else None
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
@@ -3099,6 +3100,7 @@ class DeepResearchRuntime:
             "status": job.status,
             "phase": job.phase,
             "current_checkpoint_kind": _checkpoint_kind(job.current_checkpoint),
+            "current_checkpoint_seq": current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0,
             "plan": plan_value,
             "partial_report": partial_text,
             "final_report": final_text,
@@ -3178,6 +3180,10 @@ class DeepResearchRuntime:
                     data={"resolved_artifact_batch_id": final_bundle["batch_id"]},
                 )
                 return self._job_payload(job, reused=False)
+        checkpoint_state, _ = self._load_checkpoint_state(job)
+        completed_units_count = len(checkpoint_state.completed_unit_ids) if checkpoint_state else 0
+        next_attempt_count = max(1, job.attempt_count + 1)
+        current_checkpoint = self.store.get_checkpoint(job_id, job.current_checkpoint) if job.current_checkpoint else None
         job = self.store.update_job(
             job_id,
             status="queued",
@@ -3187,6 +3193,7 @@ class DeepResearchRuntime:
             last_error="",
             cancel_requested=False,
             heartbeat_at=utc_now_iso(),
+            attempt_count=next_attempt_count,
         )
         self.store.append_event(
             job_id,
@@ -3196,7 +3203,10 @@ class DeepResearchRuntime:
             data={
                 "checkpoint_key": job.current_checkpoint,
                 "checkpoint_kind": _checkpoint_kind(job.current_checkpoint),
+                "checkpoint_seq": current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0,
                 "resume_source": resume_source,
+                "attempt_count": next_attempt_count,
+                "completed_units_count": completed_units_count,
             },
         )
         if schedule:
@@ -4485,7 +4495,13 @@ class DeepResearchRuntime:
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
         payload = job.model_dump()
+        current_checkpoint = (
+            self.store.get_checkpoint(job.job_id, job.current_checkpoint)
+            if job.current_checkpoint
+            else None
+        )
         payload["current_checkpoint_kind"] = _checkpoint_kind(job.current_checkpoint)
+        payload["current_checkpoint_seq"] = current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0
         return payload
 
     def _continuation_from_planning_checkpoint(self, job: DeepResearchJob) -> DeepResearchContinuationState | None:
@@ -4600,12 +4616,13 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     job = runtime.store.get_job(job_id)
     now_iso = utc_now_iso()
     started_at = job.started_at or now_iso
+    next_attempt_count = job.attempt_count if job.attempt_count > 0 else 1
     job = runtime.store.update_job(
         job_id,
         status="running",
         started_at=started_at,
         heartbeat_at=now_iso,
-        attempt_count=job.attempt_count + 1,
+        attempt_count=next_attempt_count,
         last_error="",
     )
     worker_attempt_count = job.attempt_count
@@ -4621,18 +4638,35 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             message="Latest checkpoint was not readable; resumed from an earlier checkpoint.",
             data=checkpoint_meta,
         )
+    current_checkpoint = runtime.store.get_checkpoint(job_id, runtime.store.get_job(job_id).current_checkpoint)
+    restored_from_checkpoint = current_checkpoint is not None and current_checkpoint.phase != "planning"
+    if restored_from_checkpoint:
+        runtime.store.append_event(
+            job_id,
+            type="checkpoint_restored",
+            phase=current_checkpoint.phase,
+            message="Deep research restored execution from the latest durable checkpoint.",
+            data={
+                "checkpoint_key": current_checkpoint.checkpoint_key,
+                "checkpoint_kind": _checkpoint_kind(current_checkpoint.checkpoint_key),
+                "checkpoint_seq": current_checkpoint.checkpoint_seq,
+                "attempt_count": worker_attempt_count,
+                "completed_units_count": len(checkpoint_state.completed_unit_ids) if checkpoint_state else 0,
+            },
+        )
 
-    runtime.store.append_event(
-        job_id,
-        type="phase_started",
-        phase="planning",
-        message="Planning started.",
-        data={"unit_count": len(plan.research_units)},
-    )
-    runtime.store.update_job(job_id, phase="planning", progress_pct=10.0, heartbeat_at=utc_now_iso())
+    if not restored_from_checkpoint:
+        runtime.store.append_event(
+            job_id,
+            type="phase_started",
+            phase="planning",
+            message="Planning started.",
+            data={"unit_count": len(plan.research_units)},
+        )
+        runtime.store.update_job(job_id, phase="planning", progress_pct=10.0, heartbeat_at=utc_now_iso())
 
     if runtime.store.get_job(job_id).cancel_requested:
-        _mark_canceled(runtime, job_id, "planning")
+        _mark_canceled(runtime, job_id, current_checkpoint.phase if restored_from_checkpoint and current_checkpoint is not None else "planning")
         return
 
     continuation = runtime._read_runtime_continuation(job)
@@ -4791,6 +4825,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 if completed_unit_ids
                 else runtime.store.get_job(job_id).current_checkpoint
             )
+            latest_checkpoint = (
+                runtime.store.get_checkpoint(job_id, latest_checkpoint_key)
+                if latest_checkpoint_key
+                else None
+            )
             runtime.store.update_job(
                 job_id,
                 status="interrupted",
@@ -4805,7 +4844,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 type="job_interrupted",
                 phase="researching",
                 message="Deep research paused after reaching the time budget.",
-                data={"completed_units": len(completed_unit_ids)},
+                data={
+                    "reason": "time_budget_exceeded",
+                    "checkpoint_key": latest_checkpoint_key,
+                    "checkpoint_kind": _checkpoint_kind(latest_checkpoint_key),
+                    "checkpoint_seq": latest_checkpoint.checkpoint_seq if latest_checkpoint is not None else 0,
+                    "attempt_count": worker_attempt_count,
+                    "completed_units_count": len(completed_unit_ids),
+                },
             )
             return
 
@@ -5093,7 +5139,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         evidence_items=evidence_items,
     )
     release_gate = _build_release_gate(report_coverage, grounding_diagnostics, verifier_diagnostics)
-    runtime_warnings = sorted({*runtime_warnings, *_coverage_warning_codes(report_coverage), *release_gate["reason_codes"]})
+    runtime_warnings = sorted(
+        {
+            *runtime_warnings,
+            *_coverage_warning_codes(report_coverage),
+            *release_gate["reason_codes"],
+            *release_gate.get("soft_reason_codes", []),
+        }
+    )
     if plan.planner_metadata.get("used_fallback"):
         runtime_warnings = sorted({*runtime_warnings, "planner_fallback_used"})
     if constraint_violations:
@@ -6004,21 +6057,34 @@ def _build_release_gate(
     grounding: dict[str, Any],
     verifier: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    reason_codes: list[str] = []
+    all_reason_codes: list[str] = []
+    blocking_reason_codes: list[str] = []
     hard_coverage_gate_passed = bool(
         coverage.get("hard_coverage_gate_passed", coverage.get("coverage_gate_passed", False))
     )
     if not hard_coverage_gate_passed:
-        reason_codes.append("coverage_incomplete")
+        all_reason_codes.append("coverage_incomplete")
+        blocking_reason_codes.append("coverage_incomplete")
     if int(grounding.get("ungrounded_claims", 0) or 0) > 0:
-        reason_codes.append("ungrounded_claims")
+        all_reason_codes.append("ungrounded_claims")
+        blocking_reason_codes.append("ungrounded_claims")
     if int(grounding.get("missing_evidence_binding_claims", 0) or 0) > 0:
-        reason_codes.append("missing_evidence_bindings")
+        all_reason_codes.append("missing_evidence_bindings")
+        blocking_reason_codes.append("missing_evidence_bindings")
     if isinstance(verifier, dict):
-        reason_codes.extend(str(code) for code in verifier.get("reason_codes", []) if str(code).strip())
+        for code in (str(code).strip() for code in verifier.get("reason_codes", [])):
+            if not code:
+                continue
+            all_reason_codes.append(code)
+            if code not in _NON_BLOCKING_VERIFIER_REASON_CODES:
+                blocking_reason_codes.append(code)
+    all_reason_codes = _dedupe_preserve_order(all_reason_codes)
+    blocking_reason_codes = _dedupe_preserve_order(blocking_reason_codes)
     return {
-        "passed": not reason_codes,
-        "reason_codes": _dedupe_preserve_order(reason_codes),
+        "passed": not blocking_reason_codes,
+        "reason_codes": blocking_reason_codes,
+        "all_reason_codes": all_reason_codes,
+        "soft_reason_codes": [code for code in all_reason_codes if code not in set(blocking_reason_codes)],
     }
 
 

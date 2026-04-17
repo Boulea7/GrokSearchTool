@@ -143,6 +143,36 @@ class DeepResearchStore:
                 );
                 """
             )
+            checkpoint_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(job_checkpoints)").fetchall()
+            }
+            if "checkpoint_seq" not in checkpoint_columns:
+                connection.execute(
+                    "ALTER TABLE job_checkpoints ADD COLUMN checkpoint_seq INTEGER NOT NULL DEFAULT 0"
+                )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_job_checkpoints_seq
+                ON job_checkpoints(job_id, checkpoint_seq DESC)
+                """
+            )
+            checkpoint_rows = connection.execute(
+                """
+                SELECT rowid, job_id
+                FROM job_checkpoints
+                ORDER BY created_at ASC, rowid ASC
+                """
+            ).fetchall()
+            if checkpoint_rows:
+                next_seq_by_job: dict[str, int] = {}
+                for row in checkpoint_rows:
+                    job_id = str(row["job_id"])
+                    next_seq_by_job[job_id] = next_seq_by_job.get(job_id, 0) + 1
+                    connection.execute(
+                        "UPDATE job_checkpoints SET checkpoint_seq = ? WHERE rowid = ?",
+                        (next_seq_by_job[job_id], row["rowid"]),
+                    )
 
     def create_job(
         self,
@@ -333,20 +363,52 @@ class DeepResearchStore:
     ) -> DeepResearchCheckpoint:
         created_at = utc_now_iso()
         with self._connect() as connection:
+            next_seq = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(checkpoint_seq), 0) + 1 FROM job_checkpoints WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()[0]
+            )
             connection.execute(
                 """
-                INSERT OR REPLACE INTO job_checkpoints (job_id, checkpoint_key, phase, created_at, state_json)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO job_checkpoints (
+                    job_id, checkpoint_key, checkpoint_seq, phase, created_at, state_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (job_id, checkpoint_key, phase, created_at, _json_dumps(state)),
+                (job_id, checkpoint_key, next_seq, phase, created_at, _json_dumps(state)),
             )
         self.update_job(job_id, current_checkpoint=checkpoint_key)
         return DeepResearchCheckpoint(
             job_id=job_id,
             checkpoint_key=checkpoint_key,
+            checkpoint_seq=next_seq,
             phase=phase,
             created_at=created_at,
             state=state,
+        )
+
+    def get_checkpoint(self, job_id: str, checkpoint_key: str) -> DeepResearchCheckpoint | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM job_checkpoints
+                WHERE job_id = ? AND checkpoint_key = ?
+                ORDER BY checkpoint_seq DESC, created_at DESC
+                LIMIT 1
+                """,
+                (job_id, checkpoint_key),
+            ).fetchone()
+        if row is None:
+            return None
+        return DeepResearchCheckpoint(
+            job_id=row["job_id"],
+            checkpoint_key=row["checkpoint_key"],
+            checkpoint_seq=int(row["checkpoint_seq"] or 0),
+            phase=row["phase"],
+            created_at=row["created_at"],
+            state=_json_loads(row["state_json"]) or {},
         )
 
     def list_checkpoints(self, job_id: str) -> list[DeepResearchCheckpoint]:
@@ -355,7 +417,7 @@ class DeepResearchStore:
                 """
                 SELECT * FROM job_checkpoints
                 WHERE job_id = ?
-                ORDER BY created_at ASC
+                ORDER BY checkpoint_seq ASC, created_at ASC, rowid ASC
                 """,
                 (job_id,),
             ).fetchall()
@@ -363,6 +425,7 @@ class DeepResearchStore:
             DeepResearchCheckpoint(
                 job_id=row["job_id"],
                 checkpoint_key=row["checkpoint_key"],
+                checkpoint_seq=int(row["checkpoint_seq"] or 0),
                 phase=row["phase"],
                 created_at=row["created_at"],
                 state=_json_loads(row["state_json"]) or {},
@@ -560,6 +623,11 @@ class DeepResearchStore:
                 finished_at=interrupted_at,
                 heartbeat_at=interrupted_at,
             )
+            current_checkpoint = (
+                self.get_checkpoint(row["job_id"], row["current_checkpoint"])
+                if row["current_checkpoint"]
+                else None
+            )
             self.append_event(
                 row["job_id"],
                 type="job_interrupted",
@@ -569,6 +637,8 @@ class DeepResearchStore:
                     "reason": "worker_restarted",
                     "checkpoint_key": row["current_checkpoint"],
                     "checkpoint_kind": _checkpoint_kind(row["current_checkpoint"]),
+                    "checkpoint_seq": current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0,
+                    "attempt_count": int(row["attempt_count"] or 0),
                 },
             )
             recovered.append(job)

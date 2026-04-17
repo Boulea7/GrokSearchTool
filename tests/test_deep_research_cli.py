@@ -1284,7 +1284,7 @@ def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, t
     assert exit_code == 0
     assert resume_payload["status"] == "queued"
     assert summary_lines(resume_captured.err) == [
-        f"summary: job={job.job_id} status=queued phase=researching progress=0.0% checkpoint=researching attempts=2 cancel_requested=false continued_from=seed-job resolved_batch=- artifact_fallback=false"
+        f"summary: job={job.job_id} status=queued phase=researching progress=0.0% checkpoint=researching attempts=3 cancel_requested=false continued_from=seed-job resolved_batch=- artifact_fallback=false"
     ]
 
     exit_code = deep_research_cli.main(["cancel", job.job_id])
@@ -1298,7 +1298,7 @@ def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, t
         "status": "canceled",
     }
     assert summary_lines(cancel_captured.err) == [
-        f"summary: job={job.job_id} status=canceled phase=researching progress=0.0% checkpoint=researching attempts=2 cancel_requested=true continued_from=seed-job resolved_batch=- artifact_fallback=false"
+        f"summary: job={job.job_id} status=canceled phase=researching progress=0.0% checkpoint=researching attempts=3 cancel_requested=true continued_from=seed-job resolved_batch=- artifact_fallback=false"
     ]
 
 
