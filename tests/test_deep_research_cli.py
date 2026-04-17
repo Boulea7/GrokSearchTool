@@ -311,6 +311,40 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
     }
 
 
+def seed_round20_lifecycle_resume_replay_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round20_lifecycle_resume_replay.json")
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-cli-round20-lifecycle-replay",
+        status=snapshot["resume_run"]["status"],
+        phase=snapshot["resume_run"]["phase"],
+        effort="deep",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=snapshot["resume_run"]["attempt_count"],
+        current_checkpoint=snapshot["resume_run"]["current_checkpoint"],
+        finished_at=utc_now_iso(),
+        last_error="time_budget_exceeded",
+    )
+    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_7"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event["type"],
+            phase=event["phase"],
+            message=event.get("message") or event["type"],
+            data=event.get("data") or {},
+        )
+    return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot}
+
+
 def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
     evidence_items = [
         {
@@ -1447,6 +1481,30 @@ def test_cli_round12_continue_resume_status_and_events_match_fixture(monkeypatch
 
     assert exit_code == 0
     assert [event["type"] for event in events_payload["events"]] == snapshot["events"]
+
+
+def test_cli_events_after_seq_replay_matches_round20_resume_fixture(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    seeded = seed_round20_lifecycle_resume_replay_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "7", "--limit", "20"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in payload["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["resume_events_after_seq_7"]
+    ]
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} events=6 after_seq=7 next_after_seq=13 last_event=job_interrupted terminal=true"
+    ]
 
 
 def test_spawn_worker_writes_logs_to_worker_log_dir(monkeypatch, tmp_path):

@@ -1,0 +1,144 @@
+{
+  "sample": "probe-round20-aws-dms",
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "safe_search_only_repairs_were_not_yet_allowed"
+    }
+  },
+  "plan": {
+    "brief": {
+      "scope": {
+        "include_domains": ["docs.aws.amazon.com"],
+        "exclude_domains": ["repost.aws"],
+        "allowed_sources": ["docs.aws.amazon.com"]
+      },
+      "must_cover": [
+        "AWS DMS checkpoint resume semantics",
+        "DescribeReplicationTasks recovery visibility"
+      ],
+      "coverage_checklist": [
+        "AWS DMS checkpoint resume semantics",
+        "DescribeReplicationTasks recovery visibility"
+      ],
+      "continuation_focus": []
+    },
+    "sub_questions": [
+      {
+        "id": "sq1",
+        "question": "AWS DMS checkpoint resume semantics"
+      },
+      {
+        "id": "sq2",
+        "question": "DescribeReplicationTasks recovery visibility"
+      }
+    ],
+    "report_outline": [
+      {
+        "section_id": "executive-summary",
+        "title": "Executive Summary"
+      },
+      {
+        "section_id": "key-findings",
+        "title": "Key Findings"
+      },
+      {
+        "section_id": "open-questions",
+        "title": "Open Questions"
+      }
+    ]
+  },
+  "report": {
+    "status": "failed",
+    "coverage": {
+      "planned_section_ids": [
+        "executive-summary",
+        "key-findings",
+        "open-questions"
+      ],
+      "answered_section_ids": [
+        "executive-summary",
+        "key-findings"
+      ],
+      "unanswered_sections": [
+        "Open Questions"
+      ],
+      "planned_sub_question_ids": [
+        "sq1",
+        "sq2"
+      ],
+      "covered_sub_question_ids": [
+        "sq1",
+        "sq2"
+      ],
+      "uncovered_sub_questions": [],
+      "hard_coverage_gate_passed": true,
+      "hard_uncovered_targets": [],
+      "coverage_gate_passed": false
+    },
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "medium_single_source_search_only",
+        "planner_fallback_used"
+      ],
+      "release_gate": {
+        "passed": false,
+        "reason_codes": [
+          "medium_single_source_search_only"
+        ]
+      },
+      "verifier": {
+        "reason_codes": [
+          "medium_single_source_search_only"
+        ]
+      }
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+      "title": "API StartReplicationTask",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": [
+        "allowlisted_domain",
+        "official_docs"
+      ],
+      "ranking_penalties": []
+    },
+    {
+      "source_id": "R7",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/migrate-data-with-aws-dms.html",
+      "title": "Migrate data with AWS DMS",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": [
+        "allowlisted_domain",
+        "official_docs"
+      ],
+      "ranking_penalties": []
+    }
+  ],
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "fail",
+      "score": 0.833,
+      "reason_tags": [
+        "unanswered_sections"
+      ]
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
