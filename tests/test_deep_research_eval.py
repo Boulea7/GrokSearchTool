@@ -558,6 +558,7 @@ def test_citation_faithfulness_probe_goldens(fixture_name):
         "eval_probe_round16_main_snapshot.json",
         "eval_probe_round18_aws_dms.json",
         "eval_probe_round19_aws_dms.json",
+        "eval_probe_round20_aws_dms.json",
     ],
 )
 def test_coverage_completeness_probe_goldens(fixture_name):
@@ -608,6 +609,7 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
         "eval_probe_round16_lifecycle.json",
         "eval_probe_round18_lifecycle.json",
         "eval_probe_round19_lifecycle_b.json",
+        "eval_probe_round20_lifecycle.json",
     ],
 )
 def test_planner_boundary_probe_goldens(fixture_name):
@@ -661,6 +663,8 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
         "eval_probe_round18_lifecycle.json",
         "eval_probe_round19_aws_dms.json",
         "eval_probe_round19_lifecycle_b.json",
+        "eval_probe_round20_aws_dms.json",
+        "eval_probe_round20_lifecycle.json",
     ],
 )
 def test_diagnostics_consistency_probe_goldens(fixture_name):
@@ -677,6 +681,7 @@ def test_diagnostics_consistency_probe_goldens(fixture_name):
     [
         "eval_probe_round19_aws_dms.json",
         "eval_probe_round19_lifecycle_b.json",
+        "eval_probe_round20_aws_dms.json",
     ],
 )
 def test_release_gate_consistency_probe_goldens(fixture_name):

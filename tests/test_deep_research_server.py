@@ -260,6 +260,40 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
     }
 
 
+def seed_round20_lifecycle_resume_replay_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round20_lifecycle_resume_replay.json")
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-server-round20-lifecycle-replay",
+        status=snapshot["resume_run"]["status"],
+        phase=snapshot["resume_run"]["phase"],
+        effort="deep",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=snapshot["resume_run"]["attempt_count"],
+        current_checkpoint=snapshot["resume_run"]["current_checkpoint"],
+        finished_at=utc_now_iso(),
+        last_error="time_budget_exceeded",
+    )
+    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_7"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event["type"],
+            phase=event["phase"],
+            message=event.get("message") or event["type"],
+            data=event.get("data") or {},
+        )
+    return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot}
+
+
 def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
     evidence_items = [
         {
@@ -505,9 +539,16 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
     listing = await server.deep_research_list()
 
     assert status["status"] == "completed"
-    assert status["artifact_kinds"] == ["plan.json", "planner_trace.json", "partial_report.md", "citations.json", "final_report.md"]
+    assert "plan.json" in status["artifact_kinds"]
+    assert "planner_trace.json" in status["artifact_kinds"]
+    assert "outline_state.json" in status["artifact_kinds"]
+    assert "evidence_ledger.json" in status["artifact_kinds"]
+    assert "section_banks.json" in status["artifact_kinds"]
+    assert "partial_report.md" in status["artifact_kinds"]
+    assert "citations.json" in status["artifact_kinds"]
+    assert "final_report.md" in status["artifact_kinds"]
     assert [event["seq"] for event in events["events"]] == list(range(1, len(events["events"]) + 1))
-    assert events["events"][0]["type"] in {"planner_fallback", "job_created"}
+    assert events["events"][0]["type"] == "job_created"
     assert events["events"][-1]["type"] == "job_completed"
     assert result["final_report"].startswith("# Final Report")
     assert result["partial_report"].startswith("# Partial Report")
@@ -530,6 +571,30 @@ async def test_deep_research_cancel_updates_job_state(monkeypatch, tmp_path):
     assert canceled["cancel_requested"] is True
     assert status["status"] == "canceled"
     assert events["events"][-1]["type"] == "job_canceled"
+
+
+@pytest.mark.asyncio
+async def test_deep_research_events_after_seq_matches_round20_resume_replay_fixture(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round20_lifecycle_resume_replay_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    payload = await server.deep_research_events(job.job_id, after_seq=7, limit=20)
+
+    assert payload["next_after_seq"] == 13
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in payload["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["resume_events_after_seq_7"]
+    ]
+    assert not any(
+        event["type"] == "phase_started" and event["phase"] == "planning"
+        for event in payload["events"]
+    )
 
 
 @pytest.mark.asyncio
