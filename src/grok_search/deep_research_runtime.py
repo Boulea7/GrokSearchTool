@@ -2528,6 +2528,21 @@ def _reconcile_section_graph_with_materialized_sections(
         root_section_ids.append(section_id)
         materialized = sections_by_id.get(section_id, {})
         base_node = base_nodes.get(section_id, {})
+        materialized_evidence_ids = [
+            str(evidence_id).strip()
+            for evidence_id in materialized.get("evidence_ids", []) or []
+            if str(evidence_id).strip()
+        ]
+        base_selected_evidence_ids = [
+            str(evidence_id).strip()
+            for evidence_id in base_node.get("selected_evidence_ids", []) or []
+            if str(evidence_id).strip()
+        ]
+        selected_evidence_ids = (
+            base_selected_evidence_ids
+            if base_selected_evidence_ids and set(base_selected_evidence_ids) == set(materialized_evidence_ids)
+            else materialized_evidence_ids or base_selected_evidence_ids
+        )
         node = {
             **base_node,
             "section_id": section_id,
@@ -2535,16 +2550,8 @@ def _reconcile_section_graph_with_materialized_sections(
             "goal": str(planned.get("goal", "") or base_node.get("goal", "")).strip(),
             "status": "grounded" if materialized.get("claims") else str(base_node.get("status", "") or "planned"),
             "rewrite_reason": str(planned.get("rewrite_reason", "") or base_node.get("rewrite_reason", "")).strip(),
-            "evidence_ids": [
-                str(evidence_id).strip()
-                for evidence_id in materialized.get("evidence_ids", []) or []
-                if str(evidence_id).strip()
-            ] or list(base_node.get("evidence_ids") or []),
-            "selected_evidence_ids": [
-                str(evidence_id).strip()
-                for evidence_id in materialized.get("evidence_ids", []) or []
-                if str(evidence_id).strip()
-            ] or list(base_node.get("selected_evidence_ids") or []),
+            "evidence_ids": selected_evidence_ids or list(base_node.get("evidence_ids") or []),
+            "selected_evidence_ids": selected_evidence_ids,
             "source_ids": [
                 str(source_id).strip()
                 for source_id in materialized.get("source_ids", []) or []
