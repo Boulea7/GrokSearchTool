@@ -69,6 +69,7 @@ class DeepResearchEvent(BaseModel):
 class DeepResearchCheckpoint(BaseModel):
     job_id: str
     checkpoint_key: str
+    checkpoint_seq: int = 0
     phase: DeepResearchPhase
     created_at: str
     state: dict[str, Any] = Field(default_factory=dict)

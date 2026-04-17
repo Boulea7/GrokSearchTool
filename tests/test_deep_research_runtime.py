@@ -5690,6 +5690,7 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
     interrupted = await runtime.run_job(response["job_id"])
     status = await runtime.status(response["job_id"])
     events = await runtime.events(response["job_id"])
+    interrupted_event = next(event for event in events["events"] if event["type"] == "job_interrupted")
 
     assert interrupted["status"] == "interrupted"
     assert status["status"] == "interrupted"
@@ -5697,13 +5698,18 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
     assert runtime.store.read_artifact_text(response["job_id"], "partial_report.md")
     assert runtime.store.read_artifact_text(response["job_id"], "final_report.md") is None
     assert runtime.store.get_job(response["job_id"]).current_checkpoint == "researching-unit-search-1"
-    assert any(event["type"] == "job_interrupted" for event in events["events"])
+    assert interrupted_event["data"]["reason"] == "time_budget_exceeded"
+    assert interrupted_event["data"]["checkpoint_key"] == "researching-unit-search-1"
+    assert interrupted_event["data"]["checkpoint_kind"] == "research_unit"
+    assert interrupted_event["data"]["attempt_count"] == 1
+    assert interrupted_event["data"]["completed_units_count"] == 1
     assert executed == ["first checkpoint"]
 
     resumed = await runtime.resume(response["job_id"], schedule=False)
     completed = await runtime.run_job(response["job_id"])
 
     assert resumed["status"] == "queued"
+    assert resumed["attempt_count"] == 2
     assert completed["status"] == "failed"
     assert executed == ["first checkpoint", "second checkpoint"]
     assert runtime.store.get_job(response["job_id"]).finished_at
@@ -5893,16 +5899,25 @@ async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoi
     events = await runtime.events(response["job_id"])
     interrupted_events = [event for event in events["events"] if event["type"] == "job_interrupted"]
     resumed_events = [event for event in events["events"] if event["type"] == "job_resumed"]
+    post_resume_events = [event for event in events["events"] if event["seq"] > resumed_events[-1]["seq"]]
 
     assert resumed["status"] == "queued"
     assert interrupted_events[-1]["data"]["reason"] == fixture["expected"]["interrupted_reason"]
     assert resumed_events[-1]["data"]["resume_source"] == fixture["expected"]["resume_source"]
+    assert resumed_events[-1]["data"]["attempt_count"] == 2
     assert resumed["current_checkpoint_kind"] == "research_dispatch"
     assert final_result["status"] == "failed"
     assert interrupted_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")
     assert interrupted_events[-1]["data"]["checkpoint_kind"] == "research_dispatch"
     assert resumed_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")
     assert resumed_events[-1]["data"]["checkpoint_kind"] == "research_dispatch"
+    assert resumed_events[-1]["data"]["checkpoint_seq"] > 0
+    assert post_resume_events[0]["type"] == "checkpoint_restored"
+    assert post_resume_events[0]["data"]["checkpoint_kind"] == "research_dispatch"
+    assert not any(
+        event["type"] == "phase_started" and event["phase"] == "planning"
+        for event in post_resume_events
+    )
     assert runtime.store.read_artifact_text(response["job_id"], "final_report.md") is not None
 
 
@@ -8767,6 +8782,56 @@ def test_release_gate_rejects_single_source_low_confidence_verifier_findings():
     assert release_gate["reason_codes"] == ["single_source_low_confidence"]
 
 
+def test_release_gate_degrades_but_does_not_fail_medium_single_source_search_only():
+    grounding = {
+        "total_claims": 1,
+        "ungrounded_claims": 0,
+        "single_source_claims": 1,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0,
+    }
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding=grounding,
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "confidence": "medium",
+                        "evidence_ids": ["e1"],
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": False,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            }
+        },
+        evidence_items=[{"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "search"}],
+    )
+    release_gate = _build_release_gate({"coverage_gate_passed": True, "hard_coverage_gate_passed": True}, grounding, verifier)
+
+    assert verifier["reason_codes"] == ["medium_single_source_search_only"]
+    assert release_gate["passed"] is True
+    assert release_gate["reason_codes"] == []
+    assert release_gate["soft_reason_codes"] == ["medium_single_source_search_only"]
+
+
 def test_verifier_flags_missing_evidence_items_and_mismatched_bindings():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True},
@@ -9496,10 +9561,13 @@ async def test_runtime_blocks_medium_single_source_search_only_report(monkeypatc
     result = await runtime.run_job(response["job_id"])
     verifier = json.loads(runtime.store.read_artifact_text(response["job_id"], "verifier.json") or "{}")
 
-    assert result["status"] == "failed"
+    assert result["status"] == "completed"
+    assert result["report"]["status"] == "degraded"
     assert "medium_single_source_search_only" in verifier["reason_codes"]
     assert "medium_single_source_search_only" in result["report"]["runtime"]["verifier"]["reason_codes"]
-    assert "medium_single_source_search_only" in result["report"]["runtime"]["release_gate"]["reason_codes"]
+    assert result["report"]["runtime"]["release_gate"]["reason_codes"] == []
+    assert "medium_single_source_search_only" in result["report"]["runtime"]["release_gate"]["soft_reason_codes"]
+    assert "medium_single_source_search_only" in result["report"]["runtime"]["warnings"]
 
 
 @pytest.mark.asyncio
