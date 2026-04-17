@@ -5,6 +5,11 @@ from pathlib import Path
 import pytest
 
 from grok_search import server
+from grok_search.deep_research_evidence import (
+    candidate_evidence_ids_by_section,
+    rejected_evidence_ids_by_section,
+    selected_evidence_ids_by_section,
+)
 from grok_search.deep_research_runtime import (
     DeepResearchRuntime,
     _build_section_citations,
@@ -16,6 +21,7 @@ from grok_search.deep_research_runtime import (
     _extract_relevant_excerpt_with_span,
     _search_query,
 )
+from grok_search.deep_research_section_graph import initialize_section_graph, update_section_graph
 import grok_search.deep_research_runtime as deep_research_runtime_module
 from grok_search.providers.grok import GrokSearchProvider
 from grok_search.deep_research_types import DeepResearchContinuationState, DeepResearchPlan, utc_now_iso
@@ -509,6 +515,248 @@ def create_completed_source_job(
 
 
 @pytest.mark.asyncio
+async def test_plan_start_persists_outline_state_and_empty_evidence_artifacts(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {
+                "id": "sq1",
+                "question": "Explain checkpoint resume semantics.",
+                "reason": "Primary question.",
+            },
+            {
+                "id": "sq2",
+                "question": "Explain restart trade-offs.",
+                "reason": "Secondary question.",
+            },
+        ]
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            },
+            {
+                "section_id": "restart-tradeoffs",
+                "title": "Restart Trade-offs",
+                "goal": "Explain restart trade-offs.",
+            },
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = planner
+
+    response = await runtime.start(
+        query="Checkpoint resume semantics",
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    outline_state = json.loads(runtime.store.read_artifact_text(response["job_id"], "outline_state.json") or "{}")
+    evidence_ledger = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_ledger.json") or "[]")
+    section_banks = json.loads(runtime.store.read_artifact_text(response["job_id"], "section_banks.json") or "[]")
+    checkpoint = runtime.store.get_checkpoint(response["job_id"], "planning")
+    expected_section_ids = [section["section_id"] for section in response["plan"]["report_outline"]]
+
+    assert outline_state["root_section_ids"] == expected_section_ids
+    assert [node["section_id"] for node in outline_state["nodes"]] == expected_section_ids
+    assert evidence_ledger == []
+    assert [bank["section_id"] for bank in section_banks] == expected_section_ids
+    assert checkpoint is not None
+    assert checkpoint.state["section_graph"]["root_section_ids"] == expected_section_ids
+    assert checkpoint.state["evidence_ledger"] == []
+    assert [bank["section_id"] for bank in checkpoint.state["section_banks"]] == expected_section_ids
+
+
+def test_section_graph_uses_selected_evidence_only_for_section_sources():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Checkpoint resume semantics",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "brief": {
+                "objective": "Checkpoint resume semantics",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "Checkpoint resume semantics", "reason": "Primary question."}
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["checkpoint resume semantics"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {"section_id": "resume", "title": "Resume", "goal": "Explain checkpoint resume semantics."},
+                {"section_id": "restart", "title": "Restart", "goal": "Explain restart trade-offs."},
+            ],
+            "research_units": [],
+            "continuation": {"mode": "fresh"},
+            "planner_metadata": {},
+        }
+    )
+    section_banks = [
+        {
+            "section_id": "resume",
+            "candidate_evidence_ids": ["e1"],
+            "selected_evidence_ids": ["e1"],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "section_id": "restart",
+            "candidate_evidence_ids": ["e1"],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": ["e1"],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+    ]
+
+    graph = update_section_graph(
+        initialize_section_graph(plan, updated_at="2026-04-18T00:00:00Z"),
+        plan=plan,
+        source_registry=[{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}],
+        selected_evidence_ids_by_section=selected_evidence_ids_by_section(section_banks),
+        candidate_evidence_ids_by_section=candidate_evidence_ids_by_section(section_banks),
+        rejected_evidence_ids_by_section=rejected_evidence_ids_by_section(section_banks),
+        matched_unit_ids_by_section={"resume": ["unit-search-1"]},
+        evidence_source_ids={"e1": ["R1"]},
+        updated_at="2026-04-18T00:00:00Z",
+    )
+    nodes_by_id = {node["section_id"]: node for node in graph["nodes"]}
+
+    assert nodes_by_id["resume"]["source_ids"] == ["R1"]
+    assert nodes_by_id["resume"]["evidence_ids"] == ["e1"]
+    assert nodes_by_id["restart"]["source_ids"] == []
+    assert nodes_by_id["restart"]["evidence_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_materializes_section_banks_and_evidence_ledger_from_completed_unit(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            }
+        ]
+        payload["sub_questions"] = [
+            {
+                "id": "sq1",
+                "question": "Explain checkpoint resume semantics.",
+                "reason": "Primary question.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Official docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nCheckpoint resume continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(
+        query="Checkpoint resume semantics",
+        force_new=True,
+        schedule=False,
+    )
+    await runtime.run_job(response["job_id"])
+
+    outline_state = json.loads(runtime.store.read_artifact_text(response["job_id"], "outline_state.json") or "{}")
+    evidence_ledger = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_ledger.json") or "[]")
+    section_banks = json.loads(runtime.store.read_artifact_text(response["job_id"], "section_banks.json") or "[]")
+    checkpoint = runtime.store.get_checkpoint(response["job_id"], "finalizing")
+
+    assert outline_state["nodes"][0]["section_id"] == "resume-semantics"
+    assert outline_state["nodes"][0]["source_ids"] == ["R1"]
+    assert outline_state["nodes"][0]["selected_evidence_ids"]
+    assert {entry["evidence_id"] for entry in evidence_ledger} >= {
+        "evidence-unit-search-1-search",
+        "evidence-unit-search-1-fetch-1",
+    }
+    assert {entry["selected_section_id"] for entry in evidence_ledger} == {"resume-semantics"}
+    assert section_banks == [
+        {
+            "section_id": "resume-semantics",
+            "candidate_evidence_ids": [
+                "evidence-unit-search-1-search",
+                "evidence-unit-search-1-fetch-1",
+            ],
+            "selected_evidence_ids": [
+                "evidence-unit-search-1-search",
+                "evidence-unit-search-1-fetch-1",
+            ],
+            "rejected_evidence_ids": [],
+            "last_updated_at": section_banks[0]["last_updated_at"],
+        }
+    ]
+    assert checkpoint is not None
+    assert checkpoint.state["section_graph"]["nodes"][0]["selected_evidence_ids"] == [
+        "evidence-unit-search-1-search",
+        "evidence-unit-search-1-fetch-1",
+    ]
+    assert checkpoint.state["section_banks"][0]["selected_evidence_ids"] == [
+        "evidence-unit-search-1-search",
+        "evidence-unit-search-1-fetch-1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_continuation_planning_bootstraps_internal_state_from_carry_forward_evidence(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(runtime, query="Continuation internal state bootstrap source")
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+
+    response = await runtime.start(
+        query="Follow up continuation internal state bootstrap",
+        continue_from_job_id=source.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    outline_state = json.loads(runtime.store.read_artifact_text(response["job_id"], "outline_state.json") or "{}")
+    evidence_ledger = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_ledger.json") or "[]")
+    section_banks = json.loads(runtime.store.read_artifact_text(response["job_id"], "section_banks.json") or "[]")
+
+    assert outline_state["nodes"]
+    assert evidence_ledger
+    assert any(entry["selected_section_id"] for entry in evidence_ledger)
+    assert any(bank["selected_evidence_ids"] for bank in section_banks)
+
+
+@pytest.mark.asyncio
 async def test_plan_only_builds_structured_plan(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -987,7 +1235,11 @@ async def test_plan_only_does_not_schedule_execution(tmp_path):
     assert executed == []
     assert status["status"] == "draft"
     assert [event["type"] for event in events["events"]] == ["job_created"]
-    assert status["artifact_kinds"] == ["plan.json", "planner_trace.json"]
+    assert "plan.json" in status["artifact_kinds"]
+    assert "planner_trace.json" in status["artifact_kinds"]
+    assert "outline_state.json" in status["artifact_kinds"]
+    assert "evidence_ledger.json" in status["artifact_kinds"]
+    assert "section_banks.json" in status["artifact_kinds"]
 
 
 @pytest.mark.asyncio
@@ -5405,6 +5657,119 @@ async def test_missing_sub_question_coverage_uses_focused_fallback_plan(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_official_doc_follow_up_safe_repairs_do_not_force_planner_fallback(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def sparse_official_docs_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {
+                "id": "sq1",
+                "question": "Explain AWS DMS checkpoint resume semantics.",
+                "reason": "Primary axis.",
+            },
+            {
+                "id": "sq2",
+                "question": "Explain DescribeReplicationTasks recovery visibility.",
+                "reason": "Secondary axis.",
+            },
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "AWS DMS checkpoint semantics",
+                "goal": "Explain AWS DMS checkpoint resume semantics.",
+                "query": "",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"]["search_queries"] = []
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain AWS DMS checkpoint resume semantics.",
+            },
+            {
+                "section_id": "task-visibility",
+                "title": "Task Visibility",
+                "goal": "Explain DescribeReplicationTasks recovery visibility.",
+            },
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = sparse_official_docs_planner
+
+    response = await runtime.start(
+        query="Follow up AWS DMS checkpoint resume semantics with official docs only",
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    trace = plan["planner_metadata"]["trace"]
+
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert plan["planner_metadata"]["planner"] == "test"
+    assert plan["research_units"][0]["query"] == "Explain AWS DMS checkpoint resume semantics."
+    assert any(unit["goal"] == "Explain DescribeReplicationTasks recovery visibility." for unit in plan["research_units"])
+    assert "filled_search_query:unit-search-1" in trace["normalize_actions"]
+    assert "added_sub_question_search_unit:sq2" in trace["normalize_actions"]
+    assert "missing_search_query" in trace["validation_issues"]
+    assert "missing_sub_question_unit_coverage" in trace["validation_issues"]
+    assert trace["unsafe_plan"] is False
+
+
+@pytest.mark.asyncio
+async def test_non_official_allowlist_safe_repairs_still_force_fallback(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def sparse_allowlisted_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "Explain checkpoint resume semantics.", "reason": "Primary axis."},
+            {"id": "sq2", "question": "Explain restart trade-offs.", "reason": "Secondary axis."},
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Generic docs search",
+                "goal": "Explain checkpoint resume semantics.",
+                "query": "",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"]["search_queries"] = []
+        return payload
+
+    runtime._generate_plan_with_model = sparse_allowlisted_planner
+
+    response = await runtime.start(
+        query="Checkpoint resume semantics",
+        include_domains=["example.com"],
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    assert response["plan"]["planner_metadata"]["used_fallback"] is True
+
+
+@pytest.mark.asyncio
 async def test_plan_normalization_expands_generic_outline_from_sub_questions(tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -5714,6 +6079,173 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
     assert executed == ["first checkpoint", "second checkpoint"]
     assert runtime.store.get_job(response["job_id"]).finished_at
     assert runtime.store.read_artifact_text(response["job_id"], "final_report.md")
+
+
+@pytest.mark.asyncio
+async def test_resume_from_research_checkpoint_restores_without_replaying_planning_phase(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    call_count = 0
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain interrupted resume behavior.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "First unit",
+                "goal": "Collect first checkpointed evidence.",
+                "query": "first checkpoint",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-search-2",
+                "unit_type": "search",
+                "title": "Second unit",
+                "goal": "Collect second checkpointed evidence.",
+                "query": "second checkpoint",
+                "depends_on": ["unit-search-1"],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["first checkpoint", "second checkpoint"],
+            "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": True},
+        }
+        return payload
+
+    async def timed_search(query):
+        nonlocal call_count
+        call_count += 1
+        await asyncio.sleep(1.2 if call_count == 1 else 0)
+        return (
+            f"Evidence for {query}",
+            [{"url": f"https://docs.example.com/{query.replace(' ', '-')}", "title": f"{query.title()} docs"}],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", timed_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(
+        query="Interrupt before second unit",
+        time_budget_seconds=1,
+        force_new=True,
+        schedule=False,
+    )
+    await runtime.run_job(response["job_id"])
+    first_events = await runtime.events(response["job_id"])
+    first_last_seq = first_events["next_after_seq"]
+
+    await runtime.resume(response["job_id"], schedule=False)
+    await runtime.run_job(response["job_id"])
+    resumed_events = await runtime.events(response["job_id"], after_seq=first_last_seq)
+
+    resumed_types = [event["type"] for event in resumed_events["events"]]
+    resumed_phases = [(event["type"], event["phase"]) for event in resumed_events["events"]]
+
+    assert resumed_types[0] == "job_resumed"
+    assert resumed_types[1] == "checkpoint_restored"
+    assert ("phase_started", "planning") not in resumed_phases
+    assert ("phase_started", "researching") in resumed_phases
+
+
+@pytest.mark.asyncio
+async def test_events_after_seq_replays_only_new_events_after_research_resume(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    call_count = 0
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain interrupted resume behavior.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "First unit",
+                "goal": "Collect first checkpointed evidence.",
+                "query": "first checkpoint",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-search-2",
+                "unit_type": "search",
+                "title": "Second unit",
+                "goal": "Collect second checkpointed evidence.",
+                "query": "second checkpoint",
+                "depends_on": ["unit-search-1"],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["first checkpoint", "second checkpoint"],
+            "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": True},
+        }
+        return payload
+
+    async def timed_search(query):
+        nonlocal call_count
+        call_count += 1
+        await asyncio.sleep(1.2 if call_count == 1 else 0)
+        return (
+            f"Evidence for {query}",
+            [{"url": f"https://docs.example.com/{query.replace(' ', '-')}", "title": f"{query.title()} docs"}],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", timed_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(
+        query="Interrupt and replay only new events",
+        time_budget_seconds=1,
+        force_new=True,
+        schedule=False,
+    )
+    await runtime.run_job(response["job_id"])
+    first_events = await runtime.events(response["job_id"])
+    first_last_seq = first_events["next_after_seq"]
+
+    await runtime.resume(response["job_id"], schedule=False)
+    await runtime.run_job(response["job_id"])
+    resumed_events = await runtime.events(response["job_id"], after_seq=first_last_seq)
+
+    assert resumed_events["events"]
+    assert all(event["seq"] > first_last_seq for event in resumed_events["events"])
+    assert not any(event["type"] == "job_created" for event in resumed_events["events"])
+    assert not any(
+        event["type"] == "research_unit_completed"
+        and event["message"] == "Completed unit-search-1."
+        for event in resumed_events["events"]
+    )
+    assert resumed_events["events"][0]["type"] == "job_resumed"
+    assert resumed_events["events"][1]["type"] == "checkpoint_restored"
 
 
 @pytest.mark.asyncio

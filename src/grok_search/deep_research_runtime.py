@@ -9,6 +9,18 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
 from .config import config
+from .deep_research_evidence import (
+    build_evidence_ledger_entries,
+    candidate_evidence_ids_by_section,
+    evidence_source_ids,
+    initialize_section_banks,
+    matched_unit_ids_by_section,
+    merge_evidence_ledger,
+    rejected_evidence_ids_by_section,
+    selected_evidence_ids_by_section,
+    update_section_banks,
+)
+from .deep_research_section_graph import initialize_section_graph, update_section_graph
 from .deep_research_store import DeepResearchStore
 from .deep_research_types import (
     DeepResearchCheckpointState,
@@ -160,8 +172,19 @@ _UNSAFE_VALIDATION_ISSUES = {
     "unknown_dependency",
     "forward_or_cyclic_dependency",
 }
+_SAFE_SEARCH_ONLY_REPAIR_ACTION_PREFIXES = (
+    "filled_search_query:",
+    "added_sub_question_search_unit:",
+)
+_SAFE_SEARCH_ONLY_REPAIR_ISSUES = {
+    "missing_search_query",
+    "missing_sub_question_unit_coverage",
+}
 _NON_BLOCKING_VERIFIER_REASON_CODES = {"medium_single_source_search_only"}
 _EVIDENCE_ITEMS_ARTIFACT_KIND = "evidence_items.json"
+_OUTLINE_STATE_ARTIFACT_KIND = "outline_state.json"
+_EVIDENCE_LEDGER_ARTIFACT_KIND = "evidence_ledger.json"
+_SECTION_BANKS_ARTIFACT_KIND = "section_banks.json"
 _CORE_FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 _PROVENANCE_FINAL_ARTIFACT_KINDS = (
     _EVIDENCE_ITEMS_ARTIFACT_KIND,
@@ -1380,6 +1403,9 @@ def _artifact_payloads(
         "planner_trace.json",
         "continuation.json",
         "continuation_capsule.json",
+        _OUTLINE_STATE_ARTIFACT_KIND,
+        _EVIDENCE_LEDGER_ARTIFACT_KIND,
+        _SECTION_BANKS_ARTIFACT_KIND,
         "partial_report.md",
         *_FINAL_ARTIFACT_KINDS,
     ]
@@ -1667,13 +1693,31 @@ def _unsafe_plan_reason(
     normalize_actions: list[str],
     validation_issues: list[str],
     blocked_reasons: list[str],
+    include_domains: list[str] | None = None,
+    research_units: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if planner == "fallback":
         return None
+    safe_search_only_repairs_allowed = (
+        continuation.mode != "continue"
+        and bool(include_domains)
+        and all(_domain_looks_like_official_docs(domain) for domain in (include_domains or []))
+        and bool(research_units)
+        and all(
+        str(unit.get("unit_type", "")).strip() == "search" for unit in (research_units or [])
+        )
+    )
     for action in normalize_actions:
+        if (
+            safe_search_only_repairs_allowed
+            and action.startswith(_SAFE_SEARCH_ONLY_REPAIR_ACTION_PREFIXES)
+        ):
+            continue
         if any(action.startswith(prefix) for prefix in _UNSAFE_NORMALIZE_ACTION_PREFIXES):
             return {"issue": action, "reason": "unsafe_normalize_action"}
     for issue in validation_issues:
+        if safe_search_only_repairs_allowed and issue in _SAFE_SEARCH_ONLY_REPAIR_ISSUES:
+            continue
         if issue in _UNSAFE_VALIDATION_ISSUES:
             return {"issue": issue, "reason": "unsafe_validation_issue"}
         if (
@@ -2418,6 +2462,34 @@ def _artifact_metadata(content: str, *, batch_id: str = "") -> dict[str, Any]:
     return metadata
 
 
+def _write_internal_state_artifacts(
+    runtime: "DeepResearchRuntime",
+    job_id: str,
+    *,
+    section_graph: dict[str, Any],
+    evidence_ledger: list[dict[str, Any]],
+    section_banks: list[dict[str, Any]],
+) -> None:
+    runtime.write_artifact(
+        job_id,
+        _OUTLINE_STATE_ARTIFACT_KIND,
+        _json_markdown_block(section_graph),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job_id,
+        _EVIDENCE_LEDGER_ARTIFACT_KIND,
+        _json_markdown_block(evidence_ledger),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job_id,
+        _SECTION_BANKS_ARTIFACT_KIND,
+        _json_markdown_block(section_banks),
+        "application/json",
+    )
+
+
 def _checkpoint_kind(checkpoint_key: str) -> str:
     normalized = (checkpoint_key or "").strip()
     if not normalized:
@@ -2449,6 +2521,9 @@ def _checkpoint_state_payload(
     sources: list[dict[str, Any]],
     evidence_items: list[dict[str, Any]],
     sections: list[dict[str, Any]],
+    section_graph: dict[str, Any] | None = None,
+    evidence_ledger: list[dict[str, Any]] | None = None,
+    section_banks: list[dict[str, Any]] | None = None,
 ) -> DeepResearchCheckpointState:
     return DeepResearchCheckpointState(
         plan=plan,
@@ -2463,6 +2538,9 @@ def _checkpoint_state_payload(
         sources=list(sources),
         evidence_items=list(evidence_items),
         sections=list(sections),
+        section_graph=dict(section_graph or {}),
+        evidence_ledger=list(evidence_ledger or []),
+        section_banks=list(section_banks or []),
     )
 
 
@@ -2571,6 +2649,60 @@ def _hydrate_evidence_source_ids(
         normalized["source_ids"] = hydrated_ids
         hydrated.append(normalized)
     return hydrated
+
+
+def _domain_looks_like_official_docs(domain: str) -> bool:
+    normalized = (domain or "").strip().lower()
+    return normalized.startswith(("docs.", "developer.", "developers.")) or normalized in {
+        "ai.google.dev",
+        "adk.dev",
+    }
+
+
+def _bootstrap_internal_state(
+    plan: DeepResearchPlan,
+    *,
+    unit_results: dict[str, dict[str, Any]],
+    evidence_items: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+    source_registry: list[dict[str, Any]],
+    updated_at: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    hydrated_evidence_items = _hydrate_evidence_source_ids(evidence_items, source_registry)
+    if not hydrated_evidence_items and sections:
+        hydrated_evidence_items = _hydrate_evidence_source_ids(
+            _build_carry_forward_evidence(unit_results, sections),
+            source_registry,
+        )
+    ledger_entries: list[dict[str, Any]] = []
+    for evidence in hydrated_evidence_items:
+        ledger_entries = merge_evidence_ledger(
+            ledger_entries,
+            build_evidence_ledger_entries(
+                plan,
+                unit_id=str(evidence.get("unit_id", "")).strip() or "carry-forward",
+                origin_query=plan.query,
+                evidence_items=[evidence],
+                updated_at=updated_at,
+            ),
+        )
+    section_banks = update_section_banks(
+        initialize_section_banks(plan, updated_at=updated_at),
+        ledger_entries=ledger_entries,
+        updated_at=updated_at,
+    )
+    section_graph = update_section_graph(
+        initialize_section_graph(plan, updated_at=updated_at),
+        plan=plan,
+        source_registry=source_registry,
+        selected_evidence_ids_by_section=selected_evidence_ids_by_section(section_banks),
+        candidate_evidence_ids_by_section=candidate_evidence_ids_by_section(section_banks),
+        rejected_evidence_ids_by_section=rejected_evidence_ids_by_section(section_banks),
+        matched_unit_ids_by_section=matched_unit_ids_by_section(ledger_entries),
+        evidence_source_ids=evidence_source_ids(ledger_entries),
+        updated_at=updated_at,
+    )
+    return section_graph, ledger_entries, section_banks
 
 
 def _planner_continuation_payload(continuation: DeepResearchContinuationState) -> dict[str, Any]:
@@ -2895,7 +3027,28 @@ class DeepResearchRuntime:
             continued_from_job_id=continue_from_job_id,
         )
         plan = await self._build_plan(job, continuation)
+        planning_updated_at = utc_now_iso()
+        if continuation.mode == "continue":
+            section_graph, evidence_ledger, section_banks = _bootstrap_internal_state(
+                plan,
+                unit_results=dict(continuation.carry_forward_unit_results),
+                evidence_items=list(continuation.carry_forward_evidence),
+                sections=list(continuation.carry_forward_sections),
+                source_registry=list(continuation.carry_forward_sources),
+                updated_at=planning_updated_at,
+            )
+        else:
+            section_graph = initialize_section_graph(plan, updated_at=planning_updated_at)
+            section_banks = initialize_section_banks(plan, updated_at=planning_updated_at)
+            evidence_ledger = []
         self.write_artifact(job.job_id, "plan.json", _json_markdown_block(plan.model_dump()), "application/json")
+        _write_internal_state_artifacts(
+            self,
+            job.job_id,
+            section_graph=section_graph,
+            evidence_ledger=evidence_ledger,
+            section_banks=section_banks,
+        )
         planner_trace = dict(plan.planner_metadata.get("trace") or {})
         if planner_trace:
             self.write_artifact(
@@ -2914,6 +3067,9 @@ class DeepResearchRuntime:
                 sources=list(continuation.carry_forward_sources),
                 evidence_items=list(continuation.carry_forward_evidence),
                 sections=list(continuation.carry_forward_sections),
+                section_graph=section_graph,
+                evidence_ledger=evidence_ledger,
+                section_banks=section_banks,
             ).model_dump(),
         )
         if continuation.mode == "continue":
@@ -4131,6 +4287,8 @@ class DeepResearchRuntime:
             normalize_actions=planner_trace["normalize_actions"],
             validation_issues=planner_trace["validation_issues"],
             blocked_reasons=planner_trace["blocked_reasons"],
+            include_domains=job.include_domains,
+            research_units=normalized_units,
         )
         planner_trace["unsafe_plan"] = bool(planner_trace.get("unsafe_plan")) or unsafe_plan_reason is not None
         if unsafe_plan_reason is not None:
@@ -4691,6 +4849,27 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     unit_results = _sanitize_unit_results(unit_results, source_registry)
     evidence_items = _sanitize_evidence_items(evidence_items, source_registry)
     sections = _sanitize_sections(sections, source_registry)
+    current_updated_at = utc_now_iso()
+    if checkpoint_state and checkpoint_state.section_graph and checkpoint_state.section_banks:
+        section_graph = dict(checkpoint_state.section_graph)
+        evidence_ledger = list(checkpoint_state.evidence_ledger)
+        section_banks = list(checkpoint_state.section_banks)
+    else:
+        section_graph, evidence_ledger, section_banks = _bootstrap_internal_state(
+            plan,
+            unit_results=unit_results,
+            evidence_items=evidence_items,
+            sections=sections,
+            source_registry=source_registry,
+            updated_at=current_updated_at,
+        )
+    _write_internal_state_artifacts(
+        runtime,
+        job_id,
+        section_graph=section_graph,
+        evidence_ledger=evidence_ledger,
+        section_banks=section_banks,
+    )
     started_at_dt = _parse_utc_iso(job.started_at) or dt.datetime.now(dt.UTC)
 
     runtime.store.update_job(job_id, phase="researching", progress_pct=20.0, heartbeat_at=utc_now_iso())
@@ -4870,6 +5049,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             sources=source_registry,
             evidence_items=evidence_items,
             sections=sections,
+            section_graph=section_graph,
+            evidence_ledger=evidence_ledger,
+            section_banks=section_banks,
         ).model_dump()
         dispatch_state["dispatched_unit_ids"] = [unit.unit_id for unit in batch_units]
         runtime.store.save_checkpoint(
@@ -4967,8 +5149,39 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "provider_api_url": unit_result.get("provider_api_url", ""),
             }
             evidence_items.extend(new_evidence)
+            ledger_entries = build_evidence_ledger_entries(
+                plan,
+                unit_id=unit.unit_id,
+                origin_query=unit.query or unit.goal,
+                evidence_items=new_evidence,
+                updated_at=utc_now_iso(),
+            )
+            evidence_ledger = merge_evidence_ledger(evidence_ledger, ledger_entries)
+            section_banks = update_section_banks(
+                section_banks,
+                ledger_entries=ledger_entries,
+                updated_at=utc_now_iso(),
+            )
+            section_graph = update_section_graph(
+                section_graph,
+                plan=plan,
+                source_registry=source_registry,
+                selected_evidence_ids_by_section=selected_evidence_ids_by_section(section_banks),
+                candidate_evidence_ids_by_section=candidate_evidence_ids_by_section(section_banks),
+                rejected_evidence_ids_by_section=rejected_evidence_ids_by_section(section_banks),
+                matched_unit_ids_by_section=matched_unit_ids_by_section(evidence_ledger),
+                evidence_source_ids=evidence_source_ids(evidence_ledger),
+                updated_at=utc_now_iso(),
+            )
             unit_results = _sanitize_unit_results(unit_results, source_registry)
             evidence_items = _sanitize_evidence_items(evidence_items, source_registry)
+            _write_internal_state_artifacts(
+                runtime,
+                job_id,
+                section_graph=section_graph,
+                evidence_ledger=evidence_ledger,
+                section_banks=section_banks,
+            )
             coverage_state = _runtime_coverage_state(
                 plan,
                 unit_results,
@@ -4989,6 +5202,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 sources=source_registry,
                 evidence_items=evidence_items,
                 sections=sections,
+                section_graph=section_graph,
+                evidence_ledger=evidence_ledger,
+                section_banks=section_banks,
             )
             runtime.store.save_checkpoint(
                 job_id,
@@ -5108,6 +5324,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             sources=source_registry,
             evidence_items=evidence_items,
             sections=sections,
+            section_graph=section_graph,
+            evidence_ledger=evidence_ledger,
+            section_banks=section_banks,
         ).model_dump(),
     )
 
@@ -5197,6 +5416,29 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         },
     }
     final_report = _build_final_report(plan, citations["sections"], citations["source_registry"], report_summary)
+    section_banks = update_section_banks(
+        section_banks,
+        ledger_entries=evidence_ledger,
+        updated_at=utc_now_iso(),
+    )
+    section_graph = update_section_graph(
+        section_graph,
+        plan=plan,
+        source_registry=source_registry,
+        selected_evidence_ids_by_section=selected_evidence_ids_by_section(section_banks),
+        candidate_evidence_ids_by_section=candidate_evidence_ids_by_section(section_banks),
+        rejected_evidence_ids_by_section=rejected_evidence_ids_by_section(section_banks),
+        matched_unit_ids_by_section=matched_unit_ids_by_section(evidence_ledger),
+        evidence_source_ids=evidence_source_ids(evidence_ledger),
+        updated_at=utc_now_iso(),
+    )
+    _write_internal_state_artifacts(
+        runtime,
+        job_id,
+        section_graph=section_graph,
+        evidence_ledger=evidence_ledger,
+        section_banks=section_banks,
+    )
     runtime.write_artifact(job_id, "coverage.json", _json_markdown_block(coverage_diagnostics), "application/json")
     runtime.write_artifact(job_id, "grounding.json", _json_markdown_block(grounding_diagnostics), "application/json")
     runtime.write_artifact(job_id, "verifier.json", _json_markdown_block(verifier_diagnostics), "application/json")
@@ -5258,6 +5500,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             sources=source_registry,
             evidence_items=evidence_items,
             sections=sections,
+            section_graph=section_graph,
+            evidence_ledger=evidence_ledger,
+            section_banks=section_banks,
         ).model_dump(),
     )
     if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
