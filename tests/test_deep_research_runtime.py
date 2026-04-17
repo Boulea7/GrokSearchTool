@@ -6380,77 +6380,154 @@ async def test_stale_worker_exception_after_reconcile_does_not_overwrite_termina
 
 
 @pytest.mark.asyncio
-async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoint_for_resume(monkeypatch, tmp_path):
+async def test_stale_worker_reconnect_lifecycle_matches_round21_fixture(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
-    fixture = load_deep_research_fixture("round13_worker_restarted_dispatch.json")
+    fixture = load_deep_research_fixture("probe_round21_stale_worker_reconnect.json")
+    search_calls = 0
 
     async def planner(job, continuation):
         payload = structured_plan_payload(job, continuation)
-        payload["search_strategy"]["selective_fetch"] = {
-            "max_urls_per_search": 0,
-            "prefer_titles_matching_outline": False,
+        payload["report_outline"] = [
+            {
+                "section_id": "stale-worker-reconnect",
+                "title": "Stale Worker Reconnect",
+                "goal": "Track resume behavior after reconnect-triggered worker recovery.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "u1",
+                "unit_type": "search",
+                "title": "Checkpoint one",
+                "goal": "Collect the first checkpoint.",
+                "query": "checkpoint one",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "u2",
+                "unit_type": "search",
+                "title": "Checkpoint two",
+                "goal": "Collect the second checkpoint.",
+                "query": "checkpoint two",
+                "depends_on": ["u1"],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "u3",
+                "unit_type": "search",
+                "title": "Checkpoint three",
+                "goal": "Collect the third checkpoint.",
+                "query": "checkpoint three",
+                "depends_on": ["u2"],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["checkpoint one", "checkpoint two", "checkpoint three"],
+            "selective_fetch": {
+                "max_urls_per_search": 0,
+                "prefer_titles_matching_outline": False,
+            },
         }
         return payload
 
-    did_reconcile = False
-
-    async def reconciling_search(query):
-        nonlocal did_reconcile
-        if not did_reconcile:
-            did_reconcile = True
-            runtime.store.reconcile_incomplete_jobs()
+    async def timed_search(query):
+        nonlocal search_calls
+        search_calls += 1
+        await asyncio.sleep(1.2)
         return (
-            "Recovered answer",
-            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
-        )
-
-    async def stable_search(query):
-        return (
-            "Recovered answer",
-            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
+            f"Evidence for {query}",
+            [{"url": f"https://example.com/{query.replace(' ', '-')}", "title": f"{query.title()} source"}],
         )
 
     async def no_fetch(url):
         return None
 
     monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
-    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", reconciling_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", timed_search)
     monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
 
-    response = await runtime.start(query=fixture["query"], force_new=True, schedule=False)
+    response = await runtime.start(
+        query=fixture["query"],
+        time_budget_seconds=1,
+        force_new=True,
+        schedule=False,
+    )
     first_result = await runtime.run_job(response["job_id"])
-    interrupted_job = runtime.store.get_job(response["job_id"])
+    first_status = await runtime.status(response["job_id"])
+    first_resume = await runtime.resume(response["job_id"], schedule=False)
+    queued_status = await runtime.status(response["job_id"])
 
-    assert did_reconcile is True
-    assert first_result["status"] == "interrupted"
-    assert interrupted_job.current_checkpoint.startswith(fixture["expected"]["checkpoint_prefix"])
+    runtime.store.update_job(response["job_id"], heartbeat_at="2000-01-01T00:00:00Z")
+    with runtime.store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ? WHERE job_id = ?",
+            ("2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", response["job_id"]),
+        )
 
-    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", stable_search)
-    resumed = await runtime.resume(response["job_id"], schedule=False)
-    final_result = await runtime.run_job(response["job_id"])
-    events = await runtime.events(response["job_id"])
-    interrupted_events = [event for event in events["events"] if event["type"] == "job_interrupted"]
-    resumed_events = [event for event in events["events"] if event["type"] == "job_resumed"]
-    post_resume_events = [event for event in events["events"] if event["seq"] > resumed_events[-1]["seq"]]
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+    monkeypatch.setattr(other_runtime, "_generate_plan_with_model", planner)
 
+    reconciled_status = await other_runtime.status(response["job_id"])
+    resumed = await other_runtime.resume(response["job_id"], schedule=False)
+    resumed_status = await other_runtime.status(response["job_id"])
+    final_result = await other_runtime.run_job(response["job_id"])
+    final_status = await other_runtime.status(response["job_id"])
+    all_events = await other_runtime.events(response["job_id"])
+    resumed_window = await other_runtime.events(
+        response["job_id"],
+        after_seq=fixture["resume_window"]["after_seq"],
+    )
+
+    assert search_calls == 2
+    assert first_result["status"] == fixture["first_run"]["status"]
+    assert first_status["current_checkpoint"] == fixture["first_run"]["current_checkpoint"]
+    assert first_status["current_checkpoint_kind"] == fixture["first_run"]["current_checkpoint_kind"]
+    assert first_status["attempt_count"] == fixture["first_run"]["attempt_count"]
+    assert first_resume["status"] == "queued"
+    assert queued_status["current_checkpoint_kind"] == fixture["expected"]["checkpoint_kind"]
+    assert reconciled_status["status"] == fixture["reconnect_reconcile"]["status"]
+    assert reconciled_status["last_error"] == fixture["reconnect_reconcile"]["last_error"]
+    assert reconciled_status["current_checkpoint"] == fixture["reconnect_reconcile"]["current_checkpoint"]
+    assert reconciled_status["current_checkpoint_kind"] == fixture["reconnect_reconcile"]["current_checkpoint_kind"]
+    assert reconciled_status["attempt_count"] == fixture["reconnect_reconcile"]["attempt_count"]
     assert resumed["status"] == "queued"
-    assert interrupted_events[-1]["data"]["reason"] == fixture["expected"]["interrupted_reason"]
-    assert resumed_events[-1]["data"]["resume_source"] == fixture["expected"]["resume_source"]
-    assert resumed_events[-1]["data"]["attempt_count"] == 2
-    assert resumed["current_checkpoint_kind"] == "research_dispatch"
-    assert final_result["status"] == "failed"
-    assert interrupted_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")
-    assert interrupted_events[-1]["data"]["checkpoint_kind"] == "research_dispatch"
-    assert resumed_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")
-    assert resumed_events[-1]["data"]["checkpoint_kind"] == "research_dispatch"
-    assert resumed_events[-1]["data"]["checkpoint_seq"] > 0
-    assert post_resume_events[0]["type"] == "checkpoint_restored"
-    assert post_resume_events[0]["data"]["checkpoint_kind"] == "research_dispatch"
+    assert resumed_status["current_checkpoint"] == fixture["reconnect_reconcile"]["current_checkpoint"]
+    assert resumed_status["current_checkpoint_kind"] == fixture["expected"]["checkpoint_kind"]
+    assert final_result["status"] == fixture["resume_run"]["status"]
+    assert final_status["current_checkpoint"] == fixture["resume_run"]["current_checkpoint"]
+    assert final_status["current_checkpoint_kind"] == fixture["resume_run"]["current_checkpoint_kind"]
+    assert final_status["attempt_count"] == fixture["resume_run"]["attempt_count"]
+    assert final_status["status"] == fixture["resume_run"]["status"]
+    assert final_status["current_checkpoint_kind"] == fixture["resume_run"]["current_checkpoint_kind"]
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in all_events["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in fixture["initial_events"] + fixture["resume_events_after_seq_7"]
+    ]
+    assert resumed_window["next_after_seq"] == fixture["resume_window"]["next_after_seq"]
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in resumed_window["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in fixture["resume_events_after_seq_7"]
+    ]
+    assert resumed_window["events"][0]["data"]["resume_source"] == fixture["expected"]["resume_source"]
+    assert resumed_window["events"][0]["data"]["checkpoint_kind"] == fixture["expected"]["checkpoint_kind"]
+    assert resumed_window["events"][1]["type"] == "checkpoint_restored"
+    assert resumed_window["events"][1]["data"]["checkpoint_kind"] == fixture["expected"]["checkpoint_kind"]
     assert not any(
         event["type"] == "phase_started" and event["phase"] == "planning"
-        for event in post_resume_events
+        for event in resumed_window["events"]
     )
-    assert runtime.store.read_artifact_text(response["job_id"], "final_report.md") is not None
 
 
 @pytest.mark.asyncio
@@ -9562,6 +9639,102 @@ def test_verifier_derives_single_source_search_only_from_citations_not_claim_met
     assert verifier["summary"]["medium_single_source_search_only"] == 1
 
 
+def test_verifier_ignores_intentional_rollup_duplicates_in_summary_sections():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 3,
+            "ungrounded_claims": 0,
+            "single_source_claims": 3,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 3,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "claims": [
+                    {
+                        "claim_id": "executive-summary-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 10,
+                                "line_end": 11,
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "section_id": "key-findings",
+                "title": "Key Findings",
+                "claims": [
+                    {
+                        "claim_id": "key-findings-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 10,
+                                "line_end": 11,
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "section_id": "checkpoint-resume-semantics",
+                "title": "Checkpoint Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "checkpoint-resume-semantics-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 10,
+                                "line_end": 11,
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            }
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+        ],
+    )
+
+    assert "duplicate_claims" not in verifier["reason_codes"]
+    assert verifier["summary"]["duplicate_claims"] == 0
+
+
 def test_verifier_flags_unbound_citation_sources_and_evidence_ids():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True},
@@ -10000,6 +10173,368 @@ def test_build_section_citations_does_not_let_executive_summary_steal_specific_s
     assert sections_by_id["resume-semantics"]["claims"][0]["source_ids"] == ["R1"]
 
 
+def test_build_section_citations_prefers_selected_evidence_from_section_banks():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Compare checkpoint resume and restart semantics",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Compare checkpoint resume and restart semantics",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "How does checkpoint resume work?", "reason": "Primary axis."},
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["checkpoint resume semantics"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+                {"section_id": "resume-semantics", "title": "Resume Semantics", "goal": "Explain checkpoint resume semantics."},
+                {"section_id": "restart-trade-offs", "title": "Restart Trade-offs", "goal": "Explain restart trade-offs."},
+            ],
+            "research_units": [
+                {
+                    "unit_id": "unit-search-1",
+                    "unit_type": "search",
+                    "title": "Primary search",
+                    "goal": "Compare checkpoint resume and restart semantics",
+                    "query": "checkpoint resume semantics",
+                    "depends_on": [],
+                    "status": "pending",
+                    "notes": "",
+                }
+            ],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/resume",
+            "title": "Resume docs",
+            "source_type": "official_docs",
+        },
+        {
+            "source_id": "R2",
+            "url": "https://docs.example.com/runtime/restart",
+            "title": "Restart docs",
+            "source_type": "official_docs",
+        },
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-resume-selected",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/resume"],
+            "summary": "Resume continues from the last durable checkpoint after interruption.",
+            "detail": "Resume continues from the last durable checkpoint after interruption.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+        {
+            "evidence_id": "evidence-resume-rejected",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R2"],
+            "source_urls": ["https://docs.example.com/runtime/restart"],
+            "summary": "Resume semantics also mention restart wording and broad checkpoint trade-offs.",
+            "detail": "Resume semantics also mention restart wording and broad checkpoint trade-offs.",
+            "evidence_kind": "fetch",
+            "weight": 2.0,
+        },
+    ]
+    section_banks = [
+        {
+            "section_id": "executive-summary",
+            "candidate_evidence_ids": [],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "section_id": "resume-semantics",
+            "candidate_evidence_ids": [
+                "evidence-resume-selected",
+                "evidence-resume-rejected",
+            ],
+            "selected_evidence_ids": ["evidence-resume-selected"],
+            "rejected_evidence_ids": ["evidence-resume-rejected"],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "section_id": "restart-trade-offs",
+            "candidate_evidence_ids": ["evidence-resume-rejected"],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+    ]
+
+    sections = _build_section_citations(
+        plan,
+        evidence_items,
+        source_registry,
+        section_banks=section_banks,
+        evidence_ledger=[],
+    )
+    sections_by_id = {section["section_id"]: section for section in sections}
+
+    assert sections_by_id["resume-semantics"]["evidence_ids"] == ["evidence-resume-selected"]
+    assert sections_by_id["resume-semantics"]["source_ids"] == ["R1"]
+    assert "evidence-resume-rejected" not in sections_by_id["resume-semantics"]["evidence_ids"]
+
+
+def test_build_section_citations_derives_key_findings_from_grounded_sections():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Compare checkpoint resume and restart semantics",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Compare checkpoint resume and restart semantics",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "How does checkpoint resume work?", "reason": "Primary axis."},
+                {"id": "sq2", "question": "How does restart differ?", "reason": "Primary axis."},
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["checkpoint resume semantics", "restart trade-offs"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+                {"section_id": "key-findings", "title": "Key Findings", "goal": "Cover the strongest findings."},
+                {"section_id": "resume-semantics", "title": "Resume Semantics", "goal": "Explain checkpoint resume semantics."},
+                {"section_id": "restart-trade-offs", "title": "Restart Trade-offs", "goal": "Explain restart trade-offs."},
+            ],
+            "research_units": [
+                {
+                    "unit_id": "unit-search-1",
+                    "unit_type": "search",
+                    "title": "Primary search",
+                    "goal": "Compare checkpoint resume and restart semantics",
+                    "query": "checkpoint resume semantics",
+                    "depends_on": [],
+                    "status": "pending",
+                    "notes": "",
+                }
+            ],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/resume",
+            "title": "Resume docs",
+            "source_type": "official_docs",
+        },
+        {
+            "source_id": "R2",
+            "url": "https://docs.example.com/runtime/restart",
+            "title": "Restart docs",
+            "source_type": "official_docs",
+        },
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-resume",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/resume"],
+            "summary": "Resume continues from the last durable checkpoint after interruption.",
+            "detail": "Resume continues from the last durable checkpoint after interruption.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+        {
+            "evidence_id": "evidence-restart",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R2"],
+            "source_urls": ["https://docs.example.com/runtime/restart"],
+            "summary": "Restart replays work from a fresh starting point and may re-run completed work.",
+            "detail": "Restart replays work from a fresh starting point and may re-run completed work.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+    ]
+    section_banks = [
+        {
+            "section_id": "executive-summary",
+            "candidate_evidence_ids": [],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "section_id": "key-findings",
+            "candidate_evidence_ids": [],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "section_id": "resume-semantics",
+            "candidate_evidence_ids": ["evidence-resume"],
+            "selected_evidence_ids": ["evidence-resume"],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "section_id": "restart-trade-offs",
+            "candidate_evidence_ids": ["evidence-restart"],
+            "selected_evidence_ids": ["evidence-restart"],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+    ]
+
+    sections = _build_section_citations(
+        plan,
+        evidence_items,
+        source_registry,
+        section_banks=section_banks,
+        evidence_ledger=[],
+    )
+    sections_by_id = {section["section_id"]: section for section in sections}
+
+    assert sections_by_id["key-findings"]["claims"]
+    assert "Resume continues from the last durable checkpoint" in sections_by_id["key-findings"]["summary"]
+    assert "Restart replays work from a fresh starting point" in sections_by_id["key-findings"]["summary"]
+
+
+def test_build_section_citations_rewrites_generic_outline_from_evidence_ledger_question_ids():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Compare checkpoint resume and restart semantics",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Compare checkpoint resume and restart semantics",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "Checkpoint resume semantics", "reason": "Primary axis."},
+                {"id": "sq2", "question": "Restart trade-offs", "reason": "Primary axis."},
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["checkpoint resume semantics", "restart trade-offs"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+                {"section_id": "key-findings", "title": "Key Findings", "goal": "Cover the strongest findings."},
+                {"section_id": "open-questions", "title": "Open Questions", "goal": "Call out remaining gaps."},
+            ],
+            "research_units": [],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/resume",
+            "title": "Resume docs",
+            "source_type": "official_docs",
+        },
+        {
+            "source_id": "R2",
+            "url": "https://docs.example.com/runtime/restart",
+            "title": "Restart docs",
+            "source_type": "official_docs",
+        },
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-resume",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/resume"],
+            "summary": "Resume continues from the last durable checkpoint after interruption.",
+            "detail": "Resume continues from the last durable checkpoint after interruption.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+        {
+            "evidence_id": "evidence-restart",
+            "unit_id": "unit-search-2",
+            "source_ids": ["R2"],
+            "source_urls": ["https://docs.example.com/runtime/restart"],
+            "summary": "Restart replays work from a fresh starting point and may re-run completed work.",
+            "detail": "Restart replays work from a fresh starting point and may re-run completed work.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+    ]
+    evidence_ledger = [
+        {
+            "ledger_id": "ledger-evidence-resume",
+            "evidence_id": "evidence-resume",
+            "unit_id": "unit-search-1",
+            "question_id": "sq1",
+            "origin_query": "checkpoint resume semantics",
+            "candidate_section_ids": ["key-findings"],
+            "selected_section_id": "key-findings",
+            "rejected_section_ids": [],
+            "disposition": "selected",
+            "disposition_reason": "keyword_overlap",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/resume"],
+            "summary": "Resume continues from the last durable checkpoint after interruption.",
+            "evidence_kind": "fetch",
+            "recorded_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "ledger_id": "ledger-evidence-restart",
+            "evidence_id": "evidence-restart",
+            "unit_id": "unit-search-2",
+            "question_id": "sq2",
+            "origin_query": "restart trade-offs",
+            "candidate_section_ids": ["key-findings"],
+            "selected_section_id": "key-findings",
+            "rejected_section_ids": [],
+            "disposition": "selected",
+            "disposition_reason": "keyword_overlap",
+            "source_ids": ["R2"],
+            "source_urls": ["https://docs.example.com/runtime/restart"],
+            "summary": "Restart replays work from a fresh starting point and may re-run completed work.",
+            "evidence_kind": "fetch",
+            "recorded_at": "2026-04-18T00:00:00Z",
+        },
+    ]
+
+    sections = _build_section_citations(
+        plan,
+        evidence_items,
+        source_registry,
+        evidence_ledger=evidence_ledger,
+    )
+    section_ids = [section["section_id"] for section in sections]
+
+    assert section_ids == [
+        "executive-summary",
+        "key-findings",
+        "checkpoint-resume-semantics",
+        "restart-trade-offs",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_runtime_persists_verifier_artifact_and_blocks_single_source_low_confidence_report(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
@@ -10047,6 +10582,108 @@ async def test_runtime_persists_verifier_artifact_and_blocks_single_source_low_c
     assert "single_source_low_confidence" in verifier["reason_codes"]
     assert "single_source_low_confidence" in result["report"]["runtime"]["verifier"]["reason_codes"]
     assert "single_source_low_confidence" in result["report"]["runtime"]["release_gate"]["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_uses_active_outline_for_coverage_and_key_findings(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "Checkpoint resume semantics", "reason": "Primary axis."},
+            {"id": "sq2", "question": "Restart trade-offs", "reason": "Primary axis."},
+        ]
+        payload["report_outline"] = [
+            {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+            {"section_id": "key-findings", "title": "Key Findings", "goal": "Cover the strongest findings."},
+            {"section_id": "open-questions", "title": "Open Questions", "goal": "Call out remaining gaps."},
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Resume docs",
+                "goal": "Checkpoint resume semantics",
+                "query": "checkpoint resume semantics",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-search-2",
+                "unit_type": "search",
+                "title": "Restart docs",
+                "goal": "Restart trade-offs",
+                "query": "restart trade-offs",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        payload["search_strategy"]["search_queries"] = [
+            "checkpoint resume semantics",
+            "restart trade-offs",
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        if "restart" in query:
+            return (
+                "Restart replays work from a fresh starting point and may re-run completed work.",
+                [
+                    {
+                        "url": "https://docs.example.com/runtime/restart",
+                        "title": "Restart docs",
+                        "description": "Official restart docs.",
+                    }
+                ],
+            )
+        return (
+            "Resume continues from the last durable checkpoint after interruption.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/resume",
+                    "title": "Resume docs",
+                    "description": "Official resume docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        if "restart" in url:
+            return "# Restart docs\n\nRestart replays work from a fresh starting point and may re-run completed work."
+        return "# Resume docs\n\nResume continues from the last durable checkpoint after interruption."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Checkpoint resume versus restart", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    section_ids = [section["section_id"] for section in result["report"]["sections"]]
+    coverage = result["report"]["coverage"]
+    key_findings = next(section for section in result["report"]["sections"] if section["section_id"] == "key-findings")
+    coverage_by_id = {item["section_id"]: item for item in coverage["section_coverage"]}
+    outline_state = json.loads(runtime.store.read_artifact_text(response["job_id"], "outline_state.json") or "{}")
+
+    assert section_ids == [
+        "executive-summary",
+        "key-findings",
+        "checkpoint-resume-semantics",
+        "restart-trade-offs",
+    ]
+    assert coverage["planned_section_ids"] == section_ids
+    assert coverage["unanswered_sections"] == []
+    assert key_findings["claims"]
+    assert coverage_by_id["checkpoint-resume-semantics"]["selected_evidence_count"] >= 1
+    assert coverage_by_id["restart-trade-offs"]["selected_evidence_count"] >= 1
+    assert outline_state["root_section_ids"] == section_ids
 
 
 @pytest.mark.asyncio
@@ -12019,6 +12656,63 @@ async def test_selective_fetch_avoids_same_domain_off_topic_page(monkeypatch, tm
         "same_domain_off_topic" not in set(source.get("ranking_penalties") or [])
         for source in source_registry.values()
     )
+
+
+@pytest.mark.asyncio
+async def test_selective_fetch_prefers_api_reference_over_prescriptive_guidance(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fetched_urls = []
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "dms-semantics",
+                "title": "AWS DMS Resume Semantics",
+                "goal": "Explain AWS DMS checkpoint resume, restart, and API-visible task state semantics.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "AWS DMS resume and restart behavior is documented in official pages.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/migrate-data-with-aws-dms.html",
+                    "title": "Migrate data with AWS DMS",
+                    "description": "Prescriptive guidance pattern with migration shell content.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "API StartReplicationTask",
+                    "description": "AWS DMS API reference for resume-processing, reload-target, and start-replication.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        fetched_urls.append(url)
+        if "API_StartReplicationTask" in url:
+            return "# API StartReplicationTask\n\nUse resume-processing to continue from the last checkpoint and reload-target to restart from a fresh load."
+        return "# Migrate data with AWS DMS\n\nThis migration pattern describes a broader project shell and cross-service workflow."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="AWS DMS checkpoint resume restart semantics", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert fetched_urls == ["https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"]
+    assert "resume-processing" in result["final_report"]
+    assert "migration pattern" not in result["final_report"].lower()
 
 
 @pytest.mark.asyncio
