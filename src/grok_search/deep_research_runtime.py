@@ -21,6 +21,13 @@ from .deep_research_evidence import (
     update_section_banks,
 )
 from .deep_research_section_graph import initialize_section_graph, update_section_graph
+from .deep_research_synthesis import (
+    build_synthesis_outline,
+    evidence_pool_for_section,
+    is_key_findings_section_title,
+    is_open_questions_section_title,
+    is_summary_section_title,
+)
 from .deep_research_store import DeepResearchStore
 from .deep_research_types import (
     DeepResearchCheckpointState,
@@ -33,6 +40,8 @@ from .deep_research_types import (
     DeepResearchReportSection,
     DeepResearchResearchUnit,
     DeepResearchSectionCitations,
+    DeepResearchSectionGraphState,
+    DeepResearchSectionNode,
     utc_now_iso,
 )
 from .providers.base import _filter_supported_search_kwargs
@@ -2488,6 +2497,67 @@ def _write_internal_state_artifacts(
         _json_markdown_block(section_banks),
         "application/json",
     )
+
+
+def _reconcile_section_graph_with_materialized_sections(
+    section_graph: dict[str, Any] | None,
+    *,
+    planned_outline: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+    updated_at: str = "",
+) -> dict[str, Any]:
+    base = dict(section_graph or {}) if isinstance(section_graph, dict) else {}
+    base_nodes = {
+        str(node.get("section_id", "")).strip(): dict(node)
+        for node in base.get("nodes", [])
+        if isinstance(node, dict) and str(node.get("section_id", "")).strip()
+    }
+    sections_by_id = {
+        str(section.get("section_id", "")).strip(): dict(section)
+        for section in sections
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    }
+    nodes: list[dict[str, Any]] = []
+    root_section_ids: list[str] = []
+    for planned in planned_outline:
+        if not isinstance(planned, dict):
+            continue
+        section_id = str(planned.get("section_id", "")).strip()
+        if not section_id:
+            continue
+        root_section_ids.append(section_id)
+        materialized = sections_by_id.get(section_id, {})
+        base_node = base_nodes.get(section_id, {})
+        node = {
+            **base_node,
+            "section_id": section_id,
+            "title": str(planned.get("title", "") or base_node.get("title", "")).strip(),
+            "goal": str(planned.get("goal", "") or base_node.get("goal", "")).strip(),
+            "status": "grounded" if materialized.get("claims") else str(base_node.get("status", "") or "planned"),
+            "rewrite_reason": str(planned.get("rewrite_reason", "") or base_node.get("rewrite_reason", "")).strip(),
+            "evidence_ids": [
+                str(evidence_id).strip()
+                for evidence_id in materialized.get("evidence_ids", []) or []
+                if str(evidence_id).strip()
+            ] or list(base_node.get("evidence_ids") or []),
+            "selected_evidence_ids": [
+                str(evidence_id).strip()
+                for evidence_id in materialized.get("evidence_ids", []) or []
+                if str(evidence_id).strip()
+            ] or list(base_node.get("selected_evidence_ids") or []),
+            "source_ids": [
+                str(source_id).strip()
+                for source_id in materialized.get("source_ids", []) or []
+                if str(source_id).strip()
+            ] or list(base_node.get("source_ids") or []),
+            "last_updated_at": updated_at or str(base_node.get("last_updated_at", "") or ""),
+        }
+        nodes.append(DeepResearchSectionNode.model_validate(node).model_dump())
+    return DeepResearchSectionGraphState(
+        version=int(base.get("version", 1) or 1),
+        root_section_ids=root_section_ids,
+        nodes=nodes,
+    ).model_dump()
 
 
 def _checkpoint_kind(checkpoint_key: str) -> str:
@@ -5281,11 +5351,38 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
 
     if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
         return
-    sections = _build_section_citations(plan, evidence_items, source_registry)
+    active_outline = build_synthesis_outline(
+        plan,
+        section_graph=section_graph,
+        section_banks=section_banks,
+        evidence_ledger=evidence_ledger,
+    )
+    sections = _build_section_citations(
+        plan,
+        evidence_items,
+        source_registry,
+        section_banks=section_banks,
+        evidence_ledger=evidence_ledger,
+        section_graph=section_graph,
+        planned_outline=active_outline,
+    )
+    section_graph = _reconcile_section_graph_with_materialized_sections(
+        section_graph,
+        planned_outline=active_outline,
+        sections=sections,
+        updated_at=utc_now_iso(),
+    )
     source_registry = _annotate_source_usage(
         source_registry,
         sections,
-        reference_texts=[plan.query, *(f"{section.title} {section.goal}" for section in plan.report_outline)],
+        reference_texts=[
+            plan.query,
+            *(
+                f"{str(section.get('title', '')).strip()} {str(section.get('goal', '')).strip()}"
+                for section in active_outline
+                if isinstance(section, dict)
+            ),
+        ],
         include_domains=plan.include_domains,
         exclude_domains=plan.exclude_domains,
     )
@@ -5341,7 +5438,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "sections": _sanitize_sections(sections, source_registry),
     }
     runtime_warnings = sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])})
-    report_coverage = _coverage_for_report(plan, citations["sections"], coverage_state=coverage_state)
+    report_coverage = _coverage_for_report(
+        plan,
+        citations["sections"],
+        coverage_state=coverage_state,
+        planned_outline=active_outline,
+        section_banks=section_banks,
+        evidence_ledger=evidence_ledger,
+    )
     coverage_diagnostics = {
         "query": plan.query,
         "must_cover": list(plan.brief.must_cover),
@@ -5421,15 +5525,10 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         ledger_entries=evidence_ledger,
         updated_at=utc_now_iso(),
     )
-    section_graph = update_section_graph(
+    section_graph = _reconcile_section_graph_with_materialized_sections(
         section_graph,
-        plan=plan,
-        source_registry=source_registry,
-        selected_evidence_ids_by_section=selected_evidence_ids_by_section(section_banks),
-        candidate_evidence_ids_by_section=candidate_evidence_ids_by_section(section_banks),
-        rejected_evidence_ids_by_section=rejected_evidence_ids_by_section(section_banks),
-        matched_unit_ids_by_section=matched_unit_ids_by_section(evidence_ledger),
-        evidence_source_ids=evidence_source_ids(evidence_ledger),
+        planned_outline=active_outline,
+        sections=citations["sections"],
         updated_at=utc_now_iso(),
     )
     _write_internal_state_artifacts(
@@ -6013,7 +6112,27 @@ def _coverage_for_report(
     sections: list[dict[str, Any]],
     *,
     coverage_state: dict[str, Any] | None = None,
+    planned_outline: list[dict[str, Any]] | None = None,
+    section_banks: list[dict[str, Any]] | None = None,
+    evidence_ledger: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    banks_by_section = {
+        str(bank.get("section_id", "")).strip(): dict(bank)
+        for bank in section_banks or []
+        if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
+    }
+    question_id_by_section_id = {
+        _slugify(_trim_text(_normalize_whitespace(item.question.rstrip(" ?")), limit=96)): item.id
+        for item in plan.sub_questions
+    }
+    ledger_by_question_id: dict[str, list[dict[str, Any]]] = {}
+    for entry in evidence_ledger or []:
+        if not isinstance(entry, dict):
+            continue
+        question_id = str(entry.get("question_id", "")).strip()
+        if not question_id:
+            continue
+        ledger_by_question_id.setdefault(question_id, []).append(entry)
     answered_section_ids: list[str] = []
     covered_sub_question_ids: list[str] = []
     uncovered_sub_questions: list[str] = []
@@ -6046,6 +6165,8 @@ def _coverage_for_report(
                 "citations": grounded_citations,
             }
         )
+        bank = banks_by_section.get(section_id, {})
+        question_entries = ledger_by_question_id.get(question_id_by_section_id.get(section_id, ""), [])
         section_coverage.append(
             {
                 "section_id": section_id,
@@ -6053,6 +6174,37 @@ def _coverage_for_report(
                 "answered": bool(grounded_claims),
                 "grounded_claim_count": len(grounded_claims),
                 "citation_count": len(grounded_citations),
+                "candidate_evidence_count": len(
+                    [item for item in bank.get("candidate_evidence_ids", []) if str(item).strip()]
+                ) or len(
+                    {
+                        str(entry.get("evidence_id", "")).strip()
+                        for entry in question_entries
+                        if str(entry.get("evidence_id", "")).strip()
+                    }
+                ),
+                "selected_evidence_count": len(
+                    [item for item in bank.get("selected_evidence_ids", []) if str(item).strip()]
+                ) or len(
+                    {
+                        str(entry.get("evidence_id", "")).strip()
+                        for entry in question_entries
+                        if str(entry.get("evidence_id", "")).strip()
+                    }
+                ),
+                "rejected_evidence_count": len(
+                    [item for item in bank.get("rejected_evidence_ids", []) if str(item).strip()]
+                ) or len(
+                    {
+                        str(entry.get("evidence_id", "")).strip()
+                        for entry in question_entries
+                        if str(entry.get("evidence_id", "")).strip()
+                        and (
+                            any(str(section_ref).strip() for section_ref in entry.get("rejected_section_ids", []) or [])
+                            or str(entry.get("disposition", "")).strip() == "rejected"
+                        )
+                    }
+                ),
             }
         )
     for item in plan.sub_questions:
@@ -6094,10 +6246,21 @@ def _coverage_for_report(
                 "claim_ids": matching_claim_ids,
             }
         )
-    unanswered_sections = [
-        section.title
+    normalized_outline = [
+        {
+            "section_id": str(section.get("section_id", "")).strip(),
+            "title": str(section.get("title", "")).strip(),
+        }
+        for section in (planned_outline or [])
+        if isinstance(section, dict)
+    ] or [
+        {"section_id": section.section_id, "title": section.title}
         for section in plan.report_outline
-        if section.section_id not in answered_section_ids
+    ]
+    unanswered_sections = [
+        section["title"]
+        for section in normalized_outline
+        if section["section_id"] not in answered_section_ids
     ]
     coverage_items_by_target = {
         _normalize_whitespace(str(item.get("target", ""))): item
@@ -6162,7 +6325,7 @@ def _coverage_for_report(
     coverage_gate_passed = not unanswered_sections and not uncovered_sub_questions
     hard_coverage_gate_passed = not hard_uncovered_targets
     return {
-        "planned_section_ids": [section.section_id for section in plan.report_outline],
+        "planned_section_ids": [section["section_id"] for section in normalized_outline],
         "answered_section_ids": answered_section_ids,
         "unanswered_sections": unanswered_sections,
         "planned_sub_question_ids": [item.id for item in plan.sub_questions],
@@ -6434,7 +6597,7 @@ def _build_verifier_diagnostics(
         for item in evidence_items
         if isinstance(item, dict) and str(item.get("evidence_id", "")).strip()
     }
-    seen_claim_keys: set[str] = set()
+    seen_claim_keys: dict[str, dict[str, Any]] = {}
     integrity_counts = {
         "missing_evidence_items": 0,
         "mismatched_binding_source": 0,
@@ -6462,6 +6625,8 @@ def _build_verifier_diagnostics(
         reason_codes.append("high_null_span_ratio")
 
     for section in sections:
+        section_title = str(section.get("title", "") or "").strip()
+        section_is_rollup = is_summary_section_title(section_title) or is_key_findings_section_title(section_title)
         for claim in section.get("claims", []):
             claim_id = str(claim.get("claim_id", "")).strip()
             raw_claim_text = str(claim.get("text", "") or "")
@@ -6480,13 +6645,24 @@ def _build_verifier_diagnostics(
             supporting_source_count = provenance["derived_supporting_source_count"]
             if claim_text:
                 claim_key = _stable_text_key(claim_text)
-                if claim_key in seen_claim_keys:
-                    if claim_id:
-                        flagged_claim_ids.append(claim_id)
-                    integrity_counts["duplicate_claims"] += 1
-                    reason_codes.append("duplicate_claims")
+                previous_claim = seen_claim_keys.get(claim_key)
+                if previous_claim is not None:
+                    previous_is_rollup = bool(previous_claim.get("is_rollup"))
+                    if not section_is_rollup and previous_is_rollup:
+                        seen_claim_keys[claim_key] = {
+                            "claim_id": claim_id,
+                            "is_rollup": False,
+                        }
+                    elif not section_is_rollup and not previous_is_rollup:
+                        if claim_id:
+                            flagged_claim_ids.append(claim_id)
+                        integrity_counts["duplicate_claims"] += 1
+                        reason_codes.append("duplicate_claims")
                 else:
-                    seen_claim_keys.add(claim_key)
+                    seen_claim_keys[claim_key] = {
+                        "claim_id": claim_id,
+                        "is_rollup": section_is_rollup,
+                    }
                 if _is_noisy_text(raw_claim_text) or _is_noisy_text(claim_text):
                     if claim_id:
                         flagged_claim_ids.append(claim_id)
@@ -6709,9 +6885,23 @@ def _build_section_citations(
     plan: DeepResearchPlan,
     evidence_items: list[dict[str, Any]],
     source_registry: list[dict[str, Any]],
+    *,
+    section_banks: list[dict[str, Any]] | None = None,
+    evidence_ledger: list[dict[str, Any]] | None = None,
+    section_graph: dict[str, Any] | None = None,
+    planned_outline: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    outline = plan.report_outline
-    outline_position = {section.section_id: index for index, section in enumerate(outline)}
+    outline = planned_outline or build_synthesis_outline(
+        plan,
+        section_graph=section_graph,
+        section_banks=section_banks,
+        evidence_ledger=evidence_ledger,
+    )
+    outline_position = {
+        str(section.get("section_id", "")).strip(): index
+        for index, section in enumerate(outline)
+        if isinstance(section, dict)
+    }
     registry_by_id = {item["source_id"]: item for item in source_registry if item.get("source_id")}
     claims_pool = [
         DeepResearchEvidenceItem.model_validate(item)
@@ -6729,34 +6919,34 @@ def _build_section_citations(
         ]
 
     sections: list[dict[str, Any]] = []
-    claim_index = 1
-    used_evidence_ids: set[str] = set()
+    claim_counter = {"value": 1}
     used_claim_keys: set[str] = set()
     query_keywords = _tokenize_keywords(plan.query)
-    prioritized_outline = sorted(
-        outline,
-        key=lambda section: (
-            1 if section.title.lower() in {"executive summary", "key findings", "summary"} else 0,
-            outline_position.get(section.section_id, 0),
-        ),
-    )
-    for section in prioritized_outline:
+
+    def _section_value(section: dict[str, Any], key: str) -> str:
+        return str(section.get(key, "") or "").strip()
+
+    def build_section_from_pool(
+        section: dict[str, Any],
+        evidence_pool: list[DeepResearchEvidenceItem],
+        *,
+        enforce_overlap: bool,
+    ) -> dict[str, Any] | None:
+        section_title = _section_value(section, "title")
+        section_id = _section_value(section, "section_id")
+        section_goal = _section_value(section, "goal")
+        if not section_id or not section_title:
+            return None
         if _is_gap_section(section) and not any(
-            _has_gap_signal(item.summary) or _has_gap_signal(item.detail) for item in claims_pool
+            _has_gap_signal(item.summary) or _has_gap_signal(item.detail) for item in evidence_pool
         ):
-            continue
-        is_generic_section = section.title.lower() in {"executive summary", "key findings", "summary"}
-        section_keywords = _tokenize_keywords(f"{section.title} {section.goal}")
-        if is_generic_section:
-            section_keywords = query_keywords
-        if not section_keywords:
-            section_keywords = query_keywords
+            return None
+        section_keywords = _tokenize_keywords(f"{section_title} {section_goal}") or query_keywords
         ranked_pool = sorted(
-            claims_pool,
+            evidence_pool,
             key=lambda evidence: (
                 _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords),
                 evidence.weight,
-                0 if evidence.evidence_id in used_evidence_ids else 1,
                 sum(_source_quality_score(registry_by_id.get(source_id, {})) for source_id in evidence.source_ids),
                 len(evidence.source_ids),
                 evidence.evidence_id,
@@ -6768,9 +6958,13 @@ def _build_section_citations(
             overlap_score = _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords)
             if not evidence.source_ids:
                 continue
-            if overlap_score <= 0 and section_keywords and not is_generic_section:
+            if enforce_overlap and overlap_score <= 0 and section_keywords:
                 continue
             relevant_evidence.append(evidence)
+        if not relevant_evidence and not enforce_overlap:
+            relevant_evidence = [evidence for evidence in ranked_pool if evidence.source_ids]
+        if not relevant_evidence:
+            return None
         section_claims: list[dict[str, Any]] = []
         clusters: list[list[DeepResearchEvidenceItem]] = []
         cluster_seed_items = [evidence for evidence in relevant_evidence if evidence.evidence_kind != "search"] or relevant_evidence
@@ -6820,7 +7014,7 @@ def _build_section_citations(
             supporting_domain_count = _supporting_domain_count(cluster_source_ids, registry_by_id)
             cluster_type = _cluster_type_for_items(cluster)
             claim = DeepResearchClaim(
-                claim_id=f"{section.section_id}-claim-{claim_index}",
+                claim_id=f"{section_id}-claim-{claim_counter['value']}",
                 text=claim_text,
                 citations=_preferred_citation_ids(cluster_source_ids, source_registry, limit=3),
                 source_ids=cluster_source_ids,
@@ -6838,14 +7032,12 @@ def _build_section_citations(
                 ),
             )
             section_claims.append(claim.model_dump())
-            for item in cluster:
-                used_evidence_ids.add(item.evidence_id)
             used_claim_keys.add(claim_key)
-            claim_index += 1
+            claim_counter["value"] += 1
             if len(section_claims) >= 2:
                 break
         if not section_claims:
-            continue
+            return None
         section_summary = _build_section_summary(section_claims)
         section_source_count = len({citation for claim in section_claims for citation in claim.get("citations", [])})
         section_domain_count = _supporting_domain_count(
@@ -6853,8 +7045,8 @@ def _build_section_citations(
             registry_by_id,
         )
         section_model = DeepResearchSectionCitations(
-            section_id=section.section_id,
-            title=section.title,
+            section_id=section_id,
+            title=section_title,
             summary=section_summary,
             claims=section_claims,
             citations=sorted({citation for claim in section_claims for citation in claim.get("citations", [])}),
@@ -6883,7 +7075,121 @@ def _build_section_citations(
             supporting_source_count=section_source_count,
             supporting_domain_count=section_domain_count,
         )
-        sections.append(section_model.model_dump())
+        return section_model.model_dump()
+
+    concrete_sections: list[dict[str, Any]] = []
+    concrete_section_ids: set[str] = set()
+    for section in outline:
+        if not isinstance(section, dict):
+            continue
+        title = _section_value(section, "title")
+        if (
+            is_summary_section_title(title)
+            or is_key_findings_section_title(title)
+            or is_open_questions_section_title(title)
+        ):
+            continue
+        pool_items, pool_mode = evidence_pool_for_section(
+            _section_value(section, "section_id"),
+            evidence_items=[item.model_dump() for item in claims_pool],
+            section_banks=section_banks,
+        )
+        materialized = build_section_from_pool(
+            section,
+            [DeepResearchEvidenceItem.model_validate(item) for item in pool_items],
+            enforce_overlap=pool_mode == "global",
+        )
+        if materialized is None:
+            continue
+        concrete_sections.append(materialized)
+        concrete_section_ids.add(_section_value(materialized, "section_id"))
+
+    def build_generic_section(section: dict[str, Any]) -> dict[str, Any] | None:
+        if not concrete_sections:
+            return build_section_from_pool(section, claims_pool, enforce_overlap=False)
+        derived_claims: list[dict[str, Any]] = []
+        seen_claim_keys: set[str] = set()
+        for concrete in concrete_sections:
+            for claim in concrete.get("claims", []):
+                claim_text = _summarize_evidence_text(str(claim.get("text", "")), limit=_MAX_CLAIM_LENGTH)
+                claim_key = _stable_text_key(claim_text)
+                if not claim_text or claim_key in seen_claim_keys:
+                    continue
+                cloned_claim = dict(claim)
+                cloned_claim["claim_id"] = f"{_section_value(section, 'section_id')}-claim-{len(derived_claims) + 1}"
+                derived_claims.append(cloned_claim)
+                seen_claim_keys.add(claim_key)
+                if len(derived_claims) >= 2:
+                    break
+            if len(derived_claims) >= 2:
+                break
+        if not derived_claims:
+            return None
+        section_source_count = len({citation for claim in derived_claims for citation in claim.get("citations", [])})
+        section_domain_count = _supporting_domain_count(
+            [citation for claim in derived_claims for citation in claim.get("citations", [])],
+            registry_by_id,
+        )
+        return DeepResearchSectionCitations(
+            section_id=_section_value(section, "section_id"),
+            title=_section_value(section, "title"),
+            summary=_build_section_summary(derived_claims),
+            claims=derived_claims,
+            citations=sorted({citation for claim in derived_claims for citation in claim.get("citations", [])}),
+            source_ids=_dedupe_preserve_order(
+                [
+                    source_id
+                    for claim in derived_claims
+                    for source_id in claim.get("source_ids", [])
+                    if str(source_id).strip()
+                ]
+            ),
+            evidence_ids=_dedupe_preserve_order(
+                [
+                    evidence_id
+                    for claim in derived_claims
+                    for evidence_id in claim.get("evidence_ids", [])
+                    if str(evidence_id).strip()
+                ]
+            ),
+            confidence=_cluster_confidence(
+                source_count=section_source_count,
+                evidence_count=sum(len(claim.get("evidence_ids", [])) for claim in derived_claims),
+                domain_count=section_domain_count,
+            ),
+            claim_cluster_count=len(derived_claims),
+            supporting_source_count=section_source_count,
+            supporting_domain_count=section_domain_count,
+        ).model_dump()
+
+    for section in outline:
+        if not isinstance(section, dict):
+            continue
+        section_id = _section_value(section, "section_id")
+        title = _section_value(section, "title")
+        if section_id in concrete_section_ids:
+            continue
+        if is_summary_section_title(title) or is_key_findings_section_title(title):
+            materialized = build_generic_section(section)
+            if materialized is not None:
+                sections.append(materialized)
+            continue
+        if is_open_questions_section_title(title):
+            continue
+        pool_items, pool_mode = evidence_pool_for_section(
+            section_id,
+            evidence_items=[item.model_dump() for item in claims_pool],
+            section_banks=section_banks,
+        )
+        materialized = build_section_from_pool(
+            section,
+            [DeepResearchEvidenceItem.model_validate(item) for item in pool_items],
+            enforce_overlap=pool_mode == "global",
+        )
+        if materialized is not None:
+            sections.append(materialized)
+
+    sections.extend(concrete_sections)
     return sorted(sections, key=lambda section: outline_position.get(str(section.get("section_id", "")), 10_000))
 
 

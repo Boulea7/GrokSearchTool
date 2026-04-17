@@ -75,6 +75,34 @@ def _candidate_section_ids(plan: DeepResearchPlan, evidence: dict[str, Any]) -> 
     return matches
 
 
+def _question_ids_for_evidence(
+    plan: DeepResearchPlan,
+    *,
+    evidence_text: str,
+    selected_section_id: str,
+) -> list[str]:
+    selected_section = next(
+        (section for section in plan.report_outline if section.section_id == selected_section_id),
+        None,
+    )
+    if selected_section is not None:
+        section_keywords = _tokenize_keywords(f"{selected_section.title} {selected_section.goal}")
+        matched_by_section = [
+            item.id
+            for item in plan.sub_questions
+            if _count_keyword_overlap(item.question, section_keywords) > 0
+        ]
+        if matched_by_section:
+            return matched_by_section
+
+    evidence_keywords = _tokenize_keywords(evidence_text)
+    return [
+        item.id
+        for item in plan.sub_questions
+        if _count_keyword_overlap(item.question, evidence_keywords) > 0
+    ]
+
+
 def build_evidence_ledger_entries(
     plan: DeepResearchPlan,
     *,
@@ -88,22 +116,14 @@ def build_evidence_ledger_entries(
         evidence_id = str(evidence.get("evidence_id", "")).strip()
         if not evidence_id:
             continue
+        evidence_text = str(evidence.get("summary") or evidence.get("detail") or "")
         candidate_section_ids = _candidate_section_ids(plan, evidence)
         selected_section_id = candidate_section_ids[0] if candidate_section_ids else ""
-        selected_section = next(
-            (section for section in plan.report_outline if section.section_id == selected_section_id),
-            None,
+        question_ids = _question_ids_for_evidence(
+            plan,
+            evidence_text=evidence_text,
+            selected_section_id=selected_section_id,
         )
-        question_ids = [
-            item.id
-            for item in plan.sub_questions
-            if selected_section is not None
-            and _count_keyword_overlap(
-                item.question,
-                _tokenize_keywords(f"{selected_section.title} {selected_section.goal}"),
-            )
-            > 0
-        ]
         entries.append(
             DeepResearchEvidenceLedgerEntry(
                 ledger_id=f"ledger-{evidence_id}",
@@ -120,7 +140,7 @@ def build_evidence_ledger_entries(
                 disposition_reason="keyword_overlap" if selected_section_id else "no_matching_section",
                 source_ids=list(evidence.get("source_ids") or []),
                 source_urls=list(evidence.get("source_urls") or []),
-                summary=str(evidence.get("summary") or evidence.get("detail") or ""),
+                summary=evidence_text,
                 evidence_kind=str(evidence.get("evidence_kind") or ""),
                 recorded_at=updated_at,
             ).model_dump()
