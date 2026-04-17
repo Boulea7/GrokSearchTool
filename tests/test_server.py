@@ -2378,6 +2378,47 @@ async def test_get_config_info_marks_runtime_probe_fallback_as_degraded(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_uses_web_search_model_source_for_runtime_readiness(monkeypatch, tmp_path):
+    monkeypatch.setenv("GROK_MODEL", "env-global-model")
+    monkeypatch.delenv("GROK_WEB_SEARCH_MODEL", raising=False)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    (tmp_path / ".env.local").write_text("GROK_WEB_SEARCH_MODEL=project-web-model\n", encoding="utf-8")
+    captured = {}
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        captured["model"] = model
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "project-web-model"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+
+    assert captured["model"] == "project-web-model"
+    assert payload["feature_readiness"]["web_search"]["runtime_model_source"] == "project_env_local"
+    assert payload["feature_readiness"]["web_search"]["runtime_override_active"] is True
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_prefers_runtime_fallback_message_when_selection_and_runtime_fallback_both_apply(monkeypatch):
     monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
@@ -2819,9 +2860,34 @@ async def test_web_search_returns_structured_status_fields_for_legacy_call(monke
         "time_range": None,
         "include_domains": [],
         "exclude_domains": [],
-        "model": server.config.grok_model,
+        "model": server.config.resolve_web_search_model_for_url(server.config.grok_api_url),
         "extra_sources": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_web_search_uses_tool_level_default_model_before_global_model(monkeypatch):
+    captured = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            captured["model"] = model
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_provider_chain_models(provider_chain):
+        return ["grok-4.20-fast", "grok-4.20-0309"], {}
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.20-fast")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_provider_chain_available_models", fake_provider_chain_models)
+
+    result = await server.web_search("test query")
+
+    assert result["effective_params"]["model"] == "grok-4.20-fast"
+    assert captured["model"] == "grok-4.20-fast"
 
 
 @pytest.mark.asyncio

@@ -1317,8 +1317,9 @@ async def web_search(
         )
 
     provider_chain = config.grok_provider_chain()
+    runtime_api_url = config.grok_api_url
     available_models, _ = await _get_provider_chain_available_models(provider_chain)
-    requested_model = config.grok_model
+    requested_model = config.resolve_web_search_model_for_url(runtime_api_url)
     effective_model = requested_model
     warnings: list[str] = []
     if model:
@@ -1415,7 +1416,7 @@ async def web_search(
         if not _is_grok_model_unavailable_message(error_message):
             return "", [], error_message, error_code, effective_model, False
 
-        preferred_models = config.preferred_web_search_models_for_url(config.grok_api_url)
+        preferred_models = config.preferred_web_search_models_for_url(runtime_api_url)
         candidates = _tool_fallback_candidates(effective_model, available_models, preferred_models)
         if not candidates:
             candidates = _fallback_candidates_for_model(requested_model, effective_model, available_models)
@@ -2619,7 +2620,7 @@ def _build_feature_readiness(
         web_map_message = "Tavily 未配置或已禁用。"
 
     toggle_status = "ready" if claude_context["status"] == "ok" else "not_ready"
-    runtime_model_source = config.grok_model_source
+    runtime_model_source = config.grok_web_search_model_source()
     web_search_check_ids = [
         "grok_config",
         "grok_models",
@@ -3075,8 +3076,8 @@ async def get_config_info(
     checks.append(grok_models)
     available_models: list[str] = []
     if grok_models["status"] == "ok":
-        configured_model = config.grok_model
-        runtime_model_source = config.grok_model_source
+        configured_model = config.resolve_web_search_model_for_url(api_url)
+        runtime_model_source = config.grok_web_search_model_source()
         runtime_model_source_label = _runtime_model_source_label(runtime_model_source)
         available_models = grok_models.get("available_models") or []
         if provider_chain:
@@ -3159,12 +3160,12 @@ async def get_config_info(
             )
         probe_model = resolved_model or configured_model
     else:
-        probe_model = config.grok_model
+        probe_model = config.resolve_web_search_model_for_url(api_url)
     if api_url and api_key:
         grok_search_probe = await _probe_web_search_with_fallback(api_url, api_key, probe_model, available_models)
         if grok_search_probe.get("fallback_model"):
             fallback_model = grok_search_probe["fallback_model"]
-            runtime_model_source = config.grok_model_source
+            runtime_model_source = config.grok_web_search_model_source()
             runtime_model_source_label = _runtime_model_source_label(runtime_model_source)
             checks.append(
                 _build_doctor_check(

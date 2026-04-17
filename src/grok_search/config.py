@@ -519,6 +519,15 @@ class Config:
             return self._apply_model_suffix_for_url(override_model, api_url)
         return self.resolve_default_grok_model_for_url(api_url, profile=selected_profile)
 
+    def resolve_web_search_model_for_url(self, api_url: str) -> str:
+        preferred = self.preferred_web_search_models_for_url(api_url)
+        if preferred:
+            return preferred[0]
+        return self._apply_model_suffix_for_url(self._DEFAULT_WEB_SEARCH_MODEL, api_url)
+
+    def grok_web_search_model_source(self) -> str:
+        return self._tool_profile_model_source("GROK_WEB_SEARCH_MODEL")
+
     def preferred_web_search_models_for_url(self, api_url: str) -> list[str]:
         primary = self._tool_profile_model_override("GROK_WEB_SEARCH_MODEL") or self._DEFAULT_WEB_SEARCH_MODEL
         fallback = self._tool_profile_model_list_override("GROK_WEB_SEARCH_FALLBACK_MODELS") or list(
@@ -949,7 +958,7 @@ class Config:
             "GROK_MODEL": self.grok_model,
             "GROK_MODEL_SOURCE": self.grok_model_source,
             "GROK_WEB_SEARCH_MODEL": self._tool_profile_model_override("GROK_WEB_SEARCH_MODEL") or self._DEFAULT_WEB_SEARCH_MODEL,
-            "GROK_WEB_SEARCH_MODEL_SOURCE": self._tool_profile_model_source("GROK_WEB_SEARCH_MODEL"),
+            "GROK_WEB_SEARCH_MODEL_SOURCE": self.grok_web_search_model_source(),
             "GROK_WEB_SEARCH_FALLBACK_MODELS": self._tool_profile_model_list_override("GROK_WEB_SEARCH_FALLBACK_MODELS") or list(self._DEFAULT_WEB_SEARCH_FALLBACK_MODELS),
             "GROK_MODEL_PROFILE": self.grok_model_profile(),
             "GROK_DEEP_RESEARCH_STANDARD_MODEL": self._tool_profile_model_override("GROK_DEEP_RESEARCH_STANDARD_MODEL") or self._DEFAULT_DEEP_RESEARCH_STANDARD_MODEL,
