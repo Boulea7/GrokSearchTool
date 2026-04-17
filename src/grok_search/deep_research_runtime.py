@@ -133,6 +133,17 @@ _GAP_EVIDENCE_MARKERS = (
     "open question",
 )
 _VALID_SEARCH_STRATEGY_APPROACHES = {"targeted", "breadth_first", "depth_first"}
+_GENERIC_OUTLINE_TITLES = {
+    "executive summary",
+    "summary",
+    "key findings",
+    "findings",
+    "main findings",
+    "open questions",
+    "remaining gaps",
+    "next steps",
+    "recommendations",
+}
 _UNSAFE_NORMALIZE_ACTION_PREFIXES = (
     "filled_search_query:",
     "degraded_fetch_without_url_to_search:",
@@ -1869,12 +1880,11 @@ def _outline_from_sub_questions(
 ) -> list[dict[str, Any]]:
     if continuation.mode == "continue" or len(sub_questions) <= 1:
         return outline
-    generic_titles = {"executive summary", "key findings", "open questions", "summary"}
     if not outline:
         return outline
     first_title = str(outline[0].get("title", "")).strip()
     remainder = outline[1:]
-    if remainder and not all(str(item.get("title", "")).strip().lower() in generic_titles for item in remainder):
+    if remainder and not all(_is_generic_section_title(str(item.get("title", "")).strip()) for item in remainder):
         return outline
     summary_section = outline[0] if first_title.lower() == "executive summary" else {
         "section_id": "executive-summary",
@@ -1891,6 +1901,9 @@ def _outline_from_sub_questions(
                 "section_id": _slugify(title),
                 "title": title,
                 "goal": title,
+                "status": "planned",
+                "coverage_state": {},
+                "rewrite_reason": "sub_questions",
             }
         )
     if len(expanded) <= len(outline):
@@ -1906,7 +1919,7 @@ def _outline_from_follow_up_surface(
     continuation_focus: list[str],
     normalize_actions: list[str],
 ) -> list[dict[str, Any]]:
-    if not _is_generic_outline(outline):
+    if not outline:
         return outline
     focused_titles = [
         _trim_text(_normalize_whitespace(item.rstrip(" ?")), limit=96)
@@ -1915,9 +1928,32 @@ def _outline_from_follow_up_surface(
     ]
     if not focused_titles:
         return outline
-    expanded = [outline[0]]
-    used_section_ids = {str(outline[0].get("section_id", "")).strip()}
+    rewriteable_generic_sections = [
+        item
+        for item in outline
+        if _is_generic_section_title(str(item.get("title", "")).strip())
+        and str(item.get("title", "")).strip().lower() != "executive summary"
+    ]
+    if not rewriteable_generic_sections:
+        return outline
+    expanded: list[dict[str, Any]] = []
+    used_section_ids: set[str] = set()
+    seen_titles: set[str] = set()
+    for item in outline:
+        title = _trim_text(_normalize_whitespace(str(item.get("title", "")).rstrip(" ?")), limit=96)
+        if _is_generic_section_title(title) and title.lower() != "executive summary":
+            continue
+        candidate = dict(item)
+        expanded.append(candidate)
+        section_id = str(candidate.get("section_id", "")).strip()
+        if section_id:
+            used_section_ids.add(section_id)
+        if title:
+            seen_titles.add(title.lower())
+    added = 0
     for title in focused_titles:
+        if title.lower() in seen_titles:
+            continue
         section_id = _slugify(title)
         candidate_id = section_id
         suffix = 2
@@ -1930,8 +1966,15 @@ def _outline_from_follow_up_surface(
                 "section_id": candidate_id,
                 "title": title[:1].upper() + title[1:] if title and title[0].islower() else title,
                 "goal": title,
+                "status": "planned",
+                "coverage_state": {},
+                "rewrite_reason": "follow_up_surface",
             }
         )
+        seen_titles.add(title.lower())
+        added += 1
+    if added == 0:
+        return outline
     _append_unique(normalize_actions, "expanded_outline_from_follow_up_surface")
     return expanded
 
@@ -1955,15 +1998,22 @@ def _dedupe_sub_questions(sub_questions: list[dict[str, Any]]) -> tuple[list[dic
 
 
 def _is_generic_outline(report_outline: list[dict[str, Any]]) -> bool:
-    titles: list[str] = []
+    content_titles: list[str] = []
     for item in report_outline:
         if isinstance(item, dict):
             title = str(item.get("title", "")).strip().lower()
         else:
             title = str(item).strip().lower()
         if title:
-            titles.append(title)
-    return titles == ["executive summary", "key findings", "open questions"]
+            if title == "executive summary":
+                continue
+            content_titles.append(title)
+    return bool(content_titles) and all(_is_generic_section_title(title) for title in content_titles)
+
+
+def _is_generic_section_title(title: str) -> bool:
+    normalized = _normalize_whitespace(title).lower()
+    return normalized in _GENERIC_OUTLINE_TITLES
 
 
 def _validate_research_units(units: list[DeepResearchResearchUnit]) -> None:
@@ -3978,6 +4028,11 @@ class DeepResearchRuntime:
                     "section_id": section_id,
                     "title": title,
                     "goal": item.get("goal") or title,
+                    "status": _normalize_whitespace(str(item.get("status", "") or "")),
+                    "coverage_state": dict(item.get("coverage_state") or {})
+                    if isinstance(item.get("coverage_state"), dict)
+                    else {},
+                    "rewrite_reason": _normalize_whitespace(str(item.get("rewrite_reason", "") or "")),
                 }
             )
         normalized_units = _ensure_sub_question_unit_coverage(
@@ -6457,6 +6512,7 @@ def _build_section_citations(
                 claim_id=f"{section.section_id}-claim-{claim_index}",
                 text=claim_text,
                 citations=_preferred_citation_ids(cluster_source_ids, source_registry, limit=3),
+                source_ids=cluster_source_ids,
                 unit_id=cluster[0].unit_id,
                 evidence_ids=_dedupe_preserve_order([item.evidence_id for item in cluster]),
                 evidence_bindings=_build_claim_evidence_bindings(cluster, registry_by_id),
@@ -6491,6 +6547,22 @@ def _build_section_citations(
             summary=section_summary,
             claims=section_claims,
             citations=sorted({citation for claim in section_claims for citation in claim.get("citations", [])}),
+            source_ids=_dedupe_preserve_order(
+                [
+                    source_id
+                    for claim in section_claims
+                    for source_id in claim.get("source_ids", [])
+                    if str(source_id).strip()
+                ]
+            ),
+            evidence_ids=_dedupe_preserve_order(
+                [
+                    evidence_id
+                    for claim in section_claims
+                    for evidence_id in claim.get("evidence_ids", [])
+                    if str(evidence_id).strip()
+                ]
+            ),
             confidence=_cluster_confidence(
                 source_count=section_source_count,
                 evidence_count=sum(len(claim.get("evidence_ids", [])) for claim in section_claims),

@@ -118,6 +118,9 @@ class DeepResearchReportSection(BaseModel):
     section_id: str
     title: str
     goal: str
+    status: str = ""
+    coverage_state: dict[str, Any] = Field(default_factory=dict)
+    rewrite_reason: str = ""
 
 
 class DeepResearchContinuation(BaseModel):
@@ -178,6 +181,7 @@ class DeepResearchClaim(BaseModel):
     claim_id: str
     text: str
     citations: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
     unit_id: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_bindings: list[dict[str, Any]] = Field(default_factory=list)
@@ -193,6 +197,8 @@ class DeepResearchSectionCitations(BaseModel):
     summary: str = ""
     claims: list[DeepResearchClaim] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
     confidence: str = ""
     claim_cluster_count: int = 0
     supporting_source_count: int = 0

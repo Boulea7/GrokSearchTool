@@ -5487,6 +5487,53 @@ async def test_plan_normalization_expands_generic_outline_for_continuation_focus
 
 
 @pytest.mark.asyncio
+async def test_plan_normalization_rewrites_only_generic_remainder_for_continuation_focus(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(runtime, query="Mixed outline source")
+
+    async def mixed_outline_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["brief"]["continuation_focus"] = [
+            "checkpoint replay boundary",
+            "resume lineage visibility",
+        ]
+        payload["report_outline"] = [
+            {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+            {
+                "section_id": "existing-specific",
+                "title": "Recovered batch consistency",
+                "goal": "Explain how resolved final batches are chosen.",
+            },
+            {"section_id": "key-findings", "title": "Key Findings", "goal": "Present the main evidence."},
+            {"section_id": "open-questions", "title": "Open Questions", "goal": "Call out remaining gaps."},
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = mixed_outline_planner
+
+    response = await runtime.start(
+        query="Follow up mixed outline lifecycle semantics",
+        continue_from_job_id=source.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    outline = response["plan"]["report_outline"]
+    outline_titles = [section["title"] for section in outline]
+
+    assert outline_titles == [
+        "Executive Summary",
+        "Recovered batch consistency",
+        "Checkpoint replay boundary",
+        "Resume lineage visibility",
+    ]
+    assert outline[1]["rewrite_reason"] == ""
+    assert outline[2]["rewrite_reason"] == "follow_up_surface"
+    assert outline[3]["rewrite_reason"] == "follow_up_surface"
+
+
+@pytest.mark.asyncio
 async def test_continue_requires_existing_source_job(tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -9351,6 +9398,9 @@ def test_build_section_citations_does_not_let_executive_summary_steal_specific_s
     assert sections_by_id["restart-trade-offs"]["claims"]
     assert "Resume continues from the last durable checkpoint." in sections_by_id["resume-semantics"]["claims"][0]["text"]
     assert "Restart reloads work from a fresh starting point." in sections_by_id["restart-trade-offs"]["claims"][0]["text"]
+    assert sections_by_id["resume-semantics"]["source_ids"] == ["R1"]
+    assert sections_by_id["resume-semantics"]["evidence_ids"] == ["evidence-resume"]
+    assert sections_by_id["resume-semantics"]["claims"][0]["source_ids"] == ["R1"]
 
 
 @pytest.mark.asyncio
