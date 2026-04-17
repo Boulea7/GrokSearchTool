@@ -153,6 +153,7 @@ async def test_get_config_info_summary_detail_returns_machine_readable_minimum(m
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
     monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.1-fast")
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
             200,
@@ -538,6 +539,7 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
     monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.1-fast")
     monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "auto")
     monkeypatch.setattr(server, "_find_git_root", lambda start=None: Path("/tmp/demo-project"))
 
@@ -649,6 +651,7 @@ async def test_get_config_info_get_sources_requires_readable_session_not_error_o
 @pytest.mark.asyncio
 async def test_get_config_info_deep_research_runtime_degrades_on_body_quality_warning_but_planner_can_stay_ready(monkeypatch):
     monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.1-fast")
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
             200,
@@ -676,6 +679,7 @@ async def test_get_config_info_deep_research_runtime_degrades_on_body_quality_wa
 @pytest.mark.asyncio
 async def test_get_config_info_deep_research_profile_probe_failure_degrades_planner_and_runtime_while_web_search_stays_ready(monkeypatch):
     monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.1-fast")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
     responses = {
@@ -762,6 +766,7 @@ async def test_get_config_info_deep_research_profile_probe_failure_degrades_plan
 @pytest.mark.asyncio
 async def test_get_config_info_deep_research_profile_probe_failure_is_reflected_in_planner_and_runtime_causes(monkeypatch):
     monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.1-fast")
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
             200,
@@ -1509,6 +1514,7 @@ async def test_get_config_info_ignores_client_specific_toggle_in_overall_doctor_
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
     monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.1-fast")
     monkeypatch.setattr(server, "_find_git_root", lambda start=None: None)
 
     responses = {
@@ -1583,6 +1589,7 @@ async def test_get_config_info_ignores_transient_get_sources_partial_ready_in_ov
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
     monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.1-fast")
     monkeypatch.setattr(server, "_SOURCES_CACHE", server.SourcesCache(max_size=32))
 
     responses = {
@@ -1843,7 +1850,7 @@ async def test_probe_web_fetch_uses_single_firecrawl_attempt_in_doctor_mode(monk
 
 @pytest.mark.asyncio
 async def test_get_config_info_marks_configured_model_mismatch_as_degraded(monkeypatch):
-    monkeypatch.setenv("GROK_MODEL", "missing-model")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "missing-model")
 
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
@@ -1888,7 +1895,10 @@ async def test_get_config_info_reports_official_xai_multi_agent_capability(monke
 @pytest.mark.asyncio
 async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkeypatch):
     monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.delenv("GROK_WEB_SEARCH_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: Path("/tmp/test-web-search-persisted"))
     monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+    monkeypatch.setattr(server.config, "_load_project_env_with_sources", lambda: ({"GROK_WEB_SEARCH_MODEL": "persisted-model"}, {"GROK_WEB_SEARCH_MODEL": "project_env"}))
 
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
@@ -1903,7 +1913,8 @@ async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkey
     assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
     assert "persisted-model" in payload["feature_readiness"]["web_search"]["message"]
     assert payload["feature_readiness"]["web_search"]["probe_scope"] == "search_runtime"
-    assert payload["feature_readiness"]["web_search"]["runtime_override_active"] is False
+    assert payload["feature_readiness"]["web_search"]["runtime_override_active"] is True
+    assert payload["feature_readiness"]["web_search"]["runtime_model_source"] == "project_env"
     assert payload["feature_readiness"]["web_search"]["degraded_by"] == [
         {
             "check_id": "grok_model_selection",
@@ -2149,7 +2160,7 @@ async def test_get_config_info_summary_exposes_runtime_override_machine_fields(m
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
     monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
-    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    (tmp_path / ".env.local").write_text("GROK_WEB_SEARCH_MODEL=project-model\n", encoding="utf-8")
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
             200,
@@ -2186,7 +2197,7 @@ async def test_get_config_info_recommendation_mentions_env_local_override_when_m
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
     monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
-    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    (tmp_path / ".env.local").write_text("GROK_WEB_SEARCH_MODEL=project-model\n", encoding="utf-8")
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
             200,
@@ -2197,7 +2208,7 @@ async def test_get_config_info_recommendation_mentions_env_local_override_when_m
 
     payload = await load_config_info()
 
-    assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
+    assert payload["GROK_WEB_SEARCH_MODEL_SOURCE"] == "project_env_local"
     assert any(".env.local" in item and "switch_model" in item for item in payload["doctor"]["recommendations"])
     detail = next(
         item for item in payload["doctor"]["recommendations_detail"] if item.get("check_id") == "grok_model_selection"
@@ -2472,7 +2483,7 @@ async def test_get_config_info_runtime_probe_fallback_recommendation_mentions_pr
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
     monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
-    (tmp_path / ".env.local").write_text("GROK_MODEL=grok-4.20-0309\n", encoding="utf-8")
+    (tmp_path / ".env.local").write_text("GROK_WEB_SEARCH_MODEL=grok-4.20-0309\n", encoding="utf-8")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
 
@@ -2512,7 +2523,7 @@ async def test_get_config_info_runtime_probe_fallback_recommendation_mentions_pr
         item for item in payload["doctor"]["recommendations_detail"] if item.get("check_id") == "grok_model_runtime_fallback"
     )
 
-    assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
+    assert payload["GROK_WEB_SEARCH_MODEL_SOURCE"] == "project_env_local"
     assert any(".env.local" in item and "switch_model" in item for item in payload["doctor"]["recommendations"])
     assert detail["runtime_model_source"] == "project_env_local"
 
@@ -3261,6 +3272,7 @@ async def test_web_search_runtime_fallback_accepts_localized_model_unavailable_m
         return ["grok-4.20-0309", "grok-4.20-fast"]
 
     monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.20-0309")
     monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
     monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
 
@@ -3380,6 +3392,7 @@ async def test_web_search_does_not_report_model_fallback_when_all_runtime_candid
         return ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
 
     monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.20-0309")
     monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
     monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
 
