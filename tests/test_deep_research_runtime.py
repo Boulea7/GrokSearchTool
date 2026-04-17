@@ -6075,7 +6075,7 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
 
     assert resumed["status"] == "queued"
     assert resumed["attempt_count"] == 2
-    assert completed["status"] == "failed"
+    assert completed["status"] == "completed"
     assert executed == ["first checkpoint", "second checkpoint"]
     assert runtime.store.get_job(response["job_id"]).finished_at
     assert runtime.store.read_artifact_text(response["job_id"], "final_report.md")
