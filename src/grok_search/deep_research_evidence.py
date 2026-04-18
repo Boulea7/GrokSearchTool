@@ -63,6 +63,167 @@ def initialize_section_banks(plan: DeepResearchPlan, *, updated_at: str = "") ->
     ]
 
 
+def initialize_section_banks_for_outline(
+    outline_sections: list[dict[str, Any]],
+    *,
+    updated_at: str = "",
+) -> list[dict[str, Any]]:
+    return [
+        DeepResearchSectionEvidenceBank(
+            section_id=str(section.get("section_id", "")).strip(),
+            last_updated_at=updated_at,
+        ).model_dump()
+        for section in outline_sections
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    ]
+
+
+def _entry_question_ids(entry: dict[str, Any]) -> list[str]:
+    return [
+        str(question_id).strip()
+        for question_id in (
+            list(entry.get("question_ids", []) or [])
+            + ([entry.get("question_id", "")] if entry.get("question_id") else [])
+        )
+        if str(question_id).strip()
+    ]
+
+
+def _section_question_ids(section: dict[str, Any]) -> list[str]:
+    return [
+        str(question_id).strip()
+        for question_id in (
+            (section.get("question_ids") or [])
+            if isinstance(section.get("question_ids"), list)
+            else [section.get("question_id", "")]
+        )
+        if str(question_id).strip()
+    ]
+
+
+def _materialized_section_ids(entry: dict[str, Any]) -> list[str]:
+    section_ids: list[str] = []
+    for claim_id in entry.get("materialized_claim_ids", []) or []:
+        normalized_claim_id = str(claim_id).strip()
+        if not normalized_claim_id or "-claim-" not in normalized_claim_id:
+            continue
+        section_id = normalized_claim_id.rsplit("-claim-", 1)[0].strip()
+        if section_id and section_id not in section_ids:
+            section_ids.append(section_id)
+    return section_ids
+
+
+def sync_section_banks_to_outline(
+    section_banks: list[dict[str, Any]],
+    *,
+    planned_outline: list[dict[str, Any]],
+    updated_at: str = "",
+) -> list[dict[str, Any]]:
+    banks_by_section = {
+        str(bank.get("section_id", "")).strip(): dict(bank)
+        for bank in section_banks
+        if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
+    }
+    ordered_bank_ids: list[str] = []
+    for section in planned_outline:
+        if not isinstance(section, dict):
+            continue
+        section_id = str(section.get("section_id", "")).strip()
+        if not section_id:
+            continue
+        if section_id not in banks_by_section:
+            banks_by_section[section_id] = DeepResearchSectionEvidenceBank(
+                section_id=section_id,
+                last_updated_at=updated_at,
+            ).model_dump()
+        ordered_bank_ids.append(section_id)
+    for bank in banks_by_section.values():
+        bank.setdefault("candidate_evidence_ids", [])
+        bank.setdefault("selected_evidence_ids", [])
+        bank.setdefault("rejected_evidence_ids", [])
+        bank.setdefault("candidate_packets", [])
+        bank.setdefault("selected_packets", [])
+        bank.setdefault("rejected_packets", [])
+        bank["last_updated_at"] = updated_at or bank.get("last_updated_at", "")
+    for section_id in sorted(banks_by_section):
+        if section_id not in ordered_bank_ids:
+            ordered_bank_ids.append(section_id)
+    return [
+        DeepResearchSectionEvidenceBank.model_validate(banks_by_section[section_id]).model_dump()
+        for section_id in ordered_bank_ids
+    ]
+
+
+def seed_section_banks_from_question_bindings(
+    section_banks: list[dict[str, Any]],
+    *,
+    planned_outline: list[dict[str, Any]],
+    ledger_entries: list[dict[str, Any]],
+    updated_at: str = "",
+) -> list[dict[str, Any]]:
+    seeded = sync_section_banks_to_outline(
+        section_banks,
+        planned_outline=planned_outline,
+        updated_at=updated_at,
+    )
+    banks_by_section = {
+        str(bank.get("section_id", "")).strip(): dict(bank)
+        for bank in seeded
+        if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
+    }
+
+    def _upsert_packet(packet_list: list[dict[str, Any]], packet: dict[str, Any]) -> None:
+        evidence_id = str(packet.get("evidence_id", "")).strip()
+        for index, existing in enumerate(packet_list):
+            if str(existing.get("evidence_id", "")).strip() == evidence_id:
+                packet_list[index] = packet
+                return
+        packet_list.append(packet)
+
+    for section in planned_outline:
+        if not isinstance(section, dict):
+            continue
+        section_id = str(section.get("section_id", "")).strip()
+        if not section_id or section_id not in banks_by_section:
+            continue
+        bank = banks_by_section[section_id]
+        section_question_ids = set(_section_question_ids(section))
+        if not section_question_ids or bank.get("selected_evidence_ids"):
+            continue
+        for entry in ledger_entries:
+            if not isinstance(entry, dict):
+                continue
+            evidence_id = str(entry.get("evidence_id", "")).strip()
+            if not evidence_id:
+                continue
+            if str(entry.get("disposition", "")).strip() == "rejected":
+                continue
+            entry_question_ids = set(_entry_question_ids(entry))
+            if not (section_question_ids & entry_question_ids):
+                continue
+            if evidence_id not in bank["candidate_evidence_ids"]:
+                bank["candidate_evidence_ids"].append(evidence_id)
+            if evidence_id not in bank["selected_evidence_ids"]:
+                bank["selected_evidence_ids"].append(evidence_id)
+            packet = _packet_for_section(entry, section_id=section_id)
+            _upsert_packet(bank["candidate_packets"], packet)
+            _upsert_packet(bank["selected_packets"], packet)
+        bank["last_updated_at"] = updated_at or bank.get("last_updated_at", "")
+
+    ordered_ids = [
+        str(section.get("section_id", "")).strip()
+        for section in planned_outline
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    ]
+    for section_id in sorted(banks_by_section):
+        if section_id not in ordered_ids:
+            ordered_ids.append(section_id)
+    return [
+        DeepResearchSectionEvidenceBank.model_validate(banks_by_section[section_id]).model_dump()
+        for section_id in ordered_ids
+    ]
+
+
 def _candidate_section_ids(plan: DeepResearchPlan, evidence: dict[str, Any]) -> list[str]:
     summary = _normalize_whitespace(str(evidence.get("summary") or evidence.get("detail") or ""))
     matches: list[str] = []
@@ -296,6 +457,7 @@ def update_section_banks(
         evidence_id = str(entry.get("evidence_id", "")).strip()
         if not evidence_id:
             continue
+        materialized_section_ids = _materialized_section_ids(entry)
         for section_id in entry.get("candidate_section_ids", []):
             bank = banks_by_section.get(section_id)
             if bank is None:
@@ -304,10 +466,18 @@ def update_section_banks(
             if evidence_id not in bank["candidate_evidence_ids"]:
                 bank["candidate_evidence_ids"].append(evidence_id)
             _upsert_packet(bank["candidate_packets"], packet)
+        selected_section_ids = []
         selected_section_id = str(entry.get("selected_section_id", "")).strip()
-        if selected_section_id and selected_section_id in banks_by_section:
-            bank = banks_by_section[selected_section_id]
-            packet = _packet_for_section(entry, section_id=selected_section_id)
+        if selected_section_id:
+            selected_section_ids.append(selected_section_id)
+        for section_id in materialized_section_ids:
+            if section_id not in selected_section_ids:
+                selected_section_ids.append(section_id)
+        for section_id in selected_section_ids:
+            bank = banks_by_section.get(section_id)
+            if bank is None:
+                continue
+            packet = _packet_for_section(entry, section_id=section_id)
             if evidence_id not in bank["selected_evidence_ids"]:
                 bank["selected_evidence_ids"].append(evidence_id)
             _upsert_packet(bank["selected_packets"], packet)

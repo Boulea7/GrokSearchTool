@@ -14,10 +14,12 @@ from .deep_research_evidence import (
     candidate_evidence_ids_by_section,
     evidence_source_ids,
     initialize_section_banks,
+    seed_section_banks_from_question_bindings,
     matched_unit_ids_by_section,
     merge_evidence_ledger,
     rejected_evidence_ids_by_section,
     selected_evidence_ids_by_section,
+    sync_section_banks_to_outline,
     update_section_banks,
 )
 from .deep_research_section_graph import initialize_section_graph, update_section_graph
@@ -5936,6 +5938,12 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         section_banks=section_banks,
         evidence_ledger=evidence_ledger,
     )
+    section_banks = seed_section_banks_from_question_bindings(
+        section_banks,
+        planned_outline=active_outline,
+        ledger_entries=evidence_ledger,
+        updated_at=utc_now_iso(),
+    )
     outline_versions = _append_outline_version_if_changed(
         outline_versions,
         sections=active_outline,
@@ -6027,6 +6035,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     evidence_ledger = _attach_materialized_claim_ids_to_evidence_ledger(
         evidence_ledger,
         citations["sections"],
+    )
+    section_banks = sync_section_banks_to_outline(
+        section_banks,
+        planned_outline=active_outline,
+        updated_at=utc_now_iso(),
     )
     section_banks = update_section_banks(
         section_banks,
@@ -7398,6 +7411,37 @@ def _build_verifier_diagnostics(
         for bank in section_banks or []
         if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
     }
+
+    def _section_bank_is_clean_official_docs(section_id: str) -> bool:
+        normalized_section_id = str(section_id).strip()
+        if not normalized_section_id:
+            return False
+        bank = section_bank_by_id.get(normalized_section_id, {})
+        selected_ids = [
+            str(evidence_id).strip()
+            for evidence_id in bank.get("selected_evidence_ids", []) or []
+            if str(evidence_id).strip() in evidence_by_id
+        ]
+        if not selected_ids:
+            return False
+        rejected_ids = [
+            str(evidence_id).strip()
+            for evidence_id in bank.get("rejected_evidence_ids", []) or []
+            if str(evidence_id).strip()
+        ]
+        if rejected_ids:
+            return False
+        selected_source_ids = {
+            str(source_id).strip()
+            for evidence_id in selected_ids
+            for source_id in evidence_by_id.get(evidence_id, {}).get("source_ids", [])
+            if str(source_id).strip()
+        }
+        return bool(selected_source_ids) and all(
+            source_id in source_registry and _source_looks_like_official_docs(source_registry[source_id])
+            for source_id in selected_source_ids
+        )
+
     integrity_counts = {
         "missing_evidence_items": 0,
         "mismatched_binding_source": 0,
@@ -7571,12 +7615,29 @@ def _build_verifier_diagnostics(
                 and bindings
                 and not any(bool(binding.get("source_backed")) for binding in bindings)
             ):
+                binding_section_ids = {
+                    str(binding.get("section_id", "")).strip()
+                    for binding in bindings
+                    if isinstance(binding, dict) and str(binding.get("section_id", "")).strip()
+                }
                 acceptable_official_section = (
-                    not section_is_rollup
-                    and not section_is_gap
-                    and bool(selected_evidence_ids)
-                    and not rejected_evidence_ids
-                    and selected_evidence_is_official_docs
+                    not section_is_gap
+                    and (
+                        (
+                            not section_is_rollup
+                            and bool(selected_evidence_ids)
+                            and not rejected_evidence_ids
+                            and selected_evidence_is_official_docs
+                        )
+                        or (
+                            section_is_rollup
+                            and bool(binding_section_ids)
+                            and all(
+                                _section_bank_is_clean_official_docs(bound_section_id)
+                                for bound_section_id in binding_section_ids
+                            )
+                        )
+                    )
                 )
                 if not acceptable_official_section:
                     if claim_id:
@@ -7838,14 +7899,41 @@ def _claim_support_details(claim: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _section_question_ids(section: dict[str, Any]) -> list[str]:
+    return [
+        str(question_id).strip()
+        for question_id in (
+            (section.get("question_ids") or [])
+            if isinstance(section.get("question_ids"), list)
+            else [section.get("question_id", "")]
+        )
+        if str(question_id).strip()
+    ]
+
+
 def _attach_materialized_claim_ids_to_evidence_ledger(
     ledger_entries: list[dict[str, Any]],
     sections: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     claim_ids_by_evidence_id: dict[str, list[str]] = {}
+    section_ids_by_evidence_id: dict[str, list[str]] = {}
+    question_ids_by_evidence_id: dict[str, list[str]] = {}
+    generic_section_ids: set[str] = set()
     for section in sections:
         if not isinstance(section, dict):
             continue
+        section_id = str(section.get("section_id", "")).strip()
+        section_title = str(section.get("title", "")).strip()
+        section_question_ids = _section_question_ids(section)
+        if (
+            section_id
+            and (
+                is_summary_section_title(section_title)
+                or is_key_findings_section_title(section_title)
+                or is_open_questions_section_title(section_title)
+            )
+        ):
+            generic_section_ids.add(section_id)
         for claim in section.get("claims", []) or []:
             if not isinstance(claim, dict):
                 continue
@@ -7859,6 +7947,15 @@ def _attach_materialized_claim_ids_to_evidence_ledger(
                 claim_ids_by_evidence_id.setdefault(normalized, [])
                 if claim_id not in claim_ids_by_evidence_id[normalized]:
                     claim_ids_by_evidence_id[normalized].append(claim_id)
+                if section_id:
+                    section_ids_by_evidence_id.setdefault(normalized, [])
+                    if section_id not in section_ids_by_evidence_id[normalized]:
+                        section_ids_by_evidence_id[normalized].append(section_id)
+                if section_question_ids:
+                    question_ids_by_evidence_id.setdefault(normalized, [])
+                    for question_id in section_question_ids:
+                        if question_id not in question_ids_by_evidence_id[normalized]:
+                            question_ids_by_evidence_id[normalized].append(question_id)
     hydrated: list[dict[str, Any]] = []
     for entry in ledger_entries:
         if not isinstance(entry, dict):
@@ -7866,6 +7963,50 @@ def _attach_materialized_claim_ids_to_evidence_ledger(
         normalized = dict(entry)
         evidence_id = str(normalized.get("evidence_id", "")).strip()
         normalized["materialized_claim_ids"] = claim_ids_by_evidence_id.get(evidence_id, [])
+        materialized_section_ids = section_ids_by_evidence_id.get(evidence_id, [])
+        candidate_section_ids = _dedupe_preserve_order(
+            [
+                str(section_id).strip()
+                for section_id in [
+                    *(normalized.get("candidate_section_ids", []) or []),
+                    *materialized_section_ids,
+                ]
+                if str(section_id).strip()
+            ]
+        )
+        normalized["candidate_section_ids"] = candidate_section_ids
+        normalized["question_ids"] = _dedupe_preserve_order(
+            [
+                str(question_id).strip()
+                for question_id in [
+                    *(normalized.get("question_ids", []) or []),
+                    normalized.get("question_id", ""),
+                    *(question_ids_by_evidence_id.get(evidence_id, []) or []),
+                ]
+                if str(question_id).strip()
+            ]
+        )
+        preferred_selected_section_id = str(normalized.get("selected_section_id", "")).strip()
+        if materialized_section_ids:
+            if preferred_selected_section_id not in materialized_section_ids:
+                concrete_materialized_section_ids = [
+                    section_id for section_id in materialized_section_ids if section_id not in generic_section_ids
+                ]
+                preferred_selected_section_id = (
+                    concrete_materialized_section_ids[0]
+                    if concrete_materialized_section_ids
+                    else materialized_section_ids[0]
+                )
+            normalized["selected_section_id"] = preferred_selected_section_id
+            normalized["decision_state"] = "selected"
+            normalized["disposition"] = "selected"
+            if not str(normalized.get("disposition_reason", "")).strip():
+                normalized["disposition_reason"] = "materialized_claim_binding"
+        normalized["rejected_section_ids"] = [
+            section_id
+            for section_id in normalized.get("rejected_section_ids", []) or []
+            if str(section_id).strip() and str(section_id).strip() != str(normalized.get("selected_section_id", "")).strip()
+        ]
         hydrated.append(normalized)
     return hydrated
 
