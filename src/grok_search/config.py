@@ -86,11 +86,59 @@ class Config:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._config_file = None
-            cls._instance._cached_model = None
-            cls._instance._project_env_cache = None
-            cls._instance._project_env_source_cache = None
-            cls._instance._project_env_layers_cache = None
+            cls._instance._cached_model_by_project_root = {}
+            cls._instance._project_env_cache_by_project_root = {}
+            cls._instance._project_env_source_cache_by_project_root = {}
+            cls._instance._project_env_layers_cache_by_project_root = {}
         return cls._instance
+
+    def _resolved_project_root(self) -> Path:
+        root = self._project_root()
+        if not isinstance(root, Path):
+            root = Path(root)
+        return root.resolve()
+
+    def _get_project_root_bucket_value(self, buckets: dict[Path, Any]) -> Any:
+        return buckets.get(self._resolved_project_root())
+
+    def _set_project_root_bucket_value(self, buckets: dict[Path, Any], value: Any) -> None:
+        bucket_key = self._resolved_project_root()
+        if value is None:
+            buckets.pop(bucket_key, None)
+            return
+        buckets[bucket_key] = value
+
+    @property
+    def _cached_model(self) -> str | None:
+        return self._get_project_root_bucket_value(self._cached_model_by_project_root)
+
+    @_cached_model.setter
+    def _cached_model(self, value: str | None) -> None:
+        self._set_project_root_bucket_value(self._cached_model_by_project_root, value)
+
+    @property
+    def _project_env_cache(self) -> dict[str, str] | None:
+        return self._get_project_root_bucket_value(self._project_env_cache_by_project_root)
+
+    @_project_env_cache.setter
+    def _project_env_cache(self, value: dict[str, str] | None) -> None:
+        self._set_project_root_bucket_value(self._project_env_cache_by_project_root, value)
+
+    @property
+    def _project_env_source_cache(self) -> dict[str, str] | None:
+        return self._get_project_root_bucket_value(self._project_env_source_cache_by_project_root)
+
+    @_project_env_source_cache.setter
+    def _project_env_source_cache(self, value: dict[str, str] | None) -> None:
+        self._set_project_root_bucket_value(self._project_env_source_cache_by_project_root, value)
+
+    @property
+    def _project_env_layers_cache(self) -> list[tuple[str, dict[str, str]]] | None:
+        return self._get_project_root_bucket_value(self._project_env_layers_cache_by_project_root)
+
+    @_project_env_layers_cache.setter
+    def _project_env_layers_cache(self, value: list[tuple[str, dict[str, str]]] | None) -> None:
+        self._set_project_root_bucket_value(self._project_env_layers_cache_by_project_root, value)
 
     def _project_root(self) -> Path:
         root = Path.cwd().resolve()
@@ -869,13 +917,13 @@ class Config:
         config_data = self._load_config_file()
         config_data["model"] = model
         self._save_config_file(config_data)
-        self._cached_model = None
+        self._cached_model_by_project_root.clear()
 
     def reset_runtime_state(self) -> None:
-        self._cached_model = None
-        self._project_env_cache = None
-        self._project_env_source_cache = None
-        self._project_env_layers_cache = None
+        self._cached_model_by_project_root.clear()
+        self._project_env_cache_by_project_root.clear()
+        self._project_env_source_cache_by_project_root.clear()
+        self._project_env_layers_cache_by_project_root.clear()
 
     @staticmethod
     def _mask_api_key(key: str) -> str:
