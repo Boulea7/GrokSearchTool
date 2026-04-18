@@ -157,6 +157,37 @@ def test_store_orders_checkpoints_by_monotonic_sequence_when_timestamps_match(mo
     assert second.checkpoint_seq == 2
 
 
+def test_store_retains_multiple_versions_for_same_checkpoint_key(monkeypatch, tmp_path):
+    store = make_store(tmp_path)
+    job = store.create_job(
+        query="Research checkpoint history",
+        request_fingerprint="fp-checkpoint-history",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    monkeypatch.setattr(deep_research_store_module, "utc_now_iso", lambda: "2026-04-17T00:00:00Z")
+
+    first = store.save_checkpoint(job.job_id, phase="researching", checkpoint_key="researching-u1", state={"n": 1})
+    second = store.save_checkpoint(job.job_id, phase="researching", checkpoint_key="researching-u1", state={"n": 2})
+    checkpoints = store.list_checkpoints(job.job_id)
+
+    assert [checkpoint.checkpoint_key for checkpoint in checkpoints] == ["researching-u1", "researching-u1"]
+    assert [checkpoint.checkpoint_seq for checkpoint in checkpoints] == [1, 2]
+    assert checkpoints[0].state == {"n": 1}
+    assert checkpoints[1].state == {"n": 2}
+    assert store.get_checkpoint(job.job_id, "researching-u1") == second
+    assert first.checkpoint_seq == 1
+    assert second.checkpoint_seq == 2
+
+
 def test_store_reuses_active_or_recent_job_by_request_fingerprint(tmp_path):
     store = make_store(tmp_path)
     active = store.create_job(

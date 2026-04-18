@@ -122,15 +122,6 @@ class DeepResearchStore:
                     PRIMARY KEY (job_id, seq)
                 );
 
-                CREATE TABLE IF NOT EXISTS job_checkpoints (
-                    job_id TEXT NOT NULL,
-                    checkpoint_key TEXT NOT NULL,
-                    phase TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    state_json TEXT NOT NULL,
-                    PRIMARY KEY (job_id, checkpoint_key)
-                );
-
                 CREATE TABLE IF NOT EXISTS job_artifacts (
                     job_id TEXT NOT NULL,
                     kind TEXT NOT NULL,
@@ -143,36 +134,96 @@ class DeepResearchStore:
                 );
                 """
             )
-            checkpoint_columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(job_checkpoints)").fetchall()
-            }
-            if "checkpoint_seq" not in checkpoint_columns:
-                connection.execute(
-                    "ALTER TABLE job_checkpoints ADD COLUMN checkpoint_seq INTEGER NOT NULL DEFAULT 0"
+            checkpoint_table = connection.execute(
+                """
+                SELECT sql
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'job_checkpoints'
+                """
+            ).fetchone()
+            needs_checkpoint_migration = False
+            if checkpoint_table is not None:
+                checkpoint_columns = connection.execute("PRAGMA table_info(job_checkpoints)").fetchall()
+                primary_key_columns = [
+                    str(row["name"])
+                    for row in sorted(checkpoint_columns, key=lambda row: int(row["pk"] or 0))
+                    if int(row["pk"] or 0) > 0
+                ]
+                needs_checkpoint_migration = primary_key_columns != ["job_id", "checkpoint_seq"]
+            if needs_checkpoint_migration:
+                connection.execute("ALTER TABLE job_checkpoints RENAME TO job_checkpoints_legacy")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS job_checkpoints (
+                    job_id TEXT NOT NULL,
+                    checkpoint_key TEXT NOT NULL,
+                    checkpoint_seq INTEGER NOT NULL,
+                    phase TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    state_json TEXT NOT NULL,
+                    PRIMARY KEY (job_id, checkpoint_seq)
                 )
+                """
+            )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_job_checkpoints_seq
                 ON job_checkpoints(job_id, checkpoint_seq DESC)
                 """
             )
-            checkpoint_rows = connection.execute(
+            connection.execute(
                 """
-                SELECT rowid, job_id
-                FROM job_checkpoints
-                ORDER BY created_at ASC, rowid ASC
+                CREATE INDEX IF NOT EXISTS idx_job_checkpoints_key
+                ON job_checkpoints(job_id, checkpoint_key, checkpoint_seq DESC)
                 """
-            ).fetchall()
-            if checkpoint_rows:
+            )
+            legacy_table = connection.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'job_checkpoints_legacy'
+                """
+            ).fetchone()
+            if legacy_table is not None:
+                legacy_columns = {
+                    str(row["name"])
+                    for row in connection.execute("PRAGMA table_info(job_checkpoints_legacy)").fetchall()
+                }
+                order_expr = (
+                    "COALESCE(checkpoint_seq, 0) ASC, created_at ASC, rowid ASC"
+                    if "checkpoint_seq" in legacy_columns
+                    else "created_at ASC, rowid ASC"
+                )
+                legacy_rows = connection.execute(
+                    f"""
+                    SELECT rowid, *
+                    FROM job_checkpoints_legacy
+                    ORDER BY {order_expr}
+                    """
+                ).fetchall()
                 next_seq_by_job: dict[str, int] = {}
-                for row in checkpoint_rows:
+                for row in legacy_rows:
                     job_id = str(row["job_id"])
-                    next_seq_by_job[job_id] = next_seq_by_job.get(job_id, 0) + 1
+                    checkpoint_seq = int(row["checkpoint_seq"] or 0) if "checkpoint_seq" in legacy_columns else 0
+                    if checkpoint_seq <= 0:
+                        checkpoint_seq = next_seq_by_job.get(job_id, 0) + 1
+                    next_seq_by_job[job_id] = max(next_seq_by_job.get(job_id, 0), checkpoint_seq)
                     connection.execute(
-                        "UPDATE job_checkpoints SET checkpoint_seq = ? WHERE rowid = ?",
-                        (next_seq_by_job[job_id], row["rowid"]),
+                        """
+                        INSERT INTO job_checkpoints (
+                            job_id, checkpoint_key, checkpoint_seq, phase, created_at, state_json
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            job_id,
+                            row["checkpoint_key"],
+                            checkpoint_seq,
+                            row["phase"],
+                            row["created_at"],
+                            row["state_json"],
+                        ),
                     )
+                connection.execute("DROP TABLE job_checkpoints_legacy")
 
     def create_job(
         self,
@@ -371,7 +422,7 @@ class DeepResearchStore:
             )
             connection.execute(
                 """
-                INSERT OR REPLACE INTO job_checkpoints (
+                INSERT INTO job_checkpoints (
                     job_id, checkpoint_key, checkpoint_seq, phase, created_at, state_json
                 )
                 VALUES (?, ?, ?, ?, ?, ?)

@@ -3062,6 +3062,75 @@ async def test_checkpoint_fallback_records_explicit_event(monkeypatch, tmp_path)
     events = await runtime.events(response["job_id"])
 
     assert any(event["type"] == "checkpoint_fallback" for event in events["events"])
+    fallback_event = next(event for event in events["events"] if event["type"] == "checkpoint_fallback")
+    assert fallback_event["data"]["invalid_checkpoint_keys"] == ["researching-bad"]
+    assert fallback_event["data"]["invalid_checkpoints"] == [
+        {
+            "checkpoint_key": "researching-bad",
+            "checkpoint_seq": 3,
+            "reason": "missing_runtime_state",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_fallback_uses_previous_version_of_same_checkpoint_key(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def fake_search(query):
+        return ("Recovered from previous checkpoint version.", [{"url": "https://example.com/recovered", "title": "Recovered"}])
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", fake_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query="Fallback same checkpoint key", force_new=True, schedule=False)
+    plan = response["plan"]
+    runtime.store.update_job(
+        response["job_id"],
+        status="interrupted",
+        phase="researching",
+        current_checkpoint="researching-u1",
+    )
+    first = runtime.store.save_checkpoint(
+        response["job_id"],
+        phase="researching",
+        checkpoint_key="researching-u1",
+        state={
+            "completed_unit_ids": [],
+            "unit_results": {},
+            "sources": [],
+            "evidence_items": [],
+            "sections": [],
+            "plan": plan,
+        },
+    )
+    second = runtime.store.save_checkpoint(
+        response["job_id"],
+        phase="researching",
+        checkpoint_key="researching-u1",
+        state={"plan": {"query": "broken"}},
+    )
+
+    await runtime.resume(response["job_id"], schedule=False)
+    await runtime.run_job(response["job_id"])
+    events = await runtime.events(response["job_id"])
+
+    fallback_event = next(event for event in events["events"] if event["type"] == "checkpoint_fallback")
+
+    assert first.checkpoint_seq < second.checkpoint_seq
+    assert fallback_event["data"]["fallback_from"] == "researching-u1"
+    assert fallback_event["data"]["fallback_to"] == "researching-u1"
+    assert fallback_event["data"]["invalid_checkpoint_keys"] == ["researching-u1"]
+    assert fallback_event["data"]["invalid_checkpoints"] == [
+        {
+            "checkpoint_key": "researching-u1",
+            "checkpoint_seq": second.checkpoint_seq,
+            "reason": "missing_runtime_state",
+        }
+    ]
 
 
 @pytest.mark.asyncio
