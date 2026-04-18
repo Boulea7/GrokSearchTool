@@ -143,7 +143,13 @@ def _event_attempt_count(event: dict[str, Any]) -> int | None:
         return None
 
 
-def _watch_attach_after_seq(payload: dict[str, Any], events: list[dict[str, Any]]) -> int:
+async def _resolve_watch_attach_after_seq(
+    runtime: DeepResearchRuntime,
+    job_id: str,
+    payload: dict[str, Any],
+    *,
+    page_limit: int = 100,
+) -> int:
     attempts = payload.get("attempt_count")
     continued_from = _summary_value(payload.get("continued_from_job_id"))
     try:
@@ -153,16 +159,32 @@ def _watch_attach_after_seq(payload: dict[str, Any], events: list[dict[str, Any]
     if numeric_attempts <= 1 and continued_from == "-":
         return 0
 
+    after_seq = 0
     fallback_after_seq = 0
-    for event in reversed(events):
-        attempt_count = _event_attempt_count(event)
-        if attempt_count != numeric_attempts:
-            continue
-        event_type = str(event.get("type", ""))
-        if event_type == "job_resumed":
-            return max(0, int(event.get("seq", 0)) - 1)
-        if event_type in {"job_created", "phase_started", "checkpoint_restored"} and fallback_after_seq == 0:
-            fallback_after_seq = max(0, int(event.get("seq", 0)) - 1)
+    while True:
+        events_payload = await runtime.events(job_id, after_seq=after_seq, limit=page_limit)
+        events = events_payload.get("events", [])
+        if not events:
+            return fallback_after_seq
+
+        for event in events:
+            attempt_count = _event_attempt_count(event)
+            if attempt_count != numeric_attempts:
+                continue
+            event_type = str(event.get("type", ""))
+            if event_type == "job_resumed":
+                return max(0, int(event.get("seq", 0)) - 1)
+            if event_type in {"job_created", "phase_started", "checkpoint_restored"} and fallback_after_seq == 0:
+                fallback_after_seq = max(0, int(event.get("seq", 0)) - 1)
+
+        next_after_seq = events_payload.get("next_after_seq", after_seq)
+        try:
+            normalized_next_after_seq = int(next_after_seq)
+        except (TypeError, ValueError):
+            return fallback_after_seq
+        if normalized_next_after_seq <= after_seq:
+            return fallback_after_seq
+        after_seq = normalized_next_after_seq
     return fallback_after_seq
 
 
@@ -227,9 +249,7 @@ async def _watch_job(runtime: DeepResearchRuntime, job_id: str, *, interval_seco
             existing_state_message = _watch_existing_state_message(status, fallback_job_id=job_id)
             if existing_state_message:
                 print(existing_state_message, file=sys.stderr)
-                history = await runtime.events(job_id, after_seq=0, limit=1000)
-                attach_after_seq = _watch_attach_after_seq(status, history.get("events", []))
-                last_seq = attach_after_seq
+                last_seq = await _resolve_watch_attach_after_seq(runtime, job_id, status)
             printed_existing_state_message = True
         events_payload = await runtime.events(job_id, after_seq=last_seq, limit=100)
         for event in events_payload["events"]:
