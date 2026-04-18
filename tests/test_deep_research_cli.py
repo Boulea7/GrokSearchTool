@@ -2390,6 +2390,24 @@ def test_cli_events_follow_returns_130_on_keyboard_interrupt_without_canceling(m
     assert_no_traceback(captured.err)
 
 
+def test_cli_main_returns_130_when_asyncio_run_raises_keyboard_interrupt(monkeypatch, capsys):
+    def raising_asyncio_run(coro):
+        try:
+            coro.close()
+        except Exception:
+            pass
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(deep_research_cli.asyncio, "run", raising_asyncio_run)
+
+    exit_code = deep_research_cli.main(["watch", "job-watch-1"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 130
+    assert captured.out == ""
+    assert_no_traceback(captured.err)
+
+
 def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
