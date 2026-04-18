@@ -1871,14 +1871,18 @@ async def web_map(
     max_breadth: Annotated[int, Field(description="Maximum number of links to follow per page.", ge=1, le=500)] = 20,
     limit: Annotated[int, Field(description="Total number of links to process before stopping.", ge=1, le=500)] = 50,
     timeout: Annotated[int, Field(description="Maximum time in seconds for the operation.", ge=10, le=150)] = 150,
+    response_format: Annotated[Literal["json_string", "object"], "Response format. Use 'object' for a structured return value; default 'json_string' preserves the legacy contract."] = "json_string",
     ctx: Context = None,
-) -> str:
+) -> Any:
     preflight = await _preflight_public_target_url(url)
     if preflight.status != "allow":
-        return f"映射失败: {preflight.message}"
+        return _render_web_map_response(
+            f"映射失败: {preflight.message}",
+            response_format=response_format,
+        )
 
     result = await _call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
-    return result
+    return _render_web_map_response(result, response_format=response_format)
 
 
 def _build_doctor_check(
@@ -2937,6 +2941,32 @@ def _render_config_info_payload(config_info: dict, *, detail: str) -> dict:
     }
 
 
+def _normalize_response_format(response_format: str) -> str:
+    normalized = (response_format or "json_string").strip().lower() or "json_string"
+    if normalized in {"json_string", "object"}:
+        return normalized
+    return "json_string"
+
+
+def _render_json_string_or_object(payload: dict[str, Any], *, response_format: str) -> str | dict[str, Any]:
+    if _normalize_response_format(response_format) == "object":
+        return payload
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _render_web_map_response(result: str, *, response_format: str) -> str | dict[str, Any] | list[Any]:
+    if _normalize_response_format(response_format) != "object":
+        return result
+
+    try:
+        return json.loads(result)
+    except json.JSONDecodeError:
+        return {
+            "status": "error",
+            "message": result,
+        }
+
+
 @mcp.tool(
     name="get_config_info",
     output_schema=None,
@@ -3473,10 +3503,9 @@ async def get_config_info(
     meta={"version": "1.3.0", "author": "guda.studio"},
 )
 async def switch_model(
-    model: Annotated[str, "Model ID to switch to (e.g., 'grok-4-fast', 'grok-2-latest', 'grok-vision-beta')."]
-) -> str:
-    import json
-
+    model: Annotated[str, "Model ID to switch to (e.g., 'grok-4-fast', 'grok-2-latest', 'grok-vision-beta')."],
+    response_format: Annotated[Literal["json_string", "object"], "Response format. Use 'object' for a structured return value; default 'json_string' preserves the legacy contract."] = "json_string",
+) -> str | dict[str, Any]:
     try:
         previous_model = config.grok_model
         previous_model_source = config.grok_model_source
@@ -3505,20 +3534,20 @@ async def switch_model(
             "config_file": str(config.config_file)
         }
 
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        return _render_json_string_or_object(result, response_format=response_format)
 
     except ValueError as e:
         result = {
             "status": "失败",
             "message": f"切换模型失败: {str(e)}"
         }
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        return _render_json_string_or_object(result, response_format=response_format)
     except Exception as e:
         result = {
             "status": "失败",
             "message": f"未知错误: {str(e)}"
         }
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        return _render_json_string_or_object(result, response_format=response_format)
 
 
 @mcp.tool(
@@ -3540,18 +3569,17 @@ async def switch_model(
     meta={"version": "1.3.0", "author": "guda.studio"},
 )
 async def toggle_builtin_tools(
-    action: Annotated[str, "Action to perform: 'on' (block built-in), 'off' (allow built-in), or 'status' (check current state)."] = "status"
-) -> str:
-    import json
-
-    def build_error(message: str, *, file_path: str = "", error_code: str) -> str:
-        return json.dumps({
+    action: Annotated[str, "Action to perform: 'on' (block built-in), 'off' (allow built-in), or 'status' (check current state)."] = "status",
+    response_format: Annotated[Literal["json_string", "object"], "Response format. Use 'object' for a structured return value; default 'json_string' preserves the legacy contract."] = "json_string",
+) -> str | dict[str, Any]:
+    def build_error(message: str, *, file_path: str = "", error_code: str) -> str | dict[str, Any]:
+        return _render_json_string_or_object({
             "blocked": False,
             "deny_list": [],
             "file": file_path,
             "message": message,
             "error": error_code,
-        }, ensure_ascii=False, indent=2)
+        }, response_format=response_format)
 
     root = _find_git_root()
     if root is None:
@@ -3642,13 +3670,13 @@ async def toggle_builtin_tools(
     else:
         msg = f"官方工具当前{'已禁用' if blocked else '已启用'}"
 
-    return json.dumps({
+    return _render_json_string_or_object({
         "blocked": blocked,
         "deny_list": deny,
         "file": str(settings_path),
         "message": msg,
         "error": None,
-    }, ensure_ascii=False, indent=2)
+    }, response_format=response_format)
 
 
 def _get_planning_sub_queries(session) -> list[dict]:

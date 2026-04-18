@@ -479,6 +479,17 @@ async def test_web_map_tool_schema_does_not_expose_ctx_parameter():
 
 
 @pytest.mark.asyncio
+async def test_legacy_contract_migration_tools_expose_response_format_parameter():
+    web_map_tool = await server.mcp.get_tool("web_map")
+    switch_model_tool = await server.mcp.get_tool("switch_model")
+    toggle_builtin_tools_tool = await server.mcp.get_tool("toggle_builtin_tools")
+
+    assert "response_format" in web_map_tool.parameters["properties"]
+    assert "response_format" in switch_model_tool.parameters["properties"]
+    assert "response_format" in toggle_builtin_tools_tool.parameters["properties"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_surfaces_http_redirect(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
@@ -4987,8 +4998,10 @@ async def test_switch_model_persists_to_temp_config_file(monkeypatch, tmp_path):
     monkeypatch.setattr(server.config, "_config_file", config_file, raising=False)
     server.config.reset_runtime_state()
 
-    payload = json.loads(await server.switch_model("grok-4.1-mini"))
+    raw_payload = await server.switch_model("grok-4.1-mini")
+    payload = json.loads(raw_payload)
 
+    assert isinstance(raw_payload, str)
     assert payload["status"] == "成功"
     assert payload["current_model"] == "grok-4.1-mini"
     assert payload["config_file"] == str(config_file)
@@ -5008,6 +5021,21 @@ async def test_switch_model_tool_keeps_env_model_active_in_current_process(monke
     assert payload["previous_model"] == "env-model"
     assert payload["current_model"] == "env-model"
     assert json.loads(config_file.read_text(encoding="utf-8"))["model"] == "persisted-model"
+
+
+@pytest.mark.asyncio
+async def test_switch_model_object_response_format_returns_structured_payload(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr(server.config, "_config_file", config_file, raising=False)
+    server.config.reset_runtime_state()
+
+    payload = await server.switch_model("grok-4.1-mini", response_format="object")
+
+    assert payload["status"] == "成功"
+    assert payload["current_model"] == "grok-4.1-mini"
+    assert payload["config_file"] == str(config_file)
+    assert json.loads(config_file.read_text(encoding="utf-8"))["model"] == "grok-4.1-mini"
 
 
 @pytest.mark.asyncio
@@ -5063,16 +5091,31 @@ async def test_toggle_builtin_tools_updates_project_settings_file(monkeypatch, t
     git_root.mkdir()
     monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
 
-    status = json.loads(await server.toggle_builtin_tools("status"))
+    raw_status = await server.toggle_builtin_tools("status")
+    status = json.loads(raw_status)
     enabled = json.loads(await server.toggle_builtin_tools("on"))
     disabled = json.loads(await server.toggle_builtin_tools("off"))
 
+    assert isinstance(raw_status, str)
     assert status["blocked"] is False
     assert enabled["blocked"] is True
     assert sorted(enabled["deny_list"]) == ["WebFetch", "WebSearch"]
     assert disabled["blocked"] is False
     assert disabled["deny_list"] == []
     assert (git_root / ".claude" / "settings.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_toggle_builtin_tools_object_response_format_returns_structured_payload(monkeypatch, tmp_path):
+    git_root = tmp_path / "repo"
+    git_root.mkdir()
+    monkeypatch.setattr(server, "_find_git_root", lambda start=None: git_root)
+
+    payload = await server.toggle_builtin_tools("on", response_format="object")
+
+    assert payload["blocked"] is True
+    assert sorted(payload["deny_list"]) == ["WebFetch", "WebSearch"]
+    assert payload["file"] == str(git_root / ".claude" / "settings.json")
 
 
 @pytest.mark.asyncio
@@ -5489,6 +5532,27 @@ async def test_web_map_does_not_consult_local_dns_for_public_hostname_paths(monk
 
 
 @pytest.mark.asyncio
+async def test_web_map_object_response_format_returns_structured_payload(monkeypatch):
+    calls = {"map": 0}
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        calls["map"] += 1
+        return json.dumps({"base_url": url, "results": ["https://public.example.com/path"]}, ensure_ascii=False)
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+
+    payload = await server.web_map("https://public.example.com/path", response_format="object")
+
+    assert payload == {
+        "base_url": "https://public.example.com/path",
+        "results": ["https://public.example.com/path"],
+    }
+    assert calls == {"map": 1}
+
+
+@pytest.mark.asyncio
 async def test_web_map_rejects_invalid_scheme_before_provider_calls(monkeypatch):
     calls = {"map": 0}
 
@@ -5504,6 +5568,28 @@ async def test_web_map_rejects_invalid_scheme_before_provider_calls(monkeypatch)
     result = await server.web_map("file:///tmp/secret.txt")
 
     assert "仅支持 http/https URL" in result
+    assert calls == {"map": 0}
+
+
+@pytest.mark.asyncio
+async def test_web_map_object_response_format_wraps_legacy_error_string(monkeypatch):
+    calls = {"map": 0}
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        calls["map"] += 1
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+
+    payload = await server.web_map("file:///tmp/secret.txt", response_format="object")
+
+    assert payload == {
+        "status": "error",
+        "message": "映射失败: 仅支持 http/https URL",
+    }
     assert calls == {"map": 0}
 
 

@@ -88,6 +88,8 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `Config.get_config_info()` returns only the base config snapshot; the MCP tool `get_config_info` keeps that snapshot and adds `connection_test`, `doctor`, `feature_readiness`, and minimal real `search/fetch` probes
 - `get_config_info` now also supports additive `detail=full|summary` output levels; `full` remains the default and preserves the current payload shape
 - `get_config_info` and `plan_*` now return structured objects directly rather than JSON strings; callers should not apply an extra JSON decode layer
+- `web_map`, `switch_model`, and `toggle_builtin_tools` keep their legacy JSON-string default contract, but now support additive `response_format=object` for object-first callers
+- for `web_map`, `response_format=object` decodes the legacy JSON success payload into an object and wraps legacy plain-text failures as `{status: "error", message: ...}`
 - `detail=summary` is currently a compact projection of the same diagnostic run, not a separate lightweight execution path
 - `connection_test` reflects `/models` reachability only; use `doctor` and `feature_readiness` to judge runtime readiness
 - `grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage and runtime will preselect a better Grok candidate before the real request
