@@ -6,6 +6,8 @@ import pytest
 import grok_search.logger as logger_module
 from grok_search.logger import log_info, log_warning
 
+_INITIAL_HANDLER_TYPES = tuple(type(handler) for handler in logging.getLogger("grok_search").handlers)
+
 
 class DummyContext:
     def __init__(self):
@@ -114,4 +116,4 @@ def test_logger_falls_back_to_null_handler_when_file_handler_fails(monkeypatch):
 def test_logger_tests_leave_global_handlers_clean():
     base_logger = logging.getLogger("grok_search")
 
-    assert not any(isinstance(handler, logging.NullHandler) for handler in base_logger.handlers)
+    assert tuple(type(handler) for handler in base_logger.handlers) == _INITIAL_HANDLER_TYPES

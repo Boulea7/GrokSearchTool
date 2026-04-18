@@ -11350,11 +11350,18 @@ def test_build_section_citations_does_not_let_executive_summary_steal_specific_s
 
     assert sections_by_id["resume-semantics"]["claims"]
     assert sections_by_id["restart-trade-offs"]["claims"]
-    assert "Resume continues from the last durable checkpoint." in sections_by_id["resume-semantics"]["claims"][0]["text"]
-    assert "Restart reloads work from a fresh starting point." in sections_by_id["restart-trade-offs"]["claims"][0]["text"]
+    assert sections_by_id["resume-semantics"]["claims"][0]["text"].startswith(
+        "Resume continues from the last durable checkpoint"
+    )
+    assert sections_by_id["restart-trade-offs"]["claims"][0]["text"].startswith(
+        "Restart reloads work from a fresh starting point"
+    )
     assert sections_by_id["resume-semantics"]["source_ids"] == ["R1"]
     assert sections_by_id["resume-semantics"]["evidence_ids"] == ["evidence-resume"]
     assert sections_by_id["resume-semantics"]["claims"][0]["source_ids"] == ["R1"]
+    assert sections_by_id["restart-trade-offs"]["source_ids"] == ["R2"]
+    assert sections_by_id["restart-trade-offs"]["evidence_ids"] == ["evidence-restart"]
+    assert sections_by_id["restart-trade-offs"]["claims"][0]["source_ids"] == ["R2"]
 
 
 def test_build_section_citations_prefers_selected_evidence_from_section_banks():
