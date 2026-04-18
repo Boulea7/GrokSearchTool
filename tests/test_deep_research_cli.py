@@ -2432,13 +2432,58 @@ def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, t
     cancel_payload = json.loads(cancel_captured.out)
 
     assert exit_code == 0
-    assert cancel_payload == {
-        "job_id": job.job_id,
-        "cancel_requested": True,
-        "status": "canceled",
-    }
+    assert cancel_payload["job_id"] == job.job_id
+    assert cancel_payload["status"] == "canceled"
+    assert cancel_payload["cancel_requested"] is True
+    assert cancel_payload["phase"] == "researching"
+    assert cancel_payload["current_checkpoint"] == "researching"
+    assert cancel_payload["attempt_count"] == 3
     assert summary_lines(cancel_captured.err) == [
         f"summary: job={job.job_id} status=canceled phase=researching progress=0.0% checkpoint=researching attempts=3 cancel_requested=true continued_from=seed-job resolved_batch=- artifact_fallback=false"
+    ]
+
+
+def test_cli_cancel_prints_full_job_payload(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="CLI running cancel payload",
+        request_fingerprint="fp-cli-running-cancel-payload",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="researching-u1",
+        attempt_count=2,
+        progress_pct=40.0,
+    )
+
+    exit_code = deep_research_cli.main(["cancel", job.job_id])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["job_id"] == job.job_id
+    assert payload["status"] == "running"
+    assert payload["phase"] == "researching"
+    assert payload["current_checkpoint"] == "researching-u1"
+    assert payload["attempt_count"] == 2
+    assert payload["cancel_requested"] is True
+    assert payload["artifact_kinds"] == []
+    assert payload["planner_fallback_used"] is False
+    assert payload["runtime_warnings"] == []
+    assert payload["constraint_violations"] == []
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} status=running phase=researching progress=40.0% checkpoint=researching-u1 attempts=2 cancel_requested=true continued_from=- resolved_batch=- artifact_fallback=false"
     ]
 
 

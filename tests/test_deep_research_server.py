@@ -921,6 +921,45 @@ async def test_deep_research_cancel_updates_job_state(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_deep_research_cancel_returns_full_status_shape_for_running_job(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    job = runtime.store.create_job(
+        query="Server running cancel payload",
+        request_fingerprint="fp-server-running-cancel-payload",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="researching-u1",
+        attempt_count=2,
+        progress_pct=40.0,
+    )
+
+    canceled = await server.deep_research_cancel(job.job_id)
+
+    assert canceled["job_id"] == job.job_id
+    assert canceled["status"] == "running"
+    assert canceled["phase"] == "researching"
+    assert canceled["current_checkpoint"] == "researching-u1"
+    assert canceled["attempt_count"] == 2
+    assert canceled["cancel_requested"] is True
+    assert canceled["artifact_kinds"] == []
+    assert canceled["planner_fallback_used"] is False
+    assert canceled["runtime_warnings"] == []
+    assert canceled["constraint_violations"] == []
+
+
+@pytest.mark.asyncio
 async def test_deep_research_events_after_seq_matches_round21_stale_worker_reconnect_fixture(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path, complete_runner)
     monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)

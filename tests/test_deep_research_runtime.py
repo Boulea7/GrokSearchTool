@@ -7670,6 +7670,45 @@ async def test_cancel_completed_job_is_noop_without_new_cancel_event(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cancel_running_job_returns_full_job_payload(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Running cancel payload",
+        request_fingerprint="fp-running-cancel-payload",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="researching-u1",
+        attempt_count=2,
+        progress_pct=35.0,
+    )
+
+    canceled = await runtime.cancel(job.job_id)
+
+    assert canceled["job_id"] == job.job_id
+    assert canceled["status"] == "running"
+    assert canceled["phase"] == "researching"
+    assert canceled["current_checkpoint"] == "researching-u1"
+    assert canceled["attempt_count"] == 2
+    assert canceled["progress_pct"] == 35.0
+    assert canceled["cancel_requested"] is True
+    assert canceled["artifact_kinds"] == []
+    assert canceled["planner_fallback_used"] is False
+    assert canceled["runtime_warnings"] == []
+    assert canceled["constraint_violations"] == []
+
+
+@pytest.mark.asyncio
 async def test_continuation_uses_citations_registry_when_sources_artifact_missing(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
