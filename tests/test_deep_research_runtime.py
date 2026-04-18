@@ -25,7 +25,7 @@ from grok_search.deep_research_synthesis import build_synthesis_outline
 from grok_search.deep_research_section_graph import initialize_section_graph, update_section_graph
 import grok_search.deep_research_runtime as deep_research_runtime_module
 from grok_search.providers.grok import GrokSearchProvider
-from grok_search.deep_research_types import DeepResearchContinuationState, DeepResearchPlan, utc_now_iso
+from grok_search.deep_research_types import DeepResearchContinuationState, DeepResearchEvidenceItem, DeepResearchPlan, utc_now_iso
 
 
 _SEEDED_BATCH_ID_PLACEHOLDER = "$seeded_batch_id"
@@ -716,6 +716,75 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
         "batch_id": persisted[0]["metadata"]["batch_id"],
         "report_payload": report_payload,
     }
+
+
+def seed_round26_worker_restart_dispatch_runtime_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round26_worker_restart_dispatch_runtime.json")
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-round26-worker-restart-dispatch-runtime",
+        status=snapshot["resume_run"]["status"],
+        phase=snapshot["resume_run"]["phase"],
+        effort="deep",
+        context="",
+        include_domains=["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=1,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=snapshot["resume_run"]["attempt_count"],
+        current_checkpoint=snapshot["resume_run"]["current_checkpoint"],
+        finished_at=utc_now_iso(),
+        last_error=snapshot["resume_run"]["last_error"],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "query": snapshot["query"],
+                "include_domains": ["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+                "exclude_domains": [],
+                "continuation": {"mode": "fresh"},
+                "brief": {"objective": snapshot["query"]},
+                "planner_metadata": {"planner": "probe", "used_fallback": False},
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "planner_trace.json",
+        json.dumps({"provider_name": "probe", "fallback_used": False}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "outline_state.json",
+        json.dumps({"version": 1, "root_section_ids": [], "nodes": []}),
+        "application/json",
+    )
+    runtime.write_artifact(job.job_id, "evidence_ledger.json", "[]", "application/json")
+    runtime.write_artifact(job.job_id, "section_banks.json", "[]", "application/json")
+    runtime.write_artifact(
+        job.job_id,
+        "partial_report.md",
+        "# Partial Report\n\nResume attempt in progress.\n",
+        "text/markdown",
+    )
+    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_4"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event["type"],
+            phase=event["phase"],
+            message=event.get("message") or event["type"],
+            data=event.get("data") or {},
+        )
+    return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot}
 
 
 @pytest.mark.asyncio
@@ -7010,6 +7079,56 @@ async def test_round24_worker_restart_status_and_result_match_fixture(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_round26_worker_restart_dispatch_runtime_events_after_seq_match_fixture(tmp_path):
+    runtime = build_runtime(tmp_path)
+    seeded = seed_round26_worker_restart_dispatch_runtime_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    resumed_window = await runtime.events(
+        job.job_id,
+        after_seq=snapshot["resume_window"]["after_seq"],
+        limit=20,
+    )
+
+    assert resumed_window["next_after_seq"] == snapshot["resume_window"]["next_after_seq"]
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in resumed_window["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["resume_events_after_seq_4"]
+    ]
+    assert resumed_window["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
+    assert resumed_window["events"][1]["type"] == "checkpoint_restored"
+
+
+@pytest.mark.asyncio
+async def test_round26_worker_restart_dispatch_runtime_status_and_result_match_fixture(tmp_path):
+    runtime = build_runtime(tmp_path)
+    seeded = seed_round26_worker_restart_dispatch_runtime_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+
+    assert status["status"] == snapshot["resume_run"]["status"]
+    assert status["phase"] == snapshot["resume_run"]["phase"]
+    assert status["attempt_count"] == snapshot["resume_run"]["attempt_count"]
+    assert status["current_checkpoint"] == snapshot["resume_run"]["current_checkpoint"]
+    assert status["current_checkpoint_kind"] == snapshot["resume_run"]["current_checkpoint_kind"]
+    assert status["last_error"] == snapshot["resume_run"]["last_error"]
+    assert result["status"] == snapshot["resume_run"]["status"]
+    assert result["phase"] == snapshot["resume_run"]["phase"]
+    assert result["partial_report"].startswith("# Partial Report")
+    assert result["final_report"] is None
+    assert result["sources"] is None
+    assert result["report"] is None
+    assert_fixture_public_surface(snapshot, status=status, result=result, seeded_batch_id="")
+
+
+@pytest.mark.asyncio
 async def test_resume_keeps_distinct_dispatch_checkpoint_identities_across_attempts(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -10382,6 +10501,184 @@ def test_verifier_flags_claim_outside_selected_bank_as_soft_packet_reason():
     assert "selected_evidence_unused" in release_gate["soft_reason_codes"]
 
 
+def test_verifier_flags_claim_when_any_binding_spills_outside_selected_bank():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 2,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1", "R2"],
+                        "source_ids": ["R1", "R2"],
+                        "evidence_ids": ["e1", "e2"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 8,
+                                "line_end": 9,
+                                "section_id": "resume-semantics",
+                                "pool_mode": "selected",
+                                "selected_for_section": True,
+                                "question_ids": ["sq1"],
+                            },
+                            {
+                                "evidence_id": "e2",
+                                "source_id": "R2",
+                                "source_backed": True,
+                                "line_start": 12,
+                                "line_end": 13,
+                                "section_id": "resume-semantics",
+                                "pool_mode": "candidate",
+                                "selected_for_section": False,
+                                "question_ids": ["sq1"],
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+                "source_type": "official_docs",
+            },
+            "R2": {
+                "source_id": "R2",
+                "url": "https://docs.example.com/runtime/restart",
+                "domain": "docs.example.com",
+                "source_type": "official_docs",
+            },
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R2"], "evidence_kind": "fetch"},
+        ],
+        section_banks=[
+            {
+                "section_id": "resume-semantics",
+                "candidate_evidence_ids": ["e1", "e2"],
+                "selected_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+                "candidate_packets": [],
+                "selected_packets": [
+                    {
+                        "evidence_id": "e1",
+                        "source_ids": ["R1"],
+                        "question_ids": ["sq1"],
+                        "unit_id": "unit-search-1",
+                        "source_backed": True,
+                        "line_span_complete": True,
+                        "excerpt_hash": "hash-1",
+                        "claim_ids": ["resume-semantics-claim-1"],
+                    }
+                ],
+                "rejected_packets": [],
+                "last_updated_at": "2026-04-18T00:00:00Z",
+            }
+        ],
+    )
+
+    assert "claim_outside_selected_bank" in verifier["reason_codes"]
+    assert verifier["summary"]["claim_outside_selected_bank"] == 1
+
+
+def test_verifier_flags_section_packet_mismatch_when_selected_packet_claim_ids_are_stale():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 1,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 10,
+                                "line_end": 11,
+                                "section_id": "resume-semantics",
+                                "pool_mode": "selected",
+                                "selected_for_section": True,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+                "source_type": "official_docs",
+            }
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+        ],
+        section_banks=[
+            {
+                "section_id": "resume-semantics",
+                "candidate_evidence_ids": ["e1"],
+                "selected_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+                "candidate_packets": [],
+                "selected_packets": [
+                    {
+                        "evidence_id": "e1",
+                        "source_ids": ["R1"],
+                        "question_ids": ["sq1"],
+                        "unit_id": "unit-search-1",
+                        "source_backed": True,
+                        "line_span_complete": True,
+                        "excerpt_hash": "hash-1",
+                        "claim_ids": ["stale-claim-id"],
+                    }
+                ],
+                "rejected_packets": [],
+                "last_updated_at": "2026-04-18T00:00:00Z",
+            }
+        ],
+    )
+
+    assert "section_packet_mismatch" in verifier["reason_codes"]
+    assert verifier["summary"]["section_packet_mismatch"] == 1
+
+
 def test_verifier_keeps_medium_single_source_search_only_for_standard_sources():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
@@ -10788,6 +11085,138 @@ async def test_hard_coverage_gate_does_not_accept_runtime_coverage_without_groun
     assert coverage["hard_uncovered_targets"] == [
         "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
     ]
+
+
+def test_hard_coverage_gate_does_not_accept_claim_text_overlap_without_packet_backed_support():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "brief": {
+                "objective": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+                "must_cover": [
+                    "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+                ],
+                "coverage_checklist": [
+                    "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+                ],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                    "reason": "Primary question.",
+                }
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": [
+                    "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+                ],
+                "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {
+                    "section_id": "durable-runtime-semantics",
+                    "title": "Durable Runtime Semantics",
+                    "goal": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                }
+            ],
+            "research_units": [],
+            "continuation": {"mode": "fresh"},
+            "planner_metadata": {},
+        }
+    )
+
+    coverage = _coverage_for_report(
+        plan,
+        [
+            {
+                "section_id": "durable-runtime-semantics",
+                "title": "Durable Runtime Semantics",
+                "summary": "Checkpoint identity and durable resume both matter.",
+                "citations": ["R1"],
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "Checkpoint identity and safe interrupt resume semantics define how durable runtimes recover state.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": [],
+                        "evidence_bindings": [],
+                    }
+                ],
+            }
+        ],
+        coverage_state={
+            "items": [
+                {
+                    "target": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                    "matched_unit_ids": ["unit-search-1"],
+                    "grounded_source_ids": ["R1"],
+                    "candidate_section_ids": ["durable-runtime-semantics"],
+                    "satisfied": True,
+                }
+            ]
+        },
+        planned_outline=[
+            {
+                "section_id": "durable-runtime-semantics",
+                "title": "Durable Runtime Semantics",
+                "goal": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                "question_id": "sq1",
+            }
+        ],
+        section_banks=[
+            {
+                "section_id": "durable-runtime-semantics",
+                "candidate_evidence_ids": [],
+                "selected_evidence_ids": [],
+                "rejected_evidence_ids": [],
+            }
+        ],
+        evidence_ledger=[],
+    )
+
+    assert coverage["hard_coverage_gate_passed"] is False
+    assert coverage["hard_uncovered_targets"] == [
+        "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+    ]
+
+
+def test_best_cluster_claim_text_prefers_grounded_detail_over_generic_fetch_heading():
+    items = [
+        DeepResearchEvidenceItem(
+            evidence_id="e1",
+            unit_id="unit-fetch-1",
+            source_ids=["R1"],
+            source_urls=["https://docs.example.com/runtime/checkpoints"],
+            summary="Runtime checkpoints",
+            detail="Checkpoint state is restored from the last durable checkpoint after interruption.",
+            evidence_kind="fetch",
+            weight=1.0,
+            derived_from_source_url="https://docs.example.com/runtime/checkpoints",
+        ),
+        DeepResearchEvidenceItem(
+            evidence_id="e2",
+            unit_id="unit-search-1",
+            source_ids=["R1"],
+            summary="Use the following CLI snippet to inspect awsdms_txn_state and validate checkpoint metadata.",
+            detail="Use the following CLI snippet to inspect awsdms_txn_state and validate checkpoint metadata.",
+            evidence_kind="search",
+            weight=0.9,
+        ),
+    ]
+
+    claim_text = deep_research_runtime_module._best_cluster_claim_text(items)
+
+    assert "restored from the last durable checkpoint" in claim_text
+    assert "CLI snippet" not in claim_text
+    assert claim_text != "Runtime checkpoints"
 
 
 def test_build_section_citations_does_not_let_executive_summary_steal_specific_section_claims():

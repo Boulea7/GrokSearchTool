@@ -10,6 +10,13 @@ from .deep_research_runtime import DeepResearchRuntime
 
 
 TERMINAL_STATUSES = {"completed", "failed", "canceled", "interrupted"}
+ATTACH_TERMINAL_EVENT_TYPES = {
+    "job_canceled",
+    "job_completed",
+    "job_failed",
+    "job_interrupted",
+    "job_resolved_from_final_batch",
+}
 
 
 def _build_runtime() -> DeepResearchRuntime:
@@ -161,31 +168,44 @@ async def _resolve_watch_attach_after_seq(
 
     after_seq = 0
     fallback_after_seq = 0
+    previous_attempt_after_seq = 0
+    previous_attempt_count = max(0, numeric_attempts - 1)
     while True:
         events_payload = await runtime.events(job_id, after_seq=after_seq, limit=page_limit)
         events = events_payload.get("events", [])
         if not events:
-            return fallback_after_seq
+            return fallback_after_seq or previous_attempt_after_seq
 
         for event in events:
+            try:
+                event_seq = int(event.get("seq", 0))
+            except (TypeError, ValueError):
+                event_seq = 0
             attempt_count = _event_attempt_count(event)
+            event_type = str(event.get("type", ""))
+            if (
+                previous_attempt_count > 0
+                and attempt_count == previous_attempt_count
+                and event_type in ATTACH_TERMINAL_EVENT_TYPES
+            ):
+                previous_attempt_after_seq = max(previous_attempt_after_seq, event_seq)
+                continue
             if attempt_count != numeric_attempts:
                 continue
-            event_type = str(event.get("type", ""))
             if event_type == "job_resumed":
-                return max(0, int(event.get("seq", 0)) - 1)
-            if event_type in {"job_created", "phase_started", "checkpoint_restored"} and fallback_after_seq == 0:
-                fallback_after_seq = max(0, int(event.get("seq", 0)) - 1)
+                return previous_attempt_after_seq or max(0, event_seq - 1)
+            if fallback_after_seq == 0:
+                fallback_after_seq = previous_attempt_after_seq or max(0, event_seq - 1)
 
         next_after_seq = events_payload.get("next_after_seq", after_seq)
         try:
             normalized_next_after_seq = int(next_after_seq)
         except (TypeError, ValueError):
-            return fallback_after_seq
+            return fallback_after_seq or previous_attempt_after_seq
         if normalized_next_after_seq <= after_seq:
-            return fallback_after_seq
+            return fallback_after_seq or previous_attempt_after_seq
         after_seq = normalized_next_after_seq
-    return fallback_after_seq
+    return fallback_after_seq or previous_attempt_after_seq
 
 
 def _print_list_summary(payload: dict[str, Any], *, status_filter: str, limit: int) -> None:
@@ -238,12 +258,20 @@ def _spawn_worker(job_id: str) -> None:
     )
 
 
-async def _watch_job(runtime: DeepResearchRuntime, job_id: str, *, interval_seconds: float = 1.0) -> None:
+async def _watch_job(
+    runtime: DeepResearchRuntime,
+    job_id: str,
+    *,
+    interval_seconds: float = 1.0,
+    initial_status: dict[str, Any] | None = None,
+) -> None:
     last_seq = 0
     last_status_line = ""
     printed_existing_state_message = False
+    pending_status = initial_status
     while True:
-        status = await runtime.status(job_id)
+        status = pending_status if pending_status is not None else await runtime.status(job_id)
+        pending_status = None
         events_payload: dict[str, Any] | None = None
         if not printed_existing_state_message:
             existing_state_message = _watch_existing_state_message(status, fallback_job_id=job_id)
@@ -362,7 +390,12 @@ async def _handle_resume(args: argparse.Namespace) -> int:
     _print_job_summary(response, fallback_job_id=args.job_id)
     _print_json(response)
     if args.watch and response["status"] == "queued":
-        await _watch_job(runtime, args.job_id, interval_seconds=args.interval_seconds)
+        await _watch_job(
+            runtime,
+            args.job_id,
+            interval_seconds=args.interval_seconds,
+            initial_status=response,
+        )
     return 0
 
 

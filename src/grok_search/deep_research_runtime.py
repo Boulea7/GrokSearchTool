@@ -6951,6 +6951,35 @@ def _coverage_for_report(
             for source_id in coverage_item.get("grounded_source_ids", [])
             if str(source_id).strip()
         }
+        packet_backed_section_ids = [
+            section_id
+            for section_id in matching_section_ids
+            if any(
+                str(evidence_id).strip()
+                for evidence_id in (banks_by_section.get(section_id, {}) or {}).get("selected_evidence_ids", []) or []
+            )
+        ]
+        binding_backed_claim_ids = []
+        for section in grounded_sections:
+            section_id = str(section.get("section_id", "")).strip()
+            for claim in section.get("claims", []):
+                claim_id = str(claim.get("claim_id", "")).strip()
+                if claim_id not in matching_claim_ids:
+                    continue
+                if any(str(evidence_id).strip() for evidence_id in claim.get("evidence_ids", []) or []):
+                    binding_backed_claim_ids.append(claim_id)
+                    continue
+                if any(
+                    isinstance(binding, dict)
+                    and (
+                        str(binding.get("evidence_id", "")).strip()
+                        or str(binding.get("source_id", "")).strip()
+                    )
+                    for binding in claim.get("evidence_bindings", []) or []
+                ):
+                    binding_backed_claim_ids.append(claim_id)
+        binding_backed_claim_ids = _dedupe_preserve_order(binding_backed_claim_ids)
+        grounded_source_backed_section_ids: list[str] = []
         if not matching_claim_ids and grounded_source_ids:
             for section in grounded_sections:
                 section_id = str(section.get("section_id", "")).strip()
@@ -6959,9 +6988,32 @@ def _coverage_for_report(
                     for citation in section.get("citations", [])
                     if str(citation).strip()
                 }
-                if section_id and section_citations & grounded_source_ids and section_id not in matching_section_ids:
+                section_bank = banks_by_section.get(section_id, {}) or {}
+                has_packet_support = any(
+                    str(evidence_id).strip()
+                    for evidence_id in section_bank.get("selected_evidence_ids", []) or []
+                )
+                has_binding_support = any(
+                    any(str(evidence_id).strip() for evidence_id in claim.get("evidence_ids", []) or [])
+                    or any(
+                        isinstance(binding, dict)
+                        and (
+                            str(binding.get("evidence_id", "")).strip()
+                            or str(binding.get("source_id", "")).strip()
+                        )
+                        for binding in claim.get("evidence_bindings", []) or []
+                    )
+                    for claim in section.get("claims", []) or []
+                )
+                if (
+                    section_id
+                    and section_citations & grounded_source_ids
+                    and (has_packet_support or has_binding_support)
+                    and section_id not in matching_section_ids
+                ):
                     matching_section_ids.append(section_id)
-        covered = bool(matching_claim_ids) or bool(matching_section_ids)
+                    grounded_source_backed_section_ids.append(section_id)
+        covered = bool(packet_backed_section_ids or binding_backed_claim_ids or grounded_source_backed_section_ids)
         if not covered:
             hard_uncovered_targets.append(target)
         hard_target_coverage.append(
@@ -6972,9 +7024,13 @@ def _coverage_for_report(
                 "claim_ids": matching_claim_ids,
                 "matched_unit_ids": matched_unit_ids,
                 "supporting_source_ids": sorted(grounded_source_ids),
-                "explain_via": "coverage_state_grounded_sources"
-                if grounded_source_ids and not matching_claim_ids
-                else ("claim_text_overlap" if matching_claim_ids else ""),
+                "explain_via": "section_packets"
+                if packet_backed_section_ids
+                else (
+                    "claim_bindings"
+                    if binding_backed_claim_ids
+                    else ("coverage_state_grounded_sources" if grounded_source_backed_section_ids else "")
+                ),
             }
         )
     coverage_gate_passed = not unanswered_sections and not uncovered_sub_questions
@@ -7338,8 +7394,35 @@ def _build_verifier_diagnostics(
             supporting_source_count = provenance["derived_supporting_source_count"]
             if selected_evidence_ids:
                 matching_selected = set(claim_evidence_ids) & set(selected_evidence_ids)
-                used_selected_evidence_ids.update(matching_selected)
-                if claim_evidence_ids and not matching_selected:
+                selected_binding_ids = {
+                    str(binding.get("evidence_id", "")).strip()
+                    for binding in bindings
+                    if isinstance(binding, dict)
+                    and (
+                        bool(binding.get("selected_for_section"))
+                        or str(binding.get("pool_mode", "")).strip() == "selected"
+                    )
+                    and str(binding.get("evidence_id", "")).strip()
+                }
+                out_of_bank_binding_ids = {
+                    str(binding.get("evidence_id", "")).strip()
+                    for binding in bindings
+                    if isinstance(binding, dict)
+                    and str(binding.get("evidence_id", "")).strip()
+                    and (
+                        str(binding.get("evidence_id", "")).strip() not in set(selected_evidence_ids)
+                        or (
+                            "selected_for_section" in binding
+                            and not bool(binding.get("selected_for_section"))
+                        )
+                        or str(binding.get("pool_mode", "")).strip() not in {"", "selected"}
+                    )
+                }
+                used_selected_evidence_ids.update(matching_selected | selected_binding_ids)
+                claim_spillover = bool(set(claim_evidence_ids) - set(selected_evidence_ids))
+                binding_spillover = bool(out_of_bank_binding_ids)
+                has_selected_support = bool(matching_selected or selected_binding_ids)
+                if claim_spillover or binding_spillover or ((claim_evidence_ids or bindings) and not has_selected_support):
                     if claim_id:
                         flagged_claim_ids.append(claim_id)
                     integrity_counts["claim_outside_selected_bank"] += 1
@@ -7456,7 +7539,7 @@ def _build_verifier_diagnostics(
                 for claim in section.get("claims", []) or []
                 if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
             }
-            if actual_claim_ids and not packet_claim_ids:
+            if actual_claim_ids and packet_claim_ids != actual_claim_ids:
                 integrity_counts["section_packet_mismatch"] += 1
                 reason_codes.append("section_packet_mismatch")
 
@@ -7605,18 +7688,31 @@ def _build_claim_evidence_bindings(
 
 
 def _best_cluster_claim_text(items: list[DeepResearchEvidenceItem]) -> str:
+    def candidate_text(item: DeepResearchEvidenceItem) -> str:
+        summary_text = _summarize_evidence_text(item.summary, limit=_MAX_CLAIM_LENGTH)
+        detail_text = _summarize_evidence_text(item.detail, limit=_MAX_CLAIM_LENGTH)
+        summary_keywords = _tokenize_keywords(summary_text)
+        detail_keywords = _tokenize_keywords(detail_text)
+        if detail_text and (
+            not summary_text
+            or len(summary_keywords) < 3
+            or (len(detail_keywords) >= max(3, len(summary_keywords) + 2))
+        ):
+            return detail_text
+        return summary_text or detail_text
+
     ranked = sorted(
         items,
         key=lambda item: (
             1 if item.evidence_kind != "search" else 0,
             item.weight,
             len(item.source_ids),
-            len(_summarize_evidence_text(item.summary or item.detail, limit=_MAX_CLAIM_LENGTH)),
+            len(candidate_text(item)),
         ),
         reverse=True,
     )
     for item in ranked:
-        text = _summarize_evidence_text(item.summary or item.detail, limit=_MAX_CLAIM_LENGTH)
+        text = candidate_text(item)
         if text and not _is_noisy_text(text):
             sentences = [chunk.strip() for chunk in re.split(r"(?<=[.!?])\s+", text) if chunk.strip()]
             if sentences:
