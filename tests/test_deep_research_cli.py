@@ -1359,6 +1359,98 @@ def test_cli_watch_explains_reconnected_job_context(monkeypatch, capsys):
     )
 
 
+def test_cli_watch_existing_attempt_skips_full_history_replay(monkeypatch, capsys):
+    snapshot = load_deep_research_fixture("probe_round21_stale_worker_reconnect.json")
+
+    class FakeRuntime:
+        def __init__(self):
+            self.status_calls = 0
+
+        async def status(self, job_id):
+            self.status_calls += 1
+            return {
+                "job_id": job_id,
+                "status": "interrupted",
+                "phase": snapshot["resume_run"]["phase"],
+                "progress_pct": 20.0,
+                "attempt_count": snapshot["resume_run"]["attempt_count"],
+                "current_checkpoint": snapshot["resume_run"]["current_checkpoint"],
+                "cancel_requested": False,
+                "continued_from_job_id": "",
+                "resolved_artifact_batch_id": "",
+                "last_error": snapshot["expected"]["interrupted_reason"],
+            }
+
+        async def events(self, job_id, after_seq=0, limit=100):
+            if after_seq == snapshot["resume_window"]["after_seq"]:
+                return {
+                    "events": [
+                        {
+                            "seq": event["seq"],
+                            "phase": event["phase"],
+                            "type": event["type"],
+                            "message": event.get("message") or event["type"],
+                            "data": event.get("data") or {},
+                        }
+                        for event in snapshot["resume_events_after_seq_7"]
+                    ],
+                    "next_after_seq": snapshot["resume_window"]["next_after_seq"],
+                }
+            if after_seq != 0:
+                return {"events": [], "next_after_seq": after_seq}
+            return {
+                "events": [
+                    {
+                        "seq": event["seq"],
+                        "phase": event["phase"],
+                        "type": event["type"],
+                        "message": event.get("message") or event["type"],
+                        "data": event.get("data") or {},
+                    }
+                    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_7"]
+                ],
+                "next_after_seq": snapshot["resume_window"]["next_after_seq"],
+            }
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
+
+    exit_code = deep_research_cli.main(["watch", "job-123", "--interval-seconds", "0.01"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "[8] researching job_resumed: Deep research job resumed from checkpoint." in captured.err
+    assert "[7] researching job_interrupted: Deep research interrupted during worker recovery." not in captured.err
+    assert "[1] planning job_created:" not in captured.err
+
+
+def test_cli_watch_summary_surfaces_last_error_for_existing_state(monkeypatch, capsys):
+    class FakeRuntime:
+        async def status(self, job_id):
+            return {
+                "job_id": job_id,
+                "status": "interrupted",
+                "phase": "researching",
+                "progress_pct": 20.0,
+                "attempt_count": 2,
+                "current_checkpoint": "researching-u4",
+                "cancel_requested": False,
+                "continued_from_job_id": "",
+                "resolved_artifact_batch_id": "",
+                "last_error": "worker_restarted",
+            }
+
+        async def events(self, job_id, after_seq=0, limit=100):
+            return {"events": [], "next_after_seq": after_seq}
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
+
+    exit_code = deep_research_cli.main(["watch", "job-123", "--interval-seconds", "0.01"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "last_error=worker_restarted" in captured.err
+
+
 def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)

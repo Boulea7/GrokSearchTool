@@ -49,6 +49,7 @@ def _quote_summary_text(value: str, *, limit: int = 80) -> str:
 
 def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") -> list[str]:
     artifact_fallback = payload.get("artifact_fallback_used")
+    last_error = _summary_value(payload.get("last_error"))
     parts = [
         f"job={_summary_value(payload.get('job_id') or fallback_job_id)}",
         f"status={_summary_value(payload.get('status'))}",
@@ -61,6 +62,8 @@ def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") ->
         f"resolved_batch={_summary_value(payload.get('resolved_artifact_batch_id'))}",
         f"artifact_fallback={_summary_value(artifact_fallback) if artifact_fallback is not None else '-'}",
     ]
+    if last_error != "-":
+        parts.append(f"last_error={last_error}")
     if payload.get("planner_fallback_used"):
         parts.append("planner_fallback=true")
     runtime_warnings = payload.get("runtime_warnings")
@@ -102,6 +105,40 @@ def _watch_existing_state_message(payload: dict[str, Any], *, fallback_job_id: s
     if continued_from != "-":
         parts.append(f"continued_from={continued_from}")
     return f"watch: attached_to_existing_state {' '.join(parts)}"
+
+
+def _event_attempt_count(event: dict[str, Any]) -> int | None:
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return None
+    value = data.get("attempt_count")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _watch_attach_after_seq(payload: dict[str, Any], events: list[dict[str, Any]]) -> int:
+    attempts = payload.get("attempt_count")
+    continued_from = _summary_value(payload.get("continued_from_job_id"))
+    try:
+        numeric_attempts = int(attempts)
+    except (TypeError, ValueError):
+        numeric_attempts = 0
+    if numeric_attempts <= 1 and continued_from == "-":
+        return 0
+
+    fallback_after_seq = 0
+    for event in reversed(events):
+        attempt_count = _event_attempt_count(event)
+        if attempt_count != numeric_attempts:
+            continue
+        event_type = str(event.get("type", ""))
+        if event_type == "job_resumed":
+            return max(0, int(event.get("seq", 0)) - 1)
+        if event_type in {"job_created", "phase_started", "checkpoint_restored"} and fallback_after_seq == 0:
+            fallback_after_seq = max(0, int(event.get("seq", 0)) - 1)
+    return fallback_after_seq
 
 
 def _print_list_summary(payload: dict[str, Any], *, status_filter: str, limit: int) -> None:
@@ -160,15 +197,19 @@ async def _watch_job(runtime: DeepResearchRuntime, job_id: str, *, interval_seco
     printed_existing_state_message = False
     while True:
         status = await runtime.status(job_id)
+        events_payload: dict[str, Any] | None = None
         if not printed_existing_state_message:
             existing_state_message = _watch_existing_state_message(status, fallback_job_id=job_id)
             if existing_state_message:
                 print(existing_state_message, file=sys.stderr)
+                history = await runtime.events(job_id, after_seq=0, limit=1000)
+                attach_after_seq = _watch_attach_after_seq(status, history.get("events", []))
+                last_seq = attach_after_seq
             printed_existing_state_message = True
-        events = await runtime.events(job_id, after_seq=last_seq, limit=100)
-        for event in events["events"]:
+        events_payload = await runtime.events(job_id, after_seq=last_seq, limit=100)
+        for event in events_payload["events"]:
             print(f"[{event['seq']}] {event['phase']} {event['type']}: {event['message']}", file=sys.stderr)
-        last_seq = events["next_after_seq"]
+        last_seq = events_payload["next_after_seq"]
         summary_parts = _job_summary_parts(status, fallback_job_id=job_id)
         status_line = " ".join(summary_parts)
         if status_line != last_status_line:
