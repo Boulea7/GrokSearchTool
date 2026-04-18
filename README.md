@@ -89,6 +89,8 @@ Client / Assistant
 - `Community-tested`：Codex 风格 MCP 客户端、Cherry Studio
 - `Planned`：Dify、n8n、Coze
 
+更广义的 MCP 宿主适配资产与宿主原生规则 / preset / skill 映射，统一收口在 [docs/HOSTS.md](./docs/HOSTS.md)。这些资产用于帮助 Cursor、Cline、Continue、Windsurf、Cherry Studio 等宿主更稳定地接入本项目，但不单独改变上面的 support level 声明。
+
 说明：
 
 - 公开安装文档当前只承诺本地 `stdio` 路径
