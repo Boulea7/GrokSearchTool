@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 
@@ -73,3 +74,13 @@ def test_docs_link_broad_host_assets_without_upgrading_support_claims():
     assert "do not upgrade a host into `Officially tested`" in compatibility
     assert "[docs/HOSTS.md](./docs/HOSTS.md)" in readme
     assert "[docs/HOSTS.md](./docs/HOSTS.md)" in readme_en
+
+
+def test_hosts_doc_uses_repo_relative_asset_links_only():
+    text = HOSTS.read_text(encoding="utf-8")
+    linked_paths = re.findall(r"\[[^\]]+\]\(([^)]+)\)", text)
+
+    assert "/Users/" not in text
+    for path in linked_paths:
+        if path.startswith("./host-assets/"):
+            assert (ROOT_DIR / "docs" / path.removeprefix("./")).exists()

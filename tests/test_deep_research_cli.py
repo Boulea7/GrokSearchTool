@@ -1068,7 +1068,7 @@ def test_cli_status_summary_surfaces_planner_fallback_and_warning_counts(monkeyp
 
     assert exit_code == 0
     assert summary_lines(captured.err) == [
-        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false planner_fallback=true warnings=2 constraint_violations=1"
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false planner_fallback=true warnings=2 warning_codes=planner_fallback_used,domain_constraints_applied constraint_violations=1 constraint_codes=unit-search-1"
     ]
 
 
@@ -1558,7 +1558,7 @@ def test_cli_round11_interrupted_status_events_and_result_remain_consistent(monk
     assert status_payload["runtime_warnings"] == ["coverage_incomplete", "planner_fallback_used"]
     assert status_payload["constraint_violations"] == []
     assert summary_lines(status_captured.err) == [
-        f"summary: job={job.job_id} status=interrupted phase=finalizing progress=0.0% checkpoint=finalizing attempts=2 cancel_requested=false continued_from={job.continued_from_job_id} resolved_batch={seeded['batch_id']} artifact_fallback=false planner_fallback=true warnings=2"
+        f"summary: job={job.job_id} status=interrupted phase=finalizing progress=0.0% checkpoint=finalizing attempts=2 cancel_requested=false continued_from={job.continued_from_job_id} resolved_batch={seeded['batch_id']} artifact_fallback=false planner_fallback=true warnings=2 warning_codes=coverage_incomplete,planner_fallback_used"
     ]
 
     exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "0", "--limit", "10"])

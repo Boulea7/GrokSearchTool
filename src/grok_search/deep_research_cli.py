@@ -69,9 +69,21 @@ def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") ->
     runtime_warnings = payload.get("runtime_warnings")
     if isinstance(runtime_warnings, list) and runtime_warnings:
         parts.append(f"warnings={len(runtime_warnings)}")
+        parts.append(f"warning_codes={','.join(str(item).strip() for item in runtime_warnings[:3] if str(item).strip())}")
     constraint_violations = payload.get("constraint_violations")
     if isinstance(constraint_violations, list) and constraint_violations:
         parts.append(f"constraint_violations={len(constraint_violations)}")
+        constraint_codes: list[str] = []
+        for item in constraint_violations[:3]:
+            if not isinstance(item, dict):
+                continue
+            for key in ("reason", "code", "unit_id"):
+                value = _summary_value(item.get(key))
+                if value != "-" and value not in constraint_codes:
+                    constraint_codes.append(value)
+                    break
+        if constraint_codes:
+            parts.append(f"constraint_codes={','.join(constraint_codes)}")
     return parts
 
 
