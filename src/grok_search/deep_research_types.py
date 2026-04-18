@@ -124,6 +124,15 @@ class DeepResearchReportSection(BaseModel):
     rewrite_reason: str = ""
 
 
+class DeepResearchOutlineVersion(BaseModel):
+    version_id: str
+    parent_version_id: str = ""
+    kind: str = "planned"
+    sections: list[DeepResearchReportSection] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+    created_at: str = ""
+
+
 class DeepResearchContinuation(BaseModel):
     mode: Literal["fresh", "continue"] = "fresh"
     source_job_id: str = ""
@@ -146,6 +155,7 @@ class DeepResearchContinuation(BaseModel):
 
 class DeepResearchContinuationState(DeepResearchContinuation):
     carry_forward_sources: list[dict[str, Any]] = Field(default_factory=list)
+    carry_forward_outline_versions: list[dict[str, Any]] = Field(default_factory=list)
     carry_forward_evidence: list[dict[str, Any]] = Field(default_factory=list)
     carry_forward_sections: list[dict[str, Any]] = Field(default_factory=list)
     carry_forward_unit_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
@@ -253,6 +263,8 @@ class DeepResearchEvidenceLedgerEntry(BaseModel):
     line_end: int | None = None
     selection_score: int = 0
     selection_basis_tokens: list[str] = Field(default_factory=list)
+    decision_state: str = ""
+    section_decisions: list[dict[str, str]] = Field(default_factory=list)
     materialized_claim_ids: list[str] = Field(default_factory=list)
     recorded_at: str = ""
 
@@ -279,6 +291,7 @@ class DeepResearchPlan(BaseModel):
     sub_questions: list[DeepResearchSubQuestion] = Field(default_factory=list)
     search_strategy: DeepResearchSearchStrategy
     report_outline: list[DeepResearchReportSection] = Field(default_factory=list)
+    outline_versions: list[DeepResearchOutlineVersion] = Field(default_factory=list)
     research_units: list[DeepResearchResearchUnit] = Field(default_factory=list)
     continuation: DeepResearchContinuation = Field(default_factory=DeepResearchContinuation)
     planner_metadata: dict[str, Any] = Field(default_factory=dict)
@@ -297,6 +310,7 @@ class DeepResearchCheckpointState(BaseModel):
     sources: list[dict[str, Any]] = Field(default_factory=list)
     evidence_items: list[dict[str, Any]] = Field(default_factory=list)
     sections: list[dict[str, Any]] = Field(default_factory=list)
+    outline_versions: list[dict[str, Any]] = Field(default_factory=list)
     section_graph: dict[str, Any] = Field(default_factory=dict)
     evidence_ledger: list[dict[str, Any]] = Field(default_factory=list)
     section_banks: list[dict[str, Any]] = Field(default_factory=list)
