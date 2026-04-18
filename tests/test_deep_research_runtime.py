@@ -5658,7 +5658,7 @@ async def test_missing_sub_question_coverage_uses_focused_fallback_plan(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_official_doc_follow_up_safe_repairs_do_not_force_planner_fallback(tmp_path):
+async def test_fresh_official_doc_query_safe_repairs_do_not_force_planner_fallback(tmp_path):
     runtime = build_runtime(tmp_path)
 
     async def sparse_official_docs_planner(job, continuation):
@@ -5730,6 +5730,128 @@ async def test_official_doc_follow_up_safe_repairs_do_not_force_planner_fallback
     assert "missing_search_query" in trace["validation_issues"]
     assert "missing_sub_question_unit_coverage" in trace["validation_issues"]
     assert trace["unsafe_plan"] is False
+
+
+@pytest.mark.asyncio
+async def test_true_continuation_official_doc_safe_repairs_do_not_force_planner_fallback(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(
+        runtime,
+        query="Prior AWS DMS checkpoint resume investigation",
+        checkpoint_sources=[
+            {
+                "source_id": "R1",
+                "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_ReplicationTask.html",
+                "title": "API_ReplicationTask",
+                "domain": "docs.aws.amazon.com",
+                "source_type": "official_docs",
+                "ranking_reasons": ["official_docs", "api_reference"],
+            }
+        ],
+        report_payload={
+            "query": "Prior AWS DMS checkpoint resume investigation",
+            "summary": "Checkpoint resume continues from the last durable checkpoint.",
+            "sections": [
+                {
+                    "section_id": "executive-summary",
+                    "title": "Executive Summary",
+                    "summary": "Checkpoint resume continues from the last durable checkpoint.",
+                    "claims": [
+                        {
+                            "claim_id": "executive-summary-claim-1",
+                            "text": "Checkpoint resume continues from the last durable checkpoint.",
+                            "citations": ["R1"],
+                            "unit_id": "unit-search-1",
+                            "evidence_ids": ["evidence-unit-search-1-search"],
+                            "confidence": "medium",
+                        }
+                    ],
+                    "citations": ["R1"],
+                    "confidence": "medium",
+                }
+            ],
+            "coverage": {
+                "uncovered_sub_questions": [
+                    "Investigate restart trade-offs after interruption",
+                ],
+                "unanswered_sections": ["Task Visibility"],
+            },
+            "unit_results": {},
+        },
+    )
+
+    async def sparse_official_docs_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {
+                "id": "sq1",
+                "question": "Explain AWS DMS checkpoint resume semantics.",
+                "reason": "Primary axis.",
+            },
+            {
+                "id": "sq2",
+                "question": "Explain DescribeReplicationTasks recovery visibility.",
+                "reason": "Secondary axis.",
+            },
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "AWS DMS checkpoint semantics",
+                "goal": "Explain AWS DMS checkpoint resume semantics.",
+                "query": "",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"]["search_queries"] = []
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain AWS DMS checkpoint resume semantics.",
+            },
+            {
+                "section_id": "task-visibility",
+                "title": "Task Visibility",
+                "goal": "Explain DescribeReplicationTasks recovery visibility.",
+            },
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = sparse_official_docs_planner
+
+    response = await runtime.start(
+        query="Continue AWS DMS checkpoint resume follow-up with official docs only",
+        continue_from_job_id=source.job_id,
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    trace = plan["planner_metadata"]["trace"]
+
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert plan["planner_metadata"]["planner"] == "test"
+    assert plan["continuation"]["mode"] == "continue"
+    assert plan["research_units"][0]["query"] == "Explain AWS DMS checkpoint resume semantics."
+    assert any(unit["goal"] == "Explain DescribeReplicationTasks recovery visibility." for unit in plan["research_units"])
+    assert "filled_search_query:unit-search-1" in trace["normalize_actions"]
+    assert "added_sub_question_search_unit:sq2" in trace["normalize_actions"]
+    assert "missing_search_query" in trace["validation_issues"]
+    assert "missing_sub_question_unit_coverage" in trace["validation_issues"]
+    assert trace["unsafe_plan"] is False
+    assert plan["brief"]["scope"]["allowed_sources"] == ["docs.aws.amazon.com"]
 
 
 @pytest.mark.asyncio
@@ -8128,7 +8250,7 @@ async def test_fallback_plan_uses_focused_continuation_surface_instead_of_only_p
                 "title": "Follow-up search",
                 "goal": "Investigate restart trade-offs after interruption",
                 "query": "",
-                "depends_on": [],
+                "depends_on": ["missing-unit"],
                 "status": "pending",
                 "notes": "",
             }
@@ -8242,7 +8364,7 @@ async def test_unsafe_plan_uses_bounded_salvage_surface_before_generic_fallback(
                 "title": "Follow-up search",
                 "goal": "Investigate checkpoint replay safety after interruption",
                 "query": "",
-                "depends_on": [],
+                "depends_on": ["missing-unit"],
                 "status": "pending",
                 "notes": "",
             }

@@ -1758,13 +1758,16 @@ def _unsafe_plan_reason(
 ) -> dict[str, Any] | None:
     if planner == "fallback":
         return None
+    effective_constraint_domains = _official_doc_constraint_domains(
+        continuation=continuation,
+        include_domains=include_domains,
+    )
     safe_search_only_repairs_allowed = (
-        continuation.mode != "continue"
-        and bool(include_domains)
-        and all(_domain_looks_like_official_docs(domain) for domain in (include_domains or []))
+        bool(effective_constraint_domains)
+        and all(_domain_looks_like_official_docs(domain) for domain in effective_constraint_domains)
         and bool(research_units)
         and all(
-        str(unit.get("unit_type", "")).strip() == "search" for unit in (research_units or [])
+            str(unit.get("unit_type", "")).strip() == "search" for unit in (research_units or [])
         )
     )
     for action in normalize_actions:
@@ -1819,6 +1822,21 @@ def _unit_query_fallback(
         str(unit.get("notes", "")),
         str(unit.get("instructions", "")),
     ]
+    if continuation.mode == "continue":
+        candidates.extend(
+            [
+                continuation.continuation_goal,
+                *continuation.open_questions,
+                *continuation.confirmed_claims,
+                *continuation.trusted_source_headers,
+                continuation.previous_summary,
+                *(
+                    str(item)
+                    for key in ("allowed_sources", "preferred_sources", "include_domains")
+                    for item in continuation.carry_forward_constraints.get(key, []) or []
+                ),
+            ]
+        )
     candidates.extend(str(item.get("question", "")) for item in sub_questions)
     candidates.append(job_query)
     for candidate in candidates:
@@ -1826,6 +1844,84 @@ def _unit_query_fallback(
         if normalized:
             return _rewrite_research_query(_trim_text(normalized, limit=220), continuation)
     return _rewrite_research_query(job_query, continuation)
+
+
+def _official_doc_constraint_domains(
+    *,
+    continuation: DeepResearchContinuationState,
+    include_domains: list[str] | None = None,
+) -> list[str]:
+    candidates = [
+        *(_normalize_string_list(include_domains)),
+        *(_normalize_string_list(continuation.carry_forward_constraints.get("include_domains"))),
+        *(_normalize_string_list(continuation.carry_forward_constraints.get("allowed_sources"))),
+        *(_normalize_string_list(continuation.carry_forward_constraints.get("preferred_sources"))),
+    ]
+    return _dedupe_preserve_order(
+        [
+            candidate
+            for candidate in candidates
+            if candidate and "://" not in candidate and _domain_looks_like_official_docs(candidate)
+        ]
+    )
+
+
+def _official_doc_carry_forward_url(
+    unit: dict[str, Any],
+    *,
+    continuation: DeepResearchContinuationState,
+) -> str:
+    allowed_domains = set(
+        _official_doc_constraint_domains(
+            continuation=continuation,
+            include_domains=_normalize_string_list(continuation.carry_forward_constraints.get("include_domains")),
+        )
+    )
+    official_sources = []
+    for source in continuation.carry_forward_sources:
+        if not isinstance(source, dict):
+            continue
+        url = _normalize_whitespace(str(source.get("url", "")))
+        if not url:
+            continue
+        try:
+            domain = urlsplit(url).netloc.lower()
+        except Exception:
+            domain = ""
+        if allowed_domains and domain not in allowed_domains:
+            continue
+        if not _domain_looks_like_official_docs(domain):
+            continue
+        official_sources.append(
+            {
+                "url": url,
+                "domain": domain,
+                "title": _normalize_whitespace(str(source.get("title", ""))),
+            }
+        )
+    if not official_sources:
+        return ""
+
+    unit_text = " ".join(
+        [
+            _normalize_whitespace(str(unit.get("title", ""))),
+            _normalize_whitespace(str(unit.get("goal", ""))),
+            _normalize_whitespace(str(unit.get("query", ""))),
+            _normalize_whitespace(str(unit.get("notes", ""))),
+            _normalize_whitespace(str(unit.get("instructions", ""))),
+        ]
+    ).strip()
+    unit_keywords = _tokenize_keywords(unit_text)
+    ranked_sources = sorted(
+        official_sources,
+        key=lambda item: (
+            _count_keyword_overlap(f"{item['title']} {item['url']}", unit_keywords),
+            1 if item["title"] else 0,
+            item["url"],
+        ),
+        reverse=True,
+    )
+    return ranked_sources[0]["url"]
 
 
 def _repair_research_units(
@@ -1876,6 +1972,13 @@ def _repair_research_units(
                     str(normalized.get("goal", "")),
                     str(normalized.get("title", "")),
                 )
+            if not url and continuation.mode == "continue":
+                url = _official_doc_carry_forward_url(normalized, continuation=continuation)
+                if url:
+                    _append_unique(
+                        normalize_actions,
+                        f"filled_{unit_type}_url_from_carry_forward:{unit_id}",
+                    )
             if url:
                 normalized["url"] = url
                 _append_unique(normalize_actions, f"filled_{unit_type}_url:{unit_id}")
@@ -3925,6 +4028,8 @@ class DeepResearchRuntime:
             ],
             limit=6,
         )
+        if not continuation_focus and _normalize_whitespace(continuation.previous_summary):
+            continuation_focus = [continuation.previous_summary]
         raw_plan = {
             "brief": {
                 "objective": salvage_queries[0],
