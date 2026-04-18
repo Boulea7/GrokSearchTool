@@ -454,6 +454,93 @@ def _planning_validation_error(code: str, message: str, details: list | None = N
     return payload
 
 
+def _is_machine_error_code(value: object) -> bool:
+    return isinstance(value, str) and bool(re.fullmatch(r"[a-z0-9_]+", value))
+
+
+def _normalize_string_list_alias(values: Optional[list[str]]) -> list[str]:
+    normalized: list[str] = []
+    for item in values or []:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        if stripped:
+            normalized.append(stripped)
+    return normalized
+
+
+def _normalize_nested_string_list_alias(values: Optional[list[list[str]]]) -> list[list[str]]:
+    normalized: list[list[str]] = []
+    for group in values or []:
+        if not isinstance(group, list):
+            continue
+        normalized_group = _normalize_string_list_alias(group)
+        if normalized_group:
+            normalized.append(normalized_group)
+    return normalized
+
+
+def _planning_error_code_and_message(result: dict[str, Any]) -> tuple[str, str] | None:
+    raw_error = result.get("error")
+    if not isinstance(raw_error, str) or not raw_error.strip():
+        return None
+    if _is_machine_error_code(raw_error) and isinstance(result.get("message"), str):
+        return None
+
+    message = raw_error.strip()
+    if message.startswith("Phase '") and " requires '" in message:
+        return "phase_order_violation", message
+    if message.startswith("Level ") and " planning completes after " in message:
+        return "phase_not_allowed_for_level", message
+    if message.startswith("Duplicate tool mapping for sub_query_id:"):
+        return "duplicate_tool_mapping", message
+    if message.startswith("Duplicate sub-query id:"):
+        return "duplicate_sub_query_id", message
+    if message.startswith("Unknown sub-query id:"):
+        return "unknown_sub_query_id", message
+    if message.startswith("Duplicate execution id:"):
+        return "duplicate_execution_id", message
+    if message.startswith("Missing sub-query ids in execution plan:"):
+        return "missing_execution_ids", message
+    if message.startswith("Dependency order violation:"):
+        return "dependency_order_violation", message
+    if message.startswith("Invalid execution_order payload:"):
+        return "invalid_execution_order_payload", message
+    if "revision would invalidate downstream phases" in message:
+        return "downstream_phase_conflict", message
+    if message.startswith("Unknown phase:"):
+        return "invalid_phase", message
+    if message.startswith("revises_phase must match phase when revision is enabled:"):
+        return "revises_phase_mismatch", message
+    return "planning_error", message
+
+
+def _normalize_planning_public_result(result: dict[str, Any]) -> dict[str, Any]:
+    normalized = _planning_error_code_and_message(result)
+    if normalized is None:
+        return result
+
+    error_code, message = normalized
+    return {
+        **result,
+        "error": error_code,
+        "message": result.get("message") or message,
+    }
+
+
+def _process_planning_phase(*, phase: str, thought: str, session_id: str = "", is_revision: bool = False, confidence: float = 1.0, phase_data: dict | list | None = None) -> dict:
+    return _normalize_planning_public_result(
+        planning_engine.process_phase(
+            phase=phase,
+            thought=thought,
+            session_id=session_id,
+            is_revision=is_revision,
+            confidence=confidence,
+            phase_data=phase_data,
+        )
+    )
+
+
 def _format_validation_details(exc: ValidationError) -> list[dict]:
     return [
         {
@@ -2954,17 +3041,66 @@ def _render_json_string_or_object(payload: dict[str, Any], *, response_format: s
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def _build_object_envelope(
+    *,
+    ok: bool,
+    message: str,
+    error: str | None = None,
+    data: Any = None,
+) -> dict[str, Any]:
+    return {
+        "ok": ok,
+        "error": error,
+        "message": message,
+        "data": data,
+    }
+
+
+def _render_legacy_or_object_envelope(
+    *,
+    response_format: str,
+    ok: bool,
+    message: str,
+    error: str | None = None,
+    data: Any = None,
+    legacy_payload: dict[str, Any],
+) -> str | dict[str, Any]:
+    if _normalize_response_format(response_format) == "object":
+        return _build_object_envelope(ok=ok, error=error, message=message, data=data)
+    return json.dumps(legacy_payload, ensure_ascii=False, indent=2)
+
+
+def _classify_web_map_error(result: str) -> str:
+    normalized = (result or "").strip()
+    if normalized.startswith("配置错误:"):
+        return "config_error"
+    if normalized.startswith("映射超时:"):
+        return "timeout"
+    if normalized.startswith("HTTP错误:"):
+        return "http_error"
+    if normalized.startswith("映射错误:"):
+        return "mapping_error"
+    return "map_failed"
+
+
 def _render_web_map_response(result: str, *, response_format: str) -> str | dict[str, Any] | list[Any]:
     if _normalize_response_format(response_format) != "object":
         return result
 
     try:
-        return json.loads(result)
+        return _build_object_envelope(
+            ok=True,
+            error=None,
+            message="映射成功",
+            data=json.loads(result),
+        )
     except json.JSONDecodeError:
-        return {
-            "status": "error",
-            "message": result,
-        }
+        return _build_object_envelope(
+            ok=False,
+            error=_classify_web_map_error(result),
+            message=result,
+            data=None,
+        )
 
 
 @mcp.tool(
@@ -3523,7 +3659,7 @@ async def switch_model(
         else:
             message = f"模型已从 {previous_model} 切换到 {current_model}"
 
-        result = {
+        legacy_result = {
             "status": "成功",
             "previous_model": previous_model,
             "previous_model_source": previous_model_source,
@@ -3534,20 +3670,50 @@ async def switch_model(
             "config_file": str(config.config_file)
         }
 
-        return _render_json_string_or_object(result, response_format=response_format)
+        return _render_legacy_or_object_envelope(
+            response_format=response_format,
+            ok=True,
+            error=None,
+            message=message,
+            data={
+                "previous_model": previous_model,
+                "previous_model_source": previous_model_source,
+                "current_model": current_model,
+                "runtime_model_source": current_model_source,
+                "runtime_model_source_label": current_model_source_label,
+                "config_file": str(config.config_file),
+            },
+            legacy_payload=legacy_result,
+        )
 
     except ValueError as e:
-        result = {
+        message = f"切换模型失败: {str(e)}"
+        legacy_result = {
             "status": "失败",
-            "message": f"切换模型失败: {str(e)}"
+            "message": message,
         }
-        return _render_json_string_or_object(result, response_format=response_format)
+        return _render_legacy_or_object_envelope(
+            response_format=response_format,
+            ok=False,
+            error="config_error",
+            message=message,
+            data=None,
+            legacy_payload=legacy_result,
+        )
     except Exception as e:
-        result = {
+        message = f"未知错误: {str(e)}"
+        legacy_result = {
             "status": "失败",
-            "message": f"未知错误: {str(e)}"
+            "message": message,
         }
-        return _render_json_string_or_object(result, response_format=response_format)
+        return _render_legacy_or_object_envelope(
+            response_format=response_format,
+            ok=False,
+            error="unexpected_error",
+            message=message,
+            data=None,
+            legacy_payload=legacy_result,
+        )
 
 
 @mcp.tool(
@@ -3573,13 +3739,25 @@ async def toggle_builtin_tools(
     response_format: Annotated[Literal["json_string", "object"], "Response format. Use 'object' for a structured return value; default 'json_string' preserves the legacy contract."] = "json_string",
 ) -> str | dict[str, Any]:
     def build_error(message: str, *, file_path: str = "", error_code: str) -> str | dict[str, Any]:
-        return _render_json_string_or_object({
+        legacy_payload = {
             "blocked": False,
             "deny_list": [],
             "file": file_path,
             "message": message,
             "error": error_code,
-        }, response_format=response_format)
+        }
+        return _render_legacy_or_object_envelope(
+            response_format=response_format,
+            ok=False,
+            error=error_code,
+            message=message,
+            data={
+                "blocked": False,
+                "deny_list": [],
+                "file": file_path,
+            },
+            legacy_payload=legacy_payload,
+        )
 
     root = _find_git_root()
     if root is None:
@@ -3670,13 +3848,25 @@ async def toggle_builtin_tools(
     else:
         msg = f"官方工具当前{'已禁用' if blocked else '已启用'}"
 
-    return _render_json_string_or_object({
+    legacy_payload = {
         "blocked": blocked,
         "deny_list": deny,
         "file": str(settings_path),
         "message": msg,
         "error": None,
-    }, response_format=response_format)
+    }
+    return _render_legacy_or_object_envelope(
+        response_format=response_format,
+        ok=True,
+        error=None,
+        message=msg,
+        data={
+            "blocked": blocked,
+            "deny_list": deny,
+            "file": str(settings_path),
+        },
+        legacy_payload=legacy_payload,
+    )
 
 
 def _get_planning_sub_queries(session) -> list[dict]:
@@ -3940,9 +4130,13 @@ async def plan_intent(
         IntentOutput(**data)
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid intent input.", _format_validation_details(exc))
-    return planning_engine.process_phase(
-        phase="intent_analysis", thought=thought, session_id=session_id,
-        is_revision=is_revision, confidence=confidence, phase_data=data,
+    return _process_planning_phase(
+        phase="intent_analysis",
+        thought=thought,
+        session_id=session_id,
+        is_revision=is_revision,
+        confidence=confidence,
+        phase_data=data,
     )
 
 
@@ -3980,11 +4174,18 @@ async def plan_complexity(
         )
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid complexity input.", _format_validation_details(exc))
-    return planning_engine.process_phase(
-        phase="complexity_assessment", thought=thought, session_id=session_id,
-        is_revision=is_revision, confidence=confidence,
-        phase_data={"level": level, "estimated_sub_queries": estimated_sub_queries,
-                     "estimated_tool_calls": estimated_tool_calls, "justification": justification},
+    return _process_planning_phase(
+        phase="complexity_assessment",
+        thought=thought,
+        session_id=session_id,
+        is_revision=is_revision,
+        confidence=confidence,
+        phase_data={
+            "level": level,
+            "estimated_sub_queries": estimated_sub_queries,
+            "estimated_tool_calls": estimated_tool_calls,
+            "justification": justification,
+        },
     )
 
 
@@ -4002,6 +4203,7 @@ async def plan_sub_query(
     boundary: Annotated[str, "What this excludes — mutual exclusion with siblings"],
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
     depends_on: Annotated[str, "Comma-separated prerequisite IDs"] = "",
+    depends_on_list: Annotated[Optional[list[str]], "Structured prerequisite IDs. Preferred over depends_on when provided."] = None,
     tool_hint: Annotated[Optional[Literal["web_search", "web_fetch", "web_map"]], "web_search | web_fetch | web_map"] = None,
     is_revision: Annotated[bool, "True to replace all sub-queries"] = False,
 ) -> dict:
@@ -4010,8 +4212,13 @@ async def plan_sub_query(
         return _planning_session_error(session_id)
     normalized_id = id.strip()
     item = {"id": normalized_id, "goal": goal, "expected_output": expected_output, "boundary": boundary}
-    if depends_on:
-        item["depends_on"] = _split_csv(depends_on)
+    normalized_depends_on = (
+        _normalize_string_list_alias(depends_on_list)
+        if depends_on_list is not None
+        else _split_csv(depends_on)
+    )
+    if normalized_depends_on:
+        item["depends_on"] = normalized_depends_on
     if tool_hint:
         item["tool_hint"] = tool_hint
     try:
@@ -4022,9 +4229,13 @@ async def plan_sub_query(
         validation_error = _validate_sub_query_item(session, item, is_revision)
         if validation_error:
             return validation_error
-    return planning_engine.process_phase(
-        phase="query_decomposition", thought=thought, session_id=session_id,
-        is_revision=is_revision, confidence=confidence, phase_data=item,
+    return _process_planning_phase(
+        phase="query_decomposition",
+        thought=thought,
+        session_id=session_id,
+        is_revision=is_revision,
+        confidence=confidence,
+        phase_data=item,
     )
 
 
@@ -4074,9 +4285,13 @@ async def plan_search_term(
     validation_error = _validate_sub_query_reference(session, normalized_purpose, "purpose")
     if validation_error:
         return validation_error
-    return planning_engine.process_phase(
-        phase="search_strategy", thought=thought, session_id=session_id,
-        is_revision=is_revision, confidence=confidence, phase_data=data,
+    return _process_planning_phase(
+        phase="search_strategy",
+        thought=thought,
+        session_id=session_id,
+        is_revision=is_revision,
+        confidence=confidence,
+        phase_data=data,
     )
 
 
@@ -4093,6 +4308,7 @@ async def plan_tool_mapping(
     reason: Annotated[str, "Why this tool for this sub-query"],
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
     params_json: Annotated[str, "Optional JSON string for tool-specific params"] = "",
+    params: Annotated[Optional[dict[str, Any]], "Optional structured params object. Preferred over params_json when provided."] = None,
     is_revision: Annotated[bool, "True to replace all mappings"] = False,
 ) -> dict:
     session = planning_engine.get_session(session_id)
@@ -4105,7 +4321,9 @@ async def plan_tool_mapping(
         )
     normalized_sub_query_id = sub_query_id.strip()
     item = {"sub_query_id": normalized_sub_query_id, "tool": tool, "reason": reason}
-    if params_json:
+    if params is not None:
+        item["params"] = params
+    elif params_json:
         try:
             parsed_params = json.loads(params_json)
         except json.JSONDecodeError:
@@ -4136,9 +4354,13 @@ async def plan_tool_mapping(
     validation_error = _validate_tool_mapping_item(session, normalized_sub_query_id, is_revision=is_revision)
     if validation_error:
         return validation_error
-    return planning_engine.process_phase(
-        phase="tool_selection", thought=thought, session_id=session_id,
-        is_revision=is_revision, confidence=confidence, phase_data=item,
+    return _process_planning_phase(
+        phase="tool_selection",
+        thought=thought,
+        session_id=session_id,
+        is_revision=is_revision,
+        confidence=confidence,
+        phase_data=item,
     )
 
 
@@ -4150,22 +4372,32 @@ async def plan_tool_mapping(
 async def plan_execution(
     session_id: Annotated[str, "Session ID from plan_intent"],
     thought: Annotated[str, "Reasoning for execution order"],
-    parallel_groups: Annotated[str, "Parallel batches: 'sq1,sq2;sq3,sq4' (semicolon=groups, comma=IDs)"],
-    sequential: Annotated[str, "Comma-separated IDs that must run in order"],
     estimated_rounds: Annotated[int, "Estimated execution rounds"],
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
+    parallel_groups: Annotated[str, "Parallel batches: 'sq1,sq2;sq3,sq4' (semicolon=groups, comma=IDs)"] = "",
+    sequential: Annotated[str, "Comma-separated IDs that must run in order"] = "",
+    parallel: Annotated[Optional[list[list[str]]], "Structured parallel batches. Preferred over parallel_groups when provided."] = None,
+    sequential_list: Annotated[Optional[list[str]], "Structured sequential IDs. Preferred over sequential when provided."] = None,
     is_revision: Annotated[bool, "True to overwrite"] = False,
 ) -> dict:
     if not planning_engine.get_session(session_id):
         return _planning_session_error(session_id)
-    parallel = [_split_csv(g) for g in parallel_groups.split(";") if g.strip()] if parallel_groups else []
-    seq = _split_csv(sequential)
+    normalized_parallel = (
+        _normalize_nested_string_list_alias(parallel)
+        if parallel is not None
+        else [_split_csv(g) for g in parallel_groups.split(";") if g.strip()]
+    )
+    seq = (
+        _normalize_string_list_alias(sequential_list)
+        if sequential_list is not None
+        else _split_csv(sequential)
+    )
     session = planning_engine.get_session(session_id)
     overwrite_error = _validate_singleton_phase_overwrite(session, "execution_order", is_revision)
     if overwrite_error:
         return overwrite_error
     try:
-        ExecutionOrderOutput(parallel=parallel, sequential=seq, estimated_rounds=estimated_rounds)
+        ExecutionOrderOutput(parallel=normalized_parallel, sequential=seq, estimated_rounds=estimated_rounds)
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid execution plan input.", _format_validation_details(exc))
     if "tool_selection" in session.phases or "execution_order" in session.phases:
@@ -4175,13 +4407,16 @@ async def plan_execution(
         validation_error = _validate_tool_mapping_coverage(session)
         if validation_error:
             return validation_error
-        validation_error = _validate_execution_plan(session, parallel, seq)
+        validation_error = _validate_execution_plan(session, normalized_parallel, seq)
         if validation_error:
             return validation_error
-    return planning_engine.process_phase(
-        phase="execution_order", thought=thought, session_id=session_id,
-        is_revision=is_revision, confidence=confidence,
-        phase_data={"parallel": parallel, "sequential": seq, "estimated_rounds": estimated_rounds},
+    return _process_planning_phase(
+        phase="execution_order",
+        thought=thought,
+        session_id=session_id,
+        is_revision=is_revision,
+        confidence=confidence,
+        phase_data={"parallel": normalized_parallel, "sequential": seq, "estimated_rounds": estimated_rounds},
     )
 
 
