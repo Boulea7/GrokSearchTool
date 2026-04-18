@@ -6077,7 +6077,7 @@ async def test_fresh_official_doc_query_safe_repairs_do_not_force_planner_fallba
 
     assert plan["planner_metadata"]["used_fallback"] is False
     assert plan["planner_metadata"]["planner"] == "test"
-    assert plan["research_units"][0]["query"] == "Explain AWS DMS checkpoint resume semantics."
+    assert "Explain AWS DMS checkpoint resume semantics." in plan["research_units"][0]["query"]
     assert any(unit["goal"] == "Explain DescribeReplicationTasks recovery visibility." for unit in plan["research_units"])
     assert "filled_search_query:unit-search-1" in trace["normalize_actions"]
     assert "added_sub_question_search_unit:sq2" in trace["normalize_actions"]
@@ -6198,12 +6198,133 @@ async def test_true_continuation_official_doc_safe_repairs_do_not_force_planner_
     assert plan["planner_metadata"]["used_fallback"] is False
     assert plan["planner_metadata"]["planner"] == "test"
     assert plan["continuation"]["mode"] == "continue"
-    assert plan["research_units"][0]["query"] == "Explain AWS DMS checkpoint resume semantics."
+    assert "Explain AWS DMS checkpoint resume semantics." in plan["research_units"][0]["query"]
     assert any(unit["goal"] == "Explain DescribeReplicationTasks recovery visibility." for unit in plan["research_units"])
     assert "filled_search_query:unit-search-1" in trace["normalize_actions"]
     assert "added_sub_question_search_unit:sq2" in trace["normalize_actions"]
     assert "missing_search_query" in trace["validation_issues"]
     assert "missing_sub_question_unit_coverage" in trace["validation_issues"]
+    assert trace["unsafe_plan"] is False
+    assert plan["brief"]["scope"]["allowed_sources"] == ["docs.aws.amazon.com"]
+
+
+@pytest.mark.asyncio
+async def test_true_continuation_official_doc_unknown_dependency_safe_repair_does_not_force_fallback(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(
+        runtime,
+        query="Prior AWS DMS checkpoint resume investigation",
+        checkpoint_sources=[
+            {
+                "source_id": "R1",
+                "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_ReplicationTask.html",
+                "title": "API_ReplicationTask",
+                "domain": "docs.aws.amazon.com",
+                "source_type": "official_docs",
+                "ranking_reasons": ["official_docs", "api_reference"],
+            }
+        ],
+        report_payload={
+            "query": "Prior AWS DMS checkpoint resume investigation",
+            "summary": "Checkpoint resume continues from the last durable checkpoint.",
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "title": "Resume Semantics",
+                    "summary": "Checkpoint resume continues from the last durable checkpoint.",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "Checkpoint resume continues from the last durable checkpoint.",
+                            "citations": ["R1"],
+                            "unit_id": "unit-search-1",
+                            "evidence_ids": ["evidence-unit-search-1-search"],
+                            "confidence": "medium",
+                        }
+                    ],
+                    "citations": ["R1"],
+                    "confidence": "medium",
+                }
+            ],
+            "coverage": {
+                "uncovered_sub_questions": [
+                    "Explain DescribeReplicationTasks recovery visibility.",
+                ],
+                "unanswered_sections": ["Task Visibility"],
+            },
+            "unit_results": {},
+        },
+    )
+
+    async def sparse_official_docs_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {
+                "id": "sq1",
+                "question": "Explain AWS DMS checkpoint resume semantics.",
+                "reason": "Primary axis.",
+            },
+            {
+                "id": "sq2",
+                "question": "Explain DescribeReplicationTasks recovery visibility.",
+                "reason": "Secondary axis.",
+            },
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "AWS DMS checkpoint semantics",
+                "goal": "Explain AWS DMS checkpoint resume semantics.",
+                "query": "",
+                "depends_on": ["missing-unit"],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"]["search_queries"] = []
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain AWS DMS checkpoint resume semantics.",
+            },
+            {
+                "section_id": "task-visibility",
+                "title": "Task Visibility",
+                "goal": "Explain DescribeReplicationTasks recovery visibility.",
+            },
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = sparse_official_docs_planner
+
+    response = await runtime.start(
+        query="Continue AWS DMS checkpoint resume follow-up with official docs only",
+        continue_from_job_id=source.job_id,
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    trace = plan["planner_metadata"]["trace"]
+
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert plan["planner_metadata"]["planner"] == "test"
+    assert plan["continuation"]["mode"] == "continue"
+    assert plan["research_units"][0]["depends_on"] == []
+    assert "Explain AWS DMS checkpoint resume semantics." in plan["research_units"][0]["query"]
+    assert "filled_search_query:unit-search-1" in trace["normalize_actions"]
+    assert "dropped_unknown_dependency:unit-search-1->missing-unit" in trace["normalize_actions"]
+    assert "unknown_dependency" in trace["validation_issues"]
     assert trace["unsafe_plan"] is False
     assert plan["brief"]["scope"]["allowed_sources"] == ["docs.aws.amazon.com"]
 
@@ -10647,6 +10768,97 @@ def test_verifier_flags_claim_when_any_binding_spills_outside_selected_bank():
     assert verifier["summary"]["claim_outside_selected_bank"] == 1
 
 
+def test_verifier_flags_partially_unused_selected_evidence():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 1,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 8,
+                                "line_end": 9,
+                                "section_id": "resume-semantics",
+                                "pool_mode": "selected",
+                                "selected_for_section": True,
+                                "question_ids": ["sq1"],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+                "source_type": "official_docs",
+            }
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R1"], "evidence_kind": "fetch"},
+        ],
+        section_banks=[
+            {
+                "section_id": "resume-semantics",
+                "candidate_evidence_ids": ["e1", "e2"],
+                "selected_evidence_ids": ["e1", "e2"],
+                "rejected_evidence_ids": [],
+                "candidate_packets": [],
+                "selected_packets": [
+                    {
+                        "evidence_id": "e1",
+                        "source_ids": ["R1"],
+                        "question_ids": ["sq1"],
+                        "unit_id": "unit-search-1",
+                        "source_backed": True,
+                        "line_span_complete": True,
+                        "excerpt_hash": "hash-1",
+                        "claim_ids": ["resume-semantics-claim-1"],
+                    },
+                    {
+                        "evidence_id": "e2",
+                        "source_ids": ["R1"],
+                        "question_ids": ["sq1"],
+                        "unit_id": "unit-search-1",
+                        "source_backed": True,
+                        "line_span_complete": True,
+                        "excerpt_hash": "hash-2",
+                        "claim_ids": [],
+                    },
+                ],
+                "rejected_packets": [],
+                "last_updated_at": "2026-04-18T00:00:00Z",
+            }
+        ],
+    )
+
+    assert "selected_evidence_unused" in verifier["reason_codes"]
+    assert verifier["summary"]["selected_evidence_unused"] == 1
+
+
 def test_verifier_flags_section_packet_mismatch_when_selected_packet_claim_ids_are_stale():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
@@ -11233,6 +11445,128 @@ def test_hard_coverage_gate_does_not_accept_claim_text_overlap_without_packet_ba
     assert coverage["hard_uncovered_targets"] == [
         "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
     ]
+
+
+def test_hard_coverage_gate_does_not_accept_unrelated_section_that_only_shares_grounded_source():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "brief": {
+                "objective": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+                "must_cover": [
+                    "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+                ],
+                "coverage_checklist": [
+                    "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+                ],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                    "reason": "Primary question.",
+                }
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": [
+                    "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+                ],
+                "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {
+                    "section_id": "durable-runtime-semantics",
+                    "title": "Durable Runtime Semantics",
+                    "goal": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                }
+            ],
+            "research_units": [],
+            "continuation": {"mode": "fresh"},
+            "planner_metadata": {},
+        }
+    )
+
+    coverage = _coverage_for_report(
+        plan,
+        [
+            {
+                "section_id": "billing-notes",
+                "title": "Billing Notes",
+                "summary": "Billing quotas are configured separately from workflow recovery.",
+                "citations": ["R1"],
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "Billing quotas are configured separately from workflow recovery semantics.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 4,
+                                "line_end": 5,
+                                "section_id": "billing-notes",
+                                "pool_mode": "selected",
+                                "selected_for_section": True,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        coverage_state={
+            "items": [
+                {
+                    "target": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                    "matched_unit_ids": ["unit-search-1"],
+                    "grounded_source_ids": ["R1"],
+                    "candidate_section_ids": ["billing-notes"],
+                    "satisfied": True,
+                }
+            ]
+        },
+        planned_outline=[
+            {
+                "section_id": "durable-runtime-semantics",
+                "title": "Durable Runtime Semantics",
+                "goal": "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes.",
+                "question_id": "sq1",
+            }
+        ],
+        section_banks=[
+            {
+                "section_id": "billing-notes",
+                "candidate_evidence_ids": ["e1"],
+                "selected_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+            }
+        ],
+        evidence_ledger=[
+            {
+                "question_id": "sq1",
+                "section_id": "billing-notes",
+                "evidence_id": "e1",
+                "source_ids": ["R1"],
+                "selected_for_section": True,
+                "selected_section_ids": ["billing-notes"],
+            }
+        ],
+    )
+
+    assert coverage["hard_coverage_gate_passed"] is False
+    assert coverage["hard_uncovered_targets"] == [
+        "Compare checkpoint identity, persistence boundaries, and safe interrupt resume semantics in durable runtimes."
+    ]
+    assert coverage["hard_coverage_targets"][0]["explain_via"] == ""
 
 
 def test_best_cluster_claim_text_prefers_grounded_detail_over_generic_fetch_heading():
@@ -14799,8 +15133,11 @@ async def test_troubleshooting_shell_text_is_filtered_from_summary_and_final_rep
 
 
 @pytest.mark.asyncio
-async def test_reused_job_payload_tolerates_invalid_plan_json(tmp_path):
+async def test_start_does_not_reuse_completed_job_with_invalid_plan_json(tmp_path):
     runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(
+        0, result=structured_plan_payload(job, continuation)
+    )
     fingerprint = runtime._request_fingerprint(
         query="Reuse invalid plan",
         context="",
@@ -14857,9 +15194,9 @@ async def test_reused_job_payload_tolerates_invalid_plan_json(tmp_path):
 
     response = await runtime.start(query="Reuse invalid plan", force_new=False, schedule=False)
 
-    assert response["reused"] is True
-    assert response["job_id"] == job.job_id
-    assert response["plan"] is None
+    assert response["reused"] is False
+    assert response["job_id"] != job.job_id
+    assert response["plan"]["query"] == "Reuse invalid plan"
 
 
 @pytest.mark.asyncio

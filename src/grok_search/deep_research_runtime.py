@@ -203,6 +203,7 @@ _SAFE_SEARCH_ONLY_REPAIR_ACTION_PREFIXES = (
     "filled_search_query:",
     "degraded_fetch_without_url_to_search:",
     "degraded_map_without_url_to_search:",
+    "dropped_unknown_dependency:",
     "added_sub_question_search_unit:",
 )
 _SAFE_SEARCH_ONLY_REPAIR_ISSUES = {
@@ -210,7 +211,9 @@ _SAFE_SEARCH_ONLY_REPAIR_ISSUES = {
     "missing_fetch_url",
     "missing_map_url",
     "missing_sub_question_unit_coverage",
+    "unknown_dependency",
 }
+_SAFE_SEARCH_ONLY_BLOCKED_REASON_PREFIXES = ("unknown_dependency:",)
 _NON_BLOCKING_VERIFIER_REASON_CODES = {
     "medium_single_source_search_only",
     "selected_evidence_unused",
@@ -2015,8 +2018,15 @@ def _unsafe_plan_reason(
             and "expanded_outline_from_follow_up_surface" not in normalize_actions
         ):
             return {"issue": issue, "reason": "unsafe_continuation_outline"}
-    if blocked_reasons:
-        return {"issue": blocked_reasons[0], "reason": "blocked_plan_dependency"}
+    effective_blocked_reasons = list(blocked_reasons)
+    if safe_search_only_repairs_allowed:
+        effective_blocked_reasons = [
+            reason
+            for reason in effective_blocked_reasons
+            if not reason.startswith(_SAFE_SEARCH_ONLY_BLOCKED_REASON_PREFIXES)
+        ]
+    if effective_blocked_reasons:
+        return {"issue": effective_blocked_reasons[0], "reason": "blocked_plan_dependency"}
     return None
 
 
@@ -3537,6 +3547,11 @@ class DeepResearchRuntime:
                 reused_job = None
             if reused_job is not None and reused_job.status in {"completed", "interrupted"}:
                 if not _final_artifact_bundle_is_usable(self.store, reused_job.job_id):
+                    reused_job = None
+            if reused_job is not None:
+                try:
+                    self._read_plan(reused_job.job_id, reused_job)
+                except Exception:
                     reused_job = None
         if reused_job is not None:
             if reused_job.status == "interrupted" and _job_prefers_resolved_final_bundle(reused_job):
@@ -6921,6 +6936,12 @@ def _coverage_for_report(
     for target in _stop_policy_targets(plan):
         target_tokens = _tokenize_keywords(target)
         coverage_threshold = max(2, min(4, max(1, len(target_tokens) // 2)))
+        target_question_ids = {
+            item.id
+            for item in plan.sub_questions
+            if _normalize_whitespace(item.question) == _normalize_whitespace(target)
+            or _count_keyword_overlap(item.question, target_tokens) >= coverage_threshold
+        }
         matching_section_ids: list[str] = []
         matching_claim_ids: list[str] = []
         for section in grounded_sections:
@@ -7005,10 +7026,27 @@ def _coverage_for_report(
                     )
                     for claim in section.get("claims", []) or []
                 )
+                section_text = " ".join(
+                    [
+                        str(section.get("title", "") or ""),
+                        str(section.get("summary", "") or ""),
+                    ]
+                )
+                section_text_aligned = _count_keyword_overlap(section_text, target_tokens) >= coverage_threshold
+                section_question_ids = set(_section_question_ids(section))
+                packet_question_ids = {
+                    str(question_id).strip()
+                    for packet in section_bank.get("selected_packets", []) or []
+                    if isinstance(packet, dict)
+                    for question_id in packet.get("question_ids", []) or []
+                    if str(question_id).strip()
+                }
+                question_aligned = bool(target_question_ids & (section_question_ids | packet_question_ids))
                 if (
                     section_id
                     and section_citations & grounded_source_ids
                     and (has_packet_support or has_binding_support)
+                    and (section_text_aligned or question_aligned)
                     and section_id not in matching_section_ids
                 ):
                     matching_section_ids.append(section_id)
@@ -7524,8 +7562,13 @@ def _build_verifier_diagnostics(
                     flagged_claim_ids.append(claim_id)
                 integrity_counts["invalid_source_backed_span"] += len(null_span_bindings)
                 reason_codes.append("invalid_source_backed_span")
-        if selected_evidence_ids and not used_selected_evidence_ids:
-            integrity_counts["selected_evidence_unused"] += len(selected_evidence_ids)
+        unused_selected_evidence_ids = [
+            evidence_id
+            for evidence_id in selected_evidence_ids
+            if evidence_id not in used_selected_evidence_ids
+        ]
+        if unused_selected_evidence_ids:
+            integrity_counts["selected_evidence_unused"] += len(unused_selected_evidence_ids)
             reason_codes.append("selected_evidence_unused")
         if selected_packets and section.get("claims"):
             packet_claim_ids = {
