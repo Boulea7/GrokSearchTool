@@ -9,6 +9,8 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
 PROBE_PUBLIC_SURFACE_FIXTURES = (
     "eval_probe_round24_worker_restart_public_surface.json",
     "eval_probe_round26_aws_dms_public_surface.json",
+    "eval_probe_round30_aws_dms_official_doc.json",
+    "eval_probe_round30_lifecycle_public_surface.json",
 )
 PROBE_PUBLIC_SURFACE_METRICS = (
     "release_gate_consistency",
@@ -604,6 +606,7 @@ def test_citation_faithfulness_probe_goldens(fixture_name):
         "eval_probe_round20_aws_dms.json",
         "eval_probe_round22_coverage_ledger.json",
         "eval_probe_round24_aws_dms_fallback_coverage.json",
+        "eval_probe_round30_aws_dms_official_doc.json",
     ],
 )
 def test_coverage_completeness_probe_goldens(fixture_name):
@@ -656,6 +659,7 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
         "eval_probe_round19_lifecycle_b.json",
         "eval_probe_round20_lifecycle.json",
         "eval_probe_round24_aws_dms_fallback_coverage.json",
+        "eval_probe_round30_aws_dms_official_doc.json",
     ],
 )
 def test_planner_boundary_probe_goldens(fixture_name):
@@ -683,6 +687,7 @@ def test_planner_boundary_probe_goldens(fixture_name):
         "eval_probe_round22_noise_filters.json",
         "eval_probe_round23_aws_dms_ranking_noise.json",
         "eval_probe_round24_aws_dms_ranking_success.json",
+        "eval_probe_round30_aws_dms_official_doc.json",
     ],
 )
 def test_ranking_noise_suppression_probe_goldens(fixture_name):
@@ -717,6 +722,7 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
         "eval_probe_round22_noise_filters.json",
         "eval_probe_round24_aws_dms_fallback_coverage.json",
         "eval_probe_round24_aws_dms_ranking_success.json",
+        "eval_probe_round30_aws_dms_official_doc.json",
     ],
 )
 def test_diagnostics_consistency_probe_goldens(fixture_name):

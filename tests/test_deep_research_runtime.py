@@ -788,6 +788,119 @@ def seed_round26_worker_restart_dispatch_runtime_job(runtime: DeepResearchRuntim
     return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot}
 
 
+def seed_round30_worker_restart_live_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round30_worker_restart_live.json")
+    final_status = snapshot["final_status"]
+    source = {
+        "source_id": "R11",
+        "url": "https://docs.aws.amazon.com/sagemaker/latest/dg/model-checkpoints-resume.html",
+        "title": "Resume training from a checkpoint",
+        "domain": "docs.aws.amazon.com",
+        "source_type": "official_docs",
+    }
+    report_payload = {
+        "query": snapshot["query"],
+        "summary": "Round30 worker restart replay summary.",
+        "status": final_status["report_status"],
+        "sections": [],
+        "unit_results": {},
+        "runtime": {
+            "warnings": list(final_status["runtime_warnings"]),
+            "verifier": {"passed": False, "reason_codes": ["coverage_incomplete"]},
+            "release_gate": {
+                "passed": False,
+                "reason_codes": ["coverage_incomplete"],
+                "all_reason_codes": ["coverage_incomplete"],
+                "soft_reason_codes": [],
+            },
+        },
+    }
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-round30-worker-restart-live",
+        status=final_status["status"],
+        phase=final_status["phase"],
+        effort="ultra",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=600,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=final_status["attempt_count"],
+        current_checkpoint=final_status["current_checkpoint"],
+        finished_at=utc_now_iso(),
+        last_error=final_status["last_error"],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps({"query": snapshot["query"], "planner_metadata": {"planner": "fallback", "used_fallback": True}}),
+        "application/json",
+    )
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {"kind": "sources.json", "content": json.dumps([source]), "content_type": "application/json"},
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {source["source_id"]: source}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {"kind": "report.json", "content": json.dumps(report_payload), "content_type": "application/json"},
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRound30 worker restart replay summary.\n",
+                "content_type": "text/markdown",
+            },
+            {"kind": "evidence_items.json", "content": "[]", "content_type": "application/json"},
+            {
+                "kind": "coverage.json",
+                "content": json.dumps(
+                    {
+                        "query": snapshot["query"],
+                        "planned_section_ids": [],
+                        "answered_section_ids": [],
+                        "unanswered_sections": ["Open Questions"],
+                        "planned_sub_question_ids": [],
+                        "covered_sub_question_ids": [],
+                        "uncovered_sub_questions": ["Coverage incomplete"],
+                        "coverage_gate_passed": True,
+                        "hard_coverage_gate_passed": False,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": json.dumps(
+                    {
+                        "total_claims": 0,
+                        "ungrounded_claims": 0,
+                        "single_source_claims": 0,
+                        "missing_evidence_binding_claims": 0,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {"kind": "verifier.json", "content": json.dumps(report_payload["runtime"]["verifier"]), "content_type": "application/json"},
+        ],
+    )
+    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_5"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event["type"],
+            phase=event["phase"],
+            message=event.get("message") or event["type"],
+            data=event.get("data") or {},
+        )
+    return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot, "batch_id": persisted[0]["metadata"]["batch_id"]}
+
+
 @pytest.mark.asyncio
 async def test_plan_start_persists_outline_state_and_empty_evidence_artifacts(tmp_path):
     runtime = build_runtime(tmp_path)
@@ -7297,6 +7410,54 @@ async def test_round26_worker_restart_dispatch_runtime_status_and_result_match_f
 
 
 @pytest.mark.asyncio
+async def test_round30_worker_restart_events_after_seq_match_fixture(tmp_path):
+    runtime = build_runtime(tmp_path)
+    seeded = seed_round30_worker_restart_live_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    resumed_window = await runtime.events(
+        job.job_id,
+        after_seq=snapshot["resume_window"]["after_seq"],
+        limit=20,
+    )
+
+    assert resumed_window["next_after_seq"] == snapshot["resume_window"]["next_after_seq"]
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in resumed_window["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["resume_events_after_seq_5"]
+    ]
+    assert resumed_window["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
+    assert resumed_window["events"][1]["type"] == "checkpoint_restored"
+
+
+@pytest.mark.asyncio
+async def test_round30_worker_restart_status_and_result_match_fixture(tmp_path):
+    runtime = build_runtime(tmp_path)
+    seeded = seed_round30_worker_restart_live_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+
+    assert status["status"] == snapshot["final_status"]["status"]
+    assert status["phase"] == snapshot["final_status"]["phase"]
+    assert status["attempt_count"] == snapshot["final_status"]["attempt_count"]
+    assert status["runtime_warnings"] == snapshot["final_status"]["runtime_warnings"]
+    assert status["constraint_violations"] == snapshot["final_status"]["constraint_violations"]
+    assert result["status"] == snapshot["final_status"]["status"]
+    assert result["phase"] == snapshot["final_status"]["phase"]
+    assert result["report"] is None
+    assert result["final_report"] is None
+    assert result["sources"] is None
+    assert_fixture_public_surface(snapshot, status=status, result=result, seeded_batch_id=seeded["batch_id"])
+
+
+@pytest.mark.asyncio
 async def test_resume_keeps_distinct_dispatch_checkpoint_identities_across_attempts(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -12638,7 +12799,6 @@ async def test_runtime_uses_active_outline_for_coverage_and_key_findings(monkeyp
     key_findings = next(section for section in result["report"]["sections"] if section["section_id"] == "key-findings")
     coverage_by_id = {item["section_id"]: item for item in coverage["section_coverage"]}
     outline_state = json.loads(runtime.store.read_artifact_text(response["job_id"], "outline_state.json") or "{}")
-
     assert section_ids == [
         "executive-summary",
         "key-findings",
@@ -12704,8 +12864,6 @@ async def test_runtime_allows_medium_single_source_search_only_for_clean_officia
     assert result["report"]["runtime"]["release_gate"]["reason_codes"] == []
     assert "medium_single_source_search_only" not in result["report"]["runtime"]["release_gate"]["soft_reason_codes"]
     assert "medium_single_source_search_only" not in result["report"]["runtime"]["warnings"]
-
-
 @pytest.mark.asyncio
 async def test_runtime_flags_high_null_span_ratio_in_release_gate(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)

@@ -1,0 +1,91 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing",
+    "runtime_warnings": [
+      "planner_fallback_used"
+    ]
+  },
+  "query": "Investigate interrupted, continue, resume, worker restart, and event replay semantics for deep research jobs",
+  "resolved_artifact_batch_id": "20260418T191527-59f5882c",
+  "artifacts": [
+    {
+      "kind": "sources.json",
+      "metadata": {
+        "batch_id": "20260418T191527-59f5882c"
+      }
+    },
+    {
+      "kind": "citations.json",
+      "metadata": {
+        "batch_id": "20260418T191527-59f5882c"
+      }
+    },
+    {
+      "kind": "report.json",
+      "metadata": {
+        "batch_id": "20260418T191527-59f5882c"
+      }
+    },
+    {
+      "kind": "final_report.md",
+      "metadata": {
+        "batch_id": "20260418T191527-59f5882c"
+      }
+    },
+    {
+      "kind": "evidence_items.json",
+      "metadata": {
+        "batch_id": "20260418T191527-59f5882c"
+      }
+    },
+    {
+      "kind": "coverage.json",
+      "metadata": {
+        "batch_id": "20260418T191527-59f5882c"
+      }
+    },
+    {
+      "kind": "grounding.json",
+      "metadata": {
+        "batch_id": "20260418T191527-59f5882c"
+      }
+    },
+    {
+      "kind": "verifier.json",
+      "metadata": {
+        "batch_id": "20260418T191527-59f5882c"
+      }
+    }
+  ],
+  "report": {
+    "status": "degraded",
+    "runtime": {
+      "warnings": [
+        "planner_fallback_used"
+      ],
+      "verifier": {
+        "passed": true,
+        "reason_codes": []
+      },
+      "release_gate": {
+        "passed": true,
+        "reason_codes": [],
+        "all_reason_codes": [],
+        "soft_reason_codes": []
+      }
+    }
+  },
+  "golden": {
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
