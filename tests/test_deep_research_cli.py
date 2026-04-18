@@ -206,6 +206,10 @@ def summary_lines(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.startswith("summary:")]
 
 
+def assert_no_traceback(text: str) -> None:
+    assert "Traceback (most recent call last)" not in text
+
+
 def load_deep_research_fixture(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text())
 
@@ -2138,6 +2142,94 @@ def test_cli_watch_summary_surfaces_last_error_for_existing_state(monkeypatch, c
 
     assert exit_code == 0
     assert "last_error=worker_restarted" in captured.err
+
+
+def test_cli_watch_returns_130_on_keyboard_interrupt(monkeypatch, capsys):
+    async def raising_watch_job(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(deep_research_cli, "_watch_job", raising_watch_job)
+
+    exit_code = deep_research_cli.main(["watch", "job-interrupted", "--interval-seconds", "0.01"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 130
+    assert captured.out == ""
+    assert_no_traceback(captured.err)
+
+
+def test_cli_resume_watch_returns_130_on_keyboard_interrupt_without_canceling(monkeypatch, capsys):
+    class FakeRuntime:
+        def __init__(self):
+            self.cancel_calls = 0
+
+        async def resume(self, job_id, schedule=False):
+            return {
+                "job_id": job_id,
+                "status": "queued",
+                "phase": "researching",
+                "progress_pct": 0.0,
+                "attempt_count": 3,
+                "current_checkpoint": "researching",
+                "cancel_requested": False,
+                "continued_from_job_id": "",
+                "resolved_artifact_batch_id": "",
+                "artifact_fallback_used": False,
+            }
+
+        async def cancel(self, job_id):
+            self.cancel_calls += 1
+            return {"job_id": job_id, "status": "canceled", "cancel_requested": True}
+
+    runtime = FakeRuntime()
+
+    async def raising_watch_job(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    monkeypatch.setattr(deep_research_cli, "_watch_job", raising_watch_job)
+    monkeypatch.setattr(deep_research_cli, "_spawn_worker", lambda job_id: None)
+
+    exit_code = deep_research_cli.main(["resume", "job-resume", "--watch", "--interval-seconds", "0.01"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 130
+    assert runtime.cancel_calls == 0
+    assert_no_traceback(captured.err)
+    assert summary_lines(captured.err) == [
+        "summary: job=job-resume status=queued phase=researching progress=0.0% checkpoint=researching attempts=3 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false"
+    ]
+
+
+def test_cli_events_follow_returns_130_on_keyboard_interrupt_without_canceling(monkeypatch, capsys):
+    class FakeRuntime:
+        def __init__(self):
+            self.cancel_calls = 0
+
+        async def events(self, job_id, after_seq=0, limit=100):
+            raise KeyboardInterrupt
+
+        async def status(self, job_id):
+            return {
+                "job_id": job_id,
+                "status": "running",
+                "phase": "researching",
+            }
+
+        async def cancel(self, job_id):
+            self.cancel_calls += 1
+            return {"job_id": job_id, "status": "canceled", "cancel_requested": True}
+
+    runtime = FakeRuntime()
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+
+    exit_code = deep_research_cli.main(["events", "job-events", "--follow", "--interval-seconds", "0.01"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 130
+    assert runtime.cancel_calls == 0
+    assert captured.out == ""
+    assert_no_traceback(captured.err)
 
 
 def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, tmp_path, capsys):
