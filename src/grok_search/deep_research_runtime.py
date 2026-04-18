@@ -6682,8 +6682,9 @@ def _build_verifier_diagnostics(
             for source_id in evidence_by_id.get(evidence_id, {}).get("source_ids", [])
             if str(source_id).strip()
         }
-        selected_evidence_is_high_trust = bool(selected_evidence_source_ids) and all(
-            source_id in source_registry and _source_is_high_trust(source_registry[source_id])
+        selected_evidence_is_official_docs = bool(selected_evidence_source_ids) and all(
+            source_id in source_registry
+            and str(source_registry[source_id].get("source_type", "")).strip().lower() == "official_docs"
             for source_id in selected_evidence_source_ids
         )
         for claim in section.get("claims", []):
@@ -6768,7 +6769,7 @@ def _build_verifier_diagnostics(
                     and not section_is_gap
                     and bool(selected_evidence_ids)
                     and not rejected_evidence_ids
-                    and selected_evidence_is_high_trust
+                    and selected_evidence_is_official_docs
                 )
                 if not acceptable_official_section:
                     if claim_id:
@@ -7258,6 +7259,9 @@ def _build_section_citations(
             evidence_by_id[evidence_id]
             for evidence_id in _dedupe_preserve_order(rejected_ids)
             if evidence_id in evidence_by_id
+            and _has_gap_signal(
+                f"{evidence_by_id[evidence_id].summary} {evidence_by_id[evidence_id].detail}"
+            )
         ]
         if not rejected_pool:
             return None

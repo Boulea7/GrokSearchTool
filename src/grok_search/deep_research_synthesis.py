@@ -175,6 +175,7 @@ def build_synthesis_outline(
                 "section_id": section_id,
                 "title": title,
                 "goal": title,
+                "question_id": item.id,
                 "status": "grounded",
                 "coverage_state": {},
                 "rewrite_reason": "evidence_ledger",
