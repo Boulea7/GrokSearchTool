@@ -435,6 +435,34 @@ async def test_get_config_info_rejects_unknown_detail_mode():
     assert "detail" in payload["message"]
 
 
+def test_normalize_planning_public_result_prefers_engine_error_code():
+    normalized = server._normalize_planning_public_result(
+        {
+            "error": "Duplicate tool mapping for sub_query_id: sq1",
+            "error_code": "duplicate_tool_mapping",
+            "message": "Duplicate tool mapping for sub_query_id: sq1",
+            "session_id": "abc123",
+        }
+    )
+
+    assert normalized["error"] == "duplicate_tool_mapping"
+    assert normalized["message"] == "Duplicate tool mapping for sub_query_id: sq1"
+    assert normalized["session_id"] == "abc123"
+
+
+def test_normalize_planning_public_result_keeps_legacy_string_prefix_fallback():
+    normalized = server._normalize_planning_public_result(
+        {
+            "error": "Duplicate tool mapping for sub_query_id: sq1",
+            "session_id": "abc123",
+        }
+    )
+
+    assert normalized["error"] == "duplicate_tool_mapping"
+    assert normalized["message"] == "Duplicate tool mapping for sub_query_id: sq1"
+    assert normalized["session_id"] == "abc123"
+
+
 @pytest.mark.asyncio
 async def test_web_search_tool_description_allows_clear_single_hop_direct_use():
     tool = await server.mcp.get_tool("web_search")
