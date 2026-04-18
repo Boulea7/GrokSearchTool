@@ -1,0 +1,344 @@
+{
+  "query": "Investigate interrupted, continue, and resume semantics for deep research jobs",
+  "expected": {
+    "resume_source": "worker_restarted",
+    "checkpoint_kind": "research_unit"
+  },
+  "reconnect_reconcile": {
+    "status": "interrupted",
+    "phase": "researching",
+    "attempt_count": 3,
+    "current_checkpoint": "researching-browse_restate_hitl",
+    "last_error": "worker_restarted"
+  },
+  "initial_events": [
+    {
+      "seq": 1,
+      "type": "job_created",
+      "phase": "planning",
+      "message": "Deep research job created.",
+      "data": {
+        "continuation_mode": "fresh",
+        "plan_only": false
+      }
+    },
+    {
+      "seq": 2,
+      "type": "phase_started",
+      "phase": "planning",
+      "message": "Planning started.",
+      "data": {
+        "unit_count": 7
+      }
+    },
+    {
+      "seq": 3,
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 0
+      }
+    },
+    {
+      "seq": 4,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed temporal_core.",
+      "data": {
+        "effective_model": "grok-4.20-expert-4-agent",
+        "provider_model": "grok-4.20-expert-4-agent",
+        "provider_name": "primary",
+        "sources_count": 10,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 5,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed restate_durable.",
+      "data": {
+        "effective_model": "grok-4.20-expert-4-agent",
+        "provider_model": "grok-4.20-expert-4-agent",
+        "provider_name": "primary",
+        "sources_count": 5,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 6,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed langgraph_interrupts.",
+      "data": {
+        "effective_model": "grok-4.20-expert-4-agent",
+        "provider_model": "grok-4.20-expert-4-agent",
+        "provider_name": "primary",
+        "sources_count": 5,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 7,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research paused after reaching the time budget.",
+      "data": {
+        "attempt_count": 1,
+        "checkpoint_key": "researching-langgraph_interrupts",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 5,
+        "completed_units_count": 3,
+        "reason": "time_budget_exceeded"
+      }
+    },
+    {
+      "seq": 8,
+      "type": "job_resumed",
+      "phase": "researching",
+      "message": "Deep research job resumed from checkpoint.",
+      "data": {
+        "attempt_count": 2,
+        "checkpoint_key": "researching-langgraph_interrupts",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 5,
+        "completed_units_count": 3,
+        "resume_source": "interrupted_resume"
+      }
+    },
+    {
+      "seq": 9,
+      "type": "checkpoint_restored",
+      "phase": "researching",
+      "message": "Deep research restored execution from the latest durable checkpoint.",
+      "data": {
+        "attempt_count": 2,
+        "checkpoint_key": "researching-langgraph_interrupts",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 5,
+        "completed_units_count": 3
+      }
+    },
+    {
+      "seq": 10,
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 3
+      }
+    },
+    {
+      "seq": 11,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed browse_temporal_continue.",
+      "data": {
+        "effective_model": "",
+        "provider_model": "",
+        "provider_name": "",
+        "sources_count": 1,
+        "unit_type": "fetch",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 12,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed browse_langgraph_interrupt.",
+      "data": {
+        "effective_model": "",
+        "provider_model": "",
+        "provider_name": "",
+        "sources_count": 1,
+        "unit_type": "fetch",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 13,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed browse_restate_hitl.",
+      "data": {
+        "effective_model": "",
+        "provider_model": "",
+        "provider_name": "",
+        "sources_count": 1,
+        "unit_type": "fetch",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 14,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research paused after reaching the time budget.",
+      "data": {
+        "attempt_count": 2,
+        "checkpoint_key": "researching-browse_restate_hitl",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 9,
+        "completed_units_count": 6,
+        "reason": "time_budget_exceeded"
+      }
+    },
+    {
+      "seq": 15,
+      "type": "job_resumed",
+      "phase": "researching",
+      "message": "Deep research job resumed from checkpoint.",
+      "data": {
+        "attempt_count": 3,
+        "checkpoint_key": "researching-browse_restate_hitl",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 9,
+        "completed_units_count": 6,
+        "resume_source": "interrupted_resume"
+      }
+    },
+    {
+      "seq": 16,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research interrupted during worker recovery.",
+      "data": {
+        "attempt_count": 3,
+        "checkpoint_key": "researching-browse_restate_hitl",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 9,
+        "reason": "worker_restarted"
+      }
+    }
+  ],
+  "resume_window": {
+    "after_seq": 16,
+    "next_after_seq": 23
+  },
+  "resume_events_after_seq_16": [
+    {
+      "seq": 17,
+      "type": "job_resumed",
+      "phase": "researching",
+      "message": "Deep research job resumed from checkpoint.",
+      "data": {
+        "attempt_count": 4,
+        "checkpoint_key": "researching-browse_restate_hitl",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 9,
+        "completed_units_count": 6,
+        "resume_source": "worker_restarted"
+      }
+    },
+    {
+      "seq": 18,
+      "type": "checkpoint_restored",
+      "phase": "researching",
+      "message": "Deep research restored execution from the latest durable checkpoint.",
+      "data": {
+        "attempt_count": 4,
+        "checkpoint_key": "researching-browse_restate_hitl",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 9,
+        "completed_units_count": 6
+      }
+    },
+    {
+      "seq": 19,
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 6
+      }
+    },
+    {
+      "seq": 20,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed comparison_synthesis.",
+      "data": {
+        "effective_model": "grok-4.20-expert-4-agent",
+        "provider_model": "grok-4.20-expert-4-agent",
+        "provider_name": "primary",
+        "sources_count": 5,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 21,
+      "type": "phase_started",
+      "phase": "synthesizing",
+      "message": "Synthesizing findings.",
+      "data": {
+        "section_count": 6
+      }
+    },
+    {
+      "seq": 22,
+      "type": "phase_started",
+      "phase": "finalizing",
+      "message": "Finalizing report.",
+      "data": {}
+    },
+    {
+      "seq": 23,
+      "type": "job_completed",
+      "phase": "finalizing",
+      "message": "Deep research completed.",
+      "data": {
+        "artifact_batch_id": "20260418T112138-053f67ef",
+        "release_gate": {
+          "passed": true,
+          "reason_codes": [],
+          "all_reason_codes": [
+            "medium_single_source_search_only"
+          ],
+          "soft_reason_codes": [
+            "medium_single_source_search_only"
+          ]
+        },
+        "sources_count": 6
+      }
+    }
+  ],
+  "final_status": {
+    "status": "completed",
+    "phase": "finalizing",
+    "attempt_count": 4,
+    "current_checkpoint": "finalizing",
+    "current_checkpoint_kind": "finalizing",
+    "last_error": "",
+    "resolved_artifact_batch_id": "20260418T112138-053f67ef",
+    "artifact_fallback_used": false,
+    "runtime_warnings": [
+      "coverage_incomplete",
+      "domain_constraints_applied",
+      "medium_single_source_search_only"
+    ],
+    "constraint_violations": [
+      {
+        "reason": "domain_constraints_applied",
+        "removed_source_count": 1,
+        "unit_id": "restate_durable"
+      },
+      {
+        "reason": "domain_constraints_applied",
+        "removed_source_count": 1,
+        "unit_id": "langgraph_interrupts"
+      },
+      {
+        "reason": "domain_constraints_applied",
+        "removed_source_count": 15,
+        "unit_id": "comparison_synthesis"
+      }
+    ],
+    "report_status": "degraded"
+  }
+}

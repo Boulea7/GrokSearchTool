@@ -1045,17 +1045,22 @@ def _enrich_source_from_fetched_text(source: dict[str, Any], fetched_text: str) 
 
 
 def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]], *, confidence: str = "") -> str:
+    section_summaries: list[str] = []
     claim_texts: list[str] = []
     for section in sections:
+        section_summary = _summarize_evidence_text(str(section.get("summary", "")), limit=220)
+        if section_summary and not _is_noisy_text(section_summary) and section_summary not in section_summaries:
+            section_summaries.append(section_summary)
         for claim in section.get("claims", []):
             text = _summarize_evidence_text(str(claim.get("text", "")), limit=180)
             if not text or _is_noisy_text(text):
                 continue
             if text not in claim_texts:
                 claim_texts.append(text)
-    if not claim_texts:
+    summary_chunks = section_summaries[:1] or claim_texts[:2]
+    if not summary_chunks:
         return _trim_text(plan.brief.objective, limit=220)
-    summary = " ".join(claim_texts[:2])
+    summary = " ".join(summary_chunks)
     section_confidences = {str(section.get("confidence", "")) for section in sections if section.get("confidence")}
     confidence_prefix = ""
     explicit_confidence = str(confidence or "").strip().lower()
@@ -1071,7 +1076,7 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
         confidence_prefix = "Medium confidence: "
     elif "low" in section_confidences:
         confidence_prefix = "Low confidence: "
-    if len(claim_texts) == 1:
+    if len(summary_chunks) == 1 and not section_summaries:
         summary = f"{plan.brief.objective}: {summary}"
     return _trim_text(f"{confidence_prefix}{summary}".strip(), limit=320)
 
@@ -7276,7 +7281,7 @@ def _best_cluster_claim_text(items: list[DeepResearchEvidenceItem]) -> str:
         if text and not _is_noisy_text(text):
             sentences = [chunk.strip() for chunk in re.split(r"(?<=[.!?])\s+", text) if chunk.strip()]
             if sentences:
-                return _trim_text(sentences[0], limit=min(180, _MAX_CLAIM_LENGTH))
+                return _trim_text(" ".join(sentences[:2]), limit=min(220, _MAX_CLAIM_LENGTH))
             return text
     return ""
 
@@ -7725,7 +7730,7 @@ def _build_section_citations(
 def _build_section_summary(section_claims: list[dict[str, Any]]) -> str:
     summary_parts: list[str] = []
     for claim in section_claims:
-        text = _summarize_evidence_text(str(claim.get("text", "")), limit=180)
+        text = _summarize_evidence_text(str(claim.get("text", "")), limit=220)
         if not text:
             continue
         if text in summary_parts:

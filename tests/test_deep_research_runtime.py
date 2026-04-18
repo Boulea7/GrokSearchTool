@@ -515,6 +515,175 @@ def create_completed_source_job(
     return runtime.store.get_job(job.job_id)
 
 
+def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round24_worker_restart_live.json")
+    final_status = snapshot["final_status"]
+    source = {
+        "source_id": "R1",
+        "url": "https://docs.temporal.io/workflow-execution/continue-as-new",
+        "title": "Continue-As-New",
+        "domain": "docs.temporal.io",
+        "source_type": "official_docs",
+    }
+    report_payload = {
+        "query": snapshot["query"],
+        "summary": "Round24 worker restart lifecycle summary.",
+        "status": final_status["report_status"],
+        "sections": [],
+        "unit_results": {},
+        "runtime": {
+            "warnings": list(final_status["runtime_warnings"]),
+            "constraint_violations": list(final_status["constraint_violations"]),
+            "release_gate": snapshot["resume_events_after_seq_16"][-1]["data"]["release_gate"],
+            "verifier": {
+                "passed": False,
+                "reason_codes": ["medium_single_source_search_only"],
+            },
+        },
+    }
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-round24-worker-restart-live",
+        status=final_status["status"],
+        phase=final_status["phase"],
+        effort="deep",
+        context="",
+        include_domains=["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=1,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=final_status["attempt_count"],
+        current_checkpoint=final_status["current_checkpoint"],
+        finished_at=utc_now_iso(),
+        last_error=final_status["last_error"],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps({"query": snapshot["query"], "planner_metadata": {"planner": "model", "used_fallback": False}}),
+        "application/json",
+    )
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([source]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": source}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps(report_payload),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRound24 worker restart lifecycle summary.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": "[]",
+                "content_type": "application/json",
+            },
+            {
+                "kind": "coverage.json",
+                "content": json.dumps(
+                    {
+                        "query": snapshot["query"],
+                        "planned_section_ids": [],
+                        "answered_section_ids": [],
+                        "unanswered_sections": ["Open Questions"],
+                        "planned_sub_question_ids": [],
+                        "covered_sub_question_ids": [],
+                        "uncovered_sub_questions": ["Coverage incomplete"],
+                        "hard_coverage_targets": [],
+                        "hard_uncovered_targets": [],
+                        "coverage_gate_passed": False,
+                        "hard_coverage_gate_passed": True,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": json.dumps(
+                    {
+                        "total_claims": 0,
+                        "grounded_claims": 0,
+                        "ungrounded_claims": 0,
+                        "single_source_claims": 0,
+                        "low_confidence_claims": 0,
+                        "missing_evidence_binding_claims": 0,
+                        "total_evidence_bindings": 0,
+                        "source_backed_binding_count": 0,
+                        "search_only_binding_count": 0,
+                        "null_span_binding_count": 0,
+                        "grounded_claims_without_source_backed_binding": 0,
+                        "sections": [],
+                        "sources": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verifier.json",
+                "content": json.dumps(
+                    {
+                        "passed": False,
+                        "reason_codes": ["medium_single_source_search_only"],
+                        "flagged_claim_ids": [],
+                        "summary": {
+                            "section_count": 0,
+                            "total_claims": 0,
+                            "low_confidence_claims": 0,
+                            "single_source_claims": 0,
+                            "source_backed_binding_count": 0,
+                            "search_only_binding_count": 0,
+                            "null_span_binding_count": 0,
+                            "missing_evidence_items": 0,
+                            "mismatched_binding_source": 0,
+                            "mismatched_binding_evidence": 0,
+                            "invalid_source_backed_span": 0,
+                            "duplicate_claims": 0,
+                            "low_value_claims": 0,
+                            "medium_single_source_search_only": 1,
+                            "same_domain_off_topic_dominance": 0,
+                            "unbound_citation_sources": 0,
+                            "unbound_evidence_ids": 0
+                        }
+                    }
+                ),
+                "content_type": "application/json",
+            },
+        ],
+    )
+    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_16"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event["type"],
+            phase=event["phase"],
+            message=event.get("message") or event["type"],
+            data=event.get("data") or {},
+        )
+    return {
+        "job": runtime.store.get_job(job.job_id),
+        "snapshot": snapshot,
+        "batch_id": persisted[0]["metadata"]["batch_id"],
+        "report_payload": report_payload,
+    }
+
+
 @pytest.mark.asyncio
 async def test_plan_start_persists_outline_state_and_empty_evidence_artifacts(tmp_path):
     runtime = build_runtime(tmp_path)
@@ -6673,6 +6842,54 @@ async def test_stale_worker_reconnect_lifecycle_matches_round21_fixture(monkeypa
         event["type"] == "phase_started" and event["phase"] == "planning"
         for event in resumed_window["events"]
     )
+
+
+@pytest.mark.asyncio
+async def test_round24_worker_restart_events_after_seq_match_fixture(tmp_path):
+    runtime = build_runtime(tmp_path)
+    seeded = seed_round24_worker_restart_live_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    resumed_window = await runtime.events(
+        job.job_id,
+        after_seq=snapshot["resume_window"]["after_seq"],
+        limit=20,
+    )
+
+    assert resumed_window["next_after_seq"] == snapshot["resume_window"]["next_after_seq"]
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in resumed_window["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["resume_events_after_seq_16"]
+    ]
+    assert resumed_window["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
+    assert resumed_window["events"][1]["type"] == "checkpoint_restored"
+
+
+@pytest.mark.asyncio
+async def test_round24_worker_restart_status_and_result_match_fixture(tmp_path):
+    runtime = build_runtime(tmp_path)
+    seeded = seed_round24_worker_restart_live_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+
+    assert status["status"] == snapshot["final_status"]["status"]
+    assert status["phase"] == snapshot["final_status"]["phase"]
+    assert status["attempt_count"] == snapshot["final_status"]["attempt_count"]
+    assert status["runtime_warnings"] == snapshot["final_status"]["runtime_warnings"]
+    assert status["constraint_violations"] == snapshot["final_status"]["constraint_violations"]
+    assert result["status"] == snapshot["final_status"]["status"]
+    assert result["phase"] == snapshot["final_status"]["phase"]
+    assert result["planner_fallback_used"] is False
+    assert result["runtime_warnings"] == snapshot["final_status"]["runtime_warnings"]
+    assert result["constraint_violations"] == snapshot["final_status"]["constraint_violations"]
+    assert result["report"]["status"] == snapshot["final_status"]["report_status"]
 
 
 @pytest.mark.asyncio

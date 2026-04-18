@@ -74,10 +74,23 @@ def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") ->
     if isinstance(constraint_violations, list) and constraint_violations:
         parts.append(f"constraint_violations={len(constraint_violations)}")
         constraint_codes: list[str] = []
-        for item in constraint_violations[:3]:
+        normalized_items = [item for item in constraint_violations if isinstance(item, dict)]
+        repeated_reason_mode = (
+            len(normalized_items) > 1
+            and len(
+                {
+                    _summary_value(item.get("reason"))
+                    for item in normalized_items
+                    if _summary_value(item.get("reason")) != "-"
+                }
+            )
+            == 1
+        )
+        for item in normalized_items[:3]:
+            preferred_keys = ("unit_id", "reason", "code") if repeated_reason_mode else ("reason", "code", "unit_id")
             if not isinstance(item, dict):
                 continue
-            for key in ("reason", "code", "unit_id"):
+            for key in preferred_keys:
                 value = _summary_value(item.get(key))
                 if value != "-" and value not in constraint_codes:
                     constraint_codes.append(value)
