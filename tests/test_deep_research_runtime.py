@@ -702,26 +702,45 @@ async def test_runtime_materializes_section_banks_and_evidence_ledger_from_compl
     assert outline_state["nodes"][0]["section_id"] == "resume-semantics"
     assert outline_state["nodes"][0]["source_ids"] == ["R1"]
     assert outline_state["nodes"][0]["selected_evidence_ids"]
+    assert outline_state["nodes"][0]["coverage_state"]["grounded_claim_ids"]
+    assert set(outline_state["nodes"][0]["coverage_state"]["grounded_evidence_ids"]) == {
+        "evidence-unit-search-1-search",
+        "evidence-unit-search-1-fetch-1",
+    }
+    assert outline_state["nodes"][0]["coverage_state"]["pool_mode"] == "selected"
+    assert outline_state["nodes"][0]["coverage_state"]["explainable_by"] == [
+        "claim_evidence_bindings",
+        "section_packets",
+    ]
     assert {entry["evidence_id"] for entry in evidence_ledger} >= {
         "evidence-unit-search-1-search",
         "evidence-unit-search-1-fetch-1",
     }
     assert {entry["selected_section_id"] for entry in evidence_ledger} == {"resume-semantics"}
-    assert section_banks == [
-        {
-            "section_id": "resume-semantics",
-            "candidate_evidence_ids": [
-                "evidence-unit-search-1-search",
-                "evidence-unit-search-1-fetch-1",
-            ],
-            "selected_evidence_ids": [
-                "evidence-unit-search-1-search",
-                "evidence-unit-search-1-fetch-1",
-            ],
-            "rejected_evidence_ids": [],
-            "last_updated_at": section_banks[0]["last_updated_at"],
-        }
+    search_entry = next(entry for entry in evidence_ledger if entry["evidence_id"] == "evidence-unit-search-1-search")
+    fetch_entry = next(entry for entry in evidence_ledger if entry["evidence_id"] == "evidence-unit-search-1-fetch-1")
+    assert search_entry["question_ids"] == ["sq1"]
+    assert search_entry["selection_score"] >= 1
+    assert search_entry["selection_basis_tokens"]
+    assert fetch_entry["line_start"] == 3
+    assert fetch_entry["line_end"] == 3
+    assert fetch_entry["materialized_claim_ids"]
+    assert len(section_banks) == 1
+    assert section_banks[0]["section_id"] == "resume-semantics"
+    assert section_banks[0]["candidate_evidence_ids"] == [
+        "evidence-unit-search-1-search",
+        "evidence-unit-search-1-fetch-1",
     ]
+    assert section_banks[0]["selected_evidence_ids"] == [
+        "evidence-unit-search-1-search",
+        "evidence-unit-search-1-fetch-1",
+    ]
+    assert section_banks[0]["rejected_evidence_ids"] == []
+    assert {packet["evidence_id"] for packet in section_banks[0]["selected_packets"]} == {
+        "evidence-unit-search-1-search",
+        "evidence-unit-search-1-fetch-1",
+    }
+    assert any(packet["claim_ids"] for packet in section_banks[0]["selected_packets"])
     assert checkpoint is not None
     assert checkpoint.state["section_graph"]["nodes"][0]["selected_evidence_ids"] == [
         "evidence-unit-search-1-search",
@@ -731,6 +750,7 @@ async def test_runtime_materializes_section_banks_and_evidence_ledger_from_compl
         "evidence-unit-search-1-search",
         "evidence-unit-search-1-fetch-1",
     ]
+    assert checkpoint.state["section_banks"][0]["selected_packets"]
 
 
 @pytest.mark.asyncio
@@ -755,6 +775,8 @@ async def test_continuation_planning_bootstraps_internal_state_from_carry_forwar
     assert evidence_ledger
     assert any(entry["selected_section_id"] for entry in evidence_ledger)
     assert any(bank["selected_evidence_ids"] for bank in section_banks)
+    assert all("question_ids" in entry for entry in evidence_ledger)
+    assert any(bank["selected_packets"] for bank in section_banks)
 
 
 @pytest.mark.asyncio
@@ -9301,22 +9323,22 @@ async def test_report_exposes_sub_question_to_claim_coverage_ledger(monkeypatch,
 
     coverage = result["report"]["coverage"]
 
-    assert coverage["sub_questions"] == [
-        {
-            "sub_question_id": "sq1",
-            "question": "Explain checkpoint resume semantics",
-            "covered": True,
-            "section_ids": ["resume-semantics"],
-            "claim_ids": ["resume-semantics-claim-1"],
-        },
-        {
-            "sub_question_id": "sq2",
-            "question": "Explain restart trade-offs",
-            "covered": False,
-            "section_ids": [],
-            "claim_ids": [],
-        },
+    assert coverage["sub_questions"][0]["sub_question_id"] == "sq1"
+    assert coverage["sub_questions"][0]["question"] == "Explain checkpoint resume semantics"
+    assert coverage["sub_questions"][0]["covered"] is True
+    assert coverage["sub_questions"][0]["section_ids"] == ["resume-semantics"]
+    assert coverage["sub_questions"][0]["claim_ids"] == ["resume-semantics-claim-1"]
+    assert coverage["sub_questions"][0]["supporting_evidence_ids"] == [
+        "evidence-unit-search-1-fetch-1",
+        "evidence-unit-search-1-search",
     ]
+    assert coverage["sub_questions"][0]["supporting_source_ids"] == ["R1"]
+    assert coverage["sub_questions"][0]["explain_via"] == "explicit_question_binding"
+    assert coverage["sub_questions"][1]["sub_question_id"] == "sq2"
+    assert coverage["sub_questions"][1]["question"] == "Explain restart trade-offs"
+    assert coverage["sub_questions"][1]["covered"] is False
+    assert coverage["sub_questions"][1]["section_ids"] == []
+    assert coverage["sub_questions"][1]["claim_ids"] == []
 
 
 @pytest.mark.asyncio
@@ -9917,6 +9939,115 @@ def test_verifier_allows_medium_single_source_search_only_for_selected_official_
 
     assert "medium_single_source_search_only" not in verifier["reason_codes"]
     assert verifier["summary"]["medium_single_source_search_only"] == 0
+
+
+def test_verifier_flags_claim_outside_selected_bank_as_soft_packet_reason():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 1,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R2"],
+                        "source_ids": ["R2"],
+                        "evidence_ids": ["e2"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e2",
+                                "source_id": "R2",
+                                "source_backed": True,
+                                "line_start": 8,
+                                "line_end": 9,
+                                "section_id": "resume-semantics",
+                                "pool_mode": "candidate",
+                                "selected_for_section": False,
+                                "question_ids": ["sq1"],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+                "source_type": "official_docs",
+            },
+            "R2": {
+                "source_id": "R2",
+                "url": "https://docs.example.com/runtime/restart",
+                "domain": "docs.example.com",
+                "source_type": "official_docs",
+            },
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R2"], "evidence_kind": "fetch"},
+        ],
+        section_banks=[
+            {
+                "section_id": "resume-semantics",
+                "candidate_evidence_ids": ["e1", "e2"],
+                "selected_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+                "candidate_packets": [],
+                "selected_packets": [
+                    {
+                        "evidence_id": "e1",
+                        "source_ids": ["R1"],
+                        "question_ids": ["sq1"],
+                        "unit_id": "unit-search-1",
+                        "source_backed": True,
+                        "line_span_complete": True,
+                        "excerpt_hash": "hash-1",
+                        "claim_ids": [],
+                    }
+                ],
+                "rejected_packets": [],
+                "last_updated_at": "2026-04-18T00:00:00Z",
+            }
+        ],
+    )
+    release_gate = _build_release_gate(
+        {"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        {
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+        },
+        verifier,
+    )
+
+    assert "claim_outside_selected_bank" in verifier["reason_codes"]
+    assert "selected_evidence_unused" in verifier["reason_codes"]
+    assert "section_packet_mismatch" in verifier["reason_codes"]
+    assert verifier["summary"]["claim_outside_selected_bank"] == 1
+    assert verifier["summary"]["selected_evidence_unused"] == 1
+    assert verifier["summary"]["section_packet_mismatch"] == 1
+    assert release_gate["passed"] is True
+    assert set(release_gate["soft_reason_codes"]) >= {
+        "claim_outside_selected_bank",
+        "selected_evidence_unused",
+        "section_packet_mismatch",
+    }
 
 
 def test_verifier_keeps_medium_single_source_search_only_for_standard_sources():
@@ -11069,27 +11200,29 @@ def test_coverage_uses_active_outline_question_binding_for_derived_sections():
         }
     )
 
+    evidence_ledger = [
+        {
+            "ledger_id": "ledger-evidence-reconnect",
+            "evidence_id": "evidence-reconnect",
+            "unit_id": "unit-search-1",
+            "question_id": "sq1",
+            "origin_query": "checkpoint identity worker fencing reconnect",
+            "candidate_section_ids": ["key-findings"],
+            "selected_section_id": "key-findings",
+            "rejected_section_ids": [],
+            "disposition": "selected",
+            "disposition_reason": "keyword_overlap",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+            "summary": "Recovered reconnect flow keeps the durable checkpoint lineage intact.",
+            "evidence_kind": "fetch",
+            "recorded_at": "2026-04-18T00:00:00Z",
+        }
+    ]
+
     active_outline = build_synthesis_outline(
         plan,
-        evidence_ledger=[
-            {
-                "ledger_id": "ledger-evidence-reconnect",
-                "evidence_id": "evidence-reconnect",
-                "unit_id": "unit-search-1",
-                "question_id": "sq1",
-                "origin_query": "checkpoint identity worker fencing reconnect",
-                "candidate_section_ids": ["key-findings"],
-                "selected_section_id": "key-findings",
-                "rejected_section_ids": [],
-                "disposition": "selected",
-                "disposition_reason": "keyword_overlap",
-                "source_ids": ["R1"],
-                "source_urls": ["https://docs.example.com/runtime/checkpoints"],
-                "summary": "Recovered reconnect flow keeps the durable checkpoint lineage intact.",
-                "evidence_kind": "fetch",
-                "recorded_at": "2026-04-18T00:00:00Z",
-            }
-        ],
+        evidence_ledger=evidence_ledger,
     )
     derived_section = next(section for section in active_outline if str(section.get("question_id", "")) == "sq1")
 
@@ -11111,11 +11244,18 @@ def test_coverage_uses_active_outline_question_binding_for_derived_sections():
             }
         ],
         planned_outline=active_outline,
+        evidence_ledger=evidence_ledger,
     )
 
     assert coverage["answered_section_ids"] == [derived_section["section_id"]]
     assert coverage["covered_sub_question_ids"] == ["sq1"]
     assert coverage["uncovered_sub_questions"] == []
+    assert coverage["sub_questions"][0]["supporting_evidence_ids"] == ["evidence-reconnect"]
+    assert coverage["sub_questions"][0]["supporting_source_ids"] == ["R1"]
+    assert coverage["sub_questions"][0]["explain_via"] == "explicit_question_binding"
+    assert coverage["section_coverage"][0]["supporting_claim_ids"] == [f"{derived_section['section_id']}-claim-1"]
+    assert coverage["section_coverage"][0]["supporting_source_ids"] == ["R1"]
+    assert coverage["section_coverage"][0]["question_id"] == "sq1"
 
 
 @pytest.mark.asyncio
@@ -13881,6 +14021,9 @@ async def test_report_runtime_surfaces_planner_fallback_and_constraint_violation
     warnings = result["report"]["runtime"]["warnings"]
     violations = result["report"]["runtime"]["constraint_violations"]
 
+    assert result["planner_fallback_used"] is True
+    assert "planner_fallback_used" in result["runtime_warnings"]
+    assert result["constraint_violations"] == violations
     assert "planner_fallback_used" in warnings
     assert "domain_constraints_applied" in warnings
     assert violations == [

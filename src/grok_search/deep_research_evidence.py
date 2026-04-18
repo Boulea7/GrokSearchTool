@@ -1,3 +1,4 @@
+import hashlib
 from typing import Any
 
 from .deep_research_types import (
@@ -75,6 +76,49 @@ def _candidate_section_ids(plan: DeepResearchPlan, evidence: dict[str, Any]) -> 
     return matches
 
 
+def _selection_score(
+    plan: DeepResearchPlan,
+    *,
+    evidence_text: str,
+    selected_section_id: str,
+) -> tuple[int, list[str]]:
+    selected_section = next(
+        (section for section in plan.report_outline if section.section_id == selected_section_id),
+        None,
+    )
+    if selected_section is None:
+        return 0, []
+    section_keywords = _tokenize_keywords(f"{selected_section.title} {selected_section.goal}")
+    return _count_keyword_overlap(evidence_text, section_keywords), section_keywords
+
+
+def _packet_from_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    excerpt = _normalize_whitespace(str(entry.get("summary", "")))
+    excerpt_hash = hashlib.sha256(excerpt.encode("utf-8")).hexdigest() if excerpt else ""
+    line_start = entry.get("line_start")
+    line_end = entry.get("line_end")
+    source_backed = bool(entry.get("derived_from_source_url")) or (
+        line_start is not None and line_end is not None
+    )
+    return {
+        "evidence_id": str(entry.get("evidence_id", "")).strip(),
+        "source_ids": [str(source_id).strip() for source_id in entry.get("source_ids", []) if str(source_id).strip()],
+        "question_ids": [
+            str(question_id).strip() for question_id in entry.get("question_ids", []) if str(question_id).strip()
+        ]
+        or ([str(entry.get("question_id", "")).strip()] if str(entry.get("question_id", "")).strip() else []),
+        "unit_id": str(entry.get("unit_id", "")).strip(),
+        "source_backed": source_backed,
+        "line_span_complete": isinstance(line_start, int) and isinstance(line_end, int) and line_end >= line_start,
+        "excerpt_hash": excerpt_hash,
+        "claim_ids": [
+            str(claim_id).strip()
+            for claim_id in entry.get("materialized_claim_ids", []) or []
+            if str(claim_id).strip()
+        ],
+    }
+
+
 def _question_ids_for_evidence(
     plan: DeepResearchPlan,
     *,
@@ -124,12 +168,18 @@ def build_evidence_ledger_entries(
             evidence_text=evidence_text,
             selected_section_id=selected_section_id,
         )
+        selection_score, selection_basis_tokens = _selection_score(
+            plan,
+            evidence_text=evidence_text,
+            selected_section_id=selected_section_id,
+        )
         entries.append(
             DeepResearchEvidenceLedgerEntry(
                 ledger_id=f"ledger-{evidence_id}",
                 evidence_id=evidence_id,
                 unit_id=unit_id,
                 question_id=question_ids[0] if question_ids else "",
+                question_ids=question_ids,
                 origin_query=origin_query,
                 candidate_section_ids=candidate_section_ids,
                 selected_section_id=selected_section_id,
@@ -142,6 +192,12 @@ def build_evidence_ledger_entries(
                 source_urls=list(evidence.get("source_urls") or []),
                 summary=evidence_text,
                 evidence_kind=str(evidence.get("evidence_kind") or ""),
+                derived_from_source_url=str(evidence.get("derived_from_source_url") or ""),
+                line_start=evidence.get("line_start"),
+                line_end=evidence.get("line_end"),
+                selection_score=selection_score,
+                selection_basis_tokens=selection_basis_tokens,
+                materialized_claim_ids=[],
                 recorded_at=updated_at,
             ).model_dump()
         )
@@ -178,7 +234,18 @@ def update_section_banks(
         bank.setdefault("candidate_evidence_ids", [])
         bank.setdefault("selected_evidence_ids", [])
         bank.setdefault("rejected_evidence_ids", [])
+        bank.setdefault("candidate_packets", [])
+        bank.setdefault("selected_packets", [])
+        bank.setdefault("rejected_packets", [])
         bank["last_updated_at"] = updated_at or bank.get("last_updated_at", "")
+
+    def _upsert_packet(packet_list: list[dict[str, Any]], packet: dict[str, Any]) -> None:
+        evidence_id = str(packet.get("evidence_id", "")).strip()
+        for index, existing in enumerate(packet_list):
+            if str(existing.get("evidence_id", "")).strip() == evidence_id:
+                packet_list[index] = packet
+                return
+        packet_list.append(packet)
 
     for entry in ledger_entries:
         if not isinstance(entry, dict):
@@ -186,23 +253,27 @@ def update_section_banks(
         evidence_id = str(entry.get("evidence_id", "")).strip()
         if not evidence_id:
             continue
+        packet = _packet_from_entry(entry)
         for section_id in entry.get("candidate_section_ids", []):
             bank = banks_by_section.get(section_id)
             if bank is None:
                 continue
             if evidence_id not in bank["candidate_evidence_ids"]:
                 bank["candidate_evidence_ids"].append(evidence_id)
+            _upsert_packet(bank["candidate_packets"], packet)
         selected_section_id = str(entry.get("selected_section_id", "")).strip()
         if selected_section_id and selected_section_id in banks_by_section:
             bank = banks_by_section[selected_section_id]
             if evidence_id not in bank["selected_evidence_ids"]:
                 bank["selected_evidence_ids"].append(evidence_id)
+            _upsert_packet(bank["selected_packets"], packet)
         for rejected_section_id in entry.get("rejected_section_ids", []):
             bank = banks_by_section.get(rejected_section_id)
             if bank is None:
                 continue
             if evidence_id not in bank["rejected_evidence_ids"]:
                 bank["rejected_evidence_ids"].append(evidence_id)
+            _upsert_packet(bank["rejected_packets"], packet)
 
     return [
         DeepResearchSectionEvidenceBank.model_validate(bank).model_dump()

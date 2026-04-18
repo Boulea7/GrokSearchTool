@@ -797,6 +797,9 @@ async def test_deep_research_round11_interrupted_status_events_and_result_remain
     assert result["phase"] == "finalizing"
     assert result["artifact_fallback_used"] is False
     assert result["resolved_artifact_batch_id"] == seeded["batch_id"]
+    assert result["planner_fallback_used"] is True
+    assert result["runtime_warnings"] == ["coverage_incomplete", "planner_fallback_used"]
+    assert result["constraint_violations"] == []
     assert result["plan"]["continuation"]["mode"] == "continue"
     assert result["plan"]["continuation"]["checkpoint_key"] == "finalizing"
     assert result["plan"]["planner_metadata"]["used_fallback"] is True

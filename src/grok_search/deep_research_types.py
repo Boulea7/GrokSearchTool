@@ -204,6 +204,8 @@ class DeepResearchSectionCitations(BaseModel):
     claim_cluster_count: int = 0
     supporting_source_count: int = 0
     supporting_domain_count: int = 0
+    pool_mode: str = ""
+    question_ids: list[str] = Field(default_factory=list)
 
 
 class DeepResearchSectionNode(BaseModel):
@@ -235,6 +237,7 @@ class DeepResearchEvidenceLedgerEntry(BaseModel):
     evidence_id: str
     unit_id: str
     question_id: str = ""
+    question_ids: list[str] = Field(default_factory=list)
     origin_query: str = ""
     candidate_section_ids: list[str] = Field(default_factory=list)
     selected_section_id: str = ""
@@ -245,6 +248,12 @@ class DeepResearchEvidenceLedgerEntry(BaseModel):
     source_urls: list[str] = Field(default_factory=list)
     summary: str = ""
     evidence_kind: str = ""
+    derived_from_source_url: str = ""
+    line_start: int | None = None
+    line_end: int | None = None
+    selection_score: int = 0
+    selection_basis_tokens: list[str] = Field(default_factory=list)
+    materialized_claim_ids: list[str] = Field(default_factory=list)
     recorded_at: str = ""
 
 
@@ -253,6 +262,9 @@ class DeepResearchSectionEvidenceBank(BaseModel):
     candidate_evidence_ids: list[str] = Field(default_factory=list)
     selected_evidence_ids: list[str] = Field(default_factory=list)
     rejected_evidence_ids: list[str] = Field(default_factory=list)
+    candidate_packets: list[dict[str, Any]] = Field(default_factory=list)
+    selected_packets: list[dict[str, Any]] = Field(default_factory=list)
+    rejected_packets: list[dict[str, Any]] = Field(default_factory=list)
     last_updated_at: str = ""
 
 

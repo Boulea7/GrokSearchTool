@@ -191,7 +191,12 @@ _SAFE_SEARCH_ONLY_REPAIR_ISSUES = {
     "missing_search_query",
     "missing_sub_question_unit_coverage",
 }
-_NON_BLOCKING_VERIFIER_REASON_CODES = {"medium_single_source_search_only"}
+_NON_BLOCKING_VERIFIER_REASON_CODES = {
+    "medium_single_source_search_only",
+    "claim_outside_selected_bank",
+    "selected_evidence_unused",
+    "section_packet_mismatch",
+}
 _EVIDENCE_ITEMS_ARTIFACT_KIND = "evidence_items.json"
 _OUTLINE_STATE_ARTIFACT_KIND = "outline_state.json"
 _EVIDENCE_LEDGER_ARTIFACT_KIND = "evidence_ledger.json"
@@ -2711,6 +2716,37 @@ def _reconcile_section_graph_with_materialized_sections(
                 for source_id in materialized.get("source_ids", []) or []
                 if str(source_id).strip()
             ] or list(base_node.get("source_ids") or []),
+            "coverage_state": {
+                **dict(base_node.get("coverage_state") or {}),
+                "grounded_claim_ids": [
+                    str(claim.get("claim_id", "")).strip()
+                    for claim in materialized.get("claims", []) or []
+                    if str(claim.get("claim_id", "")).strip()
+                ],
+                "grounded_evidence_ids": materialized_evidence_ids,
+                "grounded_source_ids": [
+                    str(source_id).strip()
+                    for source_id in materialized.get("source_ids", []) or []
+                    if str(source_id).strip()
+                ],
+                "pool_mode": str(materialized.get("pool_mode", "") or "").strip(),
+                "question_coverage": [
+                    str(question_id).strip()
+                    for question_id in materialized.get("question_ids", []) or []
+                    if str(question_id).strip()
+                ],
+                "binding_summary": {
+                    "claim_count": len(materialized.get("claims", []) or []),
+                    "evidence_binding_count": sum(
+                        len(claim.get("evidence_bindings", []) or [])
+                        for claim in materialized.get("claims", []) or []
+                        if isinstance(claim, dict)
+                    ),
+                },
+                "explainable_by": ["claim_evidence_bindings", "section_packets"]
+                if materialized.get("claims")
+                else [],
+            },
             "last_updated_at": updated_at or str(base_node.get("last_updated_at", "") or ""),
         }
         nodes.append(DeepResearchSectionNode.model_validate(node).model_dump())
@@ -3494,6 +3530,7 @@ class DeepResearchRuntime:
             )
             if artifact_text is None:
                 artifact_errors[kind] = error_code
+        diagnostics = _job_runtime_diagnostics(self.store, job_id, final_bundle=final_bundle)
         return {
             "job_id": job_id,
             "status": job.status,
@@ -3510,6 +3547,9 @@ class DeepResearchRuntime:
             "artifact_errors": artifact_errors,
             "artifact_fallback_used": _artifact_bundle_differs_from_current(self.store, job_id, final_bundle),
             "resolved_artifact_batch_id": final_bundle["batch_id"] if final_bundle is not None else "",
+            "planner_fallback_used": diagnostics["planner_fallback_used"],
+            "runtime_warnings": diagnostics["runtime_warnings"],
+            "constraint_violations": diagnostics["constraint_violations"],
             "artifacts": _artifact_payloads(
                 self.store,
                 job_id,
@@ -5612,6 +5652,15 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "source_registry": {item["source_id"]: item for item in source_registry},
         "sections": _sanitize_sections(sections, source_registry),
     }
+    evidence_ledger = _attach_materialized_claim_ids_to_evidence_ledger(
+        evidence_ledger,
+        citations["sections"],
+    )
+    section_banks = update_section_banks(
+        section_banks,
+        ledger_entries=evidence_ledger,
+        updated_at=utc_now_iso(),
+    )
     runtime_warnings = sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])})
     report_coverage = _coverage_for_report(
         plan,
@@ -5696,11 +5745,6 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         },
     }
     final_report = _build_final_report(plan, citations["sections"], citations["source_registry"], report_summary)
-    section_banks = update_section_banks(
-        section_banks,
-        ledger_entries=evidence_ledger,
-        updated_at=utc_now_iso(),
-    )
     section_graph = _reconcile_section_graph_with_materialized_sections(
         section_graph,
         planned_outline=active_outline,
@@ -6336,6 +6380,7 @@ def _coverage_for_report(
     hard_uncovered_targets: list[str] = []
     for section in sections:
         section_id = str(section.get("section_id", "")).strip()
+        bank = banks_by_section.get(section_id, {})
         grounded_claims = [
             claim
             for claim in section.get("claims", [])
@@ -6351,6 +6396,34 @@ def _coverage_for_report(
         )
         if grounded_claims and section_id:
             answered_section_ids.append(section_id)
+        section_support = [_claim_support_details(claim) for claim in grounded_claims if isinstance(claim, dict)]
+        section_claim_ids = _dedupe_preserve_order(
+            [item["claim_id"] for item in section_support if item.get("claim_id")]
+        )
+        section_evidence_ids = _dedupe_preserve_order(
+            [
+                evidence_id
+                for item in section_support
+                for evidence_id in item.get("evidence_ids", [])
+                if evidence_id
+            ]
+        )
+        section_source_ids = _dedupe_preserve_order(
+            [
+                source_id
+                for item in section_support
+                for source_id in item.get("source_ids", [])
+                if source_id
+            ]
+        )
+        section_question_ids = _dedupe_preserve_order(
+            [
+                question_id
+                for item in section_support
+                for question_id in item.get("question_ids", [])
+                if question_id
+            ]
+        )
         grounded_sections.append(
             {
                 **dict(section),
@@ -6358,7 +6431,6 @@ def _coverage_for_report(
                 "citations": grounded_citations,
             }
         )
-        bank = banks_by_section.get(section_id, {})
         question_entries = ledger_by_question_id.get(question_id_by_section_id.get(section_id, ""), [])
         section_coverage.append(
             {
@@ -6398,6 +6470,13 @@ def _coverage_for_report(
                         )
                     }
                 ),
+                "supporting_claim_ids": section_claim_ids,
+                "supporting_evidence_ids": section_evidence_ids,
+                "supporting_source_ids": section_source_ids,
+                "question_id": question_id_by_section_id.get(section_id, ""),
+                "explain_via": "section_packets" if section_evidence_ids else ("claim_bindings" if section_claim_ids else ""),
+                "pool_mode": str(section.get("pool_mode", "") or ""),
+                "question_ids": section_question_ids,
             }
         )
     for item in plan.sub_questions:
@@ -6444,6 +6523,21 @@ def _coverage_for_report(
             covered_sub_question_ids.append(item.id)
         else:
             uncovered_sub_questions.append(question)
+        supporting_evidence_ids = _dedupe_preserve_order(
+            [
+                str(entry.get("evidence_id", "")).strip()
+                for entry in ledger_by_question_id.get(item.id, [])
+                if str(entry.get("evidence_id", "")).strip()
+            ]
+        )
+        supporting_source_ids = _dedupe_preserve_order(
+            [
+                str(source_id).strip()
+                for entry in ledger_by_question_id.get(item.id, [])
+                for source_id in entry.get("source_ids", []) or []
+                if str(source_id).strip()
+            ]
+        )
         sub_question_coverage.append(
             {
                 "sub_question_id": item.id,
@@ -6451,6 +6545,11 @@ def _coverage_for_report(
                 "covered": covered,
                 "section_ids": matching_section_ids,
                 "claim_ids": matching_claim_ids,
+                "supporting_evidence_ids": supporting_evidence_ids,
+                "supporting_source_ids": supporting_source_ids,
+                "explain_via": "explicit_question_binding"
+                if supporting_evidence_ids
+                else ("claim_text_overlap" if matching_claim_ids else ""),
             }
         )
     normalized_outline = [
@@ -6527,6 +6626,10 @@ def _coverage_for_report(
                 "section_ids": matching_section_ids,
                 "claim_ids": matching_claim_ids,
                 "matched_unit_ids": matched_unit_ids,
+                "supporting_source_ids": sorted(grounded_source_ids),
+                "explain_via": "coverage_state_grounded_sources"
+                if grounded_source_ids and not matching_claim_ids
+                else ("claim_text_overlap" if matching_claim_ids else ""),
             }
         )
     coverage_gate_passed = not unanswered_sections and not uncovered_sub_questions
@@ -6822,6 +6925,9 @@ def _build_verifier_diagnostics(
         "same_domain_off_topic_dominance": 0,
         "unbound_citation_sources": 0,
         "unbound_evidence_ids": 0,
+        "claim_outside_selected_bank": 0,
+        "selected_evidence_unused": 0,
+        "section_packet_mismatch": 0,
     }
     hard_coverage_gate_passed = bool(
         coverage.get("hard_coverage_gate_passed", coverage.get("coverage_gate_passed", False))
@@ -6848,6 +6954,11 @@ def _build_verifier_diagnostics(
             for evidence_id in section_bank.get("selected_evidence_ids", []) or []
             if str(evidence_id).strip() in evidence_by_id
         ]
+        selected_packets = [
+            dict(packet)
+            for packet in section_bank.get("selected_packets", []) or []
+            if isinstance(packet, dict) and str(packet.get("evidence_id", "")).strip()
+        ]
         rejected_evidence_ids = [
             str(evidence_id).strip()
             for evidence_id in section_bank.get("rejected_evidence_ids", []) or []
@@ -6864,6 +6975,7 @@ def _build_verifier_diagnostics(
             and str(source_registry[source_id].get("source_type", "")).strip().lower() == "official_docs"
             for source_id in selected_evidence_source_ids
         )
+        used_selected_evidence_ids: set[str] = set()
         for claim in section.get("claims", []):
             claim_id = str(claim.get("claim_id", "")).strip()
             raw_claim_text = str(claim.get("text", "") or "")
@@ -6880,6 +6992,14 @@ def _build_verifier_diagnostics(
             source_backed_bindings = provenance["source_backed_bindings"]
             null_span_bindings = provenance["null_span_bindings"]
             supporting_source_count = provenance["derived_supporting_source_count"]
+            if selected_evidence_ids:
+                matching_selected = set(claim_evidence_ids) & set(selected_evidence_ids)
+                used_selected_evidence_ids.update(matching_selected)
+                if claim_evidence_ids and not matching_selected:
+                    if claim_id:
+                        flagged_claim_ids.append(claim_id)
+                    integrity_counts["claim_outside_selected_bank"] += 1
+                    reason_codes.append("claim_outside_selected_bank")
             if claim_text:
                 claim_key = _stable_text_key(claim_text)
                 previous_claim = seen_claim_keys.get(claim_key)
@@ -6977,6 +7097,24 @@ def _build_verifier_diagnostics(
                     flagged_claim_ids.append(claim_id)
                 integrity_counts["invalid_source_backed_span"] += len(null_span_bindings)
                 reason_codes.append("invalid_source_backed_span")
+        if selected_evidence_ids and not used_selected_evidence_ids:
+            integrity_counts["selected_evidence_unused"] += len(selected_evidence_ids)
+            reason_codes.append("selected_evidence_unused")
+        if selected_packets and section.get("claims"):
+            packet_claim_ids = {
+                str(claim_id).strip()
+                for packet in selected_packets
+                for claim_id in packet.get("claim_ids", []) or []
+                if str(claim_id).strip()
+            }
+            actual_claim_ids = {
+                str(claim.get("claim_id", "")).strip()
+                for claim in section.get("claims", []) or []
+                if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
+            }
+            if actual_claim_ids and not packet_claim_ids:
+                integrity_counts["section_packet_mismatch"] += 1
+                reason_codes.append("section_packet_mismatch")
 
     return {
         "passed": not reason_codes,
@@ -7070,9 +7208,18 @@ def _cluster_type_for_items(items: list[DeepResearchEvidenceItem]) -> str:
 def _build_claim_evidence_bindings(
     items: list[DeepResearchEvidenceItem],
     source_registry: dict[str, dict[str, Any]],
+    *,
+    section_id: str = "",
+    pool_mode: str = "",
+    selected_evidence_ids: list[str] | None = None,
+    question_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     bindings: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
+    selected_evidence_ids = [
+        str(evidence_id).strip() for evidence_id in selected_evidence_ids or [] if str(evidence_id).strip()
+    ]
+    question_ids = [str(question_id).strip() for question_id in question_ids or [] if str(question_id).strip()]
     for item in items:
         excerpt = _summarize_evidence_text(item.summary or item.detail, limit=_MAX_CLAIM_LENGTH)
         if not excerpt:
@@ -7104,6 +7251,10 @@ def _build_claim_evidence_bindings(
                     "source_backed": source_backed,
                     "line_start": item.line_start if source_backed else None,
                     "line_end": item.line_end if source_backed else None,
+                    "section_id": section_id,
+                    "pool_mode": pool_mode,
+                    "selected_for_section": item.evidence_id in set(selected_evidence_ids),
+                    "question_ids": list(question_ids),
                 }
             )
     return bindings
@@ -7123,8 +7274,72 @@ def _best_cluster_claim_text(items: list[DeepResearchEvidenceItem]) -> str:
     for item in ranked:
         text = _summarize_evidence_text(item.summary or item.detail, limit=_MAX_CLAIM_LENGTH)
         if text and not _is_noisy_text(text):
+            sentences = [chunk.strip() for chunk in re.split(r"(?<=[.!?])\s+", text) if chunk.strip()]
+            if sentences:
+                return _trim_text(sentences[0], limit=min(180, _MAX_CLAIM_LENGTH))
             return text
     return ""
+
+
+def _claim_support_details(claim: dict[str, Any]) -> dict[str, Any]:
+    claim_id = str(claim.get("claim_id", "")).strip()
+    evidence_ids = _dedupe_preserve_order(
+        [str(evidence_id).strip() for evidence_id in claim.get("evidence_ids", []) if str(evidence_id).strip()]
+    )
+    source_ids = _dedupe_preserve_order(
+        [
+            str(source_id).strip()
+            for source_id in [*(claim.get("source_ids", []) or []), *(claim.get("citations", []) or [])]
+            if str(source_id).strip()
+        ]
+    )
+    question_ids = _dedupe_preserve_order(
+        [
+            str(question_id).strip()
+            for binding in claim.get("evidence_bindings", []) or []
+            if isinstance(binding, dict)
+            for question_id in binding.get("question_ids", []) or []
+            if str(question_id).strip()
+        ]
+    )
+    return {
+        "claim_id": claim_id,
+        "evidence_ids": evidence_ids,
+        "source_ids": source_ids,
+        "question_ids": question_ids,
+    }
+
+
+def _attach_materialized_claim_ids_to_evidence_ledger(
+    ledger_entries: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    claim_ids_by_evidence_id: dict[str, list[str]] = {}
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        for claim in section.get("claims", []) or []:
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get("claim_id", "")).strip()
+            if not claim_id:
+                continue
+            for evidence_id in claim.get("evidence_ids", []) or []:
+                normalized = str(evidence_id).strip()
+                if not normalized:
+                    continue
+                claim_ids_by_evidence_id.setdefault(normalized, [])
+                if claim_id not in claim_ids_by_evidence_id[normalized]:
+                    claim_ids_by_evidence_id[normalized].append(claim_id)
+    hydrated: list[dict[str, Any]] = []
+    for entry in ledger_entries:
+        if not isinstance(entry, dict):
+            continue
+        normalized = dict(entry)
+        evidence_id = str(normalized.get("evidence_id", "")).strip()
+        normalized["materialized_claim_ids"] = claim_ids_by_evidence_id.get(evidence_id, [])
+        hydrated.append(normalized)
+    return hydrated
 
 
 def _build_section_citations(
@@ -7147,6 +7362,11 @@ def _build_section_citations(
         str(section.get("section_id", "")).strip(): index
         for index, section in enumerate(outline)
         if isinstance(section, dict)
+    }
+    banks_by_section = {
+        str(bank.get("section_id", "")).strip(): dict(bank)
+        for bank in section_banks or []
+        if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
     }
     registry_by_id = {item["source_id"]: item for item in source_registry if item.get("source_id")}
     claims_pool = [
@@ -7188,6 +7408,21 @@ def _build_section_citations(
         ):
             return None
         section_keywords = _tokenize_keywords(f"{section_title} {section_goal}") or query_keywords
+        section_bank = banks_by_section.get(section_id, {})
+        question_ids = [
+            str(question_id).strip()
+            for question_id in (
+                (section.get("question_ids") or [])
+                if isinstance(section.get("question_ids"), list)
+                else [section.get("question_id", "")]
+            )
+            if str(question_id).strip()
+        ]
+        selected_evidence_ids = [
+            str(evidence_id).strip()
+            for evidence_id in section_bank.get("selected_evidence_ids", []) or []
+            if str(evidence_id).strip()
+        ]
         ranked_pool = sorted(
             evidence_pool,
             key=lambda evidence: (
@@ -7266,7 +7501,14 @@ def _build_section_citations(
                 source_ids=cluster_source_ids,
                 unit_id=cluster[0].unit_id,
                 evidence_ids=_dedupe_preserve_order([item.evidence_id for item in cluster]),
-                evidence_bindings=_build_claim_evidence_bindings(cluster, registry_by_id),
+                evidence_bindings=_build_claim_evidence_bindings(
+                    cluster,
+                    registry_by_id,
+                    section_id=section_id,
+                    pool_mode="selected" if selected_evidence_ids else ("global" if enforce_overlap else "candidate"),
+                    selected_evidence_ids=selected_evidence_ids,
+                    question_ids=question_ids,
+                ),
                 cluster_type=cluster_type,
                 supporting_source_count=len(set(cluster_source_ids)),
                 supporting_domain_count=supporting_domain_count,
@@ -7320,6 +7562,8 @@ def _build_section_citations(
             claim_cluster_count=len(section_claims),
             supporting_source_count=section_source_count,
             supporting_domain_count=section_domain_count,
+            pool_mode="selected" if selected_evidence_ids else ("global" if enforce_overlap else "candidate"),
+            question_ids=question_ids,
         )
         return section_model.model_dump()
 
