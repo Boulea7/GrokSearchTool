@@ -79,17 +79,29 @@ def _selected_question_ids(evidence_ledger: list[dict[str, Any]] | None) -> list
     for entry in evidence_ledger or []:
         if not isinstance(entry, dict):
             continue
-        question_id = str(entry.get("question_id", "")).strip()
-        if not question_id:
+        entry_question_ids = _dedupe_preserve_order(
+            [
+                str(question_id).strip()
+                for question_id in (
+                    list(entry.get("question_ids", []) or [])
+                    + ([entry.get("question_id", "")] if entry.get("question_id") else [])
+                )
+                if str(question_id).strip()
+            ]
+        )
+        if not entry_question_ids:
             continue
         disposition = str(entry.get("disposition", "")).strip()
         selected_section_id = str(entry.get("selected_section_id", "")).strip()
         if disposition == "selected" or selected_section_id:
-            if question_id not in question_ids:
-                question_ids.append(question_id)
+            for question_id in entry_question_ids:
+                if question_id not in question_ids:
+                    question_ids.append(question_id)
             continue
-        if disposition != "rejected" and question_id not in fallback_question_ids:
-            fallback_question_ids.append(question_id)
+        if disposition != "rejected":
+            for question_id in entry_question_ids:
+                if question_id not in fallback_question_ids:
+                    fallback_question_ids.append(question_id)
     return question_ids or fallback_question_ids
 
 

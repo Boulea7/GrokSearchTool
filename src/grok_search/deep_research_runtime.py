@@ -127,6 +127,21 @@ _PREFERRED_TECHNICAL_TERMS = (
     "continuation",
     "state",
 )
+_OFFICIAL_DOC_HOST_PREFIXES = (
+    "docs.",
+    "developer.",
+    "developers.",
+    "learn.",
+    "platform.",
+)
+_OFFICIAL_DOC_HOST_EXACT = {
+    "adk.dev",
+    "ai.google.dev",
+    "cloud.google.com",
+    "developers.google.com",
+    "learn.microsoft.com",
+    "platform.openai.com",
+}
 _COMMUNITY_SOURCE_DOMAINS = {
     "stackoverflow.com",
     "stackexchange.com",
@@ -185,17 +200,19 @@ _UNSAFE_VALIDATION_ISSUES = {
 }
 _SAFE_SEARCH_ONLY_REPAIR_ACTION_PREFIXES = (
     "filled_search_query:",
+    "degraded_fetch_without_url_to_search:",
+    "degraded_map_without_url_to_search:",
     "added_sub_question_search_unit:",
 )
 _SAFE_SEARCH_ONLY_REPAIR_ISSUES = {
     "missing_search_query",
+    "missing_fetch_url",
+    "missing_map_url",
     "missing_sub_question_unit_coverage",
 }
 _NON_BLOCKING_VERIFIER_REASON_CODES = {
     "medium_single_source_search_only",
-    "claim_outside_selected_bank",
     "selected_evidence_unused",
-    "section_packet_mismatch",
 }
 _EVIDENCE_ITEMS_ARTIFACT_KIND = "evidence_items.json"
 _OUTLINE_STATE_ARTIFACT_KIND = "outline_state.json"
@@ -1508,6 +1525,14 @@ def _artifact_payloads(
     return payloads
 
 
+def _current_artifact_is_batch_backed(store: DeepResearchStore, job_id: str, kind: str) -> bool:
+    current_artifacts = {artifact.kind: artifact for artifact in store.list_artifacts(job_id)}
+    artifact = current_artifacts.get(kind)
+    if artifact is None:
+        return False
+    return f"/{job_id}/batches/" in artifact.path or artifact.path.startswith(f"artifacts/{job_id}/batches/")
+
+
 def _job_runtime_diagnostics(
     store: DeepResearchStore,
     job_id: str,
@@ -1567,6 +1592,21 @@ def _normalize_string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [normalized for item in value if (normalized := _normalize_whitespace(str(item)))]
     return []
+
+
+def _entry_question_ids(entry: dict[str, Any]) -> list[str]:
+    if not isinstance(entry, dict):
+        return []
+    return _dedupe_preserve_order(
+        [
+            str(question_id).strip()
+            for question_id in (
+                list(entry.get("question_ids", []) or [])
+                + ([entry.get("question_id", "")] if entry.get("question_id") else [])
+            )
+            if str(question_id).strip()
+        ]
+    )
 
 
 def _append_unique(items: list[str], value: str) -> None:
@@ -2925,10 +2965,36 @@ def _hydrate_evidence_source_ids(
 
 def _domain_looks_like_official_docs(domain: str) -> bool:
     normalized = (domain or "").strip().lower()
-    return normalized.startswith(("docs.", "developer.", "developers.")) or normalized in {
-        "ai.google.dev",
-        "adk.dev",
+    if not normalized:
+        return False
+    if normalized in _OFFICIAL_DOC_HOST_EXACT:
+        return True
+    return normalized.startswith(_OFFICIAL_DOC_HOST_PREFIXES)
+
+
+def _source_looks_like_official_docs(source: dict[str, Any]) -> bool:
+    if not isinstance(source, dict):
+        return False
+    source_type = str(source.get("source_type", "") or "").strip().lower()
+    if source_type == "official_docs":
+        return True
+    quality_tier = str(source.get("quality_tier", "") or "").strip().lower()
+    if quality_tier == "official":
+        return True
+    ranking_reasons = {
+        str(reason).strip().lower()
+        for reason in source.get("ranking_reasons", []) or []
+        if str(reason).strip()
     }
+    if "official_docs" in ranking_reasons:
+        return True
+    domain = str(source.get("domain", "") or "").strip().lower()
+    if not domain and source.get("url"):
+        try:
+            domain = urlsplit(str(source["url"])).netloc.lower()
+        except Exception:
+            domain = ""
+    return _domain_looks_like_official_docs(domain)
 
 
 def _bootstrap_internal_state(
@@ -3403,16 +3469,10 @@ class DeepResearchRuntime:
         job = self.store.get_job(job_id)
         payload = self._serialize_job(job)
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
-        bundle_candidate = (
-            _latest_batch_bundle_candidate(self.store, job_id)
-            if _job_prefers_resolved_final_bundle(job) and final_bundle is None
-            else None
-        )
         artifacts = _artifact_payloads(
             self.store,
             job_id,
             final_bundle=final_bundle,
-            bundle_candidate=bundle_candidate,
         )
         payload["artifact_kinds"] = [artifact["kind"] for artifact in artifacts]
         payload["artifacts"] = artifacts
@@ -3440,46 +3500,44 @@ class DeepResearchRuntime:
         plan_text = self.store.read_artifact_text(job_id, "plan.json")
         partial_text = self.store.read_artifact_text(job_id, "partial_report.md") if include_partial else None
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
-        bundle_candidate = (
-            _latest_batch_bundle_candidate(self.store, job_id)
-            if _job_prefers_resolved_final_bundle(job) and final_bundle is None
-            else None
+        unresolved_batch_backed = bool(
+            _job_prefers_resolved_final_bundle(job)
+            and final_bundle is None
+            and any(_current_artifact_is_batch_backed(self.store, job_id, kind) for kind in _CORE_FINAL_ARTIFACT_KINDS)
         )
         final_text = (
             _read_text_if_exists(final_bundle["paths"]["final_report.md"])
             if final_bundle is not None
-            else _read_batch_artifact_text(bundle_candidate, "final_report.md")
-            if bundle_candidate is not None
+            else None
+            if unresolved_batch_backed
             else self.store.read_artifact_text(job_id, "final_report.md")
         )
         citations_text = (
             _read_text_if_exists(final_bundle["paths"]["citations.json"])
             if final_bundle is not None
-            else _read_batch_artifact_text(bundle_candidate, "citations.json")
-            if bundle_candidate is not None
+            else None
+            if unresolved_batch_backed
             else self.store.read_artifact_text(job_id, "citations.json")
         )
         evidence_items_text = (
             _read_batch_artifact_text(final_bundle, _EVIDENCE_ITEMS_ARTIFACT_KIND)
             if final_bundle is not None
-            else _read_batch_artifact_text(bundle_candidate, _EVIDENCE_ITEMS_ARTIFACT_KIND)
-            if bundle_candidate is not None
+            else None
+            if unresolved_batch_backed
             else self.store.read_artifact_text(job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
         )
-        if evidence_items_text is None and bundle_candidate is None:
-            evidence_items_text = self.store.read_artifact_text(job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
         report_text = (
             _read_text_if_exists(final_bundle["paths"]["report.json"])
             if final_bundle is not None
-            else _read_batch_artifact_text(bundle_candidate, "report.json")
-            if bundle_candidate is not None
+            else None
+            if unresolved_batch_backed
             else self.store.read_artifact_text(job_id, "report.json")
         )
         sources_text = (
             _read_text_if_exists(final_bundle["paths"]["sources.json"])
             if final_bundle is not None
-            else _read_batch_artifact_text(bundle_candidate, "sources.json")
-            if bundle_candidate is not None
+            else None
+            if unresolved_batch_backed
             else self.store.read_artifact_text(job_id, "sources.json")
         )
         artifact_errors: dict[str, str] = {}
@@ -3529,8 +3587,8 @@ class DeepResearchRuntime:
             artifact_text = (
                 _read_text_if_exists(final_bundle["paths"][kind])
                 if final_bundle is not None and kind in final_bundle["paths"]
-                else _read_batch_artifact_text(bundle_candidate, kind)
-                if bundle_candidate is not None
+                else None
+                if unresolved_batch_backed
                 else self.store.read_artifact_text(job_id, kind)
             )
             if artifact_text is None:
@@ -3559,26 +3617,20 @@ class DeepResearchRuntime:
                 self.store,
                 job_id,
                 final_bundle=final_bundle,
-                bundle_candidate=bundle_candidate,
             ),
         }
 
     def read_artifact_text(self, job_id: str, kind: str) -> str | None:
         job = self.store.get_job(job_id)
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
-        bundle_candidate = (
-            _latest_batch_bundle_candidate(self.store, job_id)
-            if _job_prefers_resolved_final_bundle(job) and final_bundle is None
-            else None
-        )
         if final_bundle is not None:
             if kind in final_bundle["paths"]:
                 return _read_text_if_exists(final_bundle["paths"][kind])
             batch_text = _read_batch_artifact_text(final_bundle, kind)
             if batch_text is not None:
                 return batch_text
-        if bundle_candidate is not None and kind in _FINAL_ARTIFACT_KINDS:
-            return _read_batch_artifact_text(bundle_candidate, kind)
+        if _job_prefers_resolved_final_bundle(job) and _current_artifact_is_batch_backed(self.store, job_id, kind):
+            return None
         return self.store.read_artifact_text(job_id, kind)
 
     async def resume(self, job_id: str, *, schedule: bool = True) -> dict[str, Any]:
@@ -6350,6 +6402,20 @@ def _coverage_for_report(
     section_banks: list[dict[str, Any]] | None = None,
     evidence_ledger: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    def _section_question_ids(section: dict[str, Any]) -> list[str]:
+        explicit_ids = [
+            str(question_id).strip()
+            for question_id in (
+                list(section.get("question_ids", []) or [])
+                + ([section.get("question_id", "")] if section.get("question_id") else [])
+            )
+            if str(question_id).strip()
+        ]
+        mapped_id = question_id_by_section_id.get(str(section.get("section_id", "")).strip(), "")
+        if mapped_id:
+            explicit_ids.append(mapped_id)
+        return _dedupe_preserve_order(explicit_ids)
+
     banks_by_section = {
         str(bank.get("section_id", "")).strip(): dict(bank)
         for bank in section_banks or []
@@ -6371,10 +6437,8 @@ def _coverage_for_report(
     for entry in evidence_ledger or []:
         if not isinstance(entry, dict):
             continue
-        question_id = str(entry.get("question_id", "")).strip()
-        if not question_id:
-            continue
-        ledger_by_question_id.setdefault(question_id, []).append(entry)
+        for question_id in _entry_question_ids(entry):
+            ledger_by_question_id.setdefault(question_id, []).append(entry)
     answered_section_ids: list[str] = []
     covered_sub_question_ids: list[str] = []
     uncovered_sub_questions: list[str] = []
@@ -6436,7 +6500,16 @@ def _coverage_for_report(
                 "citations": grounded_citations,
             }
         )
-        question_entries = ledger_by_question_id.get(question_id_by_section_id.get(section_id, ""), [])
+        section_question_id_refs = _section_question_ids(section)
+        question_entries = [
+            entry
+            for question_id in section_question_id_refs
+            for entry in ledger_by_question_id.get(question_id, [])
+        ]
+        question_entries = list({
+            str(entry.get("ledger_id", "")).strip() or str(index): entry
+            for index, entry in enumerate(question_entries)
+        }.values())
         section_coverage.append(
             {
                 "section_id": section_id,
@@ -6478,7 +6551,7 @@ def _coverage_for_report(
                 "supporting_claim_ids": section_claim_ids,
                 "supporting_evidence_ids": section_evidence_ids,
                 "supporting_source_ids": section_source_ids,
-                "question_id": question_id_by_section_id.get(section_id, ""),
+                "question_id": section_question_id_refs[0] if section_question_id_refs else "",
                 "explain_via": "section_packets" if section_evidence_ids else ("claim_bindings" if section_claim_ids else ""),
                 "pool_mode": str(section.get("pool_mode", "") or ""),
                 "question_ids": section_question_ids,
@@ -6492,7 +6565,7 @@ def _coverage_for_report(
             str(section.get("section_id", "")).strip()
             for section in grounded_sections
             if str(section.get("section_id", "")).strip()
-            and question_id_by_section_id.get(str(section.get("section_id", "")).strip(), "") == item.id
+            and item.id in _section_question_ids(section)
             and any(
                 [
                     citation
@@ -6523,11 +6596,6 @@ def _coverage_for_report(
                 if section.get("citations") and _count_keyword_overlap(section_text, question_tokens) >= max(coverage_threshold, 3):
                     if section_id and section_id not in matching_section_ids:
                         matching_section_ids.append(section_id)
-        covered = bool(matching_claim_ids) or bool(explicit_matching_section_ids)
-        if covered:
-            covered_sub_question_ids.append(item.id)
-        else:
-            uncovered_sub_questions.append(question)
         supporting_evidence_ids = _dedupe_preserve_order(
             [
                 str(entry.get("evidence_id", "")).strip()
@@ -6543,6 +6611,14 @@ def _coverage_for_report(
                 if str(source_id).strip()
             ]
         )
+        packet_backed = bool(supporting_evidence_ids) or bool(supporting_source_ids)
+        covered = (bool(explicit_matching_section_ids) and packet_backed) or (
+            bool(matching_claim_ids) and packet_backed
+        )
+        if covered:
+            covered_sub_question_ids.append(item.id)
+        else:
+            uncovered_sub_questions.append(question)
         sub_question_coverage.append(
             {
                 "sub_question_id": item.id,
@@ -6553,7 +6629,7 @@ def _coverage_for_report(
                 "supporting_evidence_ids": supporting_evidence_ids,
                 "supporting_source_ids": supporting_source_ids,
                 "explain_via": "explicit_question_binding"
-                if supporting_evidence_ids
+                if packet_backed
                 else ("claim_text_overlap" if matching_claim_ids else ""),
             }
         )
@@ -6976,8 +7052,7 @@ def _build_verifier_diagnostics(
             if str(source_id).strip()
         }
         selected_evidence_is_official_docs = bool(selected_evidence_source_ids) and all(
-            source_id in source_registry
-            and str(source_registry[source_id].get("source_type", "")).strip().lower() == "official_docs"
+            source_id in source_registry and _source_looks_like_official_docs(source_registry[source_id])
             for source_id in selected_evidence_source_ids
         )
         used_selected_evidence_ids: set[str] = set()
