@@ -83,6 +83,27 @@ def _print_job_summary(payload: dict[str, Any], *, fallback_job_id: str = "", ex
     _print_summary_line(parts)
 
 
+def _watch_existing_state_message(payload: dict[str, Any], *, fallback_job_id: str = "") -> str | None:
+    attempts = payload.get("attempt_count")
+    try:
+        numeric_attempts = int(attempts)
+    except (TypeError, ValueError):
+        numeric_attempts = 0
+    continued_from = _summary_value(payload.get("continued_from_job_id"))
+    if numeric_attempts <= 1 and continued_from == "-":
+        return None
+
+    parts = [f"job={_summary_value(payload.get('job_id') or fallback_job_id)}"]
+    if numeric_attempts > 1:
+        parts.append(f"attempts={numeric_attempts}")
+    checkpoint = _summary_value(payload.get("current_checkpoint"))
+    if checkpoint != "-":
+        parts.append(f"checkpoint={checkpoint}")
+    if continued_from != "-":
+        parts.append(f"continued_from={continued_from}")
+    return f"watch: attached_to_existing_state {' '.join(parts)}"
+
+
 def _print_list_summary(payload: dict[str, Any], *, status_filter: str, limit: int) -> None:
     jobs = payload.get("jobs", [])
     _print_summary_line(
@@ -136,8 +157,14 @@ def _spawn_worker(job_id: str) -> None:
 async def _watch_job(runtime: DeepResearchRuntime, job_id: str, *, interval_seconds: float = 1.0) -> None:
     last_seq = 0
     last_status_line = ""
+    printed_existing_state_message = False
     while True:
         status = await runtime.status(job_id)
+        if not printed_existing_state_message:
+            existing_state_message = _watch_existing_state_message(status, fallback_job_id=job_id)
+            if existing_state_message:
+                print(existing_state_message, file=sys.stderr)
+            printed_existing_state_message = True
         events = await runtime.events(job_id, after_seq=last_seq, limit=100)
         for event in events["events"]:
             print(f"[{event['seq']}] {event['phase']} {event['type']}: {event['message']}", file=sys.stderr)
@@ -168,9 +195,10 @@ async def _handle_start(args: argparse.Namespace) -> int:
     )
     if not args.plan_only and not response.get("reused") and response.get("status") == "queued":
         _spawn_worker(response["job_id"])
-    _print_json(response)
     if args.watch and not args.plan_only:
         await _watch_job(runtime, response["job_id"], interval_seconds=args.interval_seconds)
+    else:
+        _print_json(response)
     return 0
 
 
@@ -246,10 +274,11 @@ async def _handle_resume(args: argparse.Namespace) -> int:
     response = await runtime.resume(args.job_id, schedule=False)
     if response["status"] == "queued":
         _spawn_worker(args.job_id)
-    _print_job_summary(response, fallback_job_id=args.job_id)
-    _print_json(response)
     if args.watch and response["status"] == "queued":
         await _watch_job(runtime, args.job_id, interval_seconds=args.interval_seconds)
+    else:
+        _print_job_summary(response, fallback_job_id=args.job_id)
+        _print_json(response)
     return 0
 
 
@@ -285,9 +314,10 @@ async def _handle_continue(args: argparse.Namespace) -> int:
     )
     if not response.get("reused") and response.get("status") == "queued":
         _spawn_worker(response["job_id"])
-    _print_json(response)
     if args.watch:
         await _watch_job(runtime, response["job_id"], interval_seconds=args.interval_seconds)
+    else:
+        _print_json(response)
     return 0
 
 

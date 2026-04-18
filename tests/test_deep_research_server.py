@@ -606,6 +606,29 @@ async def test_deep_research_events_after_seq_matches_round21_stale_worker_recon
 
 
 @pytest.mark.asyncio
+async def test_deep_research_round21_stale_worker_status_and_result_match_fixture(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round21_stale_worker_reconnect_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == snapshot["resume_run"]["status"]
+    assert status["phase"] == snapshot["resume_run"]["phase"]
+    assert status["current_checkpoint"] == snapshot["resume_run"]["current_checkpoint"]
+    assert status["current_checkpoint_kind"] == snapshot["resume_run"]["current_checkpoint_kind"]
+    assert status["attempt_count"] == snapshot["resume_run"]["attempt_count"]
+    assert status["last_error"] == snapshot["resume_run"]["last_error"]
+    assert result["status"] == snapshot["resume_run"]["status"]
+    assert result["phase"] == snapshot["resume_run"]["phase"]
+    assert result["resolved_artifact_batch_id"] == ""
+    assert result["partial_report"] is None
+
+
+@pytest.mark.asyncio
 async def test_deep_research_resume_from_draft_preserves_plan_only_job(tmp_path):
     response = await server.deep_research_start(
         query="Plan first, run later",
