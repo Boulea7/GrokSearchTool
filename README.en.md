@@ -65,6 +65,8 @@ The wrappers intentionally keep scalar shim inputs such as CSV `depends_on`, sem
 - `Community-tested`: Codex-style MCP clients, Cherry Studio
 - `Planned`: Dify, n8n, Coze
 
+Broader MCP host adaptation assets, including mappings for host-native rules, presets, memories, or skills, are collected in [docs/HOSTS.md](./docs/HOSTS.md). These assets help practical integration for tools such as Cursor, Cline, Continue, Windsurf, and Cherry Studio, but do not change the support-level claims above on their own.
+
 Notes:
 
 - Public installation guidance currently covers local `stdio` only.

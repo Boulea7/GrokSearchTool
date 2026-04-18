@@ -26,6 +26,24 @@ Compatibility claims are grouped into three levels:
   - core planning, search, and fetch flows are supported
   - behavior still depends on upstream model endpoint compatibility
 
+## Broad host adaptation assets
+
+The repo now also ships broad host adaptation assets for MCP-capable tools that can consume:
+
+- local `stdio` MCP configuration
+- a host-native rule, preset, memory, or skill surface
+
+Current documented adaptation targets are collected in [HOSTS.md](./HOSTS.md):
+
+- Cherry Studio
+- Claude Code / Claude Desktop
+- Cursor
+- Cline
+- Continue
+- Windsurf
+
+These assets improve practical integration guidance, but they do not upgrade a host into `Officially tested` on their own. Hosts should still be treated according to the support levels above until maintainer validation is expanded.
+
 ### Planned
 
 - Dify
