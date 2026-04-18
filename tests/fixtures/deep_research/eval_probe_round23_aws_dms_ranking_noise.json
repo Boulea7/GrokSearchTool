@@ -1,0 +1,60 @@
+{
+  "sample": "probe-round23-aws-dms-ranking-noise",
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
+  "plan": {
+    "brief": {
+      "scope": {
+        "include_domains": [
+          "docs.aws.amazon.com"
+        ],
+        "exclude_domains": [
+          "repost.aws"
+        ],
+        "allowed_sources": [
+          "docs.aws.amazon.com"
+        ]
+      }
+    }
+  },
+  "report": {
+    "status": "completed",
+    "runtime": {
+      "warnings": [],
+      "release_gate": {
+        "passed": true,
+        "reason_codes": []
+      },
+      "verifier": {
+        "reason_codes": []
+      }
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/aws-dms-checkpoint-resume-restart-recovery-timeout.html",
+      "title": "4",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": [
+        "allowlisted_domain",
+        "official_docs"
+      ],
+      "ranking_penalties": []
+    }
+  ],
+  "golden": {
+    "ranking_noise_suppression": {
+      "verdict": "fail",
+      "score": 0.0,
+      "reason_tags": [
+        "low_signal_title",
+        "same_domain_prescriptive_guidance"
+      ]
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

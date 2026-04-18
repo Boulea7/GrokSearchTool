@@ -39,6 +39,19 @@ NOISE_MARKERS = (
 TROUBLESHOOTING_MARKERS = ("troubleshooting", "support")
 
 
+def _is_low_signal_title(title: str) -> bool:
+    normalized = " ".join(str(title or "").split()).lower()
+    if not normalized:
+        return True
+    if re.fullmatch(r"(?:section|chapter|step|part)?\s*\d+(?:\.\d+)*", normalized):
+        return True
+    if re.fullmatch(r"[ivxlcdm]+", normalized):
+        return True
+    if len(normalized) <= 2 and not re.search(r"[a-z]{2}", normalized):
+        return True
+    return False
+
+
 def load_eval_case(name: str) -> dict:
     fixture_path = FIXTURE_DIR / name
     return json.loads(fixture_path.read_text())
@@ -235,6 +248,7 @@ def evaluate_ranking_noise_suppression(case: dict) -> dict:
     score = 1.0
     allowed_domains = set(_constraint_domains(case))
     query = str(case.get("query", "")).lower()
+    report_status = str(((case.get("report") or {}).get("status") or "")).lower()
     domains = {str(source.get("domain") or "").lower() for source in case.get("sources") or [] if str(source.get("domain") or "").strip()}
     mixed_docs_and_external = any(domain.startswith("docs.") for domain in domains) and any(
         domain and not domain.startswith("docs.") for domain in domains
@@ -243,9 +257,23 @@ def evaluate_ranking_noise_suppression(case: dict) -> dict:
     for source in case.get("sources") or []:
         domain = str(source.get("domain") or "").lower()
         title = str(source.get("title") or "").lower()
+        url = str(source.get("url") or "").lower()
         if any(marker in title for marker in TROUBLESHOOTING_MARKERS):
             reason_tags.append("troubleshooting_shell_source")
             score -= 0.5
+        if report_status == "completed" and _is_low_signal_title(title):
+            reason_tags.append("low_signal_title")
+            score -= 0.5
+        if (
+            report_status == "completed"
+            and
+            allowed_domains
+            and domain in allowed_domains
+            and domain.startswith("docs.")
+            and ("/prescriptive-guidance/" in url or "/patterns/" in url)
+        ):
+            reason_tags.append("same_domain_prescriptive_guidance")
+            score -= 0.6
         if _is_off_domain_for_official_docs_query(query, domain, allowed_domains) or (
             mixed_docs_and_external and domain and not domain.startswith("docs.")
         ):
@@ -636,6 +664,7 @@ def test_planner_boundary_probe_goldens(fixture_name):
         "eval_probe_round16_main_snapshot.json",
         "eval_probe_round18_aws_dms.json",
         "eval_probe_round22_noise_filters.json",
+        "eval_probe_round23_aws_dms_ranking_noise.json",
     ],
 )
 def test_ranking_noise_suppression_probe_goldens(fixture_name):
