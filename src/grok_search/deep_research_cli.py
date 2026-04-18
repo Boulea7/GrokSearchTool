@@ -245,6 +245,14 @@ def _print_events_summary(
     )
 
 
+async def _run_observation(coro: Any) -> bool:
+    try:
+        await coro
+    except KeyboardInterrupt:
+        return True
+    return False
+
+
 def _spawn_worker(job_id: str) -> None:
     log_dir = config.deep_research_dir / "worker-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -321,23 +329,31 @@ async def _handle_start(args: argparse.Namespace) -> int:
         _spawn_worker(response["job_id"])
     _print_json(response)
     if args.watch and not args.plan_only:
-        await _watch_job(
-            runtime,
-            response["job_id"],
-            interval_seconds=args.interval_seconds,
-            after_seq=args.after_seq,
+        interrupted = await _run_observation(
+            _watch_job(
+                runtime,
+                response["job_id"],
+                interval_seconds=args.interval_seconds,
+                after_seq=args.after_seq,
+            )
         )
+        if interrupted:
+            return 130
     return 0
 
 
 async def _handle_watch(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
-    await _watch_job(
-        runtime,
-        args.job_id,
-        interval_seconds=args.interval_seconds,
-        after_seq=args.after_seq,
+    interrupted = await _run_observation(
+        _watch_job(
+            runtime,
+            args.job_id,
+            interval_seconds=args.interval_seconds,
+            after_seq=args.after_seq,
+        )
     )
+    if interrupted:
+        return 130
     return 0
 
 
@@ -352,22 +368,28 @@ async def _handle_status(args: argparse.Namespace) -> int:
 async def _handle_events(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
     if args.follow:
-        last_seq = args.after_seq
-        while True:
-            payload = await runtime.events(args.job_id, after_seq=last_seq, limit=args.limit)
-            status = await runtime.status(args.job_id)
-            _print_events_summary(
-                payload,
-                after_seq=last_seq,
-                terminal=status["status"] in TERMINAL_STATUSES,
-                fallback_job_id=args.job_id,
-            )
-            if payload["events"]:
-                _print_json(payload)
-            last_seq = payload["next_after_seq"]
-            if status["status"] in TERMINAL_STATUSES:
-                return 0
-            await asyncio.sleep(args.interval_seconds)
+        async def follow_events() -> None:
+            last_seq = args.after_seq
+            while True:
+                payload = await runtime.events(args.job_id, after_seq=last_seq, limit=args.limit)
+                status = await runtime.status(args.job_id)
+                _print_events_summary(
+                    payload,
+                    after_seq=last_seq,
+                    terminal=status["status"] in TERMINAL_STATUSES,
+                    fallback_job_id=args.job_id,
+                )
+                if payload["events"]:
+                    _print_json(payload)
+                last_seq = payload["next_after_seq"]
+                if status["status"] in TERMINAL_STATUSES:
+                    return
+                await asyncio.sleep(args.interval_seconds)
+
+        interrupted = await _run_observation(follow_events())
+        if interrupted:
+            return 130
+        return 0
     payload = await runtime.events(args.job_id, after_seq=args.after_seq, limit=args.limit)
     status = await runtime.status(args.job_id)
     _print_events_summary(
@@ -410,14 +432,18 @@ async def _handle_resume(args: argparse.Namespace) -> int:
     _print_job_summary(response, fallback_job_id=args.job_id)
     _print_json(response)
     if args.watch and response["status"] == "queued":
-        await _watch_job(
-            runtime,
-            args.job_id,
-            interval_seconds=args.interval_seconds,
-            initial_status=response,
-            suppress_initial_status_line=True,
-            after_seq=args.after_seq,
+        interrupted = await _run_observation(
+            _watch_job(
+                runtime,
+                args.job_id,
+                interval_seconds=args.interval_seconds,
+                initial_status=response,
+                suppress_initial_status_line=True,
+                after_seq=args.after_seq,
+            )
         )
+        if interrupted:
+            return 130
     return 0
 
 
@@ -455,12 +481,16 @@ async def _handle_continue(args: argparse.Namespace) -> int:
         _spawn_worker(response["job_id"])
     _print_json(response)
     if args.watch:
-        await _watch_job(
-            runtime,
-            response["job_id"],
-            interval_seconds=args.interval_seconds,
-            after_seq=args.after_seq,
+        interrupted = await _run_observation(
+            _watch_job(
+                runtime,
+                response["job_id"],
+                interval_seconds=args.interval_seconds,
+                after_seq=args.after_seq,
+            )
         )
+        if interrupted:
+            return 130
     return 0
 
 
