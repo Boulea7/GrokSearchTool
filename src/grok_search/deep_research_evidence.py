@@ -119,6 +119,28 @@ def _packet_from_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _section_decisions(
+    *,
+    candidate_section_ids: list[str],
+    selected_section_id: str,
+    rejected_section_ids: list[str],
+) -> list[dict[str, str]]:
+    decisions: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for section_id in candidate_section_ids:
+        normalized = str(section_id).strip()
+        if not normalized or normalized in seen:
+            continue
+        state = "pending"
+        if normalized == selected_section_id:
+            state = "selected"
+        elif normalized in rejected_section_ids:
+            state = "rejected"
+        decisions.append({"section_id": normalized, "state": state})
+        seen.add(normalized)
+    return decisions
+
+
 def _question_ids_for_evidence(
     plan: DeepResearchPlan,
     *,
@@ -197,6 +219,14 @@ def build_evidence_ledger_entries(
                 line_end=evidence.get("line_end"),
                 selection_score=selection_score,
                 selection_basis_tokens=selection_basis_tokens,
+                decision_state="selected" if selected_section_id else "pending",
+                section_decisions=_section_decisions(
+                    candidate_section_ids=candidate_section_ids,
+                    selected_section_id=selected_section_id,
+                    rejected_section_ids=[
+                        section_id for section_id in candidate_section_ids if section_id != selected_section_id
+                    ],
+                ),
                 materialized_claim_ids=[],
                 recorded_at=updated_at,
             ).model_dump()

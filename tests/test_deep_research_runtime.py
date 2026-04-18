@@ -898,11 +898,14 @@ async def test_runtime_materializes_section_banks_and_evidence_ledger_from_compl
     await runtime.run_job(response["job_id"])
 
     outline_state = json.loads(runtime.store.read_artifact_text(response["job_id"], "outline_state.json") or "{}")
+    outline_versions = json.loads(runtime.store.read_artifact_text(response["job_id"], "outline_versions.json") or "[]")
     evidence_ledger = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_ledger.json") or "[]")
     section_banks = json.loads(runtime.store.read_artifact_text(response["job_id"], "section_banks.json") or "[]")
     checkpoint = runtime.store.get_checkpoint(response["job_id"], "finalizing")
 
     assert outline_state["nodes"][0]["section_id"] == "resume-semantics"
+    assert outline_versions
+    assert outline_versions[0]["sections"][0]["section_id"] == "resume-semantics"
     assert outline_state["nodes"][0]["source_ids"] == ["R1"]
     assert outline_state["nodes"][0]["selected_evidence_ids"]
     assert outline_state["nodes"][0]["coverage_state"]["grounded_claim_ids"]
@@ -922,6 +925,8 @@ async def test_runtime_materializes_section_banks_and_evidence_ledger_from_compl
     assert {entry["selected_section_id"] for entry in evidence_ledger} == {"resume-semantics"}
     search_entry = next(entry for entry in evidence_ledger if entry["evidence_id"] == "evidence-unit-search-1-search")
     fetch_entry = next(entry for entry in evidence_ledger if entry["evidence_id"] == "evidence-unit-search-1-fetch-1")
+    assert search_entry["decision_state"] == "selected"
+    assert search_entry["section_decisions"] == [{"section_id": "resume-semantics", "state": "selected"}]
     assert search_entry["question_ids"] == ["sq1"]
     assert search_entry["selection_score"] >= 1
     assert search_entry["selection_basis_tokens"]
@@ -971,15 +976,19 @@ async def test_continuation_planning_bootstraps_internal_state_from_carry_forwar
     )
 
     outline_state = json.loads(runtime.store.read_artifact_text(response["job_id"], "outline_state.json") or "{}")
+    outline_versions = json.loads(runtime.store.read_artifact_text(response["job_id"], "outline_versions.json") or "[]")
     evidence_ledger = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_ledger.json") or "[]")
     section_banks = json.loads(runtime.store.read_artifact_text(response["job_id"], "section_banks.json") or "[]")
+    continuation_payload = json.loads(runtime.store.read_artifact_text(response["job_id"], "continuation.json") or "{}")
 
     assert outline_state["nodes"]
+    assert outline_versions
     assert evidence_ledger
     assert any(entry["selected_section_id"] for entry in evidence_ledger)
     assert any(bank["selected_evidence_ids"] for bank in section_banks)
     assert all("question_ids" in entry for entry in evidence_ledger)
     assert any(bank["selected_packets"] for bank in section_banks)
+    assert continuation_payload["carry_forward_outline_versions"]
 
 
 @pytest.mark.asyncio
@@ -995,16 +1004,20 @@ async def test_plan_only_builds_structured_plan(tmp_path):
     )
 
     plan = response["plan"]
+    outline_versions = json.loads(runtime.store.read_artifact_text(response["job_id"], "outline_versions.json") or "[]")
 
     assert plan["query"] == "Compare open-source deep research runtimes"
     assert plan["brief"]["objective"]
     assert plan["sub_questions"]
     assert plan["search_strategy"]["search_queries"]
     assert plan["report_outline"]
+    assert plan["outline_versions"]
+    assert plan["outline_versions"][0]["sections"] == plan["report_outline"]
     assert plan["research_units"]
     assert plan["continuation"]["mode"] == "fresh"
     assert plan["planner_metadata"]["used_fallback"] is False
     assert "carry_forward_sources" not in plan["continuation"]
+    assert outline_versions == plan["outline_versions"]
 
 
 @pytest.mark.asyncio

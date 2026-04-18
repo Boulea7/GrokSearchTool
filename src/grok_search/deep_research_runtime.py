@@ -36,6 +36,7 @@ from .deep_research_types import (
     DeepResearchContinuationState,
     DeepResearchEvidenceItem,
     DeepResearchJob,
+    DeepResearchOutlineVersion,
     DeepResearchPlan,
     DeepResearchReportSection,
     DeepResearchResearchUnit,
@@ -216,6 +217,7 @@ _NON_BLOCKING_VERIFIER_REASON_CODES = {
 }
 _EVIDENCE_ITEMS_ARTIFACT_KIND = "evidence_items.json"
 _OUTLINE_STATE_ARTIFACT_KIND = "outline_state.json"
+_OUTLINE_VERSIONS_ARTIFACT_KIND = "outline_versions.json"
 _EVIDENCE_LEDGER_ARTIFACT_KIND = "evidence_ledger.json"
 _SECTION_BANKS_ARTIFACT_KIND = "section_banks.json"
 _CORE_FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
@@ -569,6 +571,156 @@ def _continuation_anchor_terms(continuation: DeepResearchContinuationState) -> l
     return anchors[:4]
 
 
+def _normalize_outline_sections_payload(items: list[Any]) -> list[dict[str, Any]]:
+    normalized_sections: list[dict[str, Any]] = []
+    seen_section_ids: dict[str, int] = {}
+    for index, item in enumerate(items or [], start=1):
+        if isinstance(item, str):
+            item = {"section_id": _slugify(item), "title": item, "goal": item}
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or f"Section {index}").strip()
+        goal = str(item.get("goal") or title).strip()
+        base_section_id = _normalize_whitespace(
+            str(item.get("section_id") or _slugify(title) or f"section-{index}")
+        )
+        count = seen_section_ids.get(base_section_id, 0)
+        section_id = base_section_id if count == 0 else f"{base_section_id}-{count + 1}"
+        seen_section_ids[base_section_id] = count + 1
+        normalized_sections.append(
+            {
+                "section_id": section_id,
+                "title": title,
+                "goal": goal,
+                "status": _normalize_whitespace(str(item.get("status", "") or "")),
+                "coverage_state": dict(item.get("coverage_state") or {})
+                if isinstance(item.get("coverage_state"), dict)
+                else {},
+                "rewrite_reason": _normalize_whitespace(str(item.get("rewrite_reason", "") or "")),
+            }
+        )
+    return normalized_sections
+
+
+def _make_outline_version(
+    sections: list[dict[str, Any]],
+    *,
+    version_id: str,
+    parent_version_id: str = "",
+    kind: str = "planned",
+    reason_codes: list[str] | None = None,
+    created_at: str = "",
+) -> dict[str, Any]:
+    return DeepResearchOutlineVersion(
+        version_id=version_id,
+        parent_version_id=parent_version_id,
+        kind=kind,
+        sections=[DeepResearchReportSection.model_validate(section) for section in sections],
+        reason_codes=_dedupe_preserve_order(
+            [str(code).strip() for code in reason_codes or [] if str(code).strip()]
+        ),
+        created_at=created_at or utc_now_iso(),
+    ).model_dump()
+
+
+def _normalize_outline_versions(
+    raw_outline_versions: Any,
+    *,
+    latest_sections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized_versions: list[dict[str, Any]] = []
+    if isinstance(raw_outline_versions, list):
+        for index, item in enumerate(raw_outline_versions, start=1):
+            if not isinstance(item, dict):
+                continue
+            sections = _normalize_outline_sections_payload(list(item.get("sections") or []))
+            if not sections:
+                continue
+            version_id = _normalize_whitespace(str(item.get("version_id") or f"outline-v{index}")) or f"outline-v{index}"
+            normalized_versions.append(
+                _make_outline_version(
+                    sections,
+                    version_id=version_id,
+                    parent_version_id=_normalize_whitespace(str(item.get("parent_version_id", "") or "")),
+                    kind=_normalize_whitespace(str(item.get("kind", "") or "planned")) or "planned",
+                    reason_codes=list(item.get("reason_codes") or []),
+                    created_at=_normalize_whitespace(str(item.get("created_at", "") or "")),
+                )
+            )
+    if not normalized_versions:
+        return [
+            _make_outline_version(
+                latest_sections,
+                version_id="outline-v1",
+                kind="planned",
+                reason_codes=["initial_outline"],
+            )
+        ]
+    if normalized_versions[-1]["sections"] != latest_sections:
+        normalized_versions.append(
+            _make_outline_version(
+                latest_sections,
+                version_id=f"outline-v{len(normalized_versions) + 1}",
+                parent_version_id=str(normalized_versions[-1].get("version_id", "")).strip(),
+                kind="normalized",
+                reason_codes=["normalized_latest_outline"],
+            )
+        )
+    return normalized_versions
+
+
+def _append_outline_version_if_changed(
+    outline_versions: list[dict[str, Any]],
+    *,
+    sections: list[dict[str, Any]],
+    kind: str,
+    reason_codes: list[str] | None = None,
+    created_at: str = "",
+) -> list[dict[str, Any]]:
+    normalized_sections = _normalize_outline_sections_payload(sections)
+    if not normalized_sections:
+        return list(outline_versions)
+    versions = list(outline_versions)
+    latest_sections = versions[-1]["sections"] if versions else []
+    if latest_sections == normalized_sections:
+        return versions
+    versions.append(
+        _make_outline_version(
+            normalized_sections,
+            version_id=f"outline-v{len(versions) + 1}",
+            parent_version_id=str(versions[-1].get("version_id", "")).strip() if versions else "",
+            kind=kind,
+            reason_codes=reason_codes or [],
+            created_at=created_at or utc_now_iso(),
+        )
+    )
+    return versions
+
+
+def _carry_forward_outline_versions(
+    *,
+    plan_payload: dict[str, Any],
+    carry_forward_sections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    raw_outline_versions = plan_payload.get("outline_versions")
+    if isinstance(raw_outline_versions, list) and raw_outline_versions:
+        latest_sections = _normalize_outline_sections_payload(
+            list((raw_outline_versions[-1] or {}).get("sections") or [])
+        ) or _normalize_outline_sections_payload(list(plan_payload.get("report_outline") or []))
+        normalized = _normalize_outline_versions(
+            raw_outline_versions,
+            latest_sections=latest_sections or _normalize_outline_sections_payload(carry_forward_sections),
+        )
+        if normalized:
+            return normalized
+    latest_sections = _normalize_outline_sections_payload(
+        list(plan_payload.get("report_outline") or [])
+    ) or _normalize_outline_sections_payload(carry_forward_sections)
+    if not latest_sections:
+        return []
+    return _normalize_outline_versions([], latest_sections=latest_sections)
+
+
 def _compact_continuation(continuation: DeepResearchContinuationState) -> DeepResearchContinuation:
     return DeepResearchContinuation(
         mode=continuation.mode,
@@ -604,6 +756,7 @@ def _focused_continuation_snapshot(
     trusted_source_headers: list[str],
     carry_forward_constraints: dict[str, Any],
     carry_forward_sources: list[dict[str, Any]],
+    carry_forward_outline_versions: list[dict[str, Any]],
     carry_forward_sections: list[dict[str, Any]],
     carry_forward_unit_results: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -632,6 +785,20 @@ def _focused_continuation_snapshot(
             }
             for item in carry_forward_sources
             if str(item.get("source_id", "")).strip() and str(item.get("url", "")).strip()
+        ],
+        "outline_versions": [
+            {
+                "version_id": str(item.get("version_id", "")).strip(),
+                "kind": str(item.get("kind", "")).strip(),
+                "reason_codes": [str(code).strip() for code in item.get("reason_codes", []) or [] if str(code).strip()],
+                "section_ids": [
+                    str(section.get("section_id", "")).strip()
+                    for section in item.get("sections", []) or []
+                    if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+                ],
+            }
+            for item in carry_forward_outline_versions
+            if isinstance(item, dict) and str(item.get("version_id", "")).strip()
         ],
         "sections": [
             {
@@ -673,6 +840,7 @@ def _continuation_has_material_carry_forward_state(continuation: DeepResearchCon
         (
             continuation.source_count > 0,
             bool(continuation.carry_forward_sources),
+            bool(continuation.carry_forward_outline_versions),
             bool(continuation.carry_forward_evidence),
             bool(continuation.carry_forward_sections),
             bool(continuation.carry_forward_unit_results),
@@ -687,6 +855,7 @@ def _checkpoint_state_has_material_carry_forward(state: dict[str, Any]) -> bool:
         (
             bool(state.get("completed_unit_ids")),
             bool(state.get("sources")),
+            bool(state.get("outline_versions")),
             bool(state.get("evidence_items")),
             bool(state.get("sections")),
             bool(state.get("unit_results")),
@@ -812,6 +981,11 @@ def _continuation_capsule(continuation: DeepResearchContinuationState) -> dict[s
             for item in continuation.carry_forward_sections[:5]
             if str(item.get("section_id", "")).strip()
         ],
+        "carry_forward_outline_version_ids": [
+            str(item.get("version_id", "")).strip()
+            for item in continuation.carry_forward_outline_versions[:3]
+            if str(item.get("version_id", "")).strip()
+        ],
     }
 
 
@@ -832,6 +1006,7 @@ def _hydrate_continuation_snapshot(continuation: DeepResearchContinuationState) 
             trusted_source_headers=list(continuation.trusted_source_headers),
             carry_forward_constraints=dict(continuation.carry_forward_constraints),
             carry_forward_sources=list(continuation.carry_forward_sources),
+            carry_forward_outline_versions=list(continuation.carry_forward_outline_versions),
             carry_forward_sections=list(continuation.carry_forward_sections),
             carry_forward_unit_results=dict(continuation.carry_forward_unit_results),
         )
@@ -1490,6 +1665,7 @@ def _artifact_payloads(
         "planner_trace.json",
         "continuation.json",
         "continuation_capsule.json",
+        _OUTLINE_VERSIONS_ARTIFACT_KIND,
         _OUTLINE_STATE_ARTIFACT_KIND,
         _EVIDENCE_LEDGER_ARTIFACT_KIND,
         _SECTION_BANKS_ARTIFACT_KIND,
@@ -2679,10 +2855,17 @@ def _write_internal_state_artifacts(
     runtime: "DeepResearchRuntime",
     job_id: str,
     *,
+    outline_versions: list[dict[str, Any]],
     section_graph: dict[str, Any],
     evidence_ledger: list[dict[str, Any]],
     section_banks: list[dict[str, Any]],
 ) -> None:
+    runtime.write_artifact(
+        job_id,
+        _OUTLINE_VERSIONS_ARTIFACT_KIND,
+        _json_markdown_block(outline_versions),
+        "application/json",
+    )
     runtime.write_artifact(
         job_id,
         _OUTLINE_STATE_ARTIFACT_KIND,
@@ -2833,6 +3016,7 @@ def _checkpoint_state_payload(
     sources: list[dict[str, Any]],
     evidence_items: list[dict[str, Any]],
     sections: list[dict[str, Any]],
+    outline_versions: list[dict[str, Any]] | None = None,
     section_graph: dict[str, Any] | None = None,
     evidence_ledger: list[dict[str, Any]] | None = None,
     section_banks: list[dict[str, Any]] | None = None,
@@ -2850,6 +3034,7 @@ def _checkpoint_state_payload(
         sources=list(sources),
         evidence_items=list(evidence_items),
         sections=list(sections),
+        outline_versions=list(outline_versions or []),
         section_graph=dict(section_graph or {}),
         evidence_ledger=list(evidence_ledger or []),
         section_banks=list(section_banks or []),
@@ -3075,6 +3260,20 @@ def _planner_continuation_payload(continuation: DeepResearchContinuationState) -
         }
         for item in continuation.carry_forward_sections[:4]
         if item.get("title")
+    ]
+    payload["carry_forward_outline_versions"] = [
+        {
+            "version_id": str(item.get("version_id", "")).strip(),
+            "kind": str(item.get("kind", "")).strip(),
+            "reason_codes": [str(code).strip() for code in item.get("reason_codes", []) or [] if str(code).strip()],
+            "section_titles": [
+                str(section.get("title", "")).strip()
+                for section in item.get("sections", []) or []
+                if isinstance(section, dict) and str(section.get("title", "")).strip()
+            ][:6],
+        }
+        for item in continuation.carry_forward_outline_versions[:2]
+        if isinstance(item, dict) and str(item.get("version_id", "")).strip()
     ]
     payload["confirmed_claims"] = list(continuation.confirmed_claims[:4])
     payload["open_questions"] = list(continuation.open_questions[:4])
@@ -3391,10 +3590,12 @@ class DeepResearchRuntime:
             section_graph = initialize_section_graph(plan, updated_at=planning_updated_at)
             section_banks = initialize_section_banks(plan, updated_at=planning_updated_at)
             evidence_ledger = []
+        outline_versions = list(plan.model_dump().get("outline_versions", []) or [])
         self.write_artifact(job.job_id, "plan.json", _json_markdown_block(plan.model_dump()), "application/json")
         _write_internal_state_artifacts(
             self,
             job.job_id,
+            outline_versions=outline_versions,
             section_graph=section_graph,
             evidence_ledger=evidence_ledger,
             section_banks=section_banks,
@@ -3417,6 +3618,7 @@ class DeepResearchRuntime:
                 sources=list(continuation.carry_forward_sources),
                 evidence_items=list(continuation.carry_forward_evidence),
                 sections=list(continuation.carry_forward_sections),
+                outline_versions=outline_versions,
                 section_graph=section_graph,
                 evidence_ledger=evidence_ledger,
                 section_banks=section_banks,
@@ -4607,6 +4809,10 @@ class DeepResearchRuntime:
             continuation_focus=requested_continuation_focus or list(normalized_brief.get("continuation_focus") or []),
             normalize_actions=normalize_actions,
         )
+        outline_versions = _normalize_outline_versions(
+            raw_plan.get("outline_versions"),
+            latest_sections=normalized_outline,
+        )
 
         raw_planner_metadata = raw_plan.get("planner_metadata")
         if not isinstance(raw_planner_metadata, dict):
@@ -4658,6 +4864,7 @@ class DeepResearchRuntime:
             "sub_questions": sub_questions,
             "search_strategy": strategy,
             "report_outline": normalized_outline,
+            "outline_versions": outline_versions,
             "research_units": normalized_units,
             "continuation": _compact_continuation(continuation).model_dump(),
             "planner_metadata": planner_metadata,
@@ -4687,6 +4894,7 @@ class DeepResearchRuntime:
         current_final_report = self.store.read_artifact_text(continue_from_job_id, "final_report.md") or ""
         current_sources_text = self.store.read_artifact_text(continue_from_job_id, "sources.json") or "[]"
         current_citations_text = self.store.read_artifact_text(continue_from_job_id, "citations.json") or ""
+        current_outline_versions_text = self.store.read_artifact_text(continue_from_job_id, _OUTLINE_VERSIONS_ARTIFACT_KIND) or ""
         plan_text = self.store.read_artifact_text(continue_from_job_id, "plan.json") or ""
         checkpoints = self.store.list_checkpoints(continue_from_job_id)
         checkpoint_state, checkpoint_meta = self._load_checkpoint_state(job)
@@ -4727,6 +4935,7 @@ class DeepResearchRuntime:
             if bundle_candidate is not None
             else self.store.read_artifact_text(continue_from_job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
         ) or ""
+        outline_versions_text = current_outline_versions_text
         if use_final_bundle and not evidence_items_text:
             evidence_items_text = self.store.read_artifact_text(
                 continue_from_job_id,
@@ -4759,6 +4968,20 @@ class DeepResearchRuntime:
                     item.get("question", "").strip()
                     for item in plan_state.get("sub_questions", []) or []
                     if item.get("question", "").strip()
+                )
+        carry_forward_outline_versions = _carry_forward_outline_versions(
+            plan_payload=plan_payload,
+            carry_forward_sections=list(report.get("sections") or []) if isinstance(report.get("sections"), list) else [],
+        )
+        if outline_versions_text:
+            outline_versions_value, outline_versions_error = _safe_load_json_artifact(outline_versions_text)
+            if outline_versions_error is None and isinstance(outline_versions_value, list):
+                latest_outline_sections = _normalize_outline_sections_payload(
+                    list((outline_versions_value[-1] or {}).get("sections") or [])
+                ) or _normalize_outline_sections_payload(list(plan_payload.get("report_outline") or []))
+                carry_forward_outline_versions = _normalize_outline_versions(
+                    outline_versions_value,
+                    latest_sections=latest_outline_sections or [],
                 )
 
         carry_forward_sources: list[dict[str, Any]] = []
@@ -4831,6 +5054,12 @@ class DeepResearchRuntime:
         carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
         carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
+        carry_forward_outline_versions = _append_outline_version_if_changed(
+            carry_forward_outline_versions,
+            sections=carry_forward_sections,
+            kind="continuation_compaction",
+            reason_codes=["carry_forward_sections"],
+        )
         used_source_ids = _continuation_used_source_ids(
             carry_forward_unit_results,
             carry_forward_evidence,
@@ -4854,6 +5083,12 @@ class DeepResearchRuntime:
         carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
         carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
+        carry_forward_outline_versions = _append_outline_version_if_changed(
+            carry_forward_outline_versions,
+            sections=carry_forward_sections,
+            kind="continuation_compaction",
+            reason_codes=["focused_source_subset"],
+        )
         previous_summary = _best_continuation_summary(
             report=report,
             final_report=final_report,
@@ -4891,6 +5126,7 @@ class DeepResearchRuntime:
             trusted_source_headers=trusted_source_headers,
             carry_forward_constraints=carry_forward_constraints,
             carry_forward_sources=carry_forward_sources,
+            carry_forward_outline_versions=carry_forward_outline_versions,
             carry_forward_sections=carry_forward_sections,
             carry_forward_unit_results=carry_forward_unit_results,
         )
@@ -4937,6 +5173,7 @@ class DeepResearchRuntime:
             trusted_source_headers=trusted_source_headers,
             carry_forward_constraints=carry_forward_constraints,
             carry_forward_sources=carry_forward_sources,
+            carry_forward_outline_versions=carry_forward_outline_versions,
             carry_forward_evidence=carry_forward_evidence,
             carry_forward_sections=carry_forward_sections,
             carry_forward_unit_results=carry_forward_unit_results,
@@ -5020,6 +5257,7 @@ class DeepResearchRuntime:
             {
                 **continuation_payload,
                 "carry_forward_sources": raw_state.get("sources") or [],
+                "carry_forward_outline_versions": raw_state.get("outline_versions") or [],
                 "carry_forward_evidence": raw_state.get("evidence_items") or [],
                 "carry_forward_sections": raw_state.get("sections") or [],
                 "carry_forward_unit_results": raw_state.get("unit_results") or {},
@@ -5192,6 +5430,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     evidence_items = _sanitize_evidence_items(evidence_items, source_registry)
     sections = _sanitize_sections(sections, source_registry)
     current_updated_at = utc_now_iso()
+    outline_versions = (
+        list(checkpoint_state.outline_versions)
+        if checkpoint_state and checkpoint_state.outline_versions
+        else list(plan.model_dump().get("outline_versions", []) or continuation.carry_forward_outline_versions)
+    )
     if checkpoint_state and checkpoint_state.section_graph and checkpoint_state.section_banks:
         section_graph = dict(checkpoint_state.section_graph)
         evidence_ledger = list(checkpoint_state.evidence_ledger)
@@ -5208,6 +5451,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     _write_internal_state_artifacts(
         runtime,
         job_id,
+        outline_versions=outline_versions,
         section_graph=section_graph,
         evidence_ledger=evidence_ledger,
         section_banks=section_banks,
@@ -5391,6 +5635,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             sources=source_registry,
             evidence_items=evidence_items,
             sections=sections,
+            outline_versions=outline_versions,
             section_graph=section_graph,
             evidence_ledger=evidence_ledger,
             section_banks=section_banks,
@@ -5520,6 +5765,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             _write_internal_state_artifacts(
                 runtime,
                 job_id,
+                outline_versions=outline_versions,
                 section_graph=section_graph,
                 evidence_ledger=evidence_ledger,
                 section_banks=section_banks,
@@ -5544,6 +5790,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 sources=source_registry,
                 evidence_items=evidence_items,
                 sections=sections,
+                outline_versions=outline_versions,
                 section_graph=section_graph,
                 evidence_ledger=evidence_ledger,
                 section_banks=section_banks,
@@ -5629,6 +5876,13 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         section_banks=section_banks,
         evidence_ledger=evidence_ledger,
     )
+    outline_versions = _append_outline_version_if_changed(
+        outline_versions,
+        sections=active_outline,
+        kind="evidence_rewrite",
+        reason_codes=["active_outline"],
+        created_at=utc_now_iso(),
+    )
     sections = _build_section_citations(
         plan,
         evidence_items,
@@ -5693,6 +5947,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             sources=source_registry,
             evidence_items=evidence_items,
             sections=sections,
+            outline_versions=outline_versions,
             section_graph=section_graph,
             evidence_ledger=evidence_ledger,
             section_banks=section_banks,
@@ -5808,9 +6063,17 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         sections=citations["sections"],
         updated_at=utc_now_iso(),
     )
+    outline_versions = _append_outline_version_if_changed(
+        outline_versions,
+        sections=active_outline,
+        kind="materialized_outline",
+        reason_codes=["synthesized_sections"],
+        created_at=utc_now_iso(),
+    )
     _write_internal_state_artifacts(
         runtime,
         job_id,
+        outline_versions=outline_versions,
         section_graph=section_graph,
         evidence_ledger=evidence_ledger,
         section_banks=section_banks,
@@ -5876,6 +6139,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             sources=source_registry,
             evidence_items=evidence_items,
             sections=sections,
+            outline_versions=outline_versions,
             section_graph=section_graph,
             evidence_ledger=evidence_ledger,
             section_banks=section_banks,
