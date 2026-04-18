@@ -173,6 +173,57 @@ def test_reset_runtime_state_clears_cached_model(monkeypatch):
     assert config._cached_model is None
 
 
+def test_grok_model_cache_is_isolated_by_project_root(monkeypatch, tmp_path):
+    config = Config()
+    root_a = tmp_path / "project-a"
+    root_b = tmp_path / "project-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    (root_a / ".env.local").write_text("GROK_MODEL=model-a\n", encoding="utf-8")
+    (root_b / ".env.local").write_text("GROK_MODEL=model-b\n", encoding="utf-8")
+    current_root = root_a
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: current_root)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+    config.reset_runtime_state()
+
+    assert config.grok_model == "model-a"
+
+    current_root = root_b
+
+    assert config.grok_model == "model-b"
+
+
+def test_reset_runtime_state_clears_all_project_root_buckets(monkeypatch, tmp_path):
+    config = Config()
+    root_a = tmp_path / "project-a"
+    root_b = tmp_path / "project-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    (root_a / ".env.local").write_text("GROK_MODEL=model-a\n", encoding="utf-8")
+    (root_b / ".env.local").write_text("GROK_MODEL=model-b\n", encoding="utf-8")
+    current_root = root_a
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: current_root)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+    config.reset_runtime_state()
+
+    assert config.grok_model == "model-a"
+
+    current_root = root_b
+    assert config.grok_model == "model-b"
+
+    (root_a / ".env.local").write_text("GROK_MODEL=model-a-updated\n", encoding="utf-8")
+    (root_b / ".env.local").write_text("GROK_MODEL=model-b-updated\n", encoding="utf-8")
+
+    config.reset_runtime_state()
+
+    current_root = root_a
+    assert config.grok_model == "model-a-updated"
+    current_root = root_b
+    assert config.grok_model == "model-b-updated"
+
+
 def test_grok_api_url_falls_back_to_project_env_local(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.delenv("GROK_API_URL", raising=False)
