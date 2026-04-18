@@ -1,0 +1,197 @@
+{
+  "sample": "probe-round26-worker-restart-dispatch-runtime",
+  "query": "Investigate interrupted, continue, and resume semantics for deep research jobs",
+  "first_run": {
+    "status": "interrupted",
+    "phase": "researching",
+    "current_checkpoint": "researching-dispatch-a1-u1",
+    "current_checkpoint_kind": "research_dispatch",
+    "attempt_count": 1,
+    "last_error": "worker_restarted"
+  },
+  "resume_run": {
+    "status": "interrupted",
+    "phase": "researching",
+    "current_checkpoint": "researching-u3",
+    "current_checkpoint_kind": "research_unit",
+    "attempt_count": 2,
+    "last_error": "time_budget_exceeded"
+  },
+  "resume_window": {
+    "after_seq": 4,
+    "next_after_seq": 11
+  },
+  "expected": {
+    "previous_terminal_reason": "worker_restarted",
+    "interrupted_reason": "time_budget_exceeded",
+    "resume_source": "worker_restarted",
+    "checkpoint_kind": "research_dispatch"
+  },
+  "public_surface": {
+    "status": {
+      "current_checkpoint": "researching-u3",
+      "current_checkpoint_kind": "research_unit",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": false,
+      "resolved_artifact_batch_id": "",
+      "runtime_warnings": [],
+      "constraint_violations": [],
+      "artifact_kinds": [
+        "plan.json",
+        "planner_trace.json",
+        "outline_state.json",
+        "evidence_ledger.json",
+        "section_banks.json",
+        "partial_report.md"
+      ]
+    },
+    "result": {
+      "current_checkpoint_kind": "research_unit",
+      "resolved_artifact_batch_id": "",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": false,
+      "runtime_warnings": [],
+      "constraint_violations": [],
+      "final_report": null,
+      "sources": null,
+      "report": null
+    }
+  },
+  "initial_events": [
+    {
+      "seq": 1,
+      "type": "job_created",
+      "phase": "planning",
+      "message": "Deep research job created.",
+      "data": {
+        "continuation_mode": "fresh",
+        "plan_only": false
+      }
+    },
+    {
+      "seq": 2,
+      "type": "phase_started",
+      "phase": "planning",
+      "message": "Planning started.",
+      "data": {
+        "unit_count": 5
+      }
+    },
+    {
+      "seq": 3,
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 0
+      }
+    },
+    {
+      "seq": 4,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research interrupted during worker recovery.",
+      "data": {
+        "attempt_count": 1,
+        "checkpoint_key": "researching-dispatch-a1-u1",
+        "checkpoint_kind": "research_dispatch",
+        "checkpoint_seq": 2,
+        "reason": "worker_restarted"
+      }
+    }
+  ],
+  "resume_events_after_seq_4": [
+    {
+      "seq": 5,
+      "type": "job_resumed",
+      "phase": "researching",
+      "message": "Deep research job resumed from checkpoint.",
+      "data": {
+        "attempt_count": 2,
+        "checkpoint_key": "researching-dispatch-a1-u1",
+        "checkpoint_kind": "research_dispatch",
+        "checkpoint_seq": 2,
+        "completed_units_count": 0,
+        "resume_source": "worker_restarted"
+      }
+    },
+    {
+      "seq": 6,
+      "type": "checkpoint_restored",
+      "phase": "researching",
+      "message": "Deep research restored execution from the latest durable checkpoint.",
+      "data": {
+        "attempt_count": 2,
+        "checkpoint_key": "researching-dispatch-a1-u1",
+        "checkpoint_kind": "research_dispatch",
+        "checkpoint_seq": 2,
+        "completed_units_count": 0
+      }
+    },
+    {
+      "seq": 7,
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 0
+      }
+    },
+    {
+      "seq": 8,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u1.",
+      "data": {
+        "effective_model": "grok-4.20-expert-4-agent",
+        "provider_model": "grok-4.20-expert-4-agent",
+        "provider_name": "primary",
+        "sources_count": 12,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 9,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u2.",
+      "data": {
+        "effective_model": "grok-4.20-expert-4-agent",
+        "provider_model": "grok-4.20-expert-4-agent",
+        "provider_name": "primary",
+        "sources_count": 7,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 10,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u3.",
+      "data": {
+        "effective_model": "grok-4.20-expert-4-agent",
+        "provider_model": "grok-4.20-expert-4-agent",
+        "provider_name": "primary",
+        "sources_count": 5,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 11,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research paused after reaching the time budget.",
+      "data": {
+        "attempt_count": 2,
+        "checkpoint_key": "researching-u3",
+        "checkpoint_kind": "research_unit",
+        "checkpoint_seq": 6,
+        "completed_units_count": 3,
+        "reason": "time_budget_exceeded"
+      }
+    }
+  ]
+}

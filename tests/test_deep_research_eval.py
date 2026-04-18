@@ -8,6 +8,7 @@ import pytest
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
 PROBE_PUBLIC_SURFACE_FIXTURES = (
     "eval_probe_round24_worker_restart_public_surface.json",
+    "eval_probe_round26_aws_dms_public_surface.json",
 )
 PROBE_PUBLIC_SURFACE_METRICS = (
     "release_gate_consistency",
