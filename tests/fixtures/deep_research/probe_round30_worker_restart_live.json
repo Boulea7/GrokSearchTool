@@ -1,0 +1,233 @@
+{
+  "sample": "probe-round30-worker-restart",
+  "query": "Investigate worker restart, checkpoint restore, resume watch, and events after_seq semantics for long-running deep research jobs with multiple phases",
+  "reconnect_reconcile": {
+    "status": "interrupted",
+    "phase": "researching",
+    "attempt_count": 1,
+    "current_checkpoint": "researching-dispatch-a1-unit-search-1",
+    "current_checkpoint_kind": "research_dispatch",
+    "last_error": "worker_restarted"
+  },
+  "final_status": {
+    "status": "failed",
+    "phase": "finalizing",
+    "attempt_count": 2,
+    "current_checkpoint": "finalizing",
+    "current_checkpoint_kind": "finalizing",
+    "last_error": "coverage_incomplete",
+    "resolved_artifact_batch_id": "",
+    "artifact_fallback_used": false,
+    "planner_fallback_used": true,
+    "runtime_warnings": [
+      "coverage_incomplete",
+      "planner_fallback_used"
+    ],
+    "constraint_violations": [],
+    "report_status": "failed"
+  },
+  "resume_window": {
+    "after_seq": 5,
+    "next_after_seq": 13
+  },
+  "expected": {
+    "resume_source": "worker_restarted",
+    "checkpoint_kind": "research_dispatch",
+    "terminal_reason": "coverage_incomplete"
+  },
+  "public_surface": {
+    "status": {
+      "current_checkpoint": "finalizing",
+      "current_checkpoint_kind": "finalizing",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": true,
+      "resolved_artifact_batch_id": "",
+      "runtime_warnings": [
+        "coverage_incomplete",
+        "planner_fallback_used"
+      ],
+      "constraint_violations": [],
+      "artifact_kinds": [
+        "plan.json",
+        "sources.json",
+        "citations.json",
+        "report.json",
+        "final_report.md",
+        "evidence_items.json",
+        "coverage.json",
+        "grounding.json",
+        "verifier.json"
+      ]
+    },
+    "result": {
+      "current_checkpoint_kind": "finalizing",
+      "resolved_artifact_batch_id": "",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": true,
+      "runtime_warnings": [
+        "coverage_incomplete",
+        "planner_fallback_used"
+      ],
+      "constraint_violations": [],
+      "partial_report": null,
+      "final_report": null,
+      "sources": null,
+      "report": null
+    }
+  },
+  "initial_events": [
+    {
+      "seq": 1,
+      "type": "job_created",
+      "phase": "planning",
+      "message": "Deep research job created.",
+      "data": {
+        "continuation_mode": "fresh",
+        "plan_only": false
+      }
+    },
+    {
+      "seq": 2,
+      "type": "planner_fallback",
+      "phase": "planning",
+      "message": "Planner fell back to the deterministic backup plan.",
+      "data": {
+        "error": "unsafe_normalize_action: filled_search_query:ru1",
+        "stage": "unsafe_plan"
+      }
+    },
+    {
+      "seq": 3,
+      "type": "phase_started",
+      "phase": "planning",
+      "message": "Planning started.",
+      "data": {
+        "unit_count": 2
+      }
+    },
+    {
+      "seq": 4,
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 0
+      }
+    },
+    {
+      "seq": 5,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research interrupted during worker recovery.",
+      "data": {
+        "attempt_count": 1,
+        "checkpoint_key": "researching-dispatch-a1-unit-search-1",
+        "checkpoint_kind": "research_dispatch",
+        "checkpoint_seq": 2,
+        "reason": "worker_restarted"
+      }
+    }
+  ],
+  "resume_events_after_seq_5": [
+    {
+      "seq": 6,
+      "type": "job_resumed",
+      "phase": "researching",
+      "message": "Deep research job resumed from checkpoint.",
+      "data": {
+        "attempt_count": 2,
+        "checkpoint_key": "researching-dispatch-a1-unit-search-1",
+        "checkpoint_kind": "research_dispatch",
+        "checkpoint_seq": 2,
+        "completed_units_count": 0,
+        "resume_source": "worker_restarted"
+      }
+    },
+    {
+      "seq": 7,
+      "type": "checkpoint_restored",
+      "phase": "researching",
+      "message": "Deep research restored execution from the latest durable checkpoint.",
+      "data": {
+        "attempt_count": 2,
+        "checkpoint_key": "researching-dispatch-a1-unit-search-1",
+        "checkpoint_kind": "research_dispatch",
+        "checkpoint_seq": 2,
+        "completed_units_count": 0
+      }
+    },
+    {
+      "seq": 8,
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 0
+      }
+    },
+    {
+      "seq": 9,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed unit-search-1.",
+      "data": {
+        "effective_model": "grok-4.20-heavy-16-agent",
+        "provider_model": "grok-4.20-fast",
+        "provider_name": "primary",
+        "sources_count": 10,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 10,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed unit-search-2.",
+      "data": {
+        "effective_model": "grok-4.20-heavy-16-agent",
+        "provider_model": "grok-4.20-fast",
+        "provider_name": "primary",
+        "sources_count": 10,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "seq": 11,
+      "type": "phase_started",
+      "phase": "synthesizing",
+      "message": "Synthesizing findings.",
+      "data": {
+        "section_count": 4
+      }
+    },
+    {
+      "seq": 12,
+      "type": "phase_started",
+      "phase": "finalizing",
+      "message": "Finalizing report.",
+      "data": {}
+    },
+    {
+      "seq": 13,
+      "type": "job_failed",
+      "phase": "finalizing",
+      "message": "Deep research failed release gate.",
+      "data": {
+        "artifact_batch_id": "$seeded_batch_id",
+        "release_gate": {
+          "all_reason_codes": [
+            "coverage_incomplete"
+          ],
+          "passed": false,
+          "reason_codes": [
+            "coverage_incomplete"
+          ],
+          "soft_reason_codes": []
+        },
+        "sources_count": 4
+      }
+    }
+  ]
+}
