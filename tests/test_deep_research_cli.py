@@ -1547,7 +1547,7 @@ def test_cli_start_watch_preserves_initial_json_response(monkeypatch, capsys):
                 "reused": False,
             }
 
-    async def fake_watch(runtime, job_id, *, interval_seconds=1.0):
+    async def fake_watch(runtime, job_id, *, interval_seconds=1.0, after_seq=0):
         print(f"watch-stream: {job_id}", file=sys.stderr)
 
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
@@ -1744,7 +1744,15 @@ def test_cli_resume_watch_passes_resume_response_as_initial_status(monkeypatch, 
 
     seen = {}
 
-    async def fake_watch(runtime, job_id, *, interval_seconds=1.0, initial_status=None, suppress_initial_status_line=False):
+    async def fake_watch(
+        runtime,
+        job_id,
+        *,
+        interval_seconds=1.0,
+        initial_status=None,
+        suppress_initial_status_line=False,
+        after_seq=0,
+    ):
         seen["job_id"] = job_id
         seen["initial_status"] = initial_status
         seen["suppress_initial_status_line"] = suppress_initial_status_line
@@ -1762,6 +1770,148 @@ def test_cli_resume_watch_passes_resume_response_as_initial_status(monkeypatch, 
         "job_id": "job-123",
         "initial_status": response,
         "suppress_initial_status_line": True,
+    }
+
+
+def test_cli_result_includes_partial_report_by_default(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="Partial by default",
+        request_fingerprint="fp-cli-result-partial-default",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "partial_report.md", "# Partial Report\n\nStill working.\n", "text/markdown")
+
+    exit_code = deep_research_cli.main(["result", job.job_id])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["partial_report"] == "# Partial Report\n\nStill working.\n"
+
+
+def test_cli_result_can_disable_partial_report_explicitly(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="No partial",
+        request_fingerprint="fp-cli-result-no-partial",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "partial_report.md", "# Partial Report\n\nStill working.\n", "text/markdown")
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--no-include-partial"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["partial_report"] is None
+
+
+def test_cli_watch_uses_additive_after_seq_when_reconnecting(monkeypatch, capsys):
+    event_calls = []
+
+    class FakeRuntime:
+        async def status(self, job_id):
+            return {
+                "job_id": job_id,
+                "status": "interrupted",
+                "phase": "researching",
+                "progress_pct": 80.0,
+                "attempt_count": 2,
+                "current_checkpoint": "researching-u2",
+                "cancel_requested": False,
+                "continued_from_job_id": "",
+                "resolved_artifact_batch_id": "",
+            }
+
+        async def events(self, job_id, after_seq=0, limit=100):
+            event_calls.append((after_seq, limit))
+            return {"events": [], "next_after_seq": after_seq}
+
+    async def fake_attach(*args, **kwargs):
+        return 7
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
+    monkeypatch.setattr(deep_research_cli, "_resolve_watch_attach_after_seq", fake_attach)
+
+    exit_code = deep_research_cli.main(["watch", "job-123", "--after-seq", "11", "--interval-seconds", "0.01"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert event_calls == [(11, 100)]
+    assert "watch: attached_to_existing_state job=job-123 attempts=2 checkpoint=researching-u2" in captured.err
+
+
+def test_cli_resume_watch_passes_after_seq_to_watch_job(monkeypatch, capsys):
+    response = {
+        "job_id": "job-123",
+        "status": "queued",
+        "phase": "researching",
+        "progress_pct": 0.0,
+        "attempt_count": 2,
+        "current_checkpoint": "researching-dispatch-a1-u1",
+        "cancel_requested": False,
+        "continued_from_job_id": "",
+        "resolved_artifact_batch_id": "",
+        "artifact_fallback_used": False,
+        "planner_fallback_used": False,
+        "runtime_warnings": [],
+        "constraint_violations": [],
+    }
+
+    class FakeRuntime:
+        async def resume(self, job_id, schedule=False):
+            assert schedule is False
+            return dict(response)
+
+    seen = {}
+
+    async def fake_watch(
+        runtime,
+        job_id,
+        *,
+        interval_seconds=1.0,
+        initial_status=None,
+        suppress_initial_status_line=False,
+        after_seq=0,
+    ):
+        seen["job_id"] = job_id
+        seen["initial_status"] = initial_status
+        seen["suppress_initial_status_line"] = suppress_initial_status_line
+        seen["after_seq"] = after_seq
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
+    monkeypatch.setattr(deep_research_cli, "_spawn_worker", lambda job_id: None)
+    monkeypatch.setattr(deep_research_cli, "_watch_job", fake_watch)
+
+    exit_code = deep_research_cli.main(["resume", "job-123", "--watch", "--after-seq", "13"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert json.loads(captured.out)["job_id"] == "job-123"
+    assert seen == {
+        "job_id": "job-123",
+        "initial_status": response,
+        "suppress_initial_status_line": True,
+        "after_seq": 13,
     }
 
 

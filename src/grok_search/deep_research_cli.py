@@ -265,8 +265,9 @@ async def _watch_job(
     interval_seconds: float = 1.0,
     initial_status: dict[str, Any] | None = None,
     suppress_initial_status_line: bool = False,
+    after_seq: int = 0,
 ) -> None:
-    last_seq = 0
+    last_seq = max(0, after_seq)
     last_status_line = ""
     printed_existing_state_message = False
     pending_status = initial_status
@@ -281,7 +282,8 @@ async def _watch_job(
             existing_state_message = _watch_existing_state_message(status, fallback_job_id=job_id)
             if existing_state_message:
                 print(existing_state_message, file=sys.stderr)
-                last_seq = await _resolve_watch_attach_after_seq(runtime, job_id, status)
+                attach_after_seq = await _resolve_watch_attach_after_seq(runtime, job_id, status)
+                last_seq = max(last_seq, attach_after_seq)
             printed_existing_state_message = True
         events_payload = await runtime.events(job_id, after_seq=last_seq, limit=100)
         for event in events_payload["events"]:
@@ -319,13 +321,23 @@ async def _handle_start(args: argparse.Namespace) -> int:
         _spawn_worker(response["job_id"])
     _print_json(response)
     if args.watch and not args.plan_only:
-        await _watch_job(runtime, response["job_id"], interval_seconds=args.interval_seconds)
+        await _watch_job(
+            runtime,
+            response["job_id"],
+            interval_seconds=args.interval_seconds,
+            after_seq=args.after_seq,
+        )
     return 0
 
 
 async def _handle_watch(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
-    await _watch_job(runtime, args.job_id, interval_seconds=args.interval_seconds)
+    await _watch_job(
+        runtime,
+        args.job_id,
+        interval_seconds=args.interval_seconds,
+        after_seq=args.after_seq,
+    )
     return 0
 
 
@@ -404,6 +416,7 @@ async def _handle_resume(args: argparse.Namespace) -> int:
             interval_seconds=args.interval_seconds,
             initial_status=response,
             suppress_initial_status_line=True,
+            after_seq=args.after_seq,
         )
     return 0
 
@@ -442,7 +455,12 @@ async def _handle_continue(args: argparse.Namespace) -> int:
         _spawn_worker(response["job_id"])
     _print_json(response)
     if args.watch:
-        await _watch_job(runtime, response["job_id"], interval_seconds=args.interval_seconds)
+        await _watch_job(
+            runtime,
+            response["job_id"],
+            interval_seconds=args.interval_seconds,
+            after_seq=args.after_seq,
+        )
     return 0
 
 
@@ -465,6 +483,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--force-new", action="store_true")
         command.add_argument("--watch", action="store_true")
         command.add_argument("--interval-seconds", type=float, default=1.0)
+        command.add_argument("--after-seq", type=int, default=0)
 
     start = subparsers.add_parser("start")
     start.add_argument("query")
@@ -475,6 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch = subparsers.add_parser("watch")
     watch.add_argument("job_id")
     watch.add_argument("--interval-seconds", type=float, default=1.0)
+    watch.add_argument("--after-seq", type=int, default=0)
 
     status = subparsers.add_parser("status")
     status.add_argument("job_id")
@@ -489,12 +509,13 @@ def build_parser() -> argparse.ArgumentParser:
     result = subparsers.add_parser("result")
     result.add_argument("job_id")
     result.add_argument("--artifact", default="")
-    result.add_argument("--include-partial", action="store_true")
+    result.add_argument("--include-partial", action=argparse.BooleanOptionalAction, default=True)
 
     resume = subparsers.add_parser("resume")
     resume.add_argument("job_id")
     resume.add_argument("--watch", action="store_true")
     resume.add_argument("--interval-seconds", type=float, default=1.0)
+    resume.add_argument("--after-seq", type=int, default=0)
 
     cancel = subparsers.add_parser("cancel")
     cancel.add_argument("job_id")
