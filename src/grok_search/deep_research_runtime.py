@@ -5363,11 +5363,17 @@ class DeepResearchRuntime:
             return None, None
         candidates: list[Any] = []
         invalid_checkpoint_keys: list[str] = []
+        invalid_checkpoints: list[dict[str, Any]] = []
         if job.current_checkpoint:
             candidates.extend(
                 checkpoint
                 for checkpoint in checkpoints
                 if checkpoint.checkpoint_key == job.current_checkpoint
+            )
+            candidates = sorted(
+                candidates,
+                key=lambda checkpoint: (checkpoint.checkpoint_seq, checkpoint.created_at),
+                reverse=True,
             )
         candidates.extend(
             checkpoint
@@ -5380,6 +5386,13 @@ class DeepResearchRuntime:
                 raw_state = {"plan": raw_state}
             if "plan" not in raw_state:
                 invalid_checkpoint_keys.append(checkpoint.checkpoint_key)
+                invalid_checkpoints.append(
+                    {
+                        "checkpoint_key": checkpoint.checkpoint_key,
+                        "checkpoint_seq": checkpoint.checkpoint_seq,
+                        "reason": "missing_plan",
+                    }
+                )
                 continue
             try:
                 if checkpoint.phase != "planning" and not any(
@@ -5396,18 +5409,32 @@ class DeepResearchRuntime:
                         ).model_dump(),
                     }
                 state = DeepResearchCheckpointState.model_validate(raw_state)
-                if job.current_checkpoint and checkpoint.checkpoint_key != job.current_checkpoint:
+                if invalid_checkpoints or (job.current_checkpoint and checkpoint.checkpoint_key != job.current_checkpoint):
                     return (
                         state,
                         {
-                            "fallback_from": job.current_checkpoint,
+                            "fallback_from": job.current_checkpoint or checkpoint.checkpoint_key,
                             "fallback_to": checkpoint.checkpoint_key,
+                            "fallback_to_seq": checkpoint.checkpoint_seq,
                             "invalid_checkpoint_keys": invalid_checkpoint_keys,
+                            "invalid_checkpoints": invalid_checkpoints,
                         },
                     )
                 return state, None
-            except Exception:
+            except Exception as exc:
+                reason = "invalid_checkpoint_state"
+                if "runtime state" in str(exc):
+                    reason = "missing_runtime_state"
+                elif "plan" in str(exc):
+                    reason = "invalid_plan_state"
                 invalid_checkpoint_keys.append(checkpoint.checkpoint_key)
+                invalid_checkpoints.append(
+                    {
+                        "checkpoint_key": checkpoint.checkpoint_key,
+                        "checkpoint_seq": checkpoint.checkpoint_seq,
+                        "reason": reason,
+                    }
+                )
                 continue
         return None, None
 
