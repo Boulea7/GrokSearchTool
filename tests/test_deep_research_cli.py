@@ -1744,9 +1744,10 @@ def test_cli_resume_watch_passes_resume_response_as_initial_status(monkeypatch, 
 
     seen = {}
 
-    async def fake_watch(runtime, job_id, *, interval_seconds=1.0, initial_status=None):
+    async def fake_watch(runtime, job_id, *, interval_seconds=1.0, initial_status=None, suppress_initial_status_line=False):
         seen["job_id"] = job_id
         seen["initial_status"] = initial_status
+        seen["suppress_initial_status_line"] = suppress_initial_status_line
 
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
     monkeypatch.setattr(deep_research_cli, "_spawn_worker", lambda job_id: None)
@@ -1757,7 +1758,102 @@ def test_cli_resume_watch_passes_resume_response_as_initial_status(monkeypatch, 
 
     assert exit_code == 0
     assert json.loads(captured.out)["job_id"] == "job-123"
-    assert seen == {"job_id": "job-123", "initial_status": response}
+    assert seen == {
+        "job_id": "job-123",
+        "initial_status": response,
+        "suppress_initial_status_line": True,
+    }
+
+
+def test_watch_job_refreshes_status_before_printing_summary_after_resume_event(monkeypatch, capsys):
+    queued_status = {
+        "job_id": "job-123",
+        "status": "queued",
+        "phase": "finalizing",
+        "progress_pct": 0.0,
+        "attempt_count": 2,
+        "current_checkpoint": "finalizing",
+        "cancel_requested": False,
+        "continued_from_job_id": "",
+        "resolved_artifact_batch_id": "",
+        "artifact_fallback_used": False,
+        "planner_fallback_used": False,
+        "runtime_warnings": [],
+        "constraint_violations": [],
+    }
+    running_status = {
+        **queued_status,
+        "status": "running",
+        "phase": "researching",
+        "current_checkpoint": "researching-u1",
+    }
+    completed_status = {
+        **running_status,
+        "status": "completed",
+        "phase": "finalizing",
+        "progress_pct": 100.0,
+        "resolved_artifact_batch_id": "batch-1",
+    }
+
+    class FakeRuntime:
+        def __init__(self):
+            self.status_calls = 0
+            self.event_calls = 0
+
+        async def status(self, job_id):
+            self.status_calls += 1
+            if self.status_calls == 1:
+                return running_status
+            return completed_status
+
+        async def events(self, job_id, after_seq=0, limit=100):
+            self.event_calls += 1
+            if self.event_calls == 1:
+                return {
+                    "events": [
+                        {
+                            "seq": 8,
+                            "phase": "finalizing",
+                            "type": "job_resumed",
+                            "message": "Deep research job resumed from checkpoint.",
+                            "data": {"resume_source": "failed_retry"},
+                        }
+                    ],
+                    "next_after_seq": 8,
+                }
+            return {"events": [], "next_after_seq": after_seq}
+
+    monkeypatch.setattr(
+        deep_research_cli,
+        "_watch_existing_state_message",
+        lambda payload, fallback_job_id="": f"watch: attached_to_existing_state job={fallback_job_id} attempts={payload['attempt_count']} checkpoint={payload['current_checkpoint']}",
+    )
+    async def fake_attach(*args, **kwargs):
+        return 7
+
+    async def fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(deep_research_cli, "_resolve_watch_attach_after_seq", fake_attach)
+    monkeypatch.setattr(deep_research_cli.asyncio, "sleep", fake_sleep)
+
+    asyncio.run(
+        deep_research_cli._watch_job(
+            FakeRuntime(),
+            "job-123",
+            interval_seconds=0.01,
+            initial_status=queued_status,
+            suppress_initial_status_line=True,
+        )
+    )
+    captured = capsys.readouterr()
+
+    summaries = summary_lines(captured.err)
+    assert summaries == [
+        "summary: job=job-123 status=running phase=researching progress=0.0% checkpoint=researching-u1 attempts=2 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false",
+        "summary: job=job-123 status=completed phase=finalizing progress=100.0% checkpoint=researching-u1 attempts=2 cancel_requested=false continued_from=- resolved_batch=batch-1 artifact_fallback=false",
+    ]
+    assert "[8] finalizing job_resumed: Deep research job resumed from checkpoint." in captured.err
 
 
 def test_cli_round21_stale_worker_status_and_result_match_fixture(monkeypatch, tmp_path, capsys):

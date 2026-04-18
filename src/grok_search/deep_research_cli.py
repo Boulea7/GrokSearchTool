@@ -264,11 +264,15 @@ async def _watch_job(
     *,
     interval_seconds: float = 1.0,
     initial_status: dict[str, Any] | None = None,
+    suppress_initial_status_line: bool = False,
 ) -> None:
     last_seq = 0
     last_status_line = ""
     printed_existing_state_message = False
     pending_status = initial_status
+    first_status_from_initial = initial_status is not None
+    if suppress_initial_status_line and initial_status is not None:
+        last_status_line = " ".join(_job_summary_parts(initial_status, fallback_job_id=job_id))
     while True:
         status = pending_status if pending_status is not None else await runtime.status(job_id)
         pending_status = None
@@ -283,6 +287,9 @@ async def _watch_job(
         for event in events_payload["events"]:
             print(f"[{event['seq']}] {event['phase']} {event['type']}: {event['message']}", file=sys.stderr)
         last_seq = events_payload["next_after_seq"]
+        if first_status_from_initial and events_payload["events"]:
+            status = await runtime.status(job_id)
+            first_status_from_initial = False
         summary_parts = _job_summary_parts(status, fallback_job_id=job_id)
         status_line = " ".join(summary_parts)
         if status_line != last_status_line:
@@ -290,6 +297,7 @@ async def _watch_job(
             last_status_line = status_line
         if status["status"] in TERMINAL_STATUSES:
             return
+        first_status_from_initial = False
         await asyncio.sleep(interval_seconds)
 
 
@@ -395,6 +403,7 @@ async def _handle_resume(args: argparse.Namespace) -> int:
             args.job_id,
             interval_seconds=args.interval_seconds,
             initial_status=response,
+            suppress_initial_status_line=True,
         )
     return 0
 
