@@ -481,6 +481,11 @@ def _normalize_nested_string_list_alias(values: Optional[list[list[str]]]) -> li
 
 
 def _planning_error_code_and_message(result: dict[str, Any]) -> tuple[str, str] | None:
+    explicit_error_code = result.get("error_code")
+    explicit_message = result.get("message")
+    if _is_machine_error_code(explicit_error_code) and isinstance(explicit_message, str) and explicit_message.strip():
+        return explicit_error_code, explicit_message
+
     raw_error = result.get("error")
     if not isinstance(raw_error, str) or not raw_error.strip():
         return None

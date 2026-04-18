@@ -225,9 +225,33 @@ class PlanningSession:
         return [item for item in record.data if isinstance(item, dict)]
 
 
-def _validate_execution_order(session: PlanningSession, phase_data: dict | None) -> str | None:
+def _error_result(
+    *,
+    error_code: str,
+    message: str,
+    legacy_error: str | None = None,
+    session: PlanningSession | None = None,
+    session_id: str = "",
+    **extra: object,
+) -> dict:
+    resolved_session_id = session.session_id if session is not None else session_id
+    payload = {
+        "error": legacy_error or error_code,
+        "error_code": error_code,
+        "message": message,
+        **extra,
+    }
+    if resolved_session_id or "session_id" in extra:
+        payload["session_id"] = resolved_session_id
+    if session is not None:
+        payload.setdefault("completed_phases", session.completed_phases)
+        payload.setdefault("complexity_level", session.complexity_level)
+    return payload
+
+
+def _validate_execution_order(session: PlanningSession, phase_data: dict | None) -> tuple[str, str] | None:
     if not isinstance(phase_data, dict):
-        return "Invalid execution_order payload: expected dict"
+        return "invalid_execution_order_payload", "Invalid execution_order payload: expected dict"
 
     existing_ids = session.sub_query_ids()
     placement_stage: dict[str, int] = {}
@@ -238,9 +262,9 @@ def _validate_execution_order(session: PlanningSession, phase_data: dict | None)
             continue
         for sub_query_id in group:
             if sub_query_id not in existing_ids:
-                return f"Unknown sub-query id: {sub_query_id}"
+                return "unknown_sub_query_id", f"Unknown sub-query id: {sub_query_id}"
             if sub_query_id in seen_ids:
-                return f"Duplicate execution id: {sub_query_id}"
+                return "duplicate_execution_id", f"Duplicate execution id: {sub_query_id}"
             seen_ids.add(sub_query_id)
             placement_stage[sub_query_id] = stage_index
 
@@ -248,15 +272,15 @@ def _validate_execution_order(session: PlanningSession, phase_data: dict | None)
     sequential_offset = len(phase_data.get("parallel") or [])
     for offset, sub_query_id in enumerate(sequential):
         if sub_query_id not in existing_ids:
-            return f"Unknown sub-query id: {sub_query_id}"
+            return "unknown_sub_query_id", f"Unknown sub-query id: {sub_query_id}"
         if sub_query_id in seen_ids:
-            return f"Duplicate execution id: {sub_query_id}"
+            return "duplicate_execution_id", f"Duplicate execution id: {sub_query_id}"
         seen_ids.add(sub_query_id)
         placement_stage[sub_query_id] = sequential_offset + offset
 
     missing_ids = sorted(existing_ids - seen_ids)
     if missing_ids:
-        return f"Missing sub-query ids in execution plan: {', '.join(missing_ids)}"
+        return "missing_execution_ids", f"Missing sub-query ids in execution plan: {', '.join(missing_ids)}"
 
     for item in session.sub_queries():
         sub_query_id = item.get("id")
@@ -268,7 +292,7 @@ def _validate_execution_order(session: PlanningSession, phase_data: dict | None)
             if dependency_stage is None:
                 continue
             if dependency_stage >= current_stage:
-                return f"Dependency order violation: {sub_query_id} depends on {dependency}"
+                return "dependency_order_violation", f"Dependency order violation: {sub_query_id} depends on {dependency}"
 
     return None
 
@@ -339,31 +363,34 @@ class PlanningEngine:
         self._purge_expired()
 
         if is_revision and not session_id:
-            return {
-                "error": "session_not_found",
-                "message": "Revision requires an existing session. Restart from intent_analysis with an empty session_id only for new plans.",
-                "session_id": session_id,
-                "restart_from_intent_analysis": True,
-                "expected_phase_order": PHASE_NAMES,
-            }
+            return _error_result(
+                error_code="session_not_found",
+                message="Revision requires an existing session. Restart from intent_analysis with an empty session_id only for new plans.",
+                session_id=session_id,
+                restart_from_intent_analysis=True,
+                expected_phase_order=PHASE_NAMES,
+            )
 
         if is_revision and revises_phase and revises_phase != phase:
-            return {
-                "error": f"revises_phase must match phase when revision is enabled: {revises_phase} != {phase}",
-                "expected_phase_order": PHASE_NAMES,
-                "session_id": session_id,
-            }
+            message = f"revises_phase must match phase when revision is enabled: {revises_phase} != {phase}"
+            return _error_result(
+                error_code="revises_phase_mismatch",
+                message=message,
+                legacy_error=message,
+                session_id=session_id,
+                expected_phase_order=PHASE_NAMES,
+            )
 
         if session_id:
             session = self._touch_session(session_id)
             if session is None:
-                return {
-                    "error": "session_not_found",
-                    "message": f"Session '{session_id}' not found. Restart from intent_analysis with an empty session_id.",
-                    "session_id": session_id,
-                    "restart_from_intent_analysis": True,
-                    "expected_phase_order": PHASE_NAMES,
-                }
+                return _error_result(
+                    error_code="session_not_found",
+                    message=f"Session '{session_id}' not found. Restart from intent_analysis with an empty session_id.",
+                    session_id=session_id,
+                    restart_from_intent_analysis=True,
+                    expected_phase_order=PHASE_NAMES,
+                )
         else:
             sid = uuid.uuid4().hex[:12]
             session = PlanningSession(sid)
@@ -376,47 +403,60 @@ class PlanningEngine:
             if phase_index >= 0:
                 downstream_phases = PHASE_NAMES[phase_index + 1 :]
                 if any(name in session.phases for name in downstream_phases):
-                    return {
-                        "error": f"{phase} revision would invalidate downstream phases. Open a new session to restart planning from {phase}.",
-                        "session_id": session.session_id,
-                        "completed_phases": session.completed_phases,
-                        "complexity_level": session.complexity_level,
-                    }
+                    message = (
+                        f"{phase} revision would invalidate downstream phases. "
+                        f"Open a new session to restart planning from {phase}."
+                    )
+                    return _error_result(
+                        error_code="downstream_phase_conflict",
+                        message=message,
+                        legacy_error=message,
+                        session=session,
+                    )
 
         target = phase
         if target not in PHASE_NAMES:
-            return {"error": f"Unknown phase: {target}. Valid: {', '.join(PHASE_NAMES)}"}
+            message = f"Unknown phase: {target}. Valid: {', '.join(PHASE_NAMES)}"
+            return _error_result(
+                error_code="invalid_phase",
+                message=message,
+                legacy_error=message,
+                session=session,
+            )
 
         creating_new_phase = target not in session.phases
 
         if creating_new_phase:
             predecessor = _PHASE_PREDECESSORS.get(target)
             if predecessor and predecessor not in session.phases:
-                return {
-                    "error": f"Phase '{target}' requires '{predecessor}' to be completed first.",
-                    "expected_phase_order": PHASE_NAMES,
-                    "session_id": session.session_id,
-                    "completed_phases": session.completed_phases,
-                    "complexity_level": session.complexity_level,
-                }
+                message = f"Phase '{target}' requires '{predecessor}' to be completed first."
+                return _error_result(
+                    error_code="phase_order_violation",
+                    message=message,
+                    legacy_error=message,
+                    session=session,
+                    expected_phase_order=PHASE_NAMES,
+                )
 
             if session.complexity_level == 1 and target in {"search_strategy", "tool_selection", "execution_order"}:
-                return {
-                    "error": "Level 1 planning completes after query_decomposition.",
-                    "expected_phase_order": PHASE_NAMES,
-                    "session_id": session.session_id,
-                    "completed_phases": session.completed_phases,
-                    "complexity_level": session.complexity_level,
-                }
+                message = "Level 1 planning completes after query_decomposition."
+                return _error_result(
+                    error_code="phase_not_allowed_for_level",
+                    message=message,
+                    legacy_error=message,
+                    session=session,
+                    expected_phase_order=PHASE_NAMES,
+                )
 
             if session.complexity_level == 2 and target == "execution_order":
-                return {
-                    "error": "Level 2 planning completes after tool_selection.",
-                    "expected_phase_order": PHASE_NAMES,
-                    "session_id": session.session_id,
-                    "completed_phases": session.completed_phases,
-                    "complexity_level": session.complexity_level,
-                }
+                message = "Level 2 planning completes after tool_selection."
+                return _error_result(
+                    error_code="phase_not_allowed_for_level",
+                    message=message,
+                    legacy_error=message,
+                    session=session,
+                    expected_phase_order=PHASE_NAMES,
+                )
 
         normalized_tool_mapping_id = (
             phase_data.get("sub_query_id", "").strip()
@@ -429,12 +469,13 @@ class PlanningEngine:
             and normalized_tool_mapping_id
             and normalized_tool_mapping_id in session.tool_mapping_ids()
         ):
-            return {
-                "error": f"Duplicate tool mapping for sub_query_id: {normalized_tool_mapping_id}",
-                "session_id": session.session_id,
-                "completed_phases": session.completed_phases,
-                "complexity_level": session.complexity_level,
-            }
+            message = f"Duplicate tool mapping for sub_query_id: {normalized_tool_mapping_id}"
+            return _error_result(
+                error_code="duplicate_tool_mapping",
+                message=message,
+                legacy_error=message,
+                session=session,
+            )
 
         normalized_sub_query_id = (
             phase_data.get("id", "").strip()
@@ -447,22 +488,24 @@ class PlanningEngine:
             and normalized_sub_query_id
             and normalized_sub_query_id in session.sub_query_ids()
         ):
-            return {
-                "error": f"Duplicate sub-query id: {normalized_sub_query_id}",
-                "session_id": session.session_id,
-                "completed_phases": session.completed_phases,
-                "complexity_level": session.complexity_level,
-            }
+            message = f"Duplicate sub-query id: {normalized_sub_query_id}"
+            return _error_result(
+                error_code="duplicate_sub_query_id",
+                message=message,
+                legacy_error=message,
+                session=session,
+            )
 
         if target == "execution_order":
             execution_error = _validate_execution_order(session, phase_data)
             if execution_error:
-                return {
-                    "error": execution_error,
-                    "session_id": session.session_id,
-                    "completed_phases": session.completed_phases,
-                    "complexity_level": session.complexity_level,
-                }
+                error_code, message = execution_error
+                return _error_result(
+                    error_code=error_code,
+                    message=message,
+                    legacy_error=message,
+                    session=session,
+                )
 
         if target in _ACCUMULATIVE_LIST_PHASES:
             if is_revision:

@@ -2348,6 +2348,35 @@ def test_planning_engine_rejects_unknown_nonempty_session_id():
     assert planning.engine.get_session("missing-session") is None
 
 
+def test_planning_engine_surfaces_machine_readable_phase_order_error_metadata():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+
+    result = planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Skip complexity on purpose.",
+        session_id=intent["session_id"],
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+
+    assert result["error_code"] == "phase_order_violation"
+    assert result["error"].startswith("Phase 'query_decomposition' requires")
+    assert result["message"] == result["error"]
+    assert result["expected_phase_order"][0] == "intent_analysis"
+
+
 def test_planning_engine_rejects_duplicate_tool_mapping_invariant():
     intent = planning.engine.process_phase(
         phase="intent_analysis",
@@ -2406,6 +2435,8 @@ def test_planning_engine_rejects_duplicate_tool_mapping_invariant():
 
     assert first["plan_complete"] is True
     assert "duplicate tool mapping" in duplicate["error"].lower()
+    assert duplicate["error_code"] == "duplicate_tool_mapping"
+    assert duplicate["message"] == duplicate["error"]
     session = planning.engine.get_session(session_id)
     assert session is not None
     assert session.tool_mapping_ids() == ["sq1"]
