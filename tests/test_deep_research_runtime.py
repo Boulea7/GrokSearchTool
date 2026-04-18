@@ -28,6 +28,9 @@ from grok_search.providers.grok import GrokSearchProvider
 from grok_search.deep_research_types import DeepResearchContinuationState, DeepResearchPlan, utc_now_iso
 
 
+_SEEDED_BATCH_ID_PLACEHOLDER = "$seeded_batch_id"
+
+
 def build_runtime(tmp_path):
     return DeepResearchRuntime(tmp_path / "deep-research")
 
@@ -35,6 +38,41 @@ def build_runtime(tmp_path):
 def load_deep_research_fixture(name: str) -> dict:
     fixture_path = Path(__file__).parent / "fixtures" / "deep_research" / name
     return json.loads(fixture_path.read_text())
+
+
+def _materialize_fixture_surface(value, *, seeded_batch_id: str):
+    if isinstance(value, dict):
+        return {
+            key: _materialize_fixture_surface(item, seeded_batch_id=seeded_batch_id)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_materialize_fixture_surface(item, seeded_batch_id=seeded_batch_id) for item in value]
+    if value == _SEEDED_BATCH_ID_PLACEHOLDER:
+        return seeded_batch_id
+    return value
+
+
+def assert_public_surface_subset(actual: dict, expected: dict, *, seeded_batch_id: str) -> None:
+    for key, expected_value in expected.items():
+        assert key in actual
+        materialized = _materialize_fixture_surface(expected_value, seeded_batch_id=seeded_batch_id)
+        actual_value = actual[key]
+        if isinstance(materialized, dict):
+            assert isinstance(actual_value, dict)
+            assert_public_surface_subset(actual_value, materialized, seeded_batch_id=seeded_batch_id)
+            continue
+        assert actual_value == materialized
+
+
+def assert_fixture_public_surface(snapshot: dict, *, status: dict, result: dict, seeded_batch_id: str) -> None:
+    public_surface = snapshot.get("public_surface") or {}
+    status_surface = public_surface.get("status") or {}
+    result_surface = public_surface.get("result") or {}
+    if status_surface:
+        assert_public_surface_subset(status, status_surface, seeded_batch_id=seeded_batch_id)
+    if result_surface:
+        assert_public_surface_subset(result, result_surface, seeded_batch_id=seeded_batch_id)
 
 
 def structured_plan_payload(job, continuation):
@@ -518,6 +556,58 @@ def create_completed_source_job(
 def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
     snapshot = load_deep_research_fixture("probe_round24_worker_restart_live.json")
     final_status = snapshot["final_status"]
+    coverage_payload = {
+        "query": snapshot["query"],
+        "planned_section_ids": [],
+        "answered_section_ids": [],
+        "unanswered_sections": ["Open Questions"],
+        "planned_sub_question_ids": [],
+        "covered_sub_question_ids": [],
+        "uncovered_sub_questions": ["Coverage incomplete"],
+        "hard_coverage_targets": [],
+        "hard_uncovered_targets": [],
+        "coverage_gate_passed": False,
+        "hard_coverage_gate_passed": True,
+    }
+    grounding_payload = {
+        "total_claims": 0,
+        "grounded_claims": 0,
+        "ungrounded_claims": 0,
+        "single_source_claims": 0,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0,
+        "total_evidence_bindings": 0,
+        "source_backed_binding_count": 0,
+        "search_only_binding_count": 0,
+        "null_span_binding_count": 0,
+        "grounded_claims_without_source_backed_binding": 0,
+        "sections": [],
+        "sources": [],
+    }
+    verifier_payload = {
+        "passed": False,
+        "reason_codes": ["medium_single_source_search_only"],
+        "flagged_claim_ids": [],
+        "summary": {
+            "section_count": 0,
+            "total_claims": 0,
+            "low_confidence_claims": 0,
+            "single_source_claims": 0,
+            "source_backed_binding_count": 0,
+            "search_only_binding_count": 0,
+            "null_span_binding_count": 0,
+            "missing_evidence_items": 0,
+            "mismatched_binding_source": 0,
+            "mismatched_binding_evidence": 0,
+            "invalid_source_backed_span": 0,
+            "duplicate_claims": 0,
+            "low_value_claims": 0,
+            "medium_single_source_search_only": 1,
+            "same_domain_off_topic_dominance": 0,
+            "unbound_citation_sources": 0,
+            "unbound_evidence_ids": 0,
+        },
+    }
     source = {
         "source_id": "R1",
         "url": "https://docs.temporal.io/workflow-execution/continue-as-new",
@@ -529,16 +619,15 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
         "query": snapshot["query"],
         "summary": "Round24 worker restart lifecycle summary.",
         "status": final_status["report_status"],
+        "coverage": coverage_payload,
         "sections": [],
         "unit_results": {},
         "runtime": {
             "warnings": list(final_status["runtime_warnings"]),
             "constraint_violations": list(final_status["constraint_violations"]),
             "release_gate": snapshot["resume_events_after_seq_16"][-1]["data"]["release_gate"],
-            "verifier": {
-                "passed": False,
-                "reason_codes": ["medium_single_source_search_only"],
-            },
+            "verifier": verifier_payload,
+            "grounding": grounding_payload,
         },
     }
     job = runtime.store.create_job(
@@ -598,72 +687,17 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
             },
             {
                 "kind": "coverage.json",
-                "content": json.dumps(
-                    {
-                        "query": snapshot["query"],
-                        "planned_section_ids": [],
-                        "answered_section_ids": [],
-                        "unanswered_sections": ["Open Questions"],
-                        "planned_sub_question_ids": [],
-                        "covered_sub_question_ids": [],
-                        "uncovered_sub_questions": ["Coverage incomplete"],
-                        "hard_coverage_targets": [],
-                        "hard_uncovered_targets": [],
-                        "coverage_gate_passed": False,
-                        "hard_coverage_gate_passed": True,
-                    }
-                ),
+                "content": json.dumps(coverage_payload),
                 "content_type": "application/json",
             },
             {
                 "kind": "grounding.json",
-                "content": json.dumps(
-                    {
-                        "total_claims": 0,
-                        "grounded_claims": 0,
-                        "ungrounded_claims": 0,
-                        "single_source_claims": 0,
-                        "low_confidence_claims": 0,
-                        "missing_evidence_binding_claims": 0,
-                        "total_evidence_bindings": 0,
-                        "source_backed_binding_count": 0,
-                        "search_only_binding_count": 0,
-                        "null_span_binding_count": 0,
-                        "grounded_claims_without_source_backed_binding": 0,
-                        "sections": [],
-                        "sources": [],
-                    }
-                ),
+                "content": json.dumps(grounding_payload),
                 "content_type": "application/json",
             },
             {
                 "kind": "verifier.json",
-                "content": json.dumps(
-                    {
-                        "passed": False,
-                        "reason_codes": ["medium_single_source_search_only"],
-                        "flagged_claim_ids": [],
-                        "summary": {
-                            "section_count": 0,
-                            "total_claims": 0,
-                            "low_confidence_claims": 0,
-                            "single_source_claims": 0,
-                            "source_backed_binding_count": 0,
-                            "search_only_binding_count": 0,
-                            "null_span_binding_count": 0,
-                            "missing_evidence_items": 0,
-                            "mismatched_binding_source": 0,
-                            "mismatched_binding_evidence": 0,
-                            "invalid_source_backed_span": 0,
-                            "duplicate_claims": 0,
-                            "low_value_claims": 0,
-                            "medium_single_source_search_only": 1,
-                            "same_domain_off_topic_dominance": 0,
-                            "unbound_citation_sources": 0,
-                            "unbound_evidence_ids": 0
-                        }
-                    }
-                ),
+                "content": json.dumps(verifier_payload),
                 "content_type": "application/json",
             },
         ],
@@ -6046,6 +6080,79 @@ async def test_true_continuation_official_doc_safe_repairs_do_not_force_planner_
 
 
 @pytest.mark.asyncio
+async def test_fresh_official_doc_fetch_without_url_degrades_to_search_without_fallback(tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def sparse_official_docs_planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["sub_questions"] = [
+            {
+                "id": "sq1",
+                "question": "Explain checkpoint identity in durable workflows.",
+                "reason": "Primary axis.",
+            },
+            {
+                "id": "sq2",
+                "question": "Explain resume behavior after worker restart.",
+                "reason": "Secondary axis.",
+            },
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-fetch-1",
+                "unit_type": "fetch",
+                "title": "Checkpoint identity page",
+                "goal": "Explain checkpoint identity in durable workflows.",
+                "url": "",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "Use the official docs page that explains checkpoint identity.",
+            }
+        ]
+        payload["search_strategy"]["search_queries"] = []
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "checkpoint-identity",
+                "title": "Checkpoint Identity",
+                "goal": "Explain checkpoint identity in durable workflows.",
+            },
+            {
+                "section_id": "resume-behavior",
+                "title": "Resume Behavior",
+                "goal": "Explain resume behavior after worker restart.",
+            },
+        ]
+        return payload
+
+    runtime._generate_plan_with_model = sparse_official_docs_planner
+
+    response = await runtime.start(
+        query="Follow up checkpoint identity and resume behavior with official docs only",
+        include_domains=["learn.microsoft.com"],
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    plan = response["plan"]
+    trace = plan["planner_metadata"]["trace"]
+
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert plan["planner_metadata"]["planner"] == "test"
+    assert plan["research_units"][0]["unit_type"] == "search"
+    assert plan["research_units"][0]["query"] == "Explain checkpoint identity in durable workflows."
+    assert any(unit["goal"] == "Explain resume behavior after worker restart." for unit in plan["research_units"])
+    assert "degraded_fetch_without_url_to_search:unit-fetch-1" in trace["normalize_actions"]
+    assert "missing_fetch_url" in trace["validation_issues"]
+    assert trace["unsafe_plan"] is False
+
+
+@pytest.mark.asyncio
 async def test_non_official_allowlist_safe_repairs_still_force_fallback(tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -6886,10 +6993,7 @@ async def test_round24_worker_restart_status_and_result_match_fixture(tmp_path):
     assert status["constraint_violations"] == snapshot["final_status"]["constraint_violations"]
     assert result["status"] == snapshot["final_status"]["status"]
     assert result["phase"] == snapshot["final_status"]["phase"]
-    assert result["planner_fallback_used"] is False
-    assert result["runtime_warnings"] == snapshot["final_status"]["runtime_warnings"]
-    assert result["constraint_violations"] == snapshot["final_status"]["constraint_violations"]
-    assert result["report"]["status"] == snapshot["final_status"]["report_status"]
+    assert_fixture_public_surface(snapshot, status=status, result=result, seeded_batch_id=seeded["batch_id"])
 
 
 @pytest.mark.asyncio
@@ -10259,12 +10363,10 @@ def test_verifier_flags_claim_outside_selected_bank_as_soft_packet_reason():
     assert verifier["summary"]["claim_outside_selected_bank"] == 1
     assert verifier["summary"]["selected_evidence_unused"] == 1
     assert verifier["summary"]["section_packet_mismatch"] == 1
-    assert release_gate["passed"] is True
-    assert set(release_gate["soft_reason_codes"]) >= {
-        "claim_outside_selected_bank",
-        "selected_evidence_unused",
-        "section_packet_mismatch",
-    }
+    assert release_gate["passed"] is False
+    assert "claim_outside_selected_bank" in release_gate["reason_codes"]
+    assert "section_packet_mismatch" in release_gate["reason_codes"]
+    assert "selected_evidence_unused" in release_gate["soft_reason_codes"]
 
 
 def test_verifier_keeps_medium_single_source_search_only_for_standard_sources():
@@ -11126,6 +11228,103 @@ def test_build_section_citations_rewrites_generic_outline_from_evidence_ledger_q
         "checkpoint-resume-semantics",
         "restart-trade-offs",
     ]
+
+
+def test_coverage_for_report_requires_packet_backed_support_for_multi_question_binding():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Explain checkpoint identity and resume behavior",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Explain checkpoint identity and resume behavior",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+                "must_cover": [
+                    "Explain checkpoint identity in durable workflows.",
+                    "Explain resume behavior after worker restart.",
+                ],
+                "coverage_checklist": [
+                    "Explain checkpoint identity in durable workflows.",
+                    "Explain resume behavior after worker restart.",
+                ],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "Explain checkpoint identity in durable workflows.", "reason": "Primary axis."},
+                {"id": "sq2", "question": "Explain resume behavior after worker restart.", "reason": "Secondary axis."},
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["checkpoint identity durable workflow", "resume behavior worker restart"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {"section_id": "checkpoint-identity", "title": "Checkpoint Identity", "goal": "Explain checkpoint identity in durable workflows."},
+                {"section_id": "resume-behavior", "title": "Resume Behavior", "goal": "Explain resume behavior after worker restart."},
+            ],
+            "research_units": [],
+        }
+    )
+
+    coverage = _coverage_for_report(
+        plan,
+        [
+            {
+                "section_id": "checkpoint-identity",
+                "title": "Checkpoint Identity",
+                "summary": "Checkpoint identity is preserved across resume boundaries.",
+                "question_ids": ["sq1", "sq2"],
+                "claims": [
+                    {
+                        "claim_id": "checkpoint-identity-claim-1",
+                        "text": "Checkpoint identity is preserved across resume boundaries.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "question_ids": ["sq1", "sq2"],
+                            }
+                        ],
+                    }
+                ],
+                "citations": ["R1"],
+            }
+        ],
+        section_banks=[
+            {
+                "section_id": "checkpoint-identity",
+                "candidate_evidence_ids": ["e1"],
+                "selected_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+                "last_updated_at": "2026-04-18T00:00:00Z",
+            }
+        ],
+        evidence_ledger=[
+            {
+                "ledger_id": "ledger-e1",
+                "evidence_id": "e1",
+                "question_id": "sq1",
+                "question_ids": ["sq1", "sq2"],
+                "selected_section_id": "checkpoint-identity",
+                "candidate_section_ids": ["checkpoint-identity"],
+                "rejected_section_ids": [],
+                "disposition": "selected",
+                "source_ids": ["R1"],
+            }
+        ],
+    )
+
+    sub_questions = {item["sub_question_id"]: item for item in coverage["sub_questions"]}
+
+    assert coverage["covered_sub_question_ids"] == ["sq1", "sq2"]
+    assert sub_questions["sq2"]["supporting_evidence_ids"] == ["e1"]
+    assert sub_questions["sq2"]["explain_via"] == "explicit_question_binding"
 
 
 def test_build_section_citations_materializes_open_questions_from_rejected_evidence():
@@ -12827,6 +13026,11 @@ async def test_finalizing_result_does_not_resolve_partial_batch_with_current_pro
     assert persisted[0]["metadata"]["batch_id"]
     assert status["resolved_artifact_batch_id"] == ""
     assert result["resolved_artifact_batch_id"] == ""
+    assert result["final_report"] is None
+    assert result["report"] is None
+    assert result["sources"] is None
+    assert result["citations"] is None
+    assert result["evidence_items"] is None
     assert result["artifact_errors"]["coverage.json"] == "missing_required_artifact"
     assert result["artifact_errors"]["grounding.json"] == "missing_required_artifact"
     assert result["artifact_errors"]["verifier.json"] == "missing_required_artifact"
