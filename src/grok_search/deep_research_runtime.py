@@ -3974,7 +3974,7 @@ class DeepResearchRuntime:
         if job.status in {"completed", "failed", "canceled", "interrupted"}:
             if job.cancel_requested:
                 job = self.store.update_job(job_id, cancel_requested=False)
-            payload = self._job_payload(job, reused=False)
+            payload = await self.status(job_id)
             payload["cancel_requested"] = False
             return payload
         job = self.store.update_job(job_id, cancel_requested=True)
@@ -3994,11 +3994,9 @@ class DeepResearchRuntime:
                 message="Deep research canceled before execution.",
                 data={},
             )
-        return {
-            "job_id": job_id,
-            "cancel_requested": True,
-            "status": self.store.get_job(job_id).status,
-        }
+        payload = await self.status(job_id)
+        payload["cancel_requested"] = True
+        return payload
 
     async def list_jobs(self, *, status: str = "", limit: int = 50) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
