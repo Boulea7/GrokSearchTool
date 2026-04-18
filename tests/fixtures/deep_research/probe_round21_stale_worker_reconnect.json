@@ -34,6 +34,30 @@
     "resume_source": "worker_restarted",
     "checkpoint_kind": "research_unit"
   },
+  "public_surface": {
+    "status": {
+      "current_checkpoint": "researching-u2",
+      "current_checkpoint_kind": "research_unit",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": false,
+      "resolved_artifact_batch_id": "",
+      "runtime_warnings": [],
+      "constraint_violations": [],
+      "artifact_kinds": []
+    },
+    "result": {
+      "current_checkpoint_kind": "research_unit",
+      "resolved_artifact_batch_id": "",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": false,
+      "runtime_warnings": [],
+      "constraint_violations": [],
+      "partial_report": null,
+      "final_report": null,
+      "sources": null,
+      "artifacts": []
+    }
+  },
   "initial_events": [
     {
       "seq": 1,

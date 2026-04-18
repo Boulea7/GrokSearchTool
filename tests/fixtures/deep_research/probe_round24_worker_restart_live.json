@@ -4,6 +4,113 @@
     "resume_source": "worker_restarted",
     "checkpoint_kind": "research_unit"
   },
+  "public_surface": {
+    "status": {
+      "current_checkpoint": "finalizing",
+      "current_checkpoint_kind": "finalizing",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": false,
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "runtime_warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied",
+        "medium_single_source_search_only"
+      ],
+      "constraint_violations": [
+        {
+          "reason": "domain_constraints_applied",
+          "removed_source_count": 1,
+          "unit_id": "restate_durable"
+        },
+        {
+          "reason": "domain_constraints_applied",
+          "removed_source_count": 1,
+          "unit_id": "langgraph_interrupts"
+        },
+        {
+          "reason": "domain_constraints_applied",
+          "removed_source_count": 15,
+          "unit_id": "comparison_synthesis"
+        }
+      ],
+      "artifact_kinds": [
+        "plan.json",
+        "sources.json",
+        "citations.json",
+        "report.json",
+        "final_report.md",
+        "evidence_items.json",
+        "coverage.json",
+        "grounding.json",
+        "verifier.json"
+      ]
+    },
+    "result": {
+      "current_checkpoint_kind": "finalizing",
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": false,
+      "runtime_warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied",
+        "medium_single_source_search_only"
+      ],
+      "constraint_violations": [
+        {
+          "reason": "domain_constraints_applied",
+          "removed_source_count": 1,
+          "unit_id": "restate_durable"
+        },
+        {
+          "reason": "domain_constraints_applied",
+          "removed_source_count": 1,
+          "unit_id": "langgraph_interrupts"
+        },
+        {
+          "reason": "domain_constraints_applied",
+          "removed_source_count": 15,
+          "unit_id": "comparison_synthesis"
+        }
+      ],
+      "partial_report": null,
+      "final_report": "# Final Report\n\nRound24 worker restart lifecycle summary.\n",
+      "sources": [
+        {
+          "source_id": "R1",
+          "url": "https://docs.temporal.io/workflow-execution/continue-as-new",
+          "title": "Continue-As-New",
+          "domain": "docs.temporal.io",
+          "source_type": "official_docs"
+        }
+      ],
+      "report": {
+        "status": "degraded",
+        "runtime": {
+          "warnings": [
+            "coverage_incomplete",
+            "domain_constraints_applied",
+            "medium_single_source_search_only"
+          ],
+          "verifier": {
+            "passed": false,
+            "reason_codes": [
+              "medium_single_source_search_only"
+            ]
+          },
+          "release_gate": {
+            "passed": true,
+            "reason_codes": [],
+            "all_reason_codes": [
+              "medium_single_source_search_only"
+            ],
+            "soft_reason_codes": [
+              "medium_single_source_search_only"
+            ]
+          }
+        }
+      }
+    }
+  },
   "reconnect_reconcile": {
     "status": "interrupted",
     "phase": "researching",

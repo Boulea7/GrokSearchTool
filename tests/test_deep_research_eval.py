@@ -6,6 +6,13 @@ import pytest
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
+PROBE_PUBLIC_SURFACE_FIXTURES = (
+    "eval_probe_round24_worker_restart_public_surface.json",
+)
+PROBE_PUBLIC_SURFACE_METRICS = (
+    "release_gate_consistency",
+    "resolved_batch_parity",
+)
 UNGROUNDED_ANALOGY_MARKERS = ("real-world analogy", "think of ")
 STOPWORDS = {
     "about",
@@ -399,6 +406,13 @@ def evaluate_release_gate_consistency(case: dict) -> dict:
     score = 1.0
 
     release_reason_codes = [str(code) for code in release_gate.get("reason_codes") or [] if str(code).strip()]
+    surfaced_release_reason_codes = sorted(
+        {
+            *release_reason_codes,
+            *(str(code) for code in release_gate.get("all_reason_codes") or [] if str(code).strip()),
+            *(str(code) for code in release_gate.get("soft_reason_codes") or [] if str(code).strip()),
+        }
+    )
     verifier_reason_codes = [str(code) for code in verifier.get("reason_codes") or [] if str(code).strip()]
     passed = release_gate.get("passed")
     status = str(report.get("status") or "")
@@ -409,10 +423,10 @@ def evaluate_release_gate_consistency(case: dict) -> dict:
     if passed is True and status == "failed":
         reason_tags.append("failed_status_without_release_gate_failure")
         score -= 0.5
-    if any(code not in warnings for code in release_reason_codes):
+    if any(code not in warnings for code in surfaced_release_reason_codes):
         reason_tags.append("release_gate_warning_gap")
         score -= 0.3
-    if verifier_reason_codes and not set(verifier_reason_codes).issubset(set(release_reason_codes)):
+    if verifier_reason_codes and not set(verifier_reason_codes).issubset(set(surfaced_release_reason_codes)):
         reason_tags.append("release_gate_missing_verifier_reason")
         score -= 0.4
     if artifact_errors and status == "completed":
@@ -959,3 +973,13 @@ def test_resolved_batch_parity_probe_goldens(fixture_name):
     result = evaluate_case_metric(case, "resolved_batch_parity")
 
     assert_metric_matches_golden(result, golden)
+
+
+@pytest.mark.parametrize("fixture_name", PROBE_PUBLIC_SURFACE_FIXTURES)
+def test_probe_public_surface_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+
+    for metric in PROBE_PUBLIC_SURFACE_METRICS:
+        golden = case["golden"][metric]
+        result = evaluate_case_metric(case, metric)
+        assert_metric_matches_golden(result, golden)

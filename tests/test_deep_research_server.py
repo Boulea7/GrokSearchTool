@@ -11,6 +11,7 @@ from grok_search.deep_research_types import utc_now_iso
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
+_SEEDED_BATCH_ID_PLACEHOLDER = "$seeded_batch_id"
 
 
 def build_runtime(tmp_path, runner):
@@ -19,6 +20,41 @@ def build_runtime(tmp_path, runner):
 
 def load_deep_research_fixture(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text())
+
+
+def _materialize_fixture_surface(value, *, seeded_batch_id: str):
+    if isinstance(value, dict):
+        return {
+            key: _materialize_fixture_surface(item, seeded_batch_id=seeded_batch_id)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_materialize_fixture_surface(item, seeded_batch_id=seeded_batch_id) for item in value]
+    if value == _SEEDED_BATCH_ID_PLACEHOLDER:
+        return seeded_batch_id
+    return value
+
+
+def assert_public_surface_subset(actual: dict, expected: dict, *, seeded_batch_id: str) -> None:
+    for key, expected_value in expected.items():
+        assert key in actual
+        materialized = _materialize_fixture_surface(expected_value, seeded_batch_id=seeded_batch_id)
+        actual_value = actual[key]
+        if isinstance(materialized, dict):
+            assert isinstance(actual_value, dict)
+            assert_public_surface_subset(actual_value, materialized, seeded_batch_id=seeded_batch_id)
+            continue
+        assert actual_value == materialized
+
+
+def assert_fixture_public_surface(snapshot: dict, *, status: dict, result: dict, seeded_batch_id: str) -> None:
+    public_surface = snapshot.get("public_surface") or {}
+    status_surface = public_surface.get("status") or {}
+    result_surface = public_surface.get("result") or {}
+    if status_surface:
+        assert_public_surface_subset(status, status_surface, seeded_batch_id=seeded_batch_id)
+    if result_surface:
+        assert_public_surface_subset(result, result_surface, seeded_batch_id=seeded_batch_id)
 
 
 def with_minimal_provenance_artifacts(
@@ -297,6 +333,59 @@ def seed_round21_stale_worker_reconnect_job(runtime: DeepResearchRuntime):
 def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
     snapshot = load_deep_research_fixture("probe_round24_worker_restart_live.json")
     final_status = snapshot["final_status"]
+    release_gate = snapshot["resume_events_after_seq_16"][-1]["data"]["release_gate"]
+    coverage_payload = {
+        "query": snapshot["query"],
+        "planned_section_ids": [],
+        "answered_section_ids": [],
+        "unanswered_sections": ["Open Questions"],
+        "planned_sub_question_ids": [],
+        "covered_sub_question_ids": [],
+        "uncovered_sub_questions": ["Coverage incomplete"],
+        "hard_coverage_targets": [],
+        "hard_uncovered_targets": [],
+        "coverage_gate_passed": False,
+        "hard_coverage_gate_passed": True,
+    }
+    grounding_payload = {
+        "total_claims": 0,
+        "grounded_claims": 0,
+        "ungrounded_claims": 0,
+        "single_source_claims": 0,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0,
+        "total_evidence_bindings": 0,
+        "source_backed_binding_count": 0,
+        "search_only_binding_count": 0,
+        "null_span_binding_count": 0,
+        "grounded_claims_without_source_backed_binding": 0,
+        "sections": [],
+        "sources": [],
+    }
+    verifier_payload = {
+        "passed": False,
+        "reason_codes": ["medium_single_source_search_only"],
+        "flagged_claim_ids": [],
+        "summary": {
+            "section_count": 0,
+            "total_claims": 0,
+            "low_confidence_claims": 0,
+            "single_source_claims": 0,
+            "source_backed_binding_count": 0,
+            "search_only_binding_count": 0,
+            "null_span_binding_count": 0,
+            "missing_evidence_items": 0,
+            "mismatched_binding_source": 0,
+            "mismatched_binding_evidence": 0,
+            "invalid_source_backed_span": 0,
+            "duplicate_claims": 0,
+            "low_value_claims": 0,
+            "medium_single_source_search_only": 1,
+            "same_domain_off_topic_dominance": 0,
+            "unbound_citation_sources": 0,
+            "unbound_evidence_ids": 0,
+        },
+    }
     source = {
         "source_id": "R1",
         "url": "https://docs.temporal.io/workflow-execution/continue-as-new",
@@ -309,15 +398,14 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
         "summary": "Round24 worker restart lifecycle summary.",
         "status": final_status["report_status"],
         "sections": [],
+        "coverage": coverage_payload,
         "unit_results": {},
         "runtime": {
             "warnings": list(final_status["runtime_warnings"]),
             "constraint_violations": list(final_status["constraint_violations"]),
-            "release_gate": snapshot["resume_events_after_seq_16"][-1]["data"]["release_gate"],
-            "verifier": {
-                "passed": False,
-                "reason_codes": ["medium_single_source_search_only"],
-            },
+            "release_gate": release_gate,
+            "verifier": verifier_payload,
+            "grounding": grounding_payload,
         },
     }
     job = runtime.store.create_job(
@@ -355,9 +443,9 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
             {"kind": "report.json", "content": json.dumps(report_payload), "content_type": "application/json"},
             {"kind": "final_report.md", "content": "# Final Report\n\nRound24 worker restart lifecycle summary.\n", "content_type": "text/markdown"},
             {"kind": "evidence_items.json", "content": "[]", "content_type": "application/json"},
-            {"kind": "coverage.json", "content": json.dumps({"query": snapshot["query"], "planned_section_ids": [], "answered_section_ids": [], "unanswered_sections": ["Open Questions"], "planned_sub_question_ids": [], "covered_sub_question_ids": [], "uncovered_sub_questions": ["Coverage incomplete"], "hard_coverage_targets": [], "hard_uncovered_targets": [], "coverage_gate_passed": False, "hard_coverage_gate_passed": True}), "content_type": "application/json"},
-            {"kind": "grounding.json", "content": json.dumps({"total_claims": 0, "grounded_claims": 0, "ungrounded_claims": 0, "single_source_claims": 0, "low_confidence_claims": 0, "missing_evidence_binding_claims": 0, "total_evidence_bindings": 0, "source_backed_binding_count": 0, "search_only_binding_count": 0, "null_span_binding_count": 0, "grounded_claims_without_source_backed_binding": 0, "sections": [], "sources": []}), "content_type": "application/json"},
-            {"kind": "verifier.json", "content": json.dumps({"passed": False, "reason_codes": ["medium_single_source_search_only"], "flagged_claim_ids": [], "summary": {"section_count": 0, "total_claims": 0, "low_confidence_claims": 0, "single_source_claims": 0, "source_backed_binding_count": 0, "search_only_binding_count": 0, "null_span_binding_count": 0, "missing_evidence_items": 0, "mismatched_binding_source": 0, "mismatched_binding_evidence": 0, "invalid_source_backed_span": 0, "duplicate_claims": 0, "low_value_claims": 0, "medium_single_source_search_only": 1, "same_domain_off_topic_dominance": 0, "unbound_citation_sources": 0, "unbound_evidence_ids": 0}}), "content_type": "application/json"}
+            {"kind": "coverage.json", "content": json.dumps(coverage_payload), "content_type": "application/json"},
+            {"kind": "grounding.json", "content": json.dumps(grounding_payload), "content_type": "application/json"},
+            {"kind": "verifier.json", "content": json.dumps(verifier_payload), "content_type": "application/json"},
         ],
     )
     for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_16"]:
@@ -701,8 +789,7 @@ async def test_deep_research_round21_stale_worker_status_and_result_match_fixtur
     assert status["last_error"] == snapshot["resume_run"]["last_error"]
     assert result["status"] == snapshot["resume_run"]["status"]
     assert result["phase"] == snapshot["resume_run"]["phase"]
-    assert result["resolved_artifact_batch_id"] == ""
-    assert result["partial_report"] is None
+    assert_fixture_public_surface(snapshot, status=status, result=result, seeded_batch_id="")
 
 
 @pytest.mark.asyncio
@@ -745,14 +832,9 @@ async def test_deep_research_round24_worker_restart_status_and_result_match_fixt
     assert status["status"] == snapshot["final_status"]["status"]
     assert status["phase"] == snapshot["final_status"]["phase"]
     assert status["attempt_count"] == snapshot["final_status"]["attempt_count"]
-    assert status["runtime_warnings"] == snapshot["final_status"]["runtime_warnings"]
-    assert status["constraint_violations"] == snapshot["final_status"]["constraint_violations"]
     assert result["status"] == snapshot["final_status"]["status"]
     assert result["phase"] == snapshot["final_status"]["phase"]
-    assert result["planner_fallback_used"] is False
-    assert result["runtime_warnings"] == snapshot["final_status"]["runtime_warnings"]
-    assert result["constraint_violations"] == snapshot["final_status"]["constraint_violations"]
-    assert result["report"]["status"] == snapshot["final_status"]["report_status"]
+    assert_fixture_public_surface(snapshot, status=status, result=result, seeded_batch_id=seeded["batch_id"])
 
 
 @pytest.mark.asyncio
