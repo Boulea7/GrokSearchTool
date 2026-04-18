@@ -50,6 +50,8 @@ planning `session_id` values are in-process transient handles with about a 1-hou
 The wrappers intentionally keep scalar shim inputs such as CSV `depends_on`, semicolon-grouped `parallel_groups`, and stringified `params_json`; the first `plan_search_term` call must provide `approach`.
 `plan_*` now returns structured objects directly rather than JSON strings, so callers should not wrap the result in an extra `json.loads(...)`.
 `plan_sub_query.boundary` now enforces a minimum machine-checkable exclusion contract; vague “focus on X” wording without an explicit exclusion boundary is rejected.
+`web_map`, `switch_model`, and `toggle_builtin_tools` now also support an additive `response_format` parameter. Set `response_format="object"` for a structured return value; this is the recommended `object` mode, while legacy JSON-string compatibility mode remains the default.
+For new callers, prefer `response_format="object"` so you can consume the payload directly without an extra JSON decode step.
 
 ## Installation
 

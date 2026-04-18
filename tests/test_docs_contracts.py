@@ -856,6 +856,23 @@ def test_docs_explain_toggle_builtin_tools_stable_error_contract():
     assert "local Git project context detection" in compatibility
 
 
+def test_docs_recommend_object_response_format_for_legacy_contract_migration_slice():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+
+    assert "`response_format`" in readme
+    assert "`object`" in readme
+    assert "默认仍保持 legacy JSON 字符串兼容模式" in readme
+    assert "`response_format`" in readme_en
+    assert "`object`" in readme_en
+    assert "legacy JSON-string compatibility mode remains the default" in readme_en
+    assert "`web_map`" in compatibility
+    assert "`switch_model`" in compatibility
+    assert "`toggle_builtin_tools`" in compatibility
+    assert "`response_format=object`" in compatibility
+
+
 def test_localized_readmes_explain_redirect_preflight_contract():
     localized_expectations = {
         README_ZH_TW: ["第 `5` 次預檢", "skipped_due_to_error", "fail-closed"],

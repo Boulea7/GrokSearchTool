@@ -422,6 +422,9 @@ claude mcp list
 | `max_breadth` | int | 否 | `20` | 每页最大跟踪链接数（1-500） |
 | `limit` | int | 否 | `50` | 总链接处理数上限（1-500） |
 | `timeout` | int | 否 | `150` | 超时秒数（10-150） |
+| `response_format` | string | 否 | `"json_string"` | 返回格式：`"json_string"` 保持 legacy JSON 字符串 / 文本错误契约，`"object"` 则优先返回结构化对象 |
+
+推荐新调用方显式传 `response_format="object"`，也就是使用 `object` 模式，这样成功结果可直接拿到对象；默认仍保持 legacy JSON 字符串兼容模式。对 `web_map` 来说，object 模式会把原来的 JSON 字符串结果直接解成对象；若命中旧式纯文本错误，则会返回带 `status="error"` 和 `message` 的对象。
 
 ### `get_config_info` — 配置诊断
 
@@ -464,18 +467,22 @@ claude mcp list
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `model` | string | 是 | 模型 ID（如 `"grok-4-fast"`, `"grok-2-latest"`） |
+| `response_format` | string | 否 | 返回格式：`"json_string"` 保持 legacy JSON 字符串契约，`"object"` 直接返回原本 JSON payload 对应的结构化对象 |
 
 切换后配置持久化到 `~/.config/grok-search/config.json`，跨会话保持。
 若当前进程或项目 `.env.local` / `.env` 已显式设置 `GROK_MODEL`，`switch_model` 仍会写入持久化配置，但当前进程的实际生效模型不会立刻改变。
 当返回里 `runtime_model_source` 显示为 `process_env`、`project_env_local` 或 `project_env` 时，应先修改对应覆盖层；单独调用 `switch_model` 不会改变当前进程。
+建议新调用方显式传 `response_format="object"`，也就是使用 `object` 模式，避免再做一次 `json.loads(...)`；默认仍保持 legacy JSON 字符串兼容模式。
 
 ### `toggle_builtin_tools` — 工具路由控制
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `action` | string | 否 | `"status"` | `"on"` 禁用官方工具 / `"off"` 启用官方工具 / `"status"` 查看状态 |
+| `response_format` | string | 否 | `"json_string"` | 返回格式：`"json_string"` 保持 legacy JSON 字符串契约，`"object"` 直接返回结构化对象 |
 
 通过修改项目级 `.claude/settings.json` 的 `permissions.deny`，为 Claude Code 添加或移除内建网页工具的 deny 规则。
+建议新调用方显式传 `response_format="object"`，也就是使用 `object` 模式；默认仍保持 legacy JSON 字符串兼容模式。
 
 稳定错误码：
 - `git_root_not_found`：当前目录不在可识别的 Git 项目里，无法定位项目级 `.claude/settings.json`
