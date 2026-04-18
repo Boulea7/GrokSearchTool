@@ -1285,7 +1285,7 @@ def test_cli_watch_prints_events_until_terminal_status(monkeypatch, tmp_path, ca
     assert "summary: job=job-123 status=completed phase=finalizing progress=100.0% checkpoint=finalizing attempts=1 cancel_requested=false continued_from=- resolved_batch=batch-1 artifact_fallback=true" in output
 
 
-def test_cli_start_watch_avoids_initial_json_dump(monkeypatch, capsys):
+def test_cli_start_watch_preserves_initial_json_response(monkeypatch, capsys):
     class FakeRuntime:
         async def start(
             self,
@@ -1325,7 +1325,7 @@ def test_cli_start_watch_avoids_initial_json_dump(monkeypatch, capsys):
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert captured.out == ""
+    assert json.loads(captured.out)["job_id"] == "job-watch-1"
     assert "watch-stream: job-watch-1" in captured.err
 
 

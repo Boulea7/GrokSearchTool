@@ -21,6 +21,7 @@ from grok_search.deep_research_runtime import (
     _extract_relevant_excerpt_with_span,
     _search_query,
 )
+from grok_search.deep_research_synthesis import build_synthesis_outline
 from grok_search.deep_research_section_graph import initialize_section_graph, update_section_graph
 import grok_search.deep_research_runtime as deep_research_runtime_module
 from grok_search.providers.grok import GrokSearchProvider
@@ -9796,6 +9797,67 @@ def test_verifier_allows_medium_single_source_search_only_for_selected_official_
     assert verifier["summary"]["medium_single_source_search_only"] == 0
 
 
+def test_verifier_keeps_medium_single_source_search_only_for_standard_sources():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 0,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": False,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://www.rfc-editor.org/rfc/rfc9000",
+                "domain": "www.rfc-editor.org",
+                "source_type": "standard",
+                "quality_tier": "high_signal",
+            }
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "search"},
+        ],
+        section_banks=[
+            {
+                "section_id": "resume-semantics",
+                "candidate_evidence_ids": ["e1"],
+                "selected_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+                "last_updated_at": "2026-04-18T00:00:00Z",
+            }
+        ],
+    )
+
+    assert "medium_single_source_search_only" in verifier["reason_codes"]
+    assert verifier["summary"]["medium_single_source_search_only"] == 1
+
+
 def test_verifier_flags_unbound_citation_sources_and_evidence_ids():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True},
@@ -10739,6 +10801,117 @@ def test_build_section_citations_materializes_open_questions_from_rejected_evide
     assert sections_by_id["open-questions"]["evidence_ids"] == ["evidence-gap"]
 
 
+def test_build_section_citations_open_questions_only_use_gap_rejected_evidence():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Compare checkpoint resume and restart semantics",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Compare checkpoint resume and restart semantics",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "Checkpoint resume semantics", "reason": "Primary axis."},
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["checkpoint resume semantics"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+                {"section_id": "open-questions", "title": "Open Questions", "goal": "Call out remaining gaps."},
+            ],
+            "research_units": [],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R0",
+            "url": "https://docs.example.com/runtime/summary",
+            "title": "Summary docs",
+            "source_type": "official_docs",
+        },
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/gap",
+            "title": "Gap docs",
+            "source_type": "official_docs",
+        },
+        {
+            "source_id": "R2",
+            "url": "https://docs.example.com/runtime/off-topic",
+            "title": "Off topic docs",
+            "source_type": "official_docs",
+        },
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-summary",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R0"],
+            "source_urls": ["https://docs.example.com/runtime/summary"],
+            "summary": "Resume usually continues from the last durable checkpoint.",
+            "detail": "Resume usually continues from the last durable checkpoint.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+        {
+            "evidence_id": "evidence-gap",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/gap"],
+            "summary": "Resume edge-case handling remains unclear and needs confirmation.",
+            "detail": "Resume edge-case handling remains unclear and needs confirmation.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+        {
+            "evidence_id": "evidence-off-topic",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R2"],
+            "source_urls": ["https://docs.example.com/runtime/off-topic"],
+            "summary": "Resume duplicates a previously accepted explanation and should be ignored here.",
+            "detail": "Resume duplicates a previously accepted explanation and should be ignored here.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+    ]
+    section_banks = [
+        {
+            "section_id": "executive-summary",
+            "candidate_evidence_ids": ["evidence-summary"],
+            "selected_evidence_ids": ["evidence-summary"],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "section_id": "open-questions",
+            "candidate_evidence_ids": ["evidence-gap", "evidence-off-topic"],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": ["evidence-gap", "evidence-off-topic"],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+    ]
+
+    sections = _build_section_citations(
+        plan,
+        evidence_items,
+        source_registry,
+        section_banks=section_banks,
+        evidence_ledger=[],
+    )
+    open_questions = next(section for section in sections if section["section_id"] == "open-questions")
+
+    assert open_questions["evidence_ids"] == ["evidence-gap"]
+    assert all("ignored here" not in claim["text"].lower() for claim in open_questions["claims"])
+
+
 def test_coverage_uses_active_outline_question_binding_for_derived_sections():
     plan = DeepResearchPlan.model_validate(
         {
@@ -10774,16 +10947,40 @@ def test_coverage_uses_active_outline_question_binding_for_derived_sections():
         }
     )
 
+    active_outline = build_synthesis_outline(
+        plan,
+        evidence_ledger=[
+            {
+                "ledger_id": "ledger-evidence-reconnect",
+                "evidence_id": "evidence-reconnect",
+                "unit_id": "unit-search-1",
+                "question_id": "sq1",
+                "origin_query": "checkpoint identity worker fencing reconnect",
+                "candidate_section_ids": ["key-findings"],
+                "selected_section_id": "key-findings",
+                "rejected_section_ids": [],
+                "disposition": "selected",
+                "disposition_reason": "keyword_overlap",
+                "source_ids": ["R1"],
+                "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                "summary": "Recovered reconnect flow keeps the durable checkpoint lineage intact.",
+                "evidence_kind": "fetch",
+                "recorded_at": "2026-04-18T00:00:00Z",
+            }
+        ],
+    )
+    derived_section = next(section for section in active_outline if str(section.get("question_id", "")) == "sq1")
+
     coverage = _coverage_for_report(
         plan,
         [
             {
-                "section_id": "derived-reconnect-focus",
-                "title": "Recovered reconnect flow",
+                "section_id": derived_section["section_id"],
+                "title": derived_section["title"],
                 "summary": "The runtime restores state from the durable checkpoint before continuing execution.",
                 "claims": [
                     {
-                        "claim_id": "derived-reconnect-focus-claim-1",
+                        "claim_id": f"{derived_section['section_id']}-claim-1",
                         "text": "The runtime restores state from the durable checkpoint before continuing execution.",
                         "citations": ["R1"],
                     }
@@ -10791,17 +10988,10 @@ def test_coverage_uses_active_outline_question_binding_for_derived_sections():
                 "citations": ["R1"],
             }
         ],
-        planned_outline=[
-            {"section_id": "executive-summary", "title": "Executive Summary"},
-            {
-                "section_id": "derived-reconnect-focus",
-                "title": "Recovered reconnect flow",
-                "question_id": "sq1",
-            },
-        ],
+        planned_outline=active_outline,
     )
 
-    assert coverage["answered_section_ids"] == ["derived-reconnect-focus"]
+    assert coverage["answered_section_ids"] == [derived_section["section_id"]]
     assert coverage["covered_sub_question_ids"] == ["sq1"]
     assert coverage["uncovered_sub_questions"] == []
 
