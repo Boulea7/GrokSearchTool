@@ -1639,7 +1639,7 @@ def test_cli_round12_continue_resume_status_and_events_match_fixture(monkeypatch
     assert status_payload["continued_from_job_id"] == snapshot["source_job_id"]
     assert status_payload["planner_fallback_used"] is True
     assert summary_lines(status_captured.err) == [
-        f"summary: job={job.job_id} status={snapshot['continue_status']['status']} phase={snapshot['continue_status']['phase']} progress=0.0% checkpoint={snapshot['continue_status']['checkpoint']} attempts={snapshot['continue_status']['attempt_count']} cancel_requested=false continued_from={snapshot['source_job_id']} resolved_batch=- artifact_fallback=false planner_fallback=true"
+        f"summary: job={job.job_id} status={snapshot['continue_status']['status']} phase={snapshot['continue_status']['phase']} progress=0.0% checkpoint={snapshot['continue_status']['checkpoint']} attempts={snapshot['continue_status']['attempt_count']} cancel_requested=false continued_from={snapshot['source_job_id']} resolved_batch=- artifact_fallback=false last_error=worker_restarted planner_fallback=true"
     ]
 
     exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "0", "--limit", "20"])

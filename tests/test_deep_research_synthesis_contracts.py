@@ -1,5 +1,3 @@
-import pytest
-
 from grok_search.deep_research_synthesis import build_synthesis_outline, evidence_pool_for_section
 from grok_search.deep_research_types import DeepResearchPlan
 

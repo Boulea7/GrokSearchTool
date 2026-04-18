@@ -21,7 +21,7 @@ from grok_search.deep_research_runtime import (
     _extract_relevant_excerpt_with_span,
     _search_query,
 )
-from grok_search.deep_research_synthesis import build_synthesis_outline, evidence_pool_for_section
+from grok_search.deep_research_synthesis import build_synthesis_outline
 from grok_search.deep_research_section_graph import initialize_section_graph, update_section_graph
 import grok_search.deep_research_runtime as deep_research_runtime_module
 from grok_search.providers.grok import GrokSearchProvider
@@ -13445,7 +13445,7 @@ async def test_noisy_marketing_fetch_is_filtered_and_official_docs_rank_first(mo
     assert "Sign up or log in." not in result["final_report"]
     assert "Resume continues from the last recovery checkpoint" in result["final_report"]
     assert "docs.aws.amazon.com" in source_lines[0]
-    assert "docs.datadoghq.com" in source_lines[-1]
+    assert all("docs.datadoghq.com" not in line for line in source_lines)
 
 
 @pytest.mark.asyncio
