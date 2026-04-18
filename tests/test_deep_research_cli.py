@@ -1,5 +1,6 @@
 import json
 import asyncio
+import sys
 from pathlib import Path
 
 from grok_search import deep_research_cli
@@ -1282,6 +1283,80 @@ def test_cli_watch_prints_events_until_terminal_status(monkeypatch, tmp_path, ca
     assert "[1] researching phase_started: Researching." in output
     assert "summary: job=job-123 status=running phase=researching progress=35.0% checkpoint=researching attempts=1 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=-" in output
     assert "summary: job=job-123 status=completed phase=finalizing progress=100.0% checkpoint=finalizing attempts=1 cancel_requested=false continued_from=- resolved_batch=batch-1 artifact_fallback=true" in output
+
+
+def test_cli_start_watch_avoids_initial_json_dump(monkeypatch, capsys):
+    class FakeRuntime:
+        async def start(
+            self,
+            *,
+            query,
+            context,
+            effort,
+            time_budget_seconds,
+            include_domains,
+            exclude_domains,
+            continue_from_job_id,
+            plan_only,
+            force_new,
+            schedule,
+        ):
+            return {
+                "job_id": "job-watch-1",
+                "status": "queued",
+                "phase": "planning",
+                "progress_pct": 0.0,
+                "attempt_count": 1,
+                "current_checkpoint": "planning",
+                "cancel_requested": False,
+                "continued_from_job_id": "",
+                "resolved_artifact_batch_id": "",
+                "reused": False,
+            }
+
+    async def fake_watch(runtime, job_id, *, interval_seconds=1.0):
+        print(f"watch-stream: {job_id}", file=sys.stderr)
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
+    monkeypatch.setattr(deep_research_cli, "_spawn_worker", lambda job_id: None)
+    monkeypatch.setattr(deep_research_cli, "_watch_job", fake_watch)
+
+    exit_code = deep_research_cli.main(["start", "Watch me", "--watch"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out == ""
+    assert "watch-stream: job-watch-1" in captured.err
+
+
+def test_cli_watch_explains_reconnected_job_context(monkeypatch, capsys):
+    class FakeRuntime:
+        async def status(self, job_id):
+            return {
+                "job_id": job_id,
+                "status": "interrupted",
+                "phase": "finalizing",
+                "progress_pct": 90.0,
+                "attempt_count": 3,
+                "current_checkpoint": "finalizing",
+                "cancel_requested": False,
+                "continued_from_job_id": "seed-job",
+                "resolved_artifact_batch_id": "batch-7",
+            }
+
+        async def events(self, job_id, after_seq=0, limit=100):
+            return {"events": [], "next_after_seq": after_seq}
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
+
+    exit_code = deep_research_cli.main(["watch", "job-123", "--interval-seconds", "0.01"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert (
+        "watch: attached_to_existing_state job=job-123 attempts=3 checkpoint=finalizing continued_from=seed-job"
+        in captured.err
+    )
 
 
 def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, tmp_path, capsys):
