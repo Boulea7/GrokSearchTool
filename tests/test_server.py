@@ -5032,9 +5032,11 @@ async def test_switch_model_object_response_format_returns_structured_payload(mo
 
     payload = await server.switch_model("grok-4.1-mini", response_format="object")
 
-    assert payload["status"] == "成功"
-    assert payload["current_model"] == "grok-4.1-mini"
-    assert payload["config_file"] == str(config_file)
+    assert payload["ok"] is True
+    assert payload["error"] is None
+    assert "切换" in payload["message"]
+    assert payload["data"]["current_model"] == "grok-4.1-mini"
+    assert payload["data"]["config_file"] == str(config_file)
     assert json.loads(config_file.read_text(encoding="utf-8"))["model"] == "grok-4.1-mini"
 
 
@@ -5113,9 +5115,12 @@ async def test_toggle_builtin_tools_object_response_format_returns_structured_pa
 
     payload = await server.toggle_builtin_tools("on", response_format="object")
 
-    assert payload["blocked"] is True
-    assert sorted(payload["deny_list"]) == ["WebFetch", "WebSearch"]
-    assert payload["file"] == str(git_root / ".claude" / "settings.json")
+    assert payload["ok"] is True
+    assert payload["error"] is None
+    assert "禁用" in payload["message"]
+    assert payload["data"]["blocked"] is True
+    assert sorted(payload["data"]["deny_list"]) == ["WebFetch", "WebSearch"]
+    assert payload["data"]["file"] == str(git_root / ".claude" / "settings.json")
 
 
 @pytest.mark.asyncio
@@ -5546,8 +5551,13 @@ async def test_web_map_object_response_format_returns_structured_payload(monkeyp
     payload = await server.web_map("https://public.example.com/path", response_format="object")
 
     assert payload == {
-        "base_url": "https://public.example.com/path",
-        "results": ["https://public.example.com/path"],
+        "ok": True,
+        "error": None,
+        "message": "映射成功",
+        "data": {
+            "base_url": "https://public.example.com/path",
+            "results": ["https://public.example.com/path"],
+        },
     }
     assert calls == {"map": 1}
 
@@ -5587,8 +5597,10 @@ async def test_web_map_object_response_format_wraps_legacy_error_string(monkeypa
     payload = await server.web_map("file:///tmp/secret.txt", response_format="object")
 
     assert payload == {
-        "status": "error",
+        "ok": False,
+        "error": "map_failed",
         "message": "映射失败: 仅支持 http/https URL",
+        "data": None,
     }
     assert calls == {"map": 0}
 
