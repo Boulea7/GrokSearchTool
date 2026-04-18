@@ -583,7 +583,10 @@ async def _run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return asyncio.run(_run(args))
+    try:
+        return asyncio.run(_run(args))
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":
