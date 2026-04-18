@@ -17,19 +17,19 @@ The goal is not to claim identical native feature parity across every host. The 
 
 ## Shared MCP Snippet
 
-- Use the shared snippet at [docs/host-assets/grok-search-stdio.json](/Users/example/GrokSearch/.worktrees/deep-research-round2/docs/host-assets/grok-search-stdio.json)
+- Use the shared snippet at [docs/host-assets/grok-search-stdio.json](./host-assets/grok-search-stdio.json)
 - It is intentionally neutral and mirrors the maintained release repo `Boulea7/GrokSearchTool`.
 
 ## Host Matrix
 
 | Host | MCP path | Native adaptation surface | Recommended asset | Notes |
 | --- | --- | --- | --- | --- |
-| Claude Code / Claude Desktop | local `stdio` | project/user settings, prompt instructions | existing README install snippets + [docs/host-assets/common-companion-guidance.md](/Users/example/GrokSearch/.worktrees/deep-research-round2/docs/host-assets/common-companion-guidance.md) | `toggle_builtin_tools` remains Claude-specific |
-| Cherry Studio | local `STDIO` MCP server entry | assistant / preset prompt | [docs/host-assets/cherry-studio-assistant-preset.md](/Users/example/GrokSearch/.worktrees/deep-research-round2/docs/host-assets/cherry-studio-assistant-preset.md) | best fit is MCP + assistant preset |
-| Cursor | local MCP config | project rules | [docs/host-assets/cursor-project-rule.md](/Users/example/GrokSearch/.worktrees/deep-research-round2/docs/host-assets/cursor-project-rule.md) | pair MCP with a project rule, not a copied agent file |
-| Cline | local MCP config | Skills / custom instructions | [docs/host-assets/cline-skill.md](/Users/example/GrokSearch/.worktrees/deep-research-round2/docs/host-assets/cline-skill.md) | use MCP for tools, skill for workflow guidance |
-| Continue | local MCP config | rules / system prompt | [docs/host-assets/continue-rule.md](/Users/example/GrokSearch/.worktrees/deep-research-round2/docs/host-assets/continue-rule.md) | keep tool use narrow and source-backed |
-| Windsurf | local MCP config | rules / memories | [docs/host-assets/windsurf-rule.md](/Users/example/GrokSearch/.worktrees/deep-research-round2/docs/host-assets/windsurf-rule.md) | use MCP + rule/memory pairing |
+| Claude Code / Claude Desktop | local `stdio` | project/user settings, prompt instructions | existing README install snippets + [docs/host-assets/common-companion-guidance.md](./host-assets/common-companion-guidance.md) | `toggle_builtin_tools` remains Claude-specific |
+| Cherry Studio | local `STDIO` MCP server entry | assistant / preset prompt | [docs/host-assets/cherry-studio-assistant-preset.md](./host-assets/cherry-studio-assistant-preset.md) | best fit is MCP + assistant preset |
+| Cursor | local MCP config | project rules | [docs/host-assets/cursor-project-rule.md](./host-assets/cursor-project-rule.md) | pair MCP with a project rule, not a copied agent file |
+| Cline | local MCP config | Skills / custom instructions | [docs/host-assets/cline-skill.md](./host-assets/cline-skill.md) | use MCP for tools, skill for workflow guidance |
+| Continue | local MCP config | rules / system prompt | [docs/host-assets/continue-rule.md](./host-assets/continue-rule.md) | keep tool use narrow and source-backed |
+| Windsurf | local MCP config | rules / memories | [docs/host-assets/windsurf-rule.md](./host-assets/windsurf-rule.md) | use MCP + rule/memory pairing |
 
 ## Recommended Companion Guidance
 
