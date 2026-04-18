@@ -9735,6 +9735,67 @@ def test_verifier_ignores_intentional_rollup_duplicates_in_summary_sections():
     assert verifier["summary"]["duplicate_claims"] == 0
 
 
+def test_verifier_allows_medium_single_source_search_only_for_selected_official_docs_section():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 0,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": False,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+                "source_type": "official_docs",
+                "quality_tier": "official",
+            }
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "search"},
+        ],
+        section_banks=[
+            {
+                "section_id": "resume-semantics",
+                "candidate_evidence_ids": ["e1"],
+                "selected_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+                "last_updated_at": "2026-04-18T00:00:00Z",
+            }
+        ],
+    )
+
+    assert "medium_single_source_search_only" not in verifier["reason_codes"]
+    assert verifier["summary"]["medium_single_source_search_only"] == 0
+
+
 def test_verifier_flags_unbound_citation_sources_and_evidence_ids():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True},
@@ -10535,6 +10596,216 @@ def test_build_section_citations_rewrites_generic_outline_from_evidence_ledger_q
     ]
 
 
+def test_build_section_citations_materializes_open_questions_from_rejected_evidence():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Compare checkpoint resume and restart semantics",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Compare checkpoint resume and restart semantics",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "Checkpoint resume semantics", "reason": "Primary axis."},
+                {"id": "sq2", "question": "Postgres restart behavior", "reason": "Primary axis."},
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["checkpoint resume semantics", "postgres restart behavior"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+                {"section_id": "key-findings", "title": "Key Findings", "goal": "Cover the strongest findings."},
+                {"section_id": "open-questions", "title": "Open Questions", "goal": "Call out remaining gaps."},
+            ],
+            "research_units": [],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/resume",
+            "title": "Resume docs",
+            "source_type": "official_docs",
+        },
+        {
+            "source_id": "R2",
+            "url": "https://docs.example.com/runtime/postgres",
+            "title": "Postgres restart docs",
+            "source_type": "official_docs",
+        },
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-resume",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/resume"],
+            "summary": "Resume continues from the last durable checkpoint after interruption.",
+            "detail": "Resume continues from the last durable checkpoint after interruption.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+        {
+            "evidence_id": "evidence-gap",
+            "unit_id": "unit-search-2",
+            "source_ids": ["R2"],
+            "source_urls": ["https://docs.example.com/runtime/postgres"],
+            "summary": "Postgres restart behavior remains unclear and needs confirmation from deeper task-state evidence.",
+            "detail": "Postgres restart behavior remains unclear and needs confirmation from deeper task-state evidence.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+    ]
+    evidence_ledger = [
+        {
+            "ledger_id": "ledger-evidence-resume",
+            "evidence_id": "evidence-resume",
+            "unit_id": "unit-search-1",
+            "question_id": "sq1",
+            "origin_query": "checkpoint resume semantics",
+            "candidate_section_ids": ["key-findings"],
+            "selected_section_id": "key-findings",
+            "rejected_section_ids": [],
+            "disposition": "selected",
+            "disposition_reason": "keyword_overlap",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/resume"],
+            "summary": "Resume continues from the last durable checkpoint after interruption.",
+            "evidence_kind": "fetch",
+            "recorded_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "ledger_id": "ledger-evidence-gap",
+            "evidence_id": "evidence-gap",
+            "unit_id": "unit-search-2",
+            "question_id": "sq2",
+            "origin_query": "postgres restart behavior",
+            "candidate_section_ids": ["key-findings", "open-questions"],
+            "selected_section_id": "",
+            "rejected_section_ids": ["key-findings", "open-questions"],
+            "disposition": "rejected",
+            "disposition_reason": "needs_confirmation",
+            "source_ids": ["R2"],
+            "source_urls": ["https://docs.example.com/runtime/postgres"],
+            "summary": "Postgres restart behavior remains unclear and needs confirmation from deeper task-state evidence.",
+            "evidence_kind": "fetch",
+            "recorded_at": "2026-04-18T00:00:00Z",
+        },
+    ]
+    section_banks = [
+        {
+            "section_id": "executive-summary",
+            "candidate_evidence_ids": [],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "section_id": "key-findings",
+            "candidate_evidence_ids": ["evidence-resume", "evidence-gap"],
+            "selected_evidence_ids": ["evidence-resume"],
+            "rejected_evidence_ids": ["evidence-gap"],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+        {
+            "section_id": "open-questions",
+            "candidate_evidence_ids": ["evidence-gap"],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": ["evidence-gap"],
+            "last_updated_at": "2026-04-18T00:00:00Z",
+        },
+    ]
+
+    sections = _build_section_citations(
+        plan,
+        evidence_items,
+        source_registry,
+        section_banks=section_banks,
+        evidence_ledger=evidence_ledger,
+    )
+    sections_by_id = {section["section_id"]: section for section in sections}
+
+    assert "open-questions" in sections_by_id
+    assert sections_by_id["open-questions"]["claims"]
+    assert "needs confirmation" in sections_by_id["open-questions"]["summary"].lower()
+    assert sections_by_id["open-questions"]["claims"][0]["citations"] == ["R2"]
+    assert sections_by_id["open-questions"]["evidence_ids"] == ["evidence-gap"]
+
+
+def test_coverage_uses_active_outline_question_binding_for_derived_sections():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Investigate checkpoint identity and worker fencing after reconnect",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Investigate checkpoint identity and worker fencing after reconnect",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "Checkpoint identity and worker fencing after reconnect",
+                    "reason": "Primary axis.",
+                }
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["checkpoint identity worker fencing reconnect"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+                {"section_id": "key-findings", "title": "Key Findings", "goal": "Cover the strongest findings."},
+                {"section_id": "open-questions", "title": "Open Questions", "goal": "Call out remaining gaps."},
+            ],
+            "research_units": [],
+        }
+    )
+
+    coverage = _coverage_for_report(
+        plan,
+        [
+            {
+                "section_id": "derived-reconnect-focus",
+                "title": "Recovered reconnect flow",
+                "summary": "The runtime restores state from the durable checkpoint before continuing execution.",
+                "claims": [
+                    {
+                        "claim_id": "derived-reconnect-focus-claim-1",
+                        "text": "The runtime restores state from the durable checkpoint before continuing execution.",
+                        "citations": ["R1"],
+                    }
+                ],
+                "citations": ["R1"],
+            }
+        ],
+        planned_outline=[
+            {"section_id": "executive-summary", "title": "Executive Summary"},
+            {
+                "section_id": "derived-reconnect-focus",
+                "title": "Recovered reconnect flow",
+                "question_id": "sq1",
+            },
+        ],
+    )
+
+    assert coverage["answered_section_ids"] == ["derived-reconnect-focus"]
+    assert coverage["covered_sub_question_ids"] == ["sq1"]
+    assert coverage["uncovered_sub_questions"] == []
+
+
 @pytest.mark.asyncio
 async def test_runtime_persists_verifier_artifact_and_blocks_single_source_low_confidence_report(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
@@ -10687,7 +10958,7 @@ async def test_runtime_uses_active_outline_for_coverage_and_key_findings(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_runtime_blocks_medium_single_source_search_only_report(monkeypatch, tmp_path):
+async def test_runtime_allows_medium_single_source_search_only_for_clean_official_docs_section(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     query = "Checkpoint resume semantics"
 
@@ -10731,12 +11002,12 @@ async def test_runtime_blocks_medium_single_source_search_only_report(monkeypatc
     verifier = json.loads(runtime.store.read_artifact_text(response["job_id"], "verifier.json") or "{}")
 
     assert result["status"] == "completed"
-    assert result["report"]["status"] == "degraded"
-    assert "medium_single_source_search_only" in verifier["reason_codes"]
-    assert "medium_single_source_search_only" in result["report"]["runtime"]["verifier"]["reason_codes"]
+    assert result["report"]["status"] == "completed"
+    assert "medium_single_source_search_only" not in verifier["reason_codes"]
+    assert "medium_single_source_search_only" not in result["report"]["runtime"]["verifier"]["reason_codes"]
     assert result["report"]["runtime"]["release_gate"]["reason_codes"] == []
-    assert "medium_single_source_search_only" in result["report"]["runtime"]["release_gate"]["soft_reason_codes"]
-    assert "medium_single_source_search_only" in result["report"]["runtime"]["warnings"]
+    assert "medium_single_source_search_only" not in result["report"]["runtime"]["release_gate"]["soft_reason_codes"]
+    assert "medium_single_source_search_only" not in result["report"]["runtime"]["warnings"]
 
 
 @pytest.mark.asyncio

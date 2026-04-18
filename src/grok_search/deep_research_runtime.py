@@ -5467,6 +5467,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         sections=citations["sections"],
         source_registry=citations["source_registry"],
         evidence_items=evidence_items,
+        section_banks=section_banks,
     )
     release_gate = _build_release_gate(report_coverage, grounding_diagnostics, verifier_diagnostics)
     runtime_warnings = sorted(
@@ -6128,10 +6129,18 @@ def _coverage_for_report(
         for bank in section_banks or []
         if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
     }
+    explicit_question_id_by_section_id = {
+        str(section.get("section_id", "")).strip(): str(section.get("question_id", "")).strip()
+        for section in (planned_outline or [])
+        if isinstance(section, dict)
+        and str(section.get("section_id", "")).strip()
+        and str(section.get("question_id", "")).strip()
+    }
     question_id_by_section_id = {
         _slugify(_trim_text(_normalize_whitespace(item.question.rstrip(" ?")), limit=96)): item.id
         for item in plan.sub_questions
     }
+    question_id_by_section_id.update(explicit_question_id_by_section_id)
     ledger_by_question_id: dict[str, list[dict[str, Any]]] = {}
     for entry in evidence_ledger or []:
         if not isinstance(entry, dict):
@@ -6218,9 +6227,23 @@ def _coverage_for_report(
         question = item.question.strip()
         if not question:
             continue
+        explicit_matching_section_ids = [
+            str(section.get("section_id", "")).strip()
+            for section in grounded_sections
+            if str(section.get("section_id", "")).strip()
+            and question_id_by_section_id.get(str(section.get("section_id", "")).strip(), "") == item.id
+            and any(
+                [
+                    citation
+                    for claim in section.get("claims", [])
+                    for citation in claim.get("citations", [])
+                    if str(citation).strip()
+                ]
+            )
+        ]
         question_tokens = _tokenize_keywords(question)
         coverage_threshold = max(2, min(4, max(1, len(question_tokens) // 2)))
-        matching_section_ids: list[str] = []
+        matching_section_ids: list[str] = list(explicit_matching_section_ids)
         matching_claim_ids: list[str] = []
         for section in grounded_sections:
             section_id = str(section.get("section_id", "")).strip()
@@ -6239,7 +6262,7 @@ def _coverage_for_report(
                 if section.get("citations") and _count_keyword_overlap(section_text, question_tokens) >= max(coverage_threshold, 3):
                     if section_id and section_id not in matching_section_ids:
                         matching_section_ids.append(section_id)
-        covered = bool(matching_claim_ids)
+        covered = bool(matching_claim_ids) or bool(explicit_matching_section_ids)
         if covered:
             covered_sub_question_ids.append(item.id)
         else:
@@ -6594,6 +6617,7 @@ def _build_verifier_diagnostics(
     sections: list[dict[str, Any]],
     source_registry: dict[str, dict[str, Any]] | None = None,
     evidence_items: list[dict[str, Any]] | None = None,
+    section_banks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     reason_codes: list[str] = []
     flagged_claim_ids: list[str] = []
@@ -6605,6 +6629,11 @@ def _build_verifier_diagnostics(
         if isinstance(item, dict) and str(item.get("evidence_id", "")).strip()
     }
     seen_claim_keys: dict[str, dict[str, Any]] = {}
+    section_bank_by_id = {
+        str(bank.get("section_id", "")).strip(): dict(bank)
+        for bank in section_banks or []
+        if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
+    }
     integrity_counts = {
         "missing_evidence_items": 0,
         "mismatched_binding_source": 0,
@@ -6633,7 +6662,30 @@ def _build_verifier_diagnostics(
 
     for section in sections:
         section_title = str(section.get("title", "") or "").strip()
+        section_id = str(section.get("section_id", "") or "").strip()
         section_is_rollup = is_summary_section_title(section_title) or is_key_findings_section_title(section_title)
+        section_is_gap = is_open_questions_section_title(section_title) or _is_gap_section(section)
+        section_bank = section_bank_by_id.get(section_id, {})
+        selected_evidence_ids = [
+            str(evidence_id).strip()
+            for evidence_id in section_bank.get("selected_evidence_ids", []) or []
+            if str(evidence_id).strip() in evidence_by_id
+        ]
+        rejected_evidence_ids = [
+            str(evidence_id).strip()
+            for evidence_id in section_bank.get("rejected_evidence_ids", []) or []
+            if str(evidence_id).strip()
+        ]
+        selected_evidence_source_ids = {
+            str(source_id).strip()
+            for evidence_id in selected_evidence_ids
+            for source_id in evidence_by_id.get(evidence_id, {}).get("source_ids", [])
+            if str(source_id).strip()
+        }
+        selected_evidence_is_high_trust = bool(selected_evidence_source_ids) and all(
+            source_id in source_registry and _source_is_high_trust(source_registry[source_id])
+            for source_id in selected_evidence_source_ids
+        )
         for claim in section.get("claims", []):
             claim_id = str(claim.get("claim_id", "")).strip()
             raw_claim_text = str(claim.get("text", "") or "")
@@ -6711,10 +6763,18 @@ def _build_verifier_diagnostics(
                 and bindings
                 and not any(bool(binding.get("source_backed")) for binding in bindings)
             ):
-                if claim_id:
-                    flagged_claim_ids.append(claim_id)
-                integrity_counts["medium_single_source_search_only"] += 1
-                reason_codes.append("medium_single_source_search_only")
+                acceptable_official_section = (
+                    not section_is_rollup
+                    and not section_is_gap
+                    and bool(selected_evidence_ids)
+                    and not rejected_evidence_ids
+                    and selected_evidence_is_high_trust
+                )
+                if not acceptable_official_section:
+                    if claim_id:
+                        flagged_claim_ids.append(claim_id)
+                    integrity_counts["medium_single_source_search_only"] += 1
+                    reason_codes.append("medium_single_source_search_only")
             if (
                 confidence == "low"
                 and supporting_source_count <= 1
@@ -6796,6 +6856,7 @@ def _validate_provenance_bundle(
         sections=sections,
         source_registry=source_registry,
         evidence_items=evidence_items_value,
+        section_banks=None,
     )
     structural_reason_codes = {
         "missing_evidence_items",
@@ -7169,6 +7230,39 @@ def _build_section_citations(
             supporting_domain_count=section_domain_count,
         ).model_dump()
 
+    def build_open_question_section(section: dict[str, Any]) -> dict[str, Any] | None:
+        evidence_by_id = {
+            item.evidence_id: item
+            for item in claims_pool
+            if item.evidence_id
+        }
+        rejected_ids = [
+            str(evidence_id).strip()
+            for bank in section_banks or []
+            if isinstance(bank, dict)
+            for evidence_id in bank.get("rejected_evidence_ids", []) or []
+            if str(evidence_id).strip() in evidence_by_id
+        ]
+        if not rejected_ids:
+            rejected_ids = [
+                str(entry.get("evidence_id", "")).strip()
+                for entry in evidence_ledger or []
+                if isinstance(entry, dict)
+                and str(entry.get("evidence_id", "")).strip() in evidence_by_id
+                and (
+                    str(entry.get("disposition", "")).strip() == "rejected"
+                    or any(str(section_id).strip() for section_id in entry.get("rejected_section_ids", []) or [])
+                )
+            ]
+        rejected_pool = [
+            evidence_by_id[evidence_id]
+            for evidence_id in _dedupe_preserve_order(rejected_ids)
+            if evidence_id in evidence_by_id
+        ]
+        if not rejected_pool:
+            return None
+        return build_section_from_pool(section, rejected_pool, enforce_overlap=False)
+
     for section in outline:
         if not isinstance(section, dict):
             continue
@@ -7182,6 +7276,9 @@ def _build_section_citations(
                 sections.append(materialized)
             continue
         if is_open_questions_section_title(title):
+            materialized = build_open_question_section(section)
+            if materialized is not None:
+                sections.append(materialized)
             continue
         pool_items, pool_mode = evidence_pool_for_section(
             section_id,

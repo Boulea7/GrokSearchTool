@@ -75,13 +75,22 @@ def _outline_section_dicts(plan: DeepResearchPlan) -> list[dict[str, Any]]:
 
 def _selected_question_ids(evidence_ledger: list[dict[str, Any]] | None) -> list[str]:
     question_ids: list[str] = []
+    fallback_question_ids: list[str] = []
     for entry in evidence_ledger or []:
         if not isinstance(entry, dict):
             continue
         question_id = str(entry.get("question_id", "")).strip()
-        if question_id and question_id not in question_ids:
-            question_ids.append(question_id)
-    return question_ids
+        if not question_id:
+            continue
+        disposition = str(entry.get("disposition", "")).strip()
+        selected_section_id = str(entry.get("selected_section_id", "")).strip()
+        if disposition == "selected" or selected_section_id:
+            if question_id not in question_ids:
+                question_ids.append(question_id)
+            continue
+        if disposition != "rejected" and question_id not in fallback_question_ids:
+            fallback_question_ids.append(question_id)
+    return question_ids or fallback_question_ids
 
 
 def _has_open_question_signal(
