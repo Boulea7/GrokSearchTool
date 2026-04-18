@@ -559,6 +559,7 @@ def test_citation_faithfulness_probe_goldens(fixture_name):
         "eval_probe_round18_aws_dms.json",
         "eval_probe_round19_aws_dms.json",
         "eval_probe_round20_aws_dms.json",
+        "eval_probe_round22_coverage_ledger.json",
     ],
 )
 def test_coverage_completeness_probe_goldens(fixture_name):
@@ -634,6 +635,7 @@ def test_planner_boundary_probe_goldens(fixture_name):
         "eval_probe_round15_main_snapshot.json",
         "eval_probe_round16_main_snapshot.json",
         "eval_probe_round18_aws_dms.json",
+        "eval_probe_round22_noise_filters.json",
     ],
 )
 def test_ranking_noise_suppression_probe_goldens(fixture_name):
@@ -665,6 +667,7 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
         "eval_probe_round19_lifecycle_b.json",
         "eval_probe_round20_aws_dms.json",
         "eval_probe_round20_lifecycle.json",
+        "eval_probe_round22_noise_filters.json",
     ],
 )
 def test_diagnostics_consistency_probe_goldens(fixture_name):
@@ -892,3 +895,33 @@ def test_resolved_batch_parity_detects_mixed_batch_provenance_sidecars():
 
     assert result["verdict"] == "fail"
     assert result["reason_tags"] == ["mixed_batch_artifacts"]
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        "eval_probe_round22_provenance_bundle.json",
+    ],
+)
+def test_provenance_bundle_consistency_probe_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+    golden = case["golden"]["provenance_bundle_consistency"]
+
+    result = evaluate_case_metric(case, "provenance_bundle_consistency")
+
+    assert_metric_matches_golden(result, golden)
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        "eval_probe_round22_provenance_bundle.json",
+    ],
+)
+def test_resolved_batch_parity_probe_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+    golden = case["golden"]["resolved_batch_parity"]
+
+    result = evaluate_case_metric(case, "resolved_batch_parity")
+
+    assert_metric_matches_golden(result, golden)
