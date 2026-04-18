@@ -119,6 +119,19 @@ def _packet_from_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _packet_for_section(entry: dict[str, Any], *, section_id: str) -> dict[str, Any]:
+    packet = _packet_from_entry(entry)
+    normalized_section_id = str(section_id).strip()
+    if not normalized_section_id:
+        return packet
+    packet["claim_ids"] = [
+        claim_id
+        for claim_id in packet.get("claim_ids", [])
+        if str(claim_id).strip().startswith(f"{normalized_section_id}-")
+    ]
+    return packet
+
+
 def _section_decisions(
     *,
     candidate_section_ids: list[str],
@@ -283,17 +296,18 @@ def update_section_banks(
         evidence_id = str(entry.get("evidence_id", "")).strip()
         if not evidence_id:
             continue
-        packet = _packet_from_entry(entry)
         for section_id in entry.get("candidate_section_ids", []):
             bank = banks_by_section.get(section_id)
             if bank is None:
                 continue
+            packet = _packet_for_section(entry, section_id=section_id)
             if evidence_id not in bank["candidate_evidence_ids"]:
                 bank["candidate_evidence_ids"].append(evidence_id)
             _upsert_packet(bank["candidate_packets"], packet)
         selected_section_id = str(entry.get("selected_section_id", "")).strip()
         if selected_section_id and selected_section_id in banks_by_section:
             bank = banks_by_section[selected_section_id]
+            packet = _packet_for_section(entry, section_id=selected_section_id)
             if evidence_id not in bank["selected_evidence_ids"]:
                 bank["selected_evidence_ids"].append(evidence_id)
             _upsert_packet(bank["selected_packets"], packet)
@@ -301,6 +315,7 @@ def update_section_banks(
             bank = banks_by_section.get(rejected_section_id)
             if bank is None:
                 continue
+            packet = _packet_for_section(entry, section_id=rejected_section_id)
             if evidence_id not in bank["rejected_evidence_ids"]:
                 bank["rejected_evidence_ids"].append(evidence_id)
             _upsert_packet(bank["rejected_packets"], packet)

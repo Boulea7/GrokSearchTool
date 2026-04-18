@@ -9,6 +9,7 @@ from grok_search.deep_research_evidence import (
     candidate_evidence_ids_by_section,
     rejected_evidence_ids_by_section,
     selected_evidence_ids_by_section,
+    update_section_banks,
 )
 from grok_search.deep_research_runtime import (
     DeepResearchRuntime,
@@ -1058,6 +1059,52 @@ async def test_continuation_planning_bootstraps_internal_state_from_carry_forwar
     assert all("question_ids" in entry for entry in evidence_ledger)
     assert any(bank["selected_packets"] for bank in section_banks)
     assert continuation_payload["carry_forward_outline_versions"]
+
+
+def test_update_section_banks_scopes_packet_claim_ids_to_the_current_section():
+    section_banks = [
+        {
+            "section_id": "section-a",
+            "candidate_evidence_ids": [],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": [],
+            "candidate_packets": [],
+            "selected_packets": [],
+            "rejected_packets": [],
+            "last_updated_at": "",
+        },
+        {
+            "section_id": "section-b",
+            "candidate_evidence_ids": [],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": [],
+            "candidate_packets": [],
+            "selected_packets": [],
+            "rejected_packets": [],
+            "last_updated_at": "",
+        },
+    ]
+    ledger_entries = [
+        {
+            "ledger_id": "ledger-e1",
+            "evidence_id": "e1",
+            "candidate_section_ids": ["section-a", "section-b"],
+            "selected_section_id": "section-a",
+            "rejected_section_ids": ["section-b"],
+            "question_ids": ["sq1"],
+            "source_ids": ["R1"],
+            "unit_id": "unit-search-1",
+            "line_start": 10,
+            "line_end": 11,
+            "materialized_claim_ids": ["section-a-claim-1", "section-b-claim-2"],
+        }
+    ]
+
+    updated = update_section_banks(section_banks, ledger_entries=ledger_entries, updated_at="2026-04-19T00:00:00Z")
+    bank_by_id = {bank["section_id"]: bank for bank in updated}
+
+    assert bank_by_id["section-a"]["selected_packets"][0]["claim_ids"] == ["section-a-claim-1"]
+    assert bank_by_id["section-b"]["rejected_packets"][0]["claim_ids"] == ["section-b-claim-2"]
 
 
 @pytest.mark.asyncio
