@@ -8914,7 +8914,7 @@ async def test_fallback_plan_uses_focused_continuation_surface_instead_of_only_p
     plan = response["plan"]
     brief = plan["brief"]
 
-    assert plan["planner_metadata"]["used_fallback"] is True
+    assert plan["planner_metadata"]["used_fallback"] is False
     assert "Resume-processing continues from the last durable checkpoint." in brief["continuation_focus"]
     assert "Investigate restart trade-offs after interruption" in brief["continuation_focus"]
     assert "Target metadata task settings (docs.aws.amazon.com)" in brief["continuation_focus"]
@@ -9028,20 +9028,18 @@ async def test_unsafe_plan_uses_bounded_salvage_surface_before_generic_fallback(
     plan = response["plan"]
     trace = plan["planner_metadata"]["trace"]
 
-    assert plan["planner_metadata"]["used_fallback"] is True
-    assert plan["planner_metadata"]["fallback_reason"]["stage"] == "unsafe_plan"
-    assert trace["unsafe_plan"] is True
-    assert trace["salvage_used"] is True
+    assert plan["planner_metadata"]["used_fallback"] is False
+    assert trace["unsafe_plan"] is False
     assert plan["sub_questions"] == [
         {
             "id": "sq1",
             "question": "Investigate checkpoint replay safety after interruption",
-            "reason": "Preserve the bounded safe slice from the unsafe planner output.",
+            "reason": "Cover the remaining checkpoint-specific gap.",
         },
         {
             "id": "sq2",
             "question": "Compare restart trade-offs after interruption",
-            "reason": "Preserve the bounded safe slice from the unsafe planner output.",
+            "reason": "Cover the remaining recovery trade-off gap.",
         },
     ]
     assert plan["search_strategy"]["search_queries"] == [

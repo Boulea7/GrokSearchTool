@@ -2314,6 +2314,46 @@ def _ensure_sub_question_unit_coverage(
     return covered_units
 
 
+def _ensure_sub_question_search_query_coverage(
+    search_queries: list[str],
+    *,
+    sub_questions: list[dict[str, Any]],
+    continuation: DeepResearchContinuationState,
+    normalize_actions: list[str],
+) -> list[str]:
+    covered_queries = list(search_queries)
+    filtered_queries = _sanitize_follow_up_surface_items(
+        covered_queries,
+        limit=max(1, len(covered_queries) + len(sub_questions)),
+    )
+    if filtered_queries != covered_queries:
+        _append_unique(normalize_actions, "filtered_low_signal_search_queries")
+        covered_queries = filtered_queries
+    for sub_question in sub_questions:
+        question = _normalize_whitespace(str(sub_question.get("question", "")))
+        question_key = _stable_text_key(question) if question else ""
+        question_tokens = _tokenize_keywords(question)
+        coverage_threshold = max(3, min(4, max(1, len(question_tokens) - 1)))
+        if any(
+            (
+                question_key
+                and question_key in _stable_text_key(query)
+            )
+            or (
+                question_tokens
+                and _count_keyword_overlap(query, question_tokens) >= coverage_threshold
+            )
+            for query in covered_queries
+        ):
+            continue
+        query = _rewrite_research_query(question, continuation)
+        if not query:
+            continue
+        covered_queries.append(query)
+        _append_unique(normalize_actions, f"added_sub_question_search_query:{sub_question.get('id', query)}")
+    return _dedupe_preserve_order(covered_queries)
+
+
 def _outline_from_sub_questions(
     outline: list[dict[str, Any]],
     *,
@@ -4803,14 +4843,19 @@ class DeepResearchRuntime:
             strategy["search_queries"] = [
                 unit["query"] for unit in normalized_units if unit["unit_type"] == "search" and unit["query"]
             ] or [job.query]
-        strategy["search_queries"] = _dedupe_preserve_order(
-            [
-                _rewrite_research_query(str(query), continuation)
-                for query in [
-                    *(strategy.get("search_queries") or [job.query]),
-                    *[unit["query"] for unit in normalized_units if unit["unit_type"] == "search" and unit["query"]],
+        strategy["search_queries"] = _ensure_sub_question_search_query_coverage(
+            _dedupe_preserve_order(
+                [
+                    _rewrite_research_query(str(query), continuation)
+                    for query in [
+                        *(strategy.get("search_queries") or [job.query]),
+                        *[unit["query"] for unit in normalized_units if unit["unit_type"] == "search" and unit["query"]],
+                    ]
                 ]
-            ]
+            ),
+            sub_questions=sub_questions,
+            continuation=continuation,
+            normalize_actions=normalize_actions,
         )
         normalized_brief = _finalize_brief_payload(
             normalized_brief,
