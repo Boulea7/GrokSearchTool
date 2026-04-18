@@ -1,0 +1,70 @@
+{
+  "sample": "probe-round24-aws-dms-ranking-success",
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
+  "plan": {
+    "brief": {
+      "scope": {
+        "include_domains": [
+          "docs.aws.amazon.com"
+        ],
+        "exclude_domains": [
+          "repost.aws"
+        ],
+        "allowed_sources": [
+          "docs.aws.amazon.com"
+        ]
+      }
+    }
+  },
+  "report": {
+    "status": "completed",
+    "runtime": {
+      "warnings": [],
+      "release_gate": {
+        "passed": true,
+        "reason_codes": []
+      },
+      "verifier": {
+        "reason_codes": []
+      }
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_ReplicationTask.html",
+      "title": "API_ReplicationTask",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": [
+        "allowlisted_domain",
+        "official_docs",
+        "api_reference"
+      ],
+      "ranking_penalties": []
+    },
+    {
+      "source_id": "R2",
+      "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+      "title": "API_DescribeReplicationTasks",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": [
+        "allowlisted_domain",
+        "official_docs",
+        "api_reference"
+      ],
+      "ranking_penalties": []
+    }
+  ],
+  "golden": {
+    "ranking_noise_suppression": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

@@ -1,0 +1,144 @@
+{
+  "sample": "probe-round24-aws-dms-fallback-coverage",
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: degraded_fetch_without_url_to_search:unit-fetch-1"
+    }
+  },
+  "plan": {
+    "brief": {
+      "scope": {
+        "include_domains": [
+          "docs.aws.amazon.com"
+        ],
+        "exclude_domains": [
+          "repost.aws"
+        ],
+        "allowed_sources": [
+          "docs.aws.amazon.com"
+        ]
+      },
+      "must_cover": [
+        "AWS DMS checkpoint resume semantics",
+        "DescribeReplicationTasks recovery visibility"
+      ],
+      "coverage_checklist": [
+        "AWS DMS checkpoint resume semantics",
+        "DescribeReplicationTasks recovery visibility"
+      ],
+      "continuation_focus": [
+        "Checkpoint resume continues from the last durable checkpoint.",
+        "Investigate restart trade-offs after interruption",
+        "API_ReplicationTask (docs.aws.amazon.com)"
+      ]
+    },
+    "sub_questions": [
+      {
+        "id": "sq1",
+        "question": "AWS DMS checkpoint resume semantics"
+      },
+      {
+        "id": "sq2",
+        "question": "DescribeReplicationTasks recovery visibility"
+      }
+    ],
+    "report_outline": [
+      {
+        "section_id": "executive-summary",
+        "title": "Executive Summary"
+      },
+      {
+        "section_id": "key-findings",
+        "title": "Key Findings"
+      },
+      {
+        "section_id": "open-questions",
+        "title": "Open Questions"
+      }
+    ]
+  },
+  "report": {
+    "status": "degraded",
+    "coverage": {
+      "planned_section_ids": [
+        "executive-summary",
+        "key-findings",
+        "open-questions"
+      ],
+      "answered_section_ids": [
+        "executive-summary",
+        "key-findings"
+      ],
+      "unanswered_sections": [
+        "Open Questions"
+      ],
+      "planned_sub_question_ids": [
+        "sq1",
+        "sq2"
+      ],
+      "covered_sub_question_ids": [
+        "sq1"
+      ],
+      "uncovered_sub_questions": [
+        "DescribeReplicationTasks recovery visibility"
+      ],
+      "hard_coverage_gate_passed": true,
+      "hard_uncovered_targets": [],
+      "coverage_gate_passed": false
+    },
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "planner_fallback_used"
+      ],
+      "release_gate": {
+        "passed": true,
+        "reason_codes": []
+      },
+      "verifier": {
+        "reason_codes": []
+      }
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_ReplicationTask.html",
+      "title": "API_ReplicationTask",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": [
+        "allowlisted_domain",
+        "official_docs",
+        "api_reference"
+      ],
+      "ranking_penalties": []
+    }
+  ],
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "fail",
+      "score": 0.583,
+      "reason_tags": [
+        "unanswered_sections",
+        "uncovered_sub_questions"
+      ]
+    },
+    "planner_boundary": {
+      "verdict": "fail",
+      "score": 0.6,
+      "reason_tags": [
+        "planner_fallback_used",
+        "unsafe_plan_fallback"
+      ]
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

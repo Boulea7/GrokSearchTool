@@ -588,6 +588,7 @@ def test_citation_faithfulness_probe_goldens(fixture_name):
         "eval_probe_round19_aws_dms.json",
         "eval_probe_round20_aws_dms.json",
         "eval_probe_round22_coverage_ledger.json",
+        "eval_probe_round24_aws_dms_fallback_coverage.json",
     ],
 )
 def test_coverage_completeness_probe_goldens(fixture_name):
@@ -639,6 +640,7 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
         "eval_probe_round18_lifecycle.json",
         "eval_probe_round19_lifecycle_b.json",
         "eval_probe_round20_lifecycle.json",
+        "eval_probe_round24_aws_dms_fallback_coverage.json",
     ],
 )
 def test_planner_boundary_probe_goldens(fixture_name):
@@ -665,6 +667,7 @@ def test_planner_boundary_probe_goldens(fixture_name):
         "eval_probe_round18_aws_dms.json",
         "eval_probe_round22_noise_filters.json",
         "eval_probe_round23_aws_dms_ranking_noise.json",
+        "eval_probe_round24_aws_dms_ranking_success.json",
     ],
 )
 def test_ranking_noise_suppression_probe_goldens(fixture_name):
@@ -697,6 +700,8 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
         "eval_probe_round20_aws_dms.json",
         "eval_probe_round20_lifecycle.json",
         "eval_probe_round22_noise_filters.json",
+        "eval_probe_round24_aws_dms_fallback_coverage.json",
+        "eval_probe_round24_aws_dms_ranking_success.json",
     ],
 )
 def test_diagnostics_consistency_probe_goldens(fixture_name):
