@@ -111,6 +111,8 @@ _NOISY_EVIDENCE_MARKERS = (
     "help you to resolve common issues",
     "following, you can find topics about troubleshooting issues",
     "these topics can help you to resolve common issues",
+    "validate checkpoint information",
+    "follow the migration pattern shell",
     "starts the replication task",
 )
 _PREFERRED_TECHNICAL_TERMS = (
@@ -445,7 +447,9 @@ def _extract_markdown_title(value: str) -> str:
         if not line:
             continue
         if line.startswith("#"):
-            return _normalize_whitespace(line.lstrip("#").strip())
+            candidate = _normalize_whitespace(line.lstrip("#").strip())
+            if not _is_low_signal_title(candidate):
+                return candidate
     return ""
 
 
@@ -463,6 +467,20 @@ def _guess_title_from_url(url: str) -> str:
     return candidate[:1].upper() + candidate[1:]
 
 
+def _is_low_signal_title(value: str) -> bool:
+    text = _normalize_whitespace(value)
+    if not text:
+        return True
+    lowered = text.lower()
+    if re.fullmatch(r"(?:section|chapter|step|part)?\s*\d+(?:\.\d+)*", lowered):
+        return True
+    if re.fullmatch(r"[ivxlcdm]+", lowered):
+        return True
+    if len(text) <= 2 and not re.search(r"[a-z]{2}", lowered):
+        return True
+    return False
+
+
 def _count_keyword_overlap(text: str, keywords: list[str]) -> int:
     lowered = (text or "").lower()
     return sum(1 for keyword in keywords if keyword in lowered)
@@ -471,9 +489,38 @@ def _count_keyword_overlap(text: str, keywords: list[str]) -> int:
 def _has_noisy_source_metadata(source: dict[str, Any]) -> bool:
     for key in ("title", "description", "snippet"):
         value = source.get(key)
+        if key == "title" and isinstance(value, str) and value.strip() and _is_low_signal_title(value):
+            return True
         if isinstance(value, str) and value.strip() and _is_noisy_text(value):
             return True
     return False
+
+
+def _source_doc_traits(source: dict[str, Any]) -> set[str]:
+    url = str(source.get("url", "")).lower()
+    domain = str(source.get("domain", "") or "").lower()
+    text = " ".join(
+        str(source.get(key, "") or "").lower()
+        for key in ("title", "description", "snippet")
+    )
+    combined = f"{url} {domain} {text}"
+    traits: set[str] = set()
+    if "/apireference/" in url or re.search(r"\bapi(?: reference)?\b", combined):
+        traits.add("api_reference")
+    if "/userguide/" in url or "user guide" in combined or "developer guide" in combined:
+        traits.add("user_guide")
+    if "/reference/" in url or re.search(r"\breference\b", combined):
+        traits.add("reference")
+    if (
+        "/prescriptive-guidance/" in url
+        or "/patterns/" in url
+        or "prescriptive guidance" in combined
+        or re.search(r"\bpatterns?\b", combined)
+    ):
+        traits.add("prescriptive_guidance")
+    if "troubleshooting" in combined:
+        traits.add("troubleshooting")
+    return traits
 
 
 def _continuation_anchor_terms(continuation: DeepResearchContinuationState) -> list[str]:
@@ -939,7 +986,10 @@ def _merge_source_metadata(existing: dict[str, Any], candidate: dict[str, Any]) 
         if key in {"description", "snippet"} and not _is_noisy_text(str(value)) and len(str(value)) > len(str(current)):
             merged[key] = value
             continue
-        if key == "title" and len(str(value)) > len(str(current)):
+        if key == "title" and _is_low_signal_title(str(current)) and not _is_low_signal_title(str(value)):
+            merged[key] = value
+            continue
+        if key == "title" and len(str(value)) > len(str(current)) and not _is_low_signal_title(str(value)):
             merged[key] = value
             continue
         if key == "score" and isinstance(value, (int, float)):
@@ -962,8 +1012,9 @@ def _merge_source_metadata(existing: dict[str, Any], candidate: dict[str, Any]) 
         if key == "contributors":
             merged[key] = value
             continue
-    if not merged.get("title") and merged.get("url"):
-        merged["title"] = _guess_title_from_url(str(merged["url"]))
+    guessed_title = _guess_title_from_url(str(merged.get("url") or ""))
+    if (not merged.get("title") or _is_low_signal_title(str(merged.get("title") or ""))) and guessed_title:
+        merged["title"] = guessed_title
     return merged
 
 
@@ -971,7 +1022,7 @@ def _enrich_source_from_fetched_text(source: dict[str, Any], fetched_text: str) 
     enriched = dict(source)
     title = _extract_markdown_title(fetched_text)
     summary = _summarize_evidence_text(fetched_text, limit=280)
-    if title and not enriched.get("title"):
+    if title and (not enriched.get("title") or _is_low_signal_title(str(enriched.get("title") or ""))):
         enriched["title"] = title
     if summary:
         if not enriched.get("snippet"):
@@ -2831,8 +2882,18 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
         except Exception:
             domain = ""
 
+    traits = _source_doc_traits(source)
     if url.startswith("https://docs.") or url.startswith("http://docs.") or domain.startswith("docs.") or "/docs/" in url or "/documentation/" in url:
-        return 3
+        bias = 3
+        if "api_reference" in traits or "reference" in traits:
+            bias += 2
+        elif "user_guide" in traits:
+            bias += 1
+        if "prescriptive_guidance" in traits:
+            bias -= 2
+        if "troubleshooting" in traits:
+            bias -= 1
+        return bias
     if domain.startswith("standards.") or "standards." in domain or "/rfc" in url or "/spec" in url or "/standard" in url:
         return 3
     if domain == "arxiv.org" or domain.endswith(".arxiv.org") or domain.endswith(".acm.org") or domain.endswith(".ieee.org") or url.endswith(".pdf"):
@@ -2871,6 +2932,7 @@ def _source_ranking_reasons(
     exclude_domains: list[str] | None = None,
 ) -> list[str]:
     reasons: list[str] = []
+    traits = _source_doc_traits(source)
     domain = str(source.get("domain", "") or "").lower()
     if not domain and source.get("url"):
         try:
@@ -2884,6 +2946,7 @@ def _source_ranking_reasons(
     source_type = _source_type(source)
     if source_type:
         reasons.append(source_type)
+    reasons.extend(sorted(traits))
     if source.get("winner_provider"):
         reasons.append("winner_provider")
     if source.get("title"):
@@ -6051,20 +6114,29 @@ def _select_fetch_sources(
     query_keywords = _tokenize_keywords(f"{plan.query} {unit.title} {unit.goal} {unit.query}")
 
     query_intent_text = f"{plan.query} {unit.title} {unit.goal} {unit.query}".lower()
+    troubleshooting_intent = any(
+        keyword in query_intent_text
+        for keyword in ("troubleshooting", "troubleshoot", "support", "error", "issue", "failure")
+    )
 
     def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, str]:
         title = f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
         quality_bias = _source_quality_bias(source)
         lowered_title = title.lower()
+        traits = _source_doc_traits(source)
         shell_penalty = 0
-        if "troubleshooting" not in query_intent_text and "troubleshooting" in lowered_title:
+        if not troubleshooting_intent and "troubleshooting" in lowered_title:
             shell_penalty -= 2
-        if "support" not in query_intent_text and "support" in lowered_title:
+        if not troubleshooting_intent and "support" in lowered_title:
             shell_penalty -= 1
+        if "prescriptive_guidance" in traits:
+            shell_penalty -= 3
+        if _is_low_signal_title(str(source.get("title") or "")):
+            shell_penalty -= 2
         return (
             quality_bias,
-            _count_keyword_overlap(title, query_keywords),
             _count_keyword_overlap(title, outline_keywords) if prefer_outline else 0,
+            _count_keyword_overlap(title, query_keywords),
             _source_topic_match_score(source, [plan.query, unit.goal, unit.query]),
             shell_penalty,
             source.get("url", ""),

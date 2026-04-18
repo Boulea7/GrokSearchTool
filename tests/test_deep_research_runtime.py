@@ -21,7 +21,7 @@ from grok_search.deep_research_runtime import (
     _extract_relevant_excerpt_with_span,
     _search_query,
 )
-from grok_search.deep_research_synthesis import build_synthesis_outline
+from grok_search.deep_research_synthesis import build_synthesis_outline, evidence_pool_for_section
 from grok_search.deep_research_section_graph import initialize_section_graph, update_section_graph
 import grok_search.deep_research_runtime as deep_research_runtime_module
 from grok_search.providers.grok import GrokSearchProvider
@@ -13174,6 +13174,97 @@ async def test_selective_fetch_prefers_api_reference_over_prescriptive_guidance(
     assert fetched_urls == ["https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"]
     assert "resume-processing" in result["final_report"]
     assert "migration pattern" not in result["final_report"].lower()
+
+
+@pytest.mark.asyncio
+async def test_selective_fetch_avoids_same_domain_prescriptive_guidance_shell_with_low_signal_title(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fetched_urls = []
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "dms-semantics",
+                "title": "AWS DMS Resume Semantics",
+                "goal": "Explain AWS DMS checkpoint resume, recovery timeout, awsdms_txn_state, and restart behavior.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "AWS DMS checkpoint resume semantics are described across official AWS documentation.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/aws-dms-checkpoint-resume-restart-recovery-timeout.html",
+                    "title": "AWS DMS checkpoint resume restart recovery timeout pattern",
+                    "description": "AWS DMS checkpoint resume, recovery timeout, awsdms_txn_state, and restart workflow guidance.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "StartReplicationTask",
+                    "description": "AWS DMS API reference for resume-processing and reload-target start behavior.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        fetched_urls.append(url)
+        if "prescriptive-guidance" in url:
+            return (
+                "# 4\n\n"
+                "Validate checkpoint information.\n"
+                "Follow the migration pattern shell before confirming database-specific task state.\n"
+                "For more information about migration shell setup, see the pattern prerequisites.\n"
+            )
+        return (
+            "# StartReplicationTask\n\n"
+            "The `resume-processing` start type resumes from the last recovery checkpoint when checkpoint metadata is still available.\n"
+            "The `reload-target` start type reloads the target and restarts task execution.\n"
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(
+        query="AWS DMS checkpoint resume recovery timeout awsdms_txn_state restart semantics",
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+    source_registry = list(result["citations"]["source_registry"].values())
+
+    assert fetched_urls == ["https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"]
+    assert "Validate checkpoint information" not in result["final_report"]
+    assert source_registry[0]["url"] == "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"
+    assert source_registry[0]["title"] != "4"
+
+
+def test_extract_markdown_title_ignores_numeric_headings():
+    title = deep_research_runtime_module._extract_markdown_title(
+        "# 4\n\nValidate checkpoint information.\n\nResume-processing continues from the last checkpoint."
+    )
+
+    assert title == ""
+
+
+def test_summarize_evidence_text_skips_shell_like_validation_step():
+    summary = deep_research_runtime_module._summarize_evidence_text(
+        "# 4\n\n"
+        "Validate checkpoint information.\n"
+        "The `resume-processing` start type resumes from the last recovery checkpoint when checkpoint metadata is still available.\n"
+    )
+
+    assert "Validate checkpoint information" not in summary
+    assert "resume-processing" in summary
 
 
 @pytest.mark.asyncio
