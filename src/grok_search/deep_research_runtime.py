@@ -3100,9 +3100,21 @@ def _runtime_coverage_state(
     completed_unit_ids: list[str],
     failed_unit_ids: list[str],
     skipped_unit_ids: list[str],
+    section_banks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
+    banks_by_section = {
+        str(bank.get("section_id", "")).strip(): dict(bank)
+        for bank in section_banks or []
+        if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
+    }
+    sections_by_id = {
+        section.section_id: section
+        for section in plan.report_outline
+    }
     for target in _stop_policy_targets(plan):
+        target_tokens = _tokenize_keywords(target)
+        threshold = max(2, min(4, max(1, len(target_tokens) // 2))) if target_tokens else 0
         matched_unit_ids = [
             unit_id
             for unit_id, result in unit_results.items()
@@ -3115,13 +3127,44 @@ def _runtime_coverage_state(
                 for source_id in unit_results.get(unit_id, {}).get("source_ids", [])
             }
         )
+        packet_backed_section_ids = [
+            section_id
+            for section_id, bank in banks_by_section.items()
+            if (
+                any(str(evidence_id).strip() for evidence_id in bank.get("selected_evidence_ids", []) or [])
+                or any(
+                    isinstance(packet, dict)
+                    and str(packet.get("evidence_id", "")).strip()
+                    for packet in bank.get("selected_packets", []) or []
+                )
+            )
+            and (
+                (
+                    section_id in sections_by_id
+                    and _count_keyword_overlap(
+                        f"{sections_by_id[section_id].title} {sections_by_id[section_id].goal}",
+                        target_tokens,
+                    )
+                    >= threshold
+                )
+                or any(
+                    isinstance(packet, dict)
+                    and _count_keyword_overlap(
+                        " ".join(str(question_id) for question_id in packet.get("question_ids", []) or []),
+                        target_tokens,
+                    )
+                    >= threshold
+                    for packet in bank.get("selected_packets", []) or []
+                )
+            )
+        ]
         items.append(
             {
                 "target": target,
                 "matched_unit_ids": matched_unit_ids,
                 "grounded_source_ids": grounded_source_ids,
-                "candidate_section_ids": [],
-                "satisfied": bool(matched_unit_ids and grounded_source_ids),
+                "candidate_section_ids": packet_backed_section_ids,
+                "satisfied": bool(matched_unit_ids and grounded_source_ids and packet_backed_section_ids),
             }
         )
     return {
@@ -5863,6 +5906,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 completed_unit_ids=completed_unit_ids,
                 failed_unit_ids=failed_unit_ids,
                 skipped_unit_ids=skipped_unit_ids,
+                section_banks=section_banks,
             )
             checkpoint_state = _checkpoint_state_payload(
                 plan=plan,
@@ -6022,6 +6066,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         completed_unit_ids=completed_unit_ids,
         failed_unit_ids=failed_unit_ids,
         skipped_unit_ids=skipped_unit_ids,
+        section_banks=section_banks,
     )
     runtime.store.save_checkpoint(
         job_id,
@@ -6479,7 +6524,16 @@ async def _execute_research_unit(
     )
     selective_fetch = plan.search_strategy.selective_fetch
     fetch_limit = max(0, selective_fetch.max_urls_per_search)
-    selected_sources_for_grounding = _select_fetch_sources(sources, plan, unit)
+    constrained_sources_for_grounding = _apply_domain_constraints(
+        sources,
+        include_domains=plan.include_domains,
+        exclude_domains=plan.exclude_domains,
+    )
+    selected_sources_for_grounding = _select_fetch_sources(
+        constrained_sources_for_grounding or sources,
+        plan,
+        unit,
+    )
     if fetch_limit == 0:
         search_support_sources = list(selected_sources_for_grounding)
     else:
