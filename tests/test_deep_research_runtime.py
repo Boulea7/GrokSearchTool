@@ -14318,6 +14318,199 @@ async def test_domain_constraints_strip_off_domain_detail_from_unit_results(monk
 
 
 @pytest.mark.asyncio
+async def test_official_doc_constraints_preserve_search_evidence_packets_when_allowlisted_source_survives(
+    monkeypatch, tmp_path
+):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["include_domains"] = ["docs.aws.amazon.com"]
+        payload["brief"]["scope"]["include_domains"] = ["docs.aws.amazon.com"]
+        payload["brief"]["scope"]["allowed_sources"] = ["docs.aws.amazon.com"]
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain AWS DMS checkpoint resume semantics from official docs.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Resume search",
+                "goal": "Explain AWS DMS checkpoint resume semantics from official docs.",
+                "query": "aws dms checkpoint resume semantics official docs",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["aws dms checkpoint resume semantics official docs"],
+            "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": True},
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "AWS DMS resume-processing continues from the last recovery checkpoint when checkpoint metadata remains available.",
+            [
+                {
+                    "url": "https://example.com/community/aws-dms-checkpoint-resume",
+                    "title": "AWS DMS checkpoint resume semantics deep dive",
+                    "description": "Third-party summary with matching query words.",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "StartReplicationTask",
+                    "description": "Official AWS DMS API reference for resume-processing.",
+                },
+            ],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+    monkeypatch.setattr(
+        "grok_search.deep_research_runtime._select_fetch_sources",
+        lambda sources, plan, unit: list(sources),
+    )
+
+    response = await runtime.start(
+        query="AWS DMS checkpoint resume semantics official docs",
+        include_domains=["docs.aws.amazon.com"],
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+
+    evidence_ledger = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_ledger.json") or "[]")
+    section_banks = json.loads(runtime.store.read_artifact_text(response["job_id"], "section_banks.json") or "[]")
+    claims = [
+        claim
+        for section in result["report"]["sections"]
+        for claim in section.get("claims", [])
+    ]
+
+    assert evidence_ledger
+    assert any(entry.get("source_ids") == ["R1"] for entry in evidence_ledger)
+    assert any(bank.get("selected_packets") for bank in section_banks)
+    assert claims
+    assert {
+        source["url"]
+        for source in result["citations"]["source_registry"].values()
+    } == {"https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"}
+    assert all(binding.get("source_id") == "R1" for claim in claims for binding in claim.get("evidence_bindings", []))
+
+
+@pytest.mark.asyncio
+async def test_runtime_stop_gate_requires_materialized_packet_backing_before_skipping_followup_units(
+    monkeypatch, tmp_path
+):
+    runtime = build_runtime(tmp_path)
+    search_calls = []
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["brief"]["coverage_checklist"] = ["AWS DMS runtime semantics"]
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "AWS DMS runtime semantics", "reason": "Primary axis."},
+        ]
+        payload["report_outline"] = [
+            {
+                "section_id": "txn-state-persistence",
+                "title": "Transaction State Persistence",
+                "goal": "Explain awsdms_txn_state persistence and recovery behavior.",
+            },
+            {
+                "section_id": "recovery-timeout",
+                "title": "Recovery Timeout",
+                "goal": "Explain RecoveryTimeout semantics and failure conditions.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Broad runtime overview",
+                "goal": "Summarize AWS DMS runtime semantics.",
+                "query": "aws dms runtime semantics overview",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-search-2",
+                "unit_type": "search",
+                "title": "Transaction state details",
+                "goal": "Explain awsdms_txn_state persistence and recovery behavior.",
+                "query": "awsdms_txn_state persistence recovery behavior",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": [
+                "aws dms runtime semantics overview",
+                "awsdms_txn_state persistence recovery behavior",
+            ],
+            "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": True},
+        }
+        return payload
+
+    async def search(query):
+        search_calls.append(query)
+        if "overview" in query:
+            return (
+                "AWS DMS runtime semantics include resume-processing and restart behavior for replication tasks.",
+                [
+                    {
+                        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                        "title": "Creating tasks for ongoing replication using AWS DMS",
+                        "description": "Overview of runtime semantics.",
+                    }
+                ],
+            )
+        return (
+            "TaskRecoveryTableEnabled creates the awsdms_txn_state table so AWS DMS can persist transaction state for recovery.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.TargetMetadata.html",
+                    "title": "Target metadata task settings",
+                    "description": "Documents TaskRecoveryTableEnabled and awsdms_txn_state.",
+                }
+            ],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_MAX_CONCURRENCY", "1")
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query="AWS DMS runtime semantics", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    section_banks = json.loads(runtime.store.read_artifact_text(response["job_id"], "section_banks.json") or "[]")
+
+    assert search_calls == [
+        "aws dms runtime semantics overview",
+        "awsdms_txn_state persistence recovery behavior",
+    ]
+    assert result["report"]["runtime"]["skipped_units"] == []
+    assert any(bank.get("selected_packets") for bank in section_banks)
+
+
+@pytest.mark.asyncio
 async def test_unused_sources_are_pruned_from_final_report_registry(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
