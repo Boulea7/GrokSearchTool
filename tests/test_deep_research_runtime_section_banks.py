@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from grok_search.deep_research_evidence import update_section_banks
+from grok_search.deep_research_evidence import (
+    build_evidence_ledger_entries,
+    seed_section_banks_from_question_bindings,
+    update_section_banks,
+)
+from grok_search.deep_research_types import DeepResearchPlan
 from test_deep_research_runtime import build_runtime, structured_plan_payload
 
 
@@ -50,6 +55,162 @@ def test_update_section_banks_backfills_selected_packets_for_materialized_sectio
 
     assert bank_by_id["section-a"]["selected_packets"][0]["claim_ids"] == ["section-a-claim-1"]
     assert bank_by_id["section-b"]["selected_packets"][0]["claim_ids"] == ["section-b-claim-2"]
+
+
+def test_seed_section_banks_from_question_bindings_prefers_candidate_until_section_is_explicitly_selected():
+    section_banks = [
+        {
+            "section_id": "task-visibility",
+            "candidate_evidence_ids": [],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": [],
+            "candidate_packets": [],
+            "selected_packets": [],
+            "rejected_packets": [],
+            "last_updated_at": "",
+        }
+    ]
+    planned_outline = [
+        {
+            "section_id": "task-visibility",
+            "title": "Task Visibility",
+            "goal": "Explain DescribeReplicationTasks recovery visibility.",
+            "question_ids": ["sq3"],
+        }
+    ]
+    ledger_entries = [
+        {
+            "ledger_id": "ledger-e1",
+            "evidence_id": "e1",
+            "candidate_section_ids": ["resume-semantics"],
+            "selected_section_id": "resume-semantics",
+            "rejected_section_ids": [],
+            "question_ids": ["sq3"],
+            "source_ids": ["R1"],
+            "unit_id": "unit-search-1",
+            "line_start": 10,
+            "line_end": 11,
+            "materialized_claim_ids": [],
+        }
+    ]
+
+    updated = seed_section_banks_from_question_bindings(
+        section_banks,
+        planned_outline=planned_outline,
+        ledger_entries=ledger_entries,
+        updated_at="2026-04-20T00:00:00Z",
+    )
+
+    assert updated[0]["candidate_evidence_ids"] == ["e1"]
+    assert updated[0]["selected_evidence_ids"] == []
+    assert updated[0]["candidate_packets"]
+    assert updated[0]["selected_packets"] == []
+
+
+def test_build_evidence_ledger_entries_uses_source_url_tokens_for_question_binding():
+    payload = structured_plan_payload(
+        type(
+            "Job",
+            (),
+            {
+                "query": "AWS DMS checkpoint semantics",
+                "context": "",
+                "effort": "deep",
+                "resolved_budget_seconds": 240,
+            },
+        )(),
+        {"mode": "fresh"},
+    )
+    payload["sub_questions"] = [
+        {
+            "id": "sq3",
+            "question": "Explain DescribeReplicationTasks RecoveryCheckpoint visibility.",
+            "reason": "Primary axis.",
+        }
+    ]
+    payload["report_outline"] = [
+        {
+            "section_id": "task-visibility",
+            "title": "Task Visibility",
+            "goal": "Explain DescribeReplicationTasks RecoveryCheckpoint visibility.",
+        }
+    ]
+    plan = DeepResearchPlan.model_validate(payload)
+    entries = build_evidence_ledger_entries(
+        plan,
+        unit_id="unit-search-1",
+        origin_query="DescribeReplicationTasks RecoveryCheckpoint",
+        evidence_items=[
+            {
+                "evidence_id": "e1",
+                "summary": "The API returns recovery checkpoint details for replication tasks.",
+                "detail": "Checkpoint metadata is exposed through DescribeReplicationTasks.",
+                "source_urls": [
+                    "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"
+                ],
+                "source_ids": ["R1"],
+                "evidence_kind": "search",
+            }
+        ],
+        updated_at="2026-04-20T00:00:00Z",
+    )
+
+    assert entries[0]["selected_section_id"] == "task-visibility"
+    assert entries[0]["question_ids"] == ["sq3"]
+
+
+def test_build_evidence_ledger_entries_does_not_bind_section_from_origin_query_alone():
+    payload = structured_plan_payload(
+        type(
+            "Job",
+            (),
+            {
+                "query": "checkpoint resume semantics",
+                "context": "",
+                "effort": "deep",
+                "resolved_budget_seconds": 240,
+            },
+        )(),
+        {"mode": "fresh"},
+    )
+    payload["sub_questions"] = [
+        {
+            "id": "sq2",
+            "question": "Explain restart trade-offs.",
+            "reason": "Secondary axis.",
+        }
+    ]
+    payload["report_outline"] = [
+        {
+            "section_id": "restart-tradeoffs",
+            "title": "Restart Trade-offs",
+            "goal": "Explain restart trade-offs.",
+            "question_ids": ["sq2"],
+        }
+    ]
+    plan = DeepResearchPlan.model_validate(payload)
+
+    entries = build_evidence_ledger_entries(
+        plan,
+        unit_id="unit-search-1",
+        origin_query="restart trade-offs",
+        evidence_items=[
+            {
+                "evidence_id": "e1",
+                "summary": "General operational guidance for on-call handling.",
+                "detail": "This page covers general operational guidance and escalation paths.",
+                "source_urls": [
+                    "https://docs.example.com/runtime/operations"
+                ],
+                "source_ids": ["R1"],
+                "evidence_kind": "search",
+            }
+        ],
+        updated_at="2026-04-21T00:00:00Z",
+    )
+
+    assert entries[0]["selected_section_id"] == ""
+    assert entries[0]["question_ids"] == []
 
 
 @pytest.mark.asyncio

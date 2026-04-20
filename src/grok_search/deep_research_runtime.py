@@ -216,6 +216,12 @@ _SAFE_SEARCH_ONLY_REPAIR_ISSUES = {
     "unknown_dependency",
 }
 _SAFE_SEARCH_ONLY_BLOCKED_REASON_PREFIXES = ("unknown_dependency:",)
+_STRUCTURAL_SAFE_QUERY_REPAIR_SOURCES = {
+    "sub_question",
+    "search_strategy",
+    "unit_goal",
+    "unit_title",
+}
 _NON_BLOCKING_VERIFIER_REASON_CODES = {
     "medium_single_source_search_only",
     "selected_evidence_unused",
@@ -1062,6 +1068,12 @@ def _best_text_claim(lines: list[str], fallback: str) -> str:
     return _normalize_whitespace(fallback)
 
 
+def _stable_text_equivalent(left: str, right: str) -> bool:
+    left_key = _stable_text_key(left)
+    right_key = _stable_text_key(right)
+    return bool(left_key and right_key and left_key == right_key)
+
+
 def _normalize_citations_payload(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -1263,7 +1275,17 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
                 continue
             if text not in claim_texts:
                 claim_texts.append(text)
-    summary_chunks = section_summaries[:2] or claim_texts[:2]
+    deduped_summary_chunks: list[str] = []
+    for chunk in section_summaries:
+        normalized_chunk = _normalize_whitespace(chunk)
+        if any(
+            normalized_chunk in existing
+            or existing in normalized_chunk
+            for existing in deduped_summary_chunks
+        ):
+            continue
+        deduped_summary_chunks.append(normalized_chunk)
+    summary_chunks = deduped_summary_chunks[:2] or claim_texts[:2]
     if not summary_chunks:
         return _trim_text(plan.brief.objective, limit=220)
     summary = " ".join(summary_chunks)
@@ -1788,6 +1810,27 @@ def _job_runtime_diagnostics(
     return diagnostics
 
 
+def _operator_summary_payload(
+    job: DeepResearchJob,
+    *,
+    diagnostics: dict[str, Any],
+    final_bundle: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "phase": job.phase,
+        "attempt_count": job.attempt_count,
+        "current_checkpoint": job.current_checkpoint,
+        "cancel_requested": job.cancel_requested,
+        "continued_from_job_id": job.continued_from_job_id,
+        "resolved_artifact_batch_id": final_bundle["batch_id"] if final_bundle is not None else "",
+        "planner_fallback_used": diagnostics["planner_fallback_used"],
+        "runtime_warnings": diagnostics["runtime_warnings"],
+        "constraint_violations": diagnostics["constraint_violations"],
+    }
+
+
 def _job_prefers_resolved_final_bundle(job: DeepResearchJob) -> bool:
     if job.status == "completed":
         return True
@@ -2008,8 +2051,17 @@ def _finalize_brief_payload(
     stop_policy = dict(normalized.get("stop_policy") or {})
     search_queries = _normalize_string_list(strategy.get("search_queries"))
     selective_fetch = strategy.get("selective_fetch") if isinstance(strategy.get("selective_fetch"), dict) else {}
+    official_doc_mode = bool(job.include_domains) and all(
+        _domain_looks_like_official_docs(domain) for domain in job.include_domains
+    )
     stop_policy.setdefault("stop_on_sufficient_coverage", True)
     stop_policy.setdefault("max_search_queries", max(1, len(search_queries) or config.deep_research_max_concurrency))
+    if official_doc_mode:
+        stop_policy["max_search_queries"] = max(
+            int(stop_policy.get("max_search_queries", 1) or 1),
+            len(search_queries),
+            len(sub_questions),
+        )
     stop_policy.setdefault("max_urls_per_search", int(selective_fetch.get("max_urls_per_search", 1) or 1))
     stop_policy.setdefault("max_runtime_seconds", int(job.resolved_budget_seconds))
     normalized["stop_policy"] = stop_policy
@@ -2027,24 +2079,44 @@ def _unsafe_plan_reason(
     normalize_actions: list[str],
     validation_issues: list[str],
     blocked_reasons: list[str],
+    query_repair_details: list[dict[str, Any]] | None = None,
     include_domains: list[str] | None = None,
     research_units: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if planner == "fallback":
         return None
-    effective_constraint_domains = _official_doc_constraint_domains(
-        continuation=continuation,
-        include_domains=include_domains,
+    raw_constraint_domains = _dedupe_preserve_order(
+        [
+            candidate
+            for candidate in [
+                *(_normalize_string_list(include_domains)),
+                *(_normalize_string_list(continuation.carry_forward_constraints.get("include_domains"))),
+                *(_normalize_string_list(continuation.carry_forward_constraints.get("allowed_sources"))),
+                *(_normalize_string_list(continuation.carry_forward_constraints.get("preferred_sources"))),
+            ]
+            if candidate and "://" not in candidate
+        ]
     )
     safe_search_only_repairs_allowed = (
-        bool(effective_constraint_domains)
-        and all(_domain_looks_like_official_docs(domain) for domain in effective_constraint_domains)
+        bool(raw_constraint_domains)
+        and all(_domain_looks_like_official_docs(domain) for domain in raw_constraint_domains)
         and bool(research_units)
         and all(
             str(unit.get("unit_type", "")).strip() == "search" for unit in (research_units or [])
         )
     )
+    structural_safe_query_repairs = {
+        str(item.get("unit_id", "")).strip()
+        for item in query_repair_details or []
+        if str(item.get("unit_type", "")).strip() == "search"
+        and str(item.get("source_kind", "")).strip() in _STRUCTURAL_SAFE_QUERY_REPAIR_SOURCES
+        and _stable_text_equivalent(str(item.get("query", "")), str(item.get("source_value", "")))
+    }
     for action in normalize_actions:
+        if action.startswith("filled_search_query:"):
+            unit_id = action.split(":", 1)[1].strip()
+            if unit_id and unit_id in structural_safe_query_repairs:
+                continue
         if (
             safe_search_only_repairs_allowed
             and action.startswith(_SAFE_SEARCH_ONLY_REPAIR_ACTION_PREFIXES)
@@ -2053,6 +2125,8 @@ def _unsafe_plan_reason(
         if any(action.startswith(prefix) for prefix in _UNSAFE_NORMALIZE_ACTION_PREFIXES):
             return {"issue": action, "reason": "unsafe_normalize_action"}
     for issue in validation_issues:
+        if issue == "missing_search_query" and structural_safe_query_repairs:
+            continue
         if safe_search_only_repairs_allowed and issue in _SAFE_SEARCH_ONLY_REPAIR_ISSUES:
             continue
         if issue in _UNSAFE_VALIDATION_ISSUES:
@@ -2093,38 +2167,51 @@ def _unit_query_fallback(
     unit: dict[str, Any],
     *,
     sub_questions: list[dict[str, Any]],
+    search_queries: list[str] | None = None,
     job_query: str,
     continuation: DeepResearchContinuationState,
-) -> str:
-    candidates = [
-        str(unit.get("query", "")),
-        str(unit.get("goal", "")),
-        str(unit.get("title", "")),
-        str(unit.get("notes", "")),
-        str(unit.get("instructions", "")),
+) -> dict[str, str]:
+    candidates: list[tuple[str, str]] = [
+        ("existing_query", str(unit.get("_raw_query", unit.get("query", "")))),
+        ("unit_goal", str(unit.get("_raw_goal", unit.get("goal", "")))),
+        ("unit_title", str(unit.get("_raw_title", unit.get("title", "")))),
+        ("unit_notes", str(unit.get("_raw_notes", unit.get("notes", "")))),
+        ("unit_instructions", str(unit.get("_raw_instructions", unit.get("instructions", "")))),
     ]
+    candidates.extend(("search_strategy", str(item)) for item in search_queries or [])
     if continuation.mode == "continue":
         candidates.extend(
             [
-                continuation.continuation_goal,
-                *continuation.open_questions,
-                *continuation.confirmed_claims,
-                *continuation.trusted_source_headers,
-                continuation.previous_summary,
-                *(
-                    str(item)
+                ("continuation_goal", continuation.continuation_goal),
+                *[("continuation_open_question", item) for item in continuation.open_questions],
+                *[("continuation_claim", item) for item in continuation.confirmed_claims],
+                *[("trusted_source_header", item) for item in continuation.trusted_source_headers],
+                ("continuation_summary", continuation.previous_summary),
+                *[
+                    ("continuation_constraint", str(item))
                     for key in ("allowed_sources", "preferred_sources", "include_domains")
                     for item in continuation.carry_forward_constraints.get(key, []) or []
-                ),
+                ],
             ]
         )
-    candidates.extend(str(item.get("question", "")) for item in sub_questions)
-    candidates.append(job_query)
-    for candidate in candidates:
+    candidates.extend(("sub_question", str(item.get("question", ""))) for item in sub_questions)
+    candidates.append(("job_query", job_query))
+    for source_kind, candidate in candidates:
         normalized = _normalize_whitespace(candidate)
         if normalized:
-            return _rewrite_research_query(_trim_text(normalized, limit=220), continuation)
-    return _rewrite_research_query(job_query, continuation)
+            rewritten = _rewrite_research_query(_trim_text(normalized, limit=220), continuation)
+            if rewritten:
+                return {
+                    "query": rewritten,
+                    "source_kind": source_kind,
+                    "source_value": _trim_text(normalized, limit=220),
+                }
+    rewritten_job_query = _rewrite_research_query(job_query, continuation)
+    return {
+        "query": rewritten_job_query,
+        "source_kind": "job_query",
+        "source_value": _trim_text(_normalize_whitespace(job_query), limit=220),
+    }
 
 
 def _official_doc_constraint_domains(
@@ -2209,11 +2296,13 @@ def _repair_research_units(
     units: list[dict[str, Any]],
     *,
     sub_questions: list[dict[str, Any]],
+    search_queries: list[str] | None = None,
     job_query: str,
     continuation: DeepResearchContinuationState,
     normalize_actions: list[str],
     validation_issues: list[str],
     blocked_reasons: list[str],
+    query_repair_details: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     repaired: list[dict[str, Any]] = []
     used_ids: set[str] = set()
@@ -2236,14 +2325,26 @@ def _repair_research_units(
         normalized["unit_type"] = unit_type
         if unit_type == "search":
             if not _normalize_whitespace(str(normalized.get("query", ""))):
-                normalized["query"] = _unit_query_fallback(
+                query_repair = _unit_query_fallback(
                     normalized,
                     sub_questions=sub_questions,
+                    search_queries=search_queries,
                     job_query=job_query,
                     continuation=continuation,
                 )
+                normalized["query"] = query_repair["query"]
                 _append_unique(validation_issues, "missing_search_query")
                 _append_unique(normalize_actions, f"filled_search_query:{unit_id}")
+                if query_repair_details is not None:
+                    query_repair_details.append(
+                        {
+                            "unit_id": unit_id,
+                            "unit_type": "search",
+                            "query": query_repair["query"],
+                            "source_kind": query_repair["source_kind"],
+                            "source_value": query_repair["source_value"],
+                        }
+                    )
         elif unit_type in {"fetch", "map"}:
             url = _normalize_whitespace(str(normalized.get("url", "")))
             if not url:
@@ -2265,14 +2366,27 @@ def _repair_research_units(
                 _append_unique(normalize_actions, f"filled_{unit_type}_url:{unit_id}")
             else:
                 normalized["unit_type"] = "search"
-                normalized["query"] = _unit_query_fallback(
+                query_repair = _unit_query_fallback(
                     normalized,
                     sub_questions=sub_questions,
+                    search_queries=search_queries,
                     job_query=job_query,
                     continuation=continuation,
                 )
+                normalized["query"] = query_repair["query"]
                 _append_unique(validation_issues, f"missing_{unit_type}_url")
                 _append_unique(normalize_actions, f"degraded_{unit_type}_without_url_to_search:{unit_id}")
+                if query_repair_details is not None:
+                    query_repair_details.append(
+                        {
+                            "unit_id": unit_id,
+                            "unit_type": "search",
+                            "query": query_repair["query"],
+                            "source_kind": query_repair["source_kind"],
+                            "source_value": query_repair["source_value"],
+                            "degraded_from_unit_type": unit_type,
+                        }
+                    )
         repaired.append(normalized)
 
     index_by_id = {unit["unit_id"]: index for index, unit in enumerate(repaired)}
@@ -2297,6 +2411,8 @@ def _repair_research_units(
                 continue
             repaired_deps.append(dependency)
         unit["depends_on"] = repaired_deps
+        for transient_key in ("_raw_title", "_raw_goal", "_raw_query", "_raw_notes", "_raw_instructions"):
+            unit.pop(transient_key, None)
     return repaired
 
 
@@ -3182,6 +3298,14 @@ def _runtime_coverage_state(
                 )
             )
             and (
+                any(
+                    isinstance(packet, dict)
+                    and str(packet.get("evidence_id", "")).strip()
+                    for packet in bank.get("selected_packets", []) or []
+                )
+                or any(str(evidence_id).strip() for evidence_id in bank.get("selected_evidence_ids", []) or [])
+            )
+            and (
                 (
                     section_id in sections_by_id
                     and _count_keyword_overlap(
@@ -3834,15 +3958,28 @@ class DeepResearchRuntime:
         payload["planner_fallback_used"] = diagnostics["planner_fallback_used"]
         payload["runtime_warnings"] = diagnostics["runtime_warnings"]
         payload["constraint_violations"] = diagnostics["constraint_violations"]
+        payload["artifact_visibility_reason"] = (
+            "unresolved_batch_backed_final_artifacts_hidden" if unresolved_batch_backed else ""
+        )
+        payload["operator_summary"] = _operator_summary_payload(
+            job,
+            diagnostics=diagnostics,
+            final_bundle=final_bundle,
+        )
         return payload
 
     async def events(self, job_id: str, *, after_seq: int = 0, limit: int = 100) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
         events = self.store.list_events(job_id, after_seq=after_seq, limit=limit)
+        terminal_event_types = {"job_completed", "job_failed", "job_canceled", "job_interrupted"}
         return {
             "job_id": job_id,
             "events": [event.model_dump() for event in events],
             "next_after_seq": events[-1].seq if events else after_seq,
+            "returned_count": len(events),
+            "last_event_type": events[-1].type if events else "",
+            "window_has_terminal_event": any(event.type in terminal_event_types for event in events),
+            "job_terminal": self.store.get_job(job_id).status in {"completed", "failed", "canceled", "interrupted"},
         }
 
     async def result(self, job_id: str, *, include_partial: bool = True) -> dict[str, Any]:
@@ -3965,6 +4102,14 @@ class DeepResearchRuntime:
             "planner_fallback_used": diagnostics["planner_fallback_used"],
             "runtime_warnings": diagnostics["runtime_warnings"],
             "constraint_violations": diagnostics["constraint_violations"],
+            "artifact_visibility_reason": (
+                "unresolved_batch_backed_final_artifacts_hidden" if unresolved_batch_backed else ""
+            ),
+            "operator_summary": _operator_summary_payload(
+                job,
+                diagnostics=diagnostics,
+                final_bundle=final_bundle,
+            ),
             "artifacts": [
                 artifact
                 for artifact in _artifact_payloads(
@@ -4326,6 +4471,7 @@ class DeepResearchRuntime:
             "repair_succeeded": False,
             "normalize_actions": [],
             "validation_issues": [],
+            "query_repair_details": [],
             "blocked_reasons": [],
             "fallback_used": False,
             "final_status": "generated",
@@ -4335,6 +4481,7 @@ class DeepResearchRuntime:
             "Return valid JSON only with keys: brief, sub_questions, search_strategy, report_outline, research_units, planner_metadata.\n"
             "Keep the plan lightweight and execution-ready.\n"
             "research_units must be an array of objects with unit_id, unit_type, title, goal, query/url/instructions, depends_on, status, notes.\n"
+            "Every search unit must include a non-empty query. Every fetch/map unit must include a non-empty URL unless you intentionally convert it into a search unit.\n"
             "Prefer search units, and only include fetch/map units when clearly justified.\n"
             "Keep report_outline concise and aligned with the research goal.\n"
             "When continuation.mode=continue, treat ambiguous terms like resume/continue as technical workflow concepts unless the prior job is explicitly career-related.\n"
@@ -4423,6 +4570,7 @@ class DeepResearchRuntime:
                         "Repair the deep research plan into valid JSON only. "
                         "Use keys: brief, sub_questions, search_strategy, report_outline, research_units, planner_metadata. "
                         "Ensure brief.success_criteria is a list of strings; research_units only use unit_type search/fetch/map; "
+                        "every search unit has a non-empty query; every fetch/map unit has a non-empty URL or is explicitly downgraded to search; "
                         "unknown statuses become pending; each sub_question has coverage; dependencies must be acyclic and only point backward; "
                         "report_outline must be concise and aligned with the query."
                     ),
@@ -4460,16 +4608,124 @@ class DeepResearchRuntime:
         fallback_reason: dict[str, Any],
         planner_trace: dict[str, Any] | None = None,
     ) -> DeepResearchPlan | None:
-        if continuation.mode != "continue":
+        trace = dict(planner_trace or {})
+        if not isinstance(raw_plan, dict):
+            return None
+        allowed_validation_issues = {
+            "missing_search_query",
+            "missing_sub_question_unit_coverage",
+            "unknown_dependency",
+            "generic_outline_for_sub_questions",
+        }
+        validation_issues = {
+            str(item).strip()
+            for item in trace.get("validation_issues", []) or []
+            if str(item).strip()
+        }
+        if validation_issues and not validation_issues.issubset(allowed_validation_issues):
+            return None
+        allowed_action_prefixes = (
+            "filled_search_query:",
+            "added_sub_question_search_unit:",
+            "added_sub_question_search_query:",
+            "filtered_low_signal_search_queries",
+            "dropped_unknown_dependency:",
+            "expanded_outline_from_sub_questions",
+            "expanded_outline_from_follow_up_surface",
+        )
+        normalize_actions = [
+            str(item).strip()
+            for item in trace.get("normalize_actions", []) or []
+            if str(item).strip()
+        ]
+        query_repair_details = [
+            dict(item)
+            for item in trace.get("query_repair_details", []) or []
+            if isinstance(item, dict)
+        ]
+        if any(
+            str(item.get("source_kind", "")).strip() not in _STRUCTURAL_SAFE_QUERY_REPAIR_SOURCES
+            for item in query_repair_details
+            if str(item.get("unit_type", "")).strip() == "search"
+        ):
+            return None
+        if not normalize_actions or any(
+            not action.startswith(allowed_action_prefixes) for action in normalize_actions
+        ):
+            return None
+        research_units = raw_plan.get("research_units") or []
+        if research_units and not all(
+            isinstance(unit, dict) and str(unit.get("unit_type", "search")).strip() == "search"
+            for unit in research_units
+        ):
             return None
         salvage_queries = _bounded_salvage_queries(raw_plan, continuation=continuation)
         if not salvage_queries:
             return None
-        trace = dict(planner_trace or {})
         trace["salvage_used"] = True
         trace["salvage_query_count"] = len(salvage_queries)
         trace["salvage_queries"] = list(salvage_queries)
+        trace["salvage_source_trace"] = {
+            "normalize_actions": list(trace.get("normalize_actions") or []),
+            "validation_issues": list(trace.get("validation_issues") or []),
+            "query_repair_details": list(trace.get("query_repair_details") or []),
+            "blocked_reasons": list(trace.get("blocked_reasons") or []),
+        }
+        trace["normalize_actions"] = []
+        trace["validation_issues"] = []
+        trace["query_repair_details"] = []
+        trace["blocked_reasons"] = []
         trace["final_status"] = "bounded_salvage"
+        raw_sub_questions = raw_plan.get("sub_questions") if isinstance(raw_plan, dict) else []
+        normalized_sub_questions: list[dict[str, Any]] = []
+        salvage_query_by_key = {
+            _stable_text_key(item): item
+            for item in salvage_queries
+            if _stable_text_key(item)
+        }
+        seen_question_ids: set[str] = set()
+        if isinstance(raw_sub_questions, list):
+            for index, item in enumerate(raw_sub_questions, start=1):
+                if not isinstance(item, dict):
+                    continue
+                question = _normalize_whitespace(str(item.get("question", "")))
+                question_key = _stable_text_key(question)
+                if not question_key or question_key not in salvage_query_by_key:
+                    continue
+                question_id = _normalize_whitespace(str(item.get("id", ""))) or f"sq{index}"
+                if question_id in seen_question_ids:
+                    continue
+                seen_question_ids.add(question_id)
+                normalized_sub_questions.append(
+                    {
+                        "id": question_id,
+                        "question": salvage_query_by_key[question_key],
+                        "reason": str(item.get("reason") or "Preserve the bounded safe slice from the unsafe planner output.").strip(),
+                    }
+                )
+        for index, item in enumerate(salvage_queries, start=1):
+            if any(_stable_text_equivalent(question["question"], item) for question in normalized_sub_questions):
+                continue
+            question_id = f"sq{index}"
+            while question_id in seen_question_ids:
+                index += 1
+                question_id = f"sq{index}"
+            seen_question_ids.add(question_id)
+            normalized_sub_questions.append(
+                {
+                    "id": question_id,
+                    "question": item,
+                    "reason": "Preserve the bounded safe slice from the unsafe planner output.",
+                }
+            )
+        raw_outline = _normalize_outline_sections_payload(
+            list((raw_plan or {}).get("report_outline") or [])
+        )
+        salvaged_outline = raw_outline or [
+            {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+            {"section_id": "key-findings", "title": "Key Findings", "goal": "Cover the strongest findings."},
+            {"section_id": "open-questions", "title": "Open Questions", "goal": "Call out remaining gaps."},
+        ]
         continuation_focus = _sanitize_follow_up_surface_items(
             [
                 continuation.continuation_goal,
@@ -4499,14 +4755,7 @@ class DeepResearchRuntime:
                 },
                 "continuation_focus": continuation_focus,
             },
-            "sub_questions": [
-                {
-                    "id": f"sq{index}",
-                    "question": item,
-                    "reason": "Preserve the bounded safe slice from the unsafe planner output.",
-                }
-                for index, item in enumerate(salvage_queries, start=1)
-            ],
+            "sub_questions": normalized_sub_questions,
             "search_strategy": {
                 "approach": "targeted",
                 "search_queries": list(salvage_queries),
@@ -4515,11 +4764,7 @@ class DeepResearchRuntime:
                     "prefer_titles_matching_outline": True,
                 },
             },
-            "report_outline": [
-                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
-                {"section_id": "key-findings", "title": "Key Findings", "goal": "Cover the strongest findings."},
-                {"section_id": "open-questions", "title": "Open Questions", "goal": "Call out remaining gaps."},
-            ],
+            "report_outline": salvaged_outline,
             "research_units": [
                 {
                     "unit_id": f"unit-search-{index}",
@@ -4537,8 +4782,8 @@ class DeepResearchRuntime:
                 )
             ],
             "planner_metadata": {
-                "planner": "fallback",
-                "used_fallback": True,
+                "planner": "salvage",
+                "used_fallback": False,
                 "fallback_reason": fallback_reason,
             },
         }
@@ -4656,6 +4901,7 @@ class DeepResearchRuntime:
             "repair_succeeded": False,
             "normalize_actions": [],
             "validation_issues": [],
+            "query_repair_details": [],
             "blocked_reasons": [],
             "fallback_used": False,
             "final_status": "normalized",
@@ -4832,6 +5078,11 @@ class DeepResearchRuntime:
                     "depends_on": _normalize_depends_on(item.get("depends_on")),
                     "status": normalized_status,
                     "notes": item.get("notes", ""),
+                    "_raw_title": str(item.get("title", "")),
+                    "_raw_goal": str(item.get("goal", "")),
+                    "_raw_query": str(item.get("query", "")),
+                    "_raw_notes": str(item.get("notes", "")),
+                    "_raw_instructions": str(item.get("instructions", "")),
                 }
             )
         if saw_string_research_units:
@@ -4852,14 +5103,29 @@ class DeepResearchRuntime:
             if continuation.mode == "continue" and re.match(r"^(search|research query)\b", unit["title"].lower()):
                 unit["title"] = f"Follow-up {unit['unit_type']} {index}"
             deduped_units.append(unit)
+        preliminary_strategy = raw_plan.get("search_strategy") or {}
+        preliminary_search_queries = []
+        if isinstance(preliminary_strategy, dict):
+            raw_search_queries = preliminary_strategy.get("search_queries")
+            if isinstance(raw_search_queries, str):
+                preliminary_search_queries = _normalize_string_list(raw_search_queries)
+            elif isinstance(raw_search_queries, dict):
+                preliminary_search_queries = _normalize_string_list(raw_search_queries.values())
+            elif isinstance(raw_search_queries, list):
+                preliminary_search_queries = _normalize_string_list(raw_search_queries)
+            elif raw_search_queries is not None:
+                preliminary_search_queries = _normalize_string_list(raw_search_queries)
+        query_repair_details: list[dict[str, Any]] = []
         normalized_units = _repair_research_units(
             deduped_units or normalized_units,
             sub_questions=sub_questions,
+            search_queries=preliminary_search_queries,
             job_query=job.query,
             continuation=continuation,
             normalize_actions=normalize_actions,
             validation_issues=validation_issues,
             blocked_reasons=planner_trace["blocked_reasons"],
+            query_repair_details=query_repair_details,
         )
 
         normalized_outline: list[dict[str, Any]] = []
@@ -4983,6 +5249,9 @@ class DeepResearchRuntime:
             }
         planner_trace["normalize_actions"] = _dedupe_preserve_order(normalize_actions)
         planner_trace["validation_issues"] = _dedupe_preserve_order(validation_issues)
+        planner_trace["query_repair_details"] = list(
+            query_repair_details or planner_trace.get("query_repair_details") or []
+        )
         planner_trace["blocked_reasons"] = _dedupe_preserve_order(list(planner_trace.get("blocked_reasons") or []))
         planner_trace["fallback_used"] = bool(planner_metadata.get("used_fallback"))
         planner_trace["fallback_reason"] = planner_metadata.get("fallback_reason")
@@ -4992,6 +5261,7 @@ class DeepResearchRuntime:
             normalize_actions=planner_trace["normalize_actions"],
             validation_issues=planner_trace["validation_issues"],
             blocked_reasons=planner_trace["blocked_reasons"],
+            query_repair_details=planner_trace["query_repair_details"],
             include_domains=job.include_domains,
             research_units=normalized_units,
         )
@@ -5056,41 +5326,32 @@ class DeepResearchRuntime:
         checkpoints = self.store.list_checkpoints(continue_from_job_id)
         checkpoint_state, checkpoint_meta = self._load_checkpoint_state(job)
         latest_state = checkpoints[-1].state or {} if checkpoints else {}
-        report_text = (
-            _read_text_if_exists(final_bundle["paths"]["report.json"])
-            if use_final_bundle
-            else _read_batch_artifact_text(bundle_candidate, "report.json")
-            if bundle_candidate is not None
-            else current_report_text
-        )
-        final_report = (
-            _read_text_if_exists(final_bundle["paths"]["final_report.md"])
-            if use_final_bundle
-            else _read_batch_artifact_text(bundle_candidate, "final_report.md")
-            if bundle_candidate is not None
-            else current_final_report
-        )
+        artifact_origin_map: dict[str, str] = {}
+
+        def _continuation_artifact_text(kind: str, current_text: str) -> str:
+            if use_final_bundle:
+                text = _read_text_if_exists(final_bundle["paths"][kind])
+                artifact_origin_map[kind] = "resolved_final_bundle"
+                return text or ""
+            if bundle_candidate is not None:
+                batch_text = _read_batch_artifact_text(bundle_candidate, kind)
+                if batch_text:
+                    artifact_origin_map[kind] = "latest_batch_candidate"
+                    return batch_text
+            artifact_origin_map[kind] = "current_artifact"
+            return current_text or ""
+
+        report_text = _continuation_artifact_text("report.json", current_report_text)
+        final_report = _continuation_artifact_text("final_report.md", current_final_report)
         partial_report = self.store.read_artifact_text(continue_from_job_id, "partial_report.md") or ""
-        sources_text = (
-            _read_text_if_exists(final_bundle["paths"]["sources.json"])
-            if use_final_bundle
-            else _read_batch_artifact_text(bundle_candidate, "sources.json")
-            if bundle_candidate is not None
-            else current_sources_text
-        ) or "[]"
-        citations_text = (
-            _read_text_if_exists(final_bundle["paths"]["citations.json"])
-            if use_final_bundle
-            else _read_batch_artifact_text(bundle_candidate, "citations.json")
-            if bundle_candidate is not None
-            else current_citations_text
+        sources_text = _continuation_artifact_text("sources.json", current_sources_text) or "[]"
+        citations_text = _continuation_artifact_text("citations.json", current_citations_text) or ""
+        current_evidence_items_text = self.store.read_artifact_text(
+            continue_from_job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND
         ) or ""
-        evidence_items_text = (
-            _read_batch_artifact_text(final_bundle, _EVIDENCE_ITEMS_ARTIFACT_KIND)
-            if use_final_bundle
-            else _read_batch_artifact_text(bundle_candidate, _EVIDENCE_ITEMS_ARTIFACT_KIND)
-            if bundle_candidate is not None
-            else self.store.read_artifact_text(continue_from_job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
+        evidence_items_text = _continuation_artifact_text(
+            _EVIDENCE_ITEMS_ARTIFACT_KIND,
+            current_evidence_items_text,
         ) or ""
         outline_versions_text = current_outline_versions_text
         if use_final_bundle and not evidence_items_text:
@@ -5098,6 +5359,7 @@ class DeepResearchRuntime:
                 continue_from_job_id,
                 _EVIDENCE_ITEMS_ARTIFACT_KIND,
             ) or ""
+            artifact_origin_map[_EVIDENCE_ITEMS_ARTIFACT_KIND] = "current_artifact"
         report: dict[str, Any] = {}
         if report_text:
             report_value, _ = _safe_load_json_artifact(report_text)
@@ -5168,6 +5430,12 @@ class DeepResearchRuntime:
         elif not carry_forward_sources and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_sources = list(latest_state.get("sources") or [])
             latest_state_sources_used = bool(carry_forward_sources)
+        if checkpoint_sources_used:
+            artifact_origin_map["sources.json"] = "checkpoint_state"
+        elif latest_state_sources_used:
+            artifact_origin_map["sources.json"] = "latest_checkpoint_snapshot"
+        elif citations_registry_fallback_used:
+            artifact_origin_map["sources.json"] = "citations_registry"
         source_count = len(carry_forward_sources)
 
         carry_forward_sections = list(report.get("sections") or []) if isinstance(report.get("sections"), list) else []
@@ -5179,6 +5447,12 @@ class DeepResearchRuntime:
         elif not carry_forward_sections and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_sections = list(latest_state.get("sections") or [])
             latest_state_sections_used = bool(carry_forward_sections)
+        if checkpoint_sections_used:
+            artifact_origin_map["sections"] = "checkpoint_state"
+        elif latest_state_sections_used:
+            artifact_origin_map["sections"] = "latest_checkpoint_snapshot"
+        elif carry_forward_sections:
+            artifact_origin_map["sections"] = "report.json"
 
         report_unit_results = report.get("unit_results") if isinstance(report.get("unit_results"), dict) else {}
         carry_forward_unit_results = dict(report_unit_results or {})
@@ -5190,6 +5464,12 @@ class DeepResearchRuntime:
         elif not carry_forward_unit_results and not use_final_bundle and isinstance(latest_state, dict):
             carry_forward_unit_results = dict(latest_state.get("unit_results") or {})
             latest_state_unit_results_used = bool(carry_forward_unit_results)
+        if checkpoint_unit_results_used:
+            artifact_origin_map["unit_results"] = "checkpoint_state"
+        elif latest_state_unit_results_used:
+            artifact_origin_map["unit_results"] = "latest_checkpoint_snapshot"
+        elif carry_forward_unit_results:
+            artifact_origin_map["unit_results"] = "report.json"
 
         carry_forward_evidence = []
         checkpoint_evidence_used = False
@@ -5208,6 +5488,12 @@ class DeepResearchRuntime:
         if not carry_forward_evidence:
             carry_forward_evidence = _build_carry_forward_evidence(carry_forward_unit_results, carry_forward_sections)
             reconstructed_evidence_used = bool(carry_forward_evidence)
+        if checkpoint_evidence_used:
+            artifact_origin_map[_EVIDENCE_ITEMS_ARTIFACT_KIND] = "checkpoint_state"
+        elif latest_state_evidence_used:
+            artifact_origin_map[_EVIDENCE_ITEMS_ARTIFACT_KIND] = "latest_checkpoint_snapshot"
+        elif reconstructed_evidence_used:
+            artifact_origin_map[_EVIDENCE_ITEMS_ARTIFACT_KIND] = "reconstructed"
         carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
         carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
@@ -5287,6 +5573,7 @@ class DeepResearchRuntime:
             carry_forward_sections=carry_forward_sections,
             carry_forward_unit_results=carry_forward_unit_results,
         )
+        focused_snapshot["artifact_origin_map"] = dict(artifact_origin_map)
         continuation_identity = _continuation_identity_for_source_job(
             focused_snapshot,
         )
@@ -7066,17 +7353,30 @@ def _coverage_for_report(
                 if section.get("citations") and _count_keyword_overlap(section_text, question_tokens) >= max(coverage_threshold, 3):
                     if section_id and section_id not in matching_section_ids:
                         matching_section_ids.append(section_id)
+        matching_section_id_set = set(matching_section_ids)
+        filtered_question_entries = [
+            entry
+            for entry in ledger_by_question_id.get(item.id, [])
+            if not matching_section_id_set
+            or str(entry.get("selected_section_id", "")).strip() in matching_section_id_set
+            or any(
+                str(section_id).strip() in matching_section_id_set
+                for section_id in entry.get("candidate_section_ids", []) or []
+            )
+        ]
+        if not filtered_question_entries:
+            filtered_question_entries = list(ledger_by_question_id.get(item.id, []))
         supporting_evidence_ids = _dedupe_preserve_order(
             [
                 str(entry.get("evidence_id", "")).strip()
-                for entry in ledger_by_question_id.get(item.id, [])
+                for entry in filtered_question_entries
                 if str(entry.get("evidence_id", "")).strip()
             ]
         )
         supporting_source_ids = _dedupe_preserve_order(
             [
                 str(source_id).strip()
-                for entry in ledger_by_question_id.get(item.id, [])
+                for entry in filtered_question_entries
                 for source_id in entry.get("source_ids", []) or []
                 if str(source_id).strip()
             ]
@@ -8225,8 +8525,25 @@ def _build_section_citations(
             for evidence_id in section_bank.get("selected_evidence_ids", []) or []
             if str(evidence_id).strip()
         ]
+        candidate_packet_evidence_ids = [
+            str(packet.get("evidence_id", "")).strip()
+            for packet in section_bank.get("candidate_packets", []) or []
+            if isinstance(packet, dict) and str(packet.get("evidence_id", "")).strip()
+        ]
+        selected_packet_evidence_ids = [
+            str(packet.get("evidence_id", "")).strip()
+            for packet in section_bank.get("selected_packets", []) or []
+            if isinstance(packet, dict) and str(packet.get("evidence_id", "")).strip()
+        ]
+        active_packet_evidence_ids = selected_packet_evidence_ids or candidate_packet_evidence_ids
+        packet_backed_pool = (
+            [evidence for evidence in evidence_pool if evidence.evidence_id in set(active_packet_evidence_ids)]
+            if active_packet_evidence_ids
+            else []
+        )
+        ranking_pool = packet_backed_pool or evidence_pool
         ranked_pool = sorted(
-            evidence_pool,
+            ranking_pool,
             key=lambda evidence: (
                 _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords),
                 evidence.weight,
@@ -8244,7 +8561,15 @@ def _build_section_citations(
             if enforce_overlap and overlap_score <= 0 and section_keywords:
                 continue
             relevant_evidence.append(evidence)
-        if not relevant_evidence and not enforce_overlap:
+        if (
+            not relevant_evidence
+            and not enforce_overlap
+            and (
+                is_summary_section_title(section_title)
+                or is_key_findings_section_title(section_title)
+                or is_open_questions_section_title(section_title)
+            )
+        ):
             relevant_evidence = [evidence for evidence in ranked_pool if evidence.source_ids]
         if not relevant_evidence:
             return None
@@ -8307,8 +8632,8 @@ def _build_section_citations(
                     cluster,
                     registry_by_id,
                     section_id=section_id,
-                    pool_mode="selected" if selected_evidence_ids else ("global" if enforce_overlap else "candidate"),
-                    selected_evidence_ids=selected_evidence_ids,
+                    pool_mode="selected" if active_packet_evidence_ids else ("global" if enforce_overlap else "candidate"),
+                    selected_evidence_ids=list(active_packet_evidence_ids or selected_evidence_ids),
                     question_ids=question_ids,
                 ),
                 cluster_type=cluster_type,
@@ -8420,7 +8745,7 @@ def _build_section_citations(
                     citations=_preferred_citation_ids(
                         [
                             str(source_id).strip()
-                            for source_id in concrete.get("source_ids", []) or base_claim.get("source_ids", []) or []
+                            for source_id in base_claim.get("source_ids", []) or concrete.get("source_ids", []) or []
                             if str(source_id).strip()
                         ],
                         source_registry,
@@ -8429,7 +8754,7 @@ def _build_section_citations(
                     source_ids=_dedupe_preserve_order(
                         [
                             str(source_id).strip()
-                            for source_id in concrete.get("source_ids", []) or base_claim.get("source_ids", []) or []
+                            for source_id in base_claim.get("source_ids", []) or concrete.get("source_ids", []) or []
                             if str(source_id).strip()
                         ]
                     ),
@@ -8437,28 +8762,27 @@ def _build_section_citations(
                     evidence_ids=_dedupe_preserve_order(
                         [
                             str(evidence_id).strip()
-                            for evidence_id in concrete.get("evidence_ids", []) or base_claim.get("evidence_ids", []) or []
+                            for evidence_id in base_claim.get("evidence_ids", []) or concrete.get("evidence_ids", []) or []
                             if str(evidence_id).strip()
                         ]
                     ),
                     evidence_bindings=[
                         dict(binding)
-                        for claim in concrete_claims
-                        for binding in claim.get("evidence_bindings", []) or []
+                        for binding in base_claim.get("evidence_bindings", []) or []
                         if isinstance(binding, dict)
                     ],
                     cluster_type="rollup",
                     supporting_source_count=len(
                         {
                             str(source_id).strip()
-                            for source_id in concrete.get("source_ids", []) or base_claim.get("source_ids", []) or []
+                            for source_id in base_claim.get("source_ids", []) or concrete.get("source_ids", []) or []
                             if str(source_id).strip()
                         }
                     ),
                     supporting_domain_count=_supporting_domain_count(
                         [
                             str(source_id).strip()
-                            for source_id in concrete.get("source_ids", []) or base_claim.get("source_ids", []) or []
+                            for source_id in base_claim.get("source_ids", []) or concrete.get("source_ids", []) or []
                             if str(source_id).strip()
                         ],
                         registry_by_id,

@@ -1,4 +1,5 @@
 import hashlib
+import re
 from typing import Any
 
 from .deep_research_types import (
@@ -33,15 +34,32 @@ _STOPWORDS = {
     "with",
 }
 
+_GENERIC_SECTION_TITLES = {
+    "executive summary",
+    "summary",
+    "key findings",
+    "findings",
+    "main findings",
+    "open questions",
+    "remaining gaps",
+    "next steps",
+    "recommendations",
+}
+
 
 def _normalize_whitespace(value: str) -> str:
     return " ".join(str(value or "").split())
 
 
+def _is_generic_section_title(title: str) -> bool:
+    return _normalize_whitespace(title).lower() in _GENERIC_SECTION_TITLES
+
+
 def _tokenize_keywords(value: str) -> list[str]:
+    normalized = re.sub(r"([a-z])([A-Z])", r"\1 \2", _normalize_whitespace(value))
     return [
         token
-        for token in _normalize_whitespace(value).lower().replace("-", " ").replace("_", " ").split()
+        for token in re.findall(r"[A-Za-z0-9]+", normalized.lower().replace("-", " ").replace("_", " "))
         if token and token not in _STOPWORDS
     ]
 
@@ -49,8 +67,27 @@ def _tokenize_keywords(value: str) -> list[str]:
 def _count_keyword_overlap(text: str, keywords: list[str]) -> int:
     if not text or not keywords:
         return 0
-    haystack = " " + _normalize_whitespace(text).lower() + " "
-    return sum(1 for keyword in keywords if f" {keyword} " in haystack)
+    haystack_tokens = set(_tokenize_keywords(text))
+    return sum(1 for keyword in keywords if keyword in haystack_tokens)
+
+
+def _evidence_surface_text(
+    evidence: dict[str, Any],
+    *,
+    origin_query: str = "",
+    include_origin_query: bool = True,
+) -> str:
+    return " ".join(
+        _normalize_whitespace(str(item))
+        for item in [
+            evidence.get("summary", ""),
+            evidence.get("detail", ""),
+            evidence.get("derived_from_source_url", ""),
+            *list(evidence.get("source_urls", []) or []),
+            origin_query if include_origin_query else "",
+        ]
+        if _normalize_whitespace(str(item))
+    )
 
 
 def initialize_section_banks(plan: DeepResearchPlan, *, updated_at: str = "") -> list[dict[str, Any]]:
@@ -188,7 +225,7 @@ def seed_section_banks_from_question_bindings(
             continue
         bank = banks_by_section[section_id]
         section_question_ids = set(_section_question_ids(section))
-        if not section_question_ids or bank.get("selected_evidence_ids"):
+        if not section_question_ids or bank.get("selected_evidence_ids") or bank.get("candidate_evidence_ids"):
             continue
         for entry in ledger_entries:
             if not isinstance(entry, dict):
@@ -203,11 +240,15 @@ def seed_section_banks_from_question_bindings(
                 continue
             if evidence_id not in bank["candidate_evidence_ids"]:
                 bank["candidate_evidence_ids"].append(evidence_id)
-            if evidence_id not in bank["selected_evidence_ids"]:
-                bank["selected_evidence_ids"].append(evidence_id)
             packet = _packet_for_section(entry, section_id=section_id)
             _upsert_packet(bank["candidate_packets"], packet)
-            _upsert_packet(bank["selected_packets"], packet)
+            if (
+                str(entry.get("selected_section_id", "")).strip() == section_id
+                or section_id in _materialized_section_ids(entry)
+            ):
+                if evidence_id not in bank["selected_evidence_ids"]:
+                    bank["selected_evidence_ids"].append(evidence_id)
+                _upsert_packet(bank["selected_packets"], packet)
         bank["last_updated_at"] = updated_at or bank.get("last_updated_at", "")
 
     ordered_ids = [
@@ -224,16 +265,29 @@ def seed_section_banks_from_question_bindings(
     ]
 
 
-def _candidate_section_ids(plan: DeepResearchPlan, evidence: dict[str, Any]) -> list[str]:
-    summary = _normalize_whitespace(str(evidence.get("summary") or evidence.get("detail") or ""))
+def _candidate_section_ids(
+    plan: DeepResearchPlan,
+    evidence: dict[str, Any],
+    *,
+    origin_query: str = "",
+) -> list[str]:
+    evidence_surface = _evidence_surface_text(
+        evidence,
+        origin_query=origin_query,
+        include_origin_query=False,
+    )
     matches: list[str] = []
     for section in plan.report_outline:
         keywords = _tokenize_keywords(f"{section.title} {section.goal}")
-        overlap = _count_keyword_overlap(summary, keywords)
+        overlap = _count_keyword_overlap(evidence_surface, keywords)
         if overlap > 0:
             matches.append(section.section_id)
-    if not matches and len(plan.report_outline) == 1:
-        matches.append(plan.report_outline[0].section_id)
+    if (
+        not matches
+        and len(plan.report_outline) == 1
+        and _is_generic_section_title(plan.report_outline[0].title)
+    ):
+        return [plan.report_outline[0].section_id]
     return matches
 
 
@@ -319,6 +373,7 @@ def _question_ids_for_evidence(
     plan: DeepResearchPlan,
     *,
     evidence_text: str,
+    evidence_context_text: str = "",
     selected_section_id: str,
 ) -> list[str]:
     selected_section = next(
@@ -335,7 +390,7 @@ def _question_ids_for_evidence(
         if matched_by_section:
             return matched_by_section
 
-    evidence_keywords = _tokenize_keywords(evidence_text)
+    evidence_keywords = _tokenize_keywords(f"{evidence_text} {evidence_context_text}")
     return [
         item.id
         for item in plan.sub_questions
@@ -357,16 +412,22 @@ def build_evidence_ledger_entries(
         if not evidence_id:
             continue
         evidence_text = str(evidence.get("summary") or evidence.get("detail") or "")
-        candidate_section_ids = _candidate_section_ids(plan, evidence)
+        evidence_context_text = _evidence_surface_text(
+            evidence,
+            origin_query=origin_query,
+            include_origin_query=False,
+        )
+        candidate_section_ids = _candidate_section_ids(plan, evidence, origin_query=origin_query)
         selected_section_id = candidate_section_ids[0] if candidate_section_ids else ""
         question_ids = _question_ids_for_evidence(
             plan,
             evidence_text=evidence_text,
+            evidence_context_text=evidence_context_text,
             selected_section_id=selected_section_id,
         )
         selection_score, selection_basis_tokens = _selection_score(
             plan,
-            evidence_text=evidence_text,
+            evidence_text=evidence_context_text,
             selected_section_id=selected_section_id,
         )
         entries.append(
