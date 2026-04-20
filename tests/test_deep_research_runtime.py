@@ -7042,8 +7042,8 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
                 "unit_id": "unit-search-1",
                 "unit_type": "search",
                 "title": "First unit",
-                "goal": "Collect first checkpointed evidence.",
-                "query": "first checkpoint",
+                "goal": "Collect interrupted resume checkpoint evidence.",
+                "query": "interrupted resume behavior first checkpoint",
                 "depends_on": [],
                 "status": "pending",
                 "notes": "",
@@ -7052,8 +7052,8 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
                 "unit_id": "unit-search-2",
                 "unit_type": "search",
                 "title": "Second unit",
-                "goal": "Collect second checkpointed evidence.",
-                "query": "second checkpoint",
+                "goal": "Collect interrupted resume recovery evidence.",
+                "query": "interrupted resume behavior second checkpoint",
                 "depends_on": ["unit-search-1"],
                 "status": "pending",
                 "notes": "",
@@ -7061,7 +7061,10 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
         ]
         payload["search_strategy"] = {
             "approach": "targeted",
-            "search_queries": ["first checkpoint", "second checkpoint"],
+            "search_queries": [
+                "interrupted resume behavior first checkpoint",
+                "interrupted resume behavior second checkpoint",
+            ],
             "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": True},
         }
         return payload
@@ -7070,7 +7073,7 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
         executed.append(query)
         await asyncio.sleep(1.2)
         return (
-            f"Evidence for {query}",
+            f"Interrupted resume behavior evidence for {query}",
             [{"url": f"https://docs.example.com/{query.replace(' ', '-')}", "title": f"{query.title()} docs"}],
         )
 
@@ -7103,7 +7106,7 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
     assert interrupted_event["data"]["checkpoint_kind"] == "research_unit"
     assert interrupted_event["data"]["attempt_count"] == 1
     assert interrupted_event["data"]["completed_units_count"] == 1
-    assert executed == ["first checkpoint"]
+    assert executed == ["interrupted resume behavior first checkpoint"]
 
     resumed = await runtime.resume(response["job_id"], schedule=False)
     completed = await runtime.run_job(response["job_id"])
@@ -7111,7 +7114,10 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
     assert resumed["status"] == "queued"
     assert resumed["attempt_count"] == 2
     assert completed["status"] == "completed"
-    assert executed == ["first checkpoint", "second checkpoint"]
+    assert executed == [
+        "interrupted resume behavior first checkpoint",
+        "interrupted resume behavior second checkpoint",
+    ]
     assert runtime.store.get_job(response["job_id"]).finished_at
     assert runtime.store.read_artifact_text(response["job_id"], "final_report.md")
 
