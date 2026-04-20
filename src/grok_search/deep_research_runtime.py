@@ -1242,10 +1242,19 @@ def _enrich_source_from_fetched_text(source: dict[str, Any], fetched_text: str) 
 
 
 def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]], *, confidence: str = "") -> str:
+    def _strip_confidence_prefix(value: str) -> str:
+        text = _normalize_whitespace(value)
+        lowered = text.lower()
+        for prefix in ("high confidence:", "medium confidence:", "low confidence:"):
+            if lowered.startswith(prefix):
+                return text[len(prefix) :].strip()
+        return text
+
     section_summaries: list[str] = []
     claim_texts: list[str] = []
     for section in sections:
         section_summary = _summarize_evidence_text(str(section.get("summary", "")), limit=220)
+        section_summary = _strip_confidence_prefix(section_summary)
         if section_summary and not _is_noisy_text(section_summary) and section_summary not in section_summaries:
             section_summaries.append(section_summary)
         for claim in section.get("claims", []):
@@ -1254,7 +1263,7 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
                 continue
             if text not in claim_texts:
                 claim_texts.append(text)
-    summary_chunks = section_summaries[:1] or claim_texts[:2]
+    summary_chunks = section_summaries[:2] or claim_texts[:2]
     if not summary_chunks:
         return _trim_text(plan.brief.objective, limit=220)
     summary = " ".join(summary_chunks)
@@ -1276,6 +1285,21 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
     if len(summary_chunks) == 1 and not section_summaries:
         summary = f"{plan.brief.objective}: {summary}"
     return _trim_text(f"{confidence_prefix}{summary}".strip(), limit=320)
+
+
+def _synthesize_rollup_claim_text(section_title: str, summary_text: str) -> str:
+    normalized_summary = _summarize_evidence_text(summary_text, limit=_MAX_CLAIM_LENGTH)
+    if not normalized_summary:
+        return ""
+    normalized_summary = normalized_summary.rstrip(".")
+    title = _normalize_whitespace(section_title)
+    if not title:
+        return f"{normalized_summary}."
+    if is_key_findings_section_title(title):
+        return _trim_text(f"Key finding: {normalized_summary}.", limit=_MAX_CLAIM_LENGTH)
+    if is_summary_section_title(title):
+        return _trim_text(f"Overall, {normalized_summary}.", limit=_MAX_CLAIM_LENGTH)
+    return _trim_text(f"{title}: {normalized_summary}.", limit=_MAX_CLAIM_LENGTH)
 
 
 def _report_artifact_contract_error(job: DeepResearchJob) -> dict[str, str]:
@@ -8348,17 +8372,73 @@ def _build_section_citations(
         derived_claims: list[dict[str, Any]] = []
         seen_claim_keys: set[str] = set()
         for concrete in concrete_sections:
-            for claim in concrete.get("claims", []):
-                claim_text = _summarize_evidence_text(str(claim.get("text", "")), limit=_MAX_CLAIM_LENGTH)
-                claim_key = _stable_text_key(claim_text)
-                if not claim_text or claim_key in seen_claim_keys:
-                    continue
-                cloned_claim = dict(claim)
-                cloned_claim["claim_id"] = f"{_section_value(section, 'section_id')}-claim-{len(derived_claims) + 1}"
-                derived_claims.append(cloned_claim)
-                seen_claim_keys.add(claim_key)
-                if len(derived_claims) >= 2:
-                    break
+            concrete_claims = [dict(claim) for claim in concrete.get("claims", []) if isinstance(claim, dict)]
+            if not concrete_claims:
+                continue
+            synthesized_text = _synthesize_rollup_claim_text(
+                _section_value(section, "title"),
+                str(concrete.get("summary", "") or concrete_claims[0].get("text", "")),
+            )
+            claim_key = _stable_text_key(synthesized_text)
+            if not synthesized_text or claim_key in seen_claim_keys:
+                continue
+            base_claim = concrete_claims[0]
+            derived_claims.append(
+                DeepResearchClaim(
+                    claim_id=f"{_section_value(section, 'section_id')}-claim-{len(derived_claims) + 1}",
+                    text=synthesized_text,
+                    citations=_preferred_citation_ids(
+                        [
+                            str(source_id).strip()
+                            for source_id in concrete.get("source_ids", []) or base_claim.get("source_ids", []) or []
+                            if str(source_id).strip()
+                        ],
+                        source_registry,
+                        limit=3,
+                    ),
+                    source_ids=_dedupe_preserve_order(
+                        [
+                            str(source_id).strip()
+                            for source_id in concrete.get("source_ids", []) or base_claim.get("source_ids", []) or []
+                            if str(source_id).strip()
+                        ]
+                    ),
+                    unit_id=str(base_claim.get("unit_id", "") or concrete.get("section_id", "")).strip(),
+                    evidence_ids=_dedupe_preserve_order(
+                        [
+                            str(evidence_id).strip()
+                            for evidence_id in concrete.get("evidence_ids", []) or base_claim.get("evidence_ids", []) or []
+                            if str(evidence_id).strip()
+                        ]
+                    ),
+                    evidence_bindings=[
+                        dict(binding)
+                        for claim in concrete_claims
+                        for binding in claim.get("evidence_bindings", []) or []
+                        if isinstance(binding, dict)
+                    ],
+                    cluster_type="rollup",
+                    supporting_source_count=len(
+                        {
+                            str(source_id).strip()
+                            for source_id in concrete.get("source_ids", []) or base_claim.get("source_ids", []) or []
+                            if str(source_id).strip()
+                        }
+                    ),
+                    supporting_domain_count=_supporting_domain_count(
+                        [
+                            str(source_id).strip()
+                            for source_id in concrete.get("source_ids", []) or base_claim.get("source_ids", []) or []
+                            if str(source_id).strip()
+                        ],
+                        registry_by_id,
+                    ),
+                    confidence=str(concrete.get("confidence", "") or base_claim.get("confidence", "") or "medium"),
+                ).model_dump()
+            )
+            seen_claim_keys.add(claim_key)
+            if len(derived_claims) >= 2:
+                break
             if len(derived_claims) >= 2:
                 break
         if not derived_claims:
