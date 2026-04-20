@@ -14991,7 +14991,7 @@ async def test_official_doc_constraints_preserve_search_evidence_packets_when_al
 
 
 @pytest.mark.asyncio
-async def test_runtime_stop_gate_requires_materialized_packet_backing_before_skipping_followup_units(
+async def test_runtime_stop_gate_can_skip_followup_units_with_research_stage_packet_backing(
     monkeypatch, tmp_path
 ):
     runtime = build_runtime(tmp_path)
@@ -15083,11 +15083,14 @@ async def test_runtime_stop_gate_requires_materialized_packet_backing_before_ski
     result = await runtime.run_job(response["job_id"])
     section_banks = json.loads(runtime.store.read_artifact_text(response["job_id"], "section_banks.json") or "[]")
 
-    assert search_calls == [
-        "aws dms runtime semantics overview",
-        "awsdms_txn_state persistence recovery behavior",
+    assert search_calls == ["aws dms runtime semantics overview"]
+    assert result["report"]["runtime"]["skipped_units"] == [
+        {
+            "unit_id": "unit-search-2",
+            "unit_type": "search",
+            "reason": "sufficient_coverage_reached",
+        }
     ]
-    assert result["report"]["runtime"]["skipped_units"] == []
     assert any(bank.get("selected_packets") for bank in section_banks)
 
 
