@@ -1136,6 +1136,10 @@ async def test_deep_research_round30_worker_restart_events_after_seq_match_fixtu
         (event["seq"], event["type"], event["phase"])
         for event in snapshot["resume_events_after_seq_5"]
     ]
+    assert payload["returned_count"] == snapshot["events_public_surface"]["returned_count"]
+    assert payload["last_event_type"] == snapshot["events_public_surface"]["last_event_type"]
+    assert payload["window_has_terminal_event"] is snapshot["events_public_surface"]["window_has_terminal_event"]
+    assert payload["job_terminal"] is snapshot["events_public_surface"]["job_terminal"]
     assert payload["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
     assert payload["events"][1]["data"]["checkpoint_kind"] == snapshot["expected"]["checkpoint_kind"]
 

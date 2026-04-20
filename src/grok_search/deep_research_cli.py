@@ -228,19 +228,28 @@ def _print_events_summary(
     payload: dict[str, Any],
     *,
     after_seq: int,
-    terminal: bool,
+    terminal: bool | None,
     fallback_job_id: str = "",
 ) -> None:
     events = payload.get("events", [])
-    last_event = events[-1]["type"] if events else "-"
+    returned_count = payload.get("returned_count", len(events))
+    last_event = payload.get("last_event_type") or (events[-1]["type"] if events else "-")
+    window_has_terminal_event = payload.get("window_has_terminal_event")
+    job_terminal = payload.get("job_terminal")
+    effective_terminal = (
+        bool(job_terminal or window_has_terminal_event)
+        if job_terminal is not None
+        else (bool(window_has_terminal_event) if window_has_terminal_event is not None else bool(terminal))
+    )
     _print_summary_line(
         [
             f"job={_summary_value(payload.get('job_id') or fallback_job_id)}",
-            f"events={len(events)}",
+            f"events={returned_count}",
             f"after_seq={after_seq}",
             f"next_after_seq={payload.get('next_after_seq', after_seq)}",
             f"last_event={last_event}",
-            f"terminal={'true' if terminal else 'false'}",
+            f"terminal={'true' if effective_terminal else 'false'}",
+            f"window_terminal={_summary_value(window_has_terminal_event) if window_has_terminal_event is not None else '-'}",
         ]
     )
 
@@ -376,7 +385,7 @@ async def _handle_events(args: argparse.Namespace) -> int:
                 _print_events_summary(
                     payload,
                     after_seq=last_seq,
-                    terminal=status["status"] in TERMINAL_STATUSES,
+                    terminal=payload.get("job_terminal"),
                     fallback_job_id=args.job_id,
                 )
                 if payload["events"]:
@@ -395,7 +404,7 @@ async def _handle_events(args: argparse.Namespace) -> int:
     _print_events_summary(
         payload,
         after_seq=args.after_seq,
-        terminal=status["status"] in TERMINAL_STATUSES,
+        terminal=payload.get("job_terminal"),
         fallback_job_id=args.job_id,
     )
     _print_json(payload)
@@ -450,7 +459,7 @@ async def _handle_resume(args: argparse.Namespace) -> int:
 async def _handle_cancel(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
     response = await runtime.cancel(args.job_id)
-    _print_job_summary(await runtime.status(args.job_id), fallback_job_id=args.job_id)
+    _print_job_summary(response, fallback_job_id=args.job_id)
     _print_json(response)
     return 0
 

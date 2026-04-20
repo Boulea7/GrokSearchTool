@@ -85,6 +85,37 @@ def test_store_appends_events_with_monotonic_sequence(tmp_path):
     assert store.list_events(job.job_id, after_seq=1) == [second]
 
 
+def test_store_list_events_paginates_and_replays_after_seq_boundaries(tmp_path):
+    store = make_store(tmp_path)
+    job = store.create_job(
+        query="Research event pagination",
+        request_fingerprint="fp-events-pagination",
+        status="running",
+        phase="researching",
+        effort="deep",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=300,
+        continued_from_job_id="",
+    )
+    first = store.append_event(job.job_id, type="job_created", phase="planning", message="Created.")
+    second = store.append_event(job.job_id, type="phase_started", phase="planning", message="Planning.")
+    third = store.append_event(job.job_id, type="phase_started", phase="researching", message="Researching.")
+
+    first_page = store.list_events(job.job_id, after_seq=0, limit=1)
+    second_page = store.list_events(job.job_id, after_seq=first_page[-1].seq, limit=1)
+    tail_page = store.list_events(job.job_id, after_seq=second_page[-1].seq, limit=10)
+    empty_page = store.list_events(job.job_id, after_seq=third.seq, limit=10)
+
+    assert first_page == [first]
+    assert second_page == [second]
+    assert tail_page == [third]
+    assert empty_page == []
+
+
 def test_store_persists_checkpoints_and_artifacts(tmp_path):
     store = make_store(tmp_path)
     job = store.create_job(

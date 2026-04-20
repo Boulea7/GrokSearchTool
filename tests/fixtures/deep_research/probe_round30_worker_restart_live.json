@@ -40,6 +40,7 @@
       "current_checkpoint": "finalizing",
       "current_checkpoint_kind": "finalizing",
       "artifact_fallback_used": false,
+      "artifact_visibility_reason": "unresolved_batch_backed_final_artifacts_hidden",
       "planner_fallback_used": true,
       "resolved_artifact_batch_id": "",
       "runtime_warnings": [
@@ -47,6 +48,21 @@
         "planner_fallback_used"
       ],
       "constraint_violations": [],
+      "operator_summary": {
+        "status": "failed",
+        "phase": "finalizing",
+        "attempt_count": 2,
+        "current_checkpoint": "finalizing",
+        "cancel_requested": false,
+        "continued_from_job_id": "",
+        "resolved_artifact_batch_id": "",
+        "planner_fallback_used": true,
+        "runtime_warnings": [
+          "coverage_incomplete",
+          "planner_fallback_used"
+        ],
+        "constraint_violations": []
+      },
       "artifact_kinds": [
         "plan.json"
       ]
@@ -55,17 +71,39 @@
       "current_checkpoint_kind": "finalizing",
       "resolved_artifact_batch_id": "",
       "artifact_fallback_used": false,
+      "artifact_visibility_reason": "unresolved_batch_backed_final_artifacts_hidden",
       "planner_fallback_used": true,
       "runtime_warnings": [
         "coverage_incomplete",
         "planner_fallback_used"
       ],
       "constraint_violations": [],
+      "operator_summary": {
+        "status": "failed",
+        "phase": "finalizing",
+        "attempt_count": 2,
+        "current_checkpoint": "finalizing",
+        "cancel_requested": false,
+        "continued_from_job_id": "",
+        "resolved_artifact_batch_id": "",
+        "planner_fallback_used": true,
+        "runtime_warnings": [
+          "coverage_incomplete",
+          "planner_fallback_used"
+        ],
+        "constraint_violations": []
+      },
       "partial_report": null,
       "final_report": null,
       "sources": null,
       "report": null
     }
+  },
+  "events_public_surface": {
+    "returned_count": 8,
+    "last_event_type": "job_failed",
+    "window_has_terminal_event": true,
+    "job_terminal": true
   },
   "initial_events": [
     {
