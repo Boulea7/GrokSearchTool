@@ -5078,7 +5078,14 @@ async def test_result_surfaces_invalid_provenance_bundle_for_partially_bound_cla
 
     result = await runtime.result(job.job_id)
 
-    assert result["artifact_errors"]["report.json"] == "invalid_provenance_bundle"
+    assert result["resolved_artifact_batch_id"] == ""
+    assert result["report"] is None
+    assert result["sources"] is None
+    assert result["final_report"] is None
+    assert result["artifact_errors"]["report.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["sources.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["citations.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["evidence_items.json"] == "missing_required_artifact"
 
 
 @pytest.mark.asyncio

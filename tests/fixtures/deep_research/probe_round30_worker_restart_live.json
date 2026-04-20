@@ -48,15 +48,7 @@
       ],
       "constraint_violations": [],
       "artifact_kinds": [
-        "plan.json",
-        "sources.json",
-        "citations.json",
-        "report.json",
-        "final_report.md",
-        "evidence_items.json",
-        "coverage.json",
-        "grounding.json",
-        "verifier.json"
+        "plan.json"
       ]
     },
     "result": {
