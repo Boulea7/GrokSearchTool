@@ -11,6 +11,8 @@ PROBE_PUBLIC_SURFACE_FIXTURES = (
     "eval_probe_round26_aws_dms_public_surface.json",
     "eval_probe_round30_aws_dms_official_doc.json",
     "eval_probe_round30_lifecycle_public_surface.json",
+    "eval_probe_round33_aws_dms_official_doc.json",
+    "eval_probe_round33_lifecycle_public_surface.json",
 )
 PROBE_PUBLIC_SURFACE_METRICS = (
     "release_gate_consistency",
