@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -2935,6 +2936,25 @@ async def test_resume_preserves_skipped_and_constraint_state_from_checkpoint(mon
             "reason": "domain_constraints_applied",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_resume_returns_full_status_shaped_payload(tmp_path):
+    runtime = build_runtime(tmp_path)
+    response = await runtime.start(query="Resume payload shape", force_new=True, schedule=False)
+    runtime.store.update_job(
+        response["job_id"],
+        status="interrupted",
+        phase="researching",
+        current_checkpoint="researching-unit-search-1",
+    )
+
+    resumed = await runtime.resume(response["job_id"], schedule=False)
+
+    assert resumed["status"] == "queued"
+    assert "artifact_kinds" in resumed
+    assert "artifacts" in resumed
+    assert "plan.json" in resumed["artifact_kinds"]
 
 
 @pytest.mark.asyncio
@@ -8008,6 +8028,64 @@ async def test_read_plan_keeps_frozen_follow_up_continuation_when_source_job_get
 
     assert rebuilt_plan.continuation.previous_summary == frozen_continuation["previous_summary"]
     assert rebuilt_plan.continuation.source_count == frozen_continuation["source_count"]
+
+
+@pytest.mark.asyncio
+async def test_load_checkpoint_state_uses_frozen_follow_up_continuation_instead_of_live_source_job(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = create_completed_source_job(runtime, query="Frozen checkpoint continuation source")
+
+    response = await runtime.start(
+        query="Follow up frozen checkpoint continuation source",
+        continue_from_job_id=source.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+    follow_up_job = runtime.store.update_job(response["job_id"], current_checkpoint="planning")
+    frozen_continuation = json.loads(runtime.store.read_artifact_text(follow_up_job.job_id, "continuation.json"))
+
+    runtime.write_artifact(
+        source.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "query": "Frozen checkpoint continuation source",
+                "summary": "Updated source summary after follow-up creation.",
+                "sections": [
+                    {
+                        "section_id": "updated",
+                        "title": "Updated",
+                        "summary": "Updated source summary after follow-up creation.",
+                        "claims": [
+                            {
+                                "claim_id": "updated-claim-1",
+                                "text": "Updated source summary after follow-up creation.",
+                                "citations": ["R9"],
+                            }
+                        ],
+                        "citations": ["R9"],
+                    }
+                ],
+                "unit_results": {},
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        source.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://docs.example.com/runtime/updated"}]),
+        "application/json",
+    )
+
+    checkpoint_state, checkpoint_meta = runtime._load_checkpoint_state(follow_up_job)
+
+    assert checkpoint_meta is None
+    assert checkpoint_state is not None
+    assert checkpoint_state.plan.continuation.previous_summary == frozen_continuation["previous_summary"]
+    assert checkpoint_state.plan.continuation.source_count == frozen_continuation["source_count"]
 
 
 @pytest.mark.asyncio
@@ -14018,6 +14096,152 @@ async def test_resolved_final_batch_rejects_latest_batch_with_unknown_provenance
 
 
 @pytest.mark.asyncio
+async def test_resolved_final_batch_rejects_latest_batch_with_invalid_provenance_bundle(tmp_path):
+    runtime = build_runtime(tmp_path)
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume behavior.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nResume continues from the last durable checkpoint."
+
+    runtime._generate_plan_with_model = planner
+    response = await runtime.start(query="Resolved batch invalid provenance bundle parity", force_new=True, schedule=False)
+    with patch("grok_search.deep_research_runtime._search_query", search), patch(
+        "grok_search.deep_research_runtime._fetch_url", fetch
+    ):
+        await runtime.run_job(response["job_id"])
+    job = runtime.store.get_job(response["job_id"])
+    good_batch_id = next(
+        artifact.metadata.get("batch_id", "")
+        for artifact in runtime.store.list_artifacts(job.job_id)
+        if artifact.kind == "report.json"
+    )
+
+    runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps(
+                        {
+                            "source_registry": {
+                                "R1": {
+                                    "source_id": "R1",
+                                    "url": "https://docs.example.com/runtime/checkpoints",
+                                }
+                            },
+                            "sections": [
+                                {
+                                    "section_id": "executive-summary",
+                                    "title": "Executive Summary",
+                                    "claims": [
+                                        {
+                                            "claim_id": "executive-summary-claim-1",
+                                            "text": "Resume continues from the last checkpoint.",
+                                            "citations": ["R9"],
+                                            "evidence_ids": ["e404"],
+                                            "evidence_bindings": [
+                                                {
+                                                    "evidence_id": "e404",
+                                                    "source_id": "R9",
+                                                    "source_backed": True,
+                                                    "line_start": 3,
+                                                    "line_end": 4,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                    "citations": ["R9"],
+                                }
+                            ],
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps(
+                        {
+                            "summary": "Resume continues from the last checkpoint.",
+                            "sections": [
+                                {
+                                    "section_id": "executive-summary",
+                                    "title": "Executive Summary",
+                                    "summary": "Resume continues from the last checkpoint.",
+                                    "claims": [
+                                        {
+                                            "claim_id": "executive-summary-claim-1",
+                                            "text": "Resume continues from the last checkpoint.",
+                                            "citations": ["R9"],
+                                            "evidence_ids": ["e404"],
+                                            "evidence_bindings": [
+                                                {
+                                                    "evidence_id": "e404",
+                                                    "source_id": "R9",
+                                                    "source_backed": True,
+                                                    "line_start": 3,
+                                                    "line_end": 4,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                    "citations": ["R9"],
+                                }
+                            ],
+                            "unit_results": {},
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nResume continues from the last checkpoint.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Resolved batch invalid provenance bundle parity",
+            evidence_items=[],
+        ),
+    )
+
+    status = await runtime.status(job.job_id)
+
+    assert status["resolved_artifact_batch_id"] == good_batch_id
+    assert status["artifact_fallback_used"] is True
+
+
+@pytest.mark.asyncio
 async def test_finalizing_result_does_not_resolve_partial_batch_with_current_provenance(tmp_path):
     runtime = build_runtime(tmp_path)
     job = runtime.store.create_job(
@@ -14118,6 +14342,8 @@ async def test_finalizing_result_does_not_resolve_partial_batch_with_current_pro
     result = await runtime.result(job.job_id)
 
     assert persisted[0]["metadata"]["batch_id"]
+    assert status["artifact_kinds"] == ["plan.json"]
+    assert [artifact["kind"] for artifact in status["artifacts"]] == ["plan.json"]
     assert status["resolved_artifact_batch_id"] == ""
     assert result["resolved_artifact_batch_id"] == ""
     assert result["final_report"] is None

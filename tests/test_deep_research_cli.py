@@ -1912,6 +1912,61 @@ def test_cli_resume_watch_passes_resume_response_as_initial_status(monkeypatch, 
     }
 
 
+def test_cli_resume_watch_attaches_even_when_resume_returns_terminal_status(monkeypatch, capsys):
+    response = {
+        "job_id": "job-123",
+        "status": "completed",
+        "phase": "finalizing",
+        "progress_pct": 100.0,
+        "attempt_count": 2,
+        "current_checkpoint": "finalizing",
+        "cancel_requested": False,
+        "continued_from_job_id": "",
+        "resolved_artifact_batch_id": "batch-1",
+        "artifact_fallback_used": False,
+        "planner_fallback_used": False,
+        "runtime_warnings": [],
+        "constraint_violations": [],
+        "artifact_kinds": ["plan.json", "report.json"],
+        "artifacts": [],
+    }
+
+    class FakeRuntime:
+        async def resume(self, job_id, schedule=False):
+            assert schedule is False
+            return dict(response)
+
+    seen = {}
+
+    async def fake_watch(
+        runtime,
+        job_id,
+        *,
+        interval_seconds=1.0,
+        initial_status=None,
+        suppress_initial_status_line=False,
+        after_seq=0,
+    ):
+        seen["job_id"] = job_id
+        seen["initial_status"] = initial_status
+        seen["suppress_initial_status_line"] = suppress_initial_status_line
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
+    monkeypatch.setattr(deep_research_cli, "_spawn_worker", lambda job_id: None)
+    monkeypatch.setattr(deep_research_cli, "_watch_job", fake_watch)
+
+    exit_code = deep_research_cli.main(["resume", "job-123", "--watch"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert json.loads(captured.out)["status"] == "completed"
+    assert seen == {
+        "job_id": "job-123",
+        "initial_status": response,
+        "suppress_initial_status_line": True,
+    }
+
+
 def test_cli_result_includes_partial_report_by_default(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)

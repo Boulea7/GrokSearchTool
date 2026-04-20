@@ -431,7 +431,7 @@ async def _handle_resume(args: argparse.Namespace) -> int:
         _spawn_worker(args.job_id)
     _print_job_summary(response, fallback_job_id=args.job_id)
     _print_json(response)
-    if args.watch and response["status"] == "queued":
+    if args.watch:
         interrupted = await _run_observation(
             _watch_job(
                 runtime,
