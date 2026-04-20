@@ -14845,6 +14845,144 @@ async def test_section_summary_flows_into_report_and_final_report(monkeypatch, t
 
 
 @pytest.mark.asyncio
+async def test_report_summary_combines_multiple_answered_sections(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the key operational answer.",
+            },
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            },
+            {
+                "section_id": "recovery-timeout",
+                "title": "Recovery Timeout",
+                "goal": "Explain RecoveryTimeout behavior.",
+            },
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 2,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume continues from the last durable checkpoint. RecoveryTimeout defaults to waiting indefinitely unless a bound is configured.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "StartReplicationTask",
+                    "description": "Resume-processing semantics.",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+                    "title": "Change processing tuning settings",
+                    "description": "RecoveryTimeout behavior.",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "ChangeProcessingTuning" in url:
+            return "# Change processing tuning settings\n\nRecoveryTimeout defaults to waiting indefinitely unless a bound is configured."
+        return "# StartReplicationTask\n\nResume-processing continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="AWS DMS resume and RecoveryTimeout", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert "Resume continues from the last durable checkpoint" in result["report"]["summary"]
+    assert "RecoveryTimeout defaults to waiting indefinitely" in result["report"]["summary"]
+    assert result["report"]["summary"].count("RecoveryTimeout defaults to waiting indefinitely") == 1
+    assert "Medium confidence: Medium confidence:" not in result["report"]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_key_findings_claims_do_not_clone_concrete_claim_text(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "key-findings",
+                "title": "Key Findings",
+                "goal": "Cover the strongest findings.",
+            },
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            },
+            {
+                "section_id": "restart-trade-offs",
+                "title": "Restart Trade-offs",
+                "goal": "Explain restart trade-offs.",
+            },
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 2,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume continues from the last durable checkpoint without replaying completed work. Restart replays the task from a fresh starting point and increases recovery time.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/resume",
+                    "title": "Resume docs",
+                    "description": "Resume semantics.",
+                },
+                {
+                    "url": "https://docs.example.com/runtime/restart",
+                    "title": "Restart docs",
+                    "description": "Restart trade-offs.",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        if "restart" in url:
+            return "# Restart docs\n\nRestart replays the task from a fresh starting point and increases recovery time."
+        return "# Resume docs\n\nResume continues from the last durable checkpoint without replaying completed work."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Checkpoint resume and restart trade-offs", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    sections_by_id = {section["section_id"]: section for section in result["report"]["sections"]}
+    concrete_claim_texts = {
+        claim["text"]
+        for section_id in ("resume-semantics", "restart-trade-offs")
+        for claim in sections_by_id[section_id]["claims"]
+    }
+    key_findings_claim_texts = {claim["text"] for claim in sections_by_id["key-findings"]["claims"]}
+
+    assert key_findings_claim_texts
+    assert not (key_findings_claim_texts & concrete_claim_texts)
+
+
+@pytest.mark.asyncio
 async def test_completed_claims_include_provenance_fields_and_final_sources_follow_rank(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
