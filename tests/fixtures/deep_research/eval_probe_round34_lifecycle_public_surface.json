@@ -1,0 +1,104 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing",
+    "runtime_warnings": [
+      "coverage_incomplete",
+      "medium_single_source_search_only",
+      "selected_evidence_unused"
+    ]
+  },
+  "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, and selected evidence usage for long-running deep research jobs",
+  "resolved_artifact_batch_id": "20260420T170306-8c4db0c3",
+  "artifacts": [
+    {
+      "kind": "sources.json",
+      "metadata": {
+        "batch_id": "20260420T170306-8c4db0c3"
+      }
+    },
+    {
+      "kind": "citations.json",
+      "metadata": {
+        "batch_id": "20260420T170306-8c4db0c3"
+      }
+    },
+    {
+      "kind": "report.json",
+      "metadata": {
+        "batch_id": "20260420T170306-8c4db0c3"
+      }
+    },
+    {
+      "kind": "final_report.md",
+      "metadata": {
+        "batch_id": "20260420T170306-8c4db0c3"
+      }
+    },
+    {
+      "kind": "evidence_items.json",
+      "metadata": {
+        "batch_id": "20260420T170306-8c4db0c3"
+      }
+    },
+    {
+      "kind": "coverage.json",
+      "metadata": {
+        "batch_id": "20260420T170306-8c4db0c3"
+      }
+    },
+    {
+      "kind": "grounding.json",
+      "metadata": {
+        "batch_id": "20260420T170306-8c4db0c3"
+      }
+    },
+    {
+      "kind": "verifier.json",
+      "metadata": {
+        "batch_id": "20260420T170306-8c4db0c3"
+      }
+    }
+  ],
+  "report": {
+    "status": "degraded",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "medium_single_source_search_only",
+        "selected_evidence_unused"
+      ],
+      "verifier": {
+        "passed": false,
+        "reason_codes": [
+          "selected_evidence_unused",
+          "medium_single_source_search_only"
+        ]
+      },
+      "release_gate": {
+        "passed": true,
+        "reason_codes": [],
+        "all_reason_codes": [
+          "selected_evidence_unused",
+          "medium_single_source_search_only"
+        ],
+        "soft_reason_codes": [
+          "selected_evidence_unused",
+          "medium_single_source_search_only"
+        ]
+      }
+    }
+  },
+  "golden": {
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing",
+    "runtime_warnings": [
+      "coverage_incomplete",
+      "domain_constraints_applied",
+      "medium_single_source_search_only",
+      "selected_evidence_unused"
+    ]
+  },
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, and Postgres-specific restart behavior",
+  "resolved_artifact_batch_id": "20260420T165708-59713b37",
+  "artifacts": [
+    {
+      "kind": "sources.json",
+      "metadata": {
+        "batch_id": "20260420T165708-59713b37"
+      }
+    },
+    {
+      "kind": "citations.json",
+      "metadata": {
+        "batch_id": "20260420T165708-59713b37"
+      }
+    },
+    {
+      "kind": "report.json",
+      "metadata": {
+        "batch_id": "20260420T165708-59713b37"
+      }
+    },
+    {
+      "kind": "final_report.md",
+      "metadata": {
+        "batch_id": "20260420T165708-59713b37"
+      }
+    },
+    {
+      "kind": "evidence_items.json",
+      "metadata": {
+        "batch_id": "20260420T165708-59713b37"
+      }
+    },
+    {
+      "kind": "coverage.json",
+      "metadata": {
+        "batch_id": "20260420T165708-59713b37"
+      }
+    },
+    {
+      "kind": "grounding.json",
+      "metadata": {
+        "batch_id": "20260420T165708-59713b37"
+      }
+    },
+    {
+      "kind": "verifier.json",
+      "metadata": {
+        "batch_id": "20260420T165708-59713b37"
+      }
+    }
+  ],
+  "report": {
+    "status": "degraded",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied",
+        "medium_single_source_search_only",
+        "selected_evidence_unused"
+      ],
+      "verifier": {
+        "passed": false,
+        "reason_codes": [
+          "selected_evidence_unused",
+          "medium_single_source_search_only"
+        ]
+      },
+      "release_gate": {
+        "passed": true,
+        "reason_codes": [],
+        "all_reason_codes": [
+          "selected_evidence_unused",
+          "medium_single_source_search_only"
+        ],
+        "soft_reason_codes": [
+          "selected_evidence_unused",
+          "medium_single_source_search_only"
+        ]
+      }
+    }
+  },
+  "golden": {
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
