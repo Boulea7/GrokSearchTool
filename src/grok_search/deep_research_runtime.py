@@ -1262,9 +1262,24 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
                 return text[len(prefix) :].strip()
         return text
 
+    def _dedupe_summary_key(value: str) -> str:
+        text = _strip_confidence_prefix(value)
+        text = re.sub(r"^(overall,\s*)+", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^(key point:\s*)+", "", text, flags=re.IGNORECASE)
+        text = _strip_confidence_prefix(text)
+        return _stable_text_key(text)
+
+    concrete_sections = [
+        section
+        for section in sections
+        if not is_summary_section_title(str(section.get("title", "")))
+        and not is_key_findings_section_title(str(section.get("title", "")))
+        and not is_open_questions_section_title(str(section.get("title", "")))
+    ]
+    source_sections = concrete_sections or sections
     section_summaries: list[str] = []
     claim_texts: list[str] = []
-    for section in sections:
+    for section in source_sections:
         section_summary = _summarize_evidence_text(str(section.get("summary", "")), limit=220)
         section_summary = _strip_confidence_prefix(section_summary)
         if section_summary and not _is_noisy_text(section_summary) and section_summary not in section_summaries:
@@ -1276,8 +1291,17 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
             if text not in claim_texts:
                 claim_texts.append(text)
     deduped_summary_chunks: list[str] = []
+    seen_summary_keys: set[str] = set()
     for chunk in section_summaries:
         normalized_chunk = _normalize_whitespace(chunk)
+        dedupe_key = _dedupe_summary_key(normalized_chunk)
+        if dedupe_key and dedupe_key in seen_summary_keys:
+            continue
+        if dedupe_key and any(
+            dedupe_key in existing_key or existing_key in dedupe_key
+            for existing_key in seen_summary_keys
+        ):
+            continue
         if any(
             normalized_chunk in existing
             or existing in normalized_chunk
@@ -1285,10 +1309,25 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
         ):
             continue
         deduped_summary_chunks.append(normalized_chunk)
+        if dedupe_key:
+            seen_summary_keys.add(dedupe_key)
     summary_chunks = deduped_summary_chunks[:2] or claim_texts[:2]
     if not summary_chunks:
         return _trim_text(plan.brief.objective, limit=220)
-    summary = " ".join(summary_chunks)
+    deduped_sentences: list[str] = []
+    seen_sentence_keys: set[str] = set()
+    for chunk in summary_chunks:
+        for sentence in re.split(r"(?<=[.!?])\s+", chunk):
+            normalized_sentence = _normalize_whitespace(sentence)
+            if not normalized_sentence:
+                continue
+            sentence_key = _dedupe_summary_key(normalized_sentence)
+            if sentence_key and sentence_key in seen_sentence_keys:
+                continue
+            deduped_sentences.append(normalized_sentence)
+            if sentence_key:
+                seen_sentence_keys.add(sentence_key)
+    summary = " ".join(deduped_sentences or summary_chunks)
     section_confidences = {str(section.get("confidence", "")) for section in sections if section.get("confidence")}
     confidence_prefix = ""
     explicit_confidence = str(confidence or "").strip().lower()
