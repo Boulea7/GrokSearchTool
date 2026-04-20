@@ -1558,6 +1558,9 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
     coverage_value: dict[str, Any] | None = None
     grounding_value: dict[str, Any] | None = None
     verifier_value: dict[str, Any] | None = None
+    sources_value: list[dict[str, Any]] | None = None
+    citations_value: dict[str, Any] | None = None
+    evidence_items_value: list[dict[str, Any]] | None = None
     for kind in _FINAL_ARTIFACT_KINDS:
         text = _read_text_if_exists(paths.get(kind))
         if text is None:
@@ -1568,6 +1571,15 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
                 return False
             if kind == "report.json" and isinstance(value, dict):
                 report_value = value
+            elif kind == "sources.json" and isinstance(value, list):
+                sources_value = value
+            elif kind == "citations.json":
+                normalized_citations = _normalize_citations_payload(value)
+                if _validate_json_artifact_shape(kind, normalized_citations) is not None:
+                    return False
+                citations_value = normalized_citations
+            elif kind == _EVIDENCE_ITEMS_ARTIFACT_KIND and isinstance(value, list):
+                evidence_items_value = value
             elif kind == "coverage.json" and isinstance(value, dict):
                 coverage_value = value
             elif kind == "grounding.json" and isinstance(value, dict):
@@ -1582,6 +1594,13 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
         coverage_value=coverage_value,
         grounding_value=grounding_value,
         verifier_value=verifier_value,
+    ):
+        return False
+    if _validate_provenance_bundle(
+        report_value=report_value,
+        sources_value=sources_value,
+        citations_value=citations_value,
+        evidence_items_value=evidence_items_value,
     ):
         return False
     return True
@@ -3795,11 +3814,18 @@ class DeepResearchRuntime:
         job = self.store.get_job(job_id)
         payload = self._serialize_job(job)
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
+        unresolved_batch_backed = bool(
+            _job_prefers_resolved_final_bundle(job)
+            and final_bundle is None
+            and any(_current_artifact_is_batch_backed(self.store, job_id, kind) for kind in _CORE_FINAL_ARTIFACT_KINDS)
+        )
         artifacts = _artifact_payloads(
             self.store,
             job_id,
             final_bundle=final_bundle,
         )
+        if unresolved_batch_backed:
+            artifacts = [artifact for artifact in artifacts if artifact.get("kind") not in _FINAL_ARTIFACT_KINDS]
         payload["artifact_kinds"] = [artifact["kind"] for artifact in artifacts]
         payload["artifacts"] = artifacts
         payload["artifact_fallback_used"] = _artifact_bundle_differs_from_current(self.store, job_id, final_bundle)
@@ -3939,11 +3965,15 @@ class DeepResearchRuntime:
             "planner_fallback_used": diagnostics["planner_fallback_used"],
             "runtime_warnings": diagnostics["runtime_warnings"],
             "constraint_violations": diagnostics["constraint_violations"],
-            "artifacts": _artifact_payloads(
-                self.store,
-                job_id,
-                final_bundle=final_bundle,
-            ),
+            "artifacts": [
+                artifact
+                for artifact in _artifact_payloads(
+                    self.store,
+                    job_id,
+                    final_bundle=final_bundle,
+                )
+                if not (unresolved_batch_backed and artifact.get("kind") in _FINAL_ARTIFACT_KINDS)
+            ],
         }
 
     def read_artifact_text(self, job_id: str, kind: str) -> str | None:
@@ -3970,9 +4000,9 @@ class DeepResearchRuntime:
                 message="Plan-only jobs cannot be resumed into execution.",
                 data={},
             )
-            return self._job_payload(job, reused=False)
+            return await self.status(job_id)
         if job.status not in {"draft", "failed", "interrupted"}:
-            return self._job_payload(job, reused=False)
+            return await self.status(job_id)
         if job.last_error == "worker_restarted":
             resume_source = "worker_restarted"
         elif job.status == "failed":
@@ -4001,7 +4031,7 @@ class DeepResearchRuntime:
                     message="Deep research recovered a usable final artifact batch without rerunning finalization.",
                     data={"resolved_artifact_batch_id": final_bundle["batch_id"]},
                 )
-                return self._job_payload(job, reused=False)
+                return await self.status(job_id)
         checkpoint_state, _ = self._load_checkpoint_state(job)
         completed_units_count = len(checkpoint_state.completed_unit_ids) if checkpoint_state else 0
         next_attempt_count = max(1, job.attempt_count + 1)
@@ -4033,7 +4063,7 @@ class DeepResearchRuntime:
         )
         if schedule:
             await self._schedule(job_id)
-        return self._job_payload(job, reused=False)
+        return await self.status(job_id)
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
         await self._ensure_startup_reconciled()

@@ -1190,6 +1190,30 @@ async def test_deep_research_resume_from_draft_preserves_plan_only_job(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_deep_research_resume_returns_status_shaped_payload(tmp_path):
+    response = await server.deep_research_start(
+        query="Resume status payload",
+        context="Need status-shaped resume output.",
+        plan_only=False,
+        force_new=True,
+    )
+    runtime = server._DEEP_RESEARCH_RUNTIME
+    runtime.store.update_job(
+        response["job_id"],
+        status="interrupted",
+        phase="researching",
+        current_checkpoint="researching-unit-search-1",
+    )
+
+    resumed = await server.deep_research_resume(response["job_id"])
+
+    assert resumed["status"] == "queued"
+    assert "artifact_kinds" in resumed
+    assert "artifacts" in resumed
+    assert "plan.json" in resumed["artifact_kinds"]
+
+
+@pytest.mark.asyncio
 async def test_search_query_falls_back_to_extracting_inline_urls(monkeypatch):
     async def fake_provider_search(provider, query, **kwargs):
         return (
