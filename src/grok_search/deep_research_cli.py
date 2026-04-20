@@ -400,7 +400,6 @@ async def _handle_events(args: argparse.Namespace) -> int:
             return 130
         return 0
     payload = await runtime.events(args.job_id, after_seq=args.after_seq, limit=args.limit)
-    status = await runtime.status(args.job_id)
     _print_events_summary(
         payload,
         after_seq=args.after_seq,
