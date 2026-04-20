@@ -229,6 +229,15 @@ def evidence_pool_for_section(
     if not isinstance(bank, dict):
         return list(evidence_items), "global"
 
+    selected_packet_ids = [
+        str(packet.get("evidence_id", "")).strip()
+        for packet in bank.get("selected_packets", []) or []
+        if isinstance(packet, dict) and str(packet.get("evidence_id", "")).strip() in evidence_by_id
+    ]
+    if selected_packet_ids:
+        deduped_selected_packet_ids = _dedupe_preserve_order(selected_packet_ids)
+        return [evidence_by_id[evidence_id] for evidence_id in deduped_selected_packet_ids], "selected"
+
     selected_ids = [
         str(evidence_id).strip()
         for evidence_id in bank.get("selected_evidence_ids", []) or []
@@ -242,6 +251,17 @@ def evidence_pool_for_section(
         for evidence_id in bank.get("rejected_evidence_ids", []) or []
         if str(evidence_id).strip()
     }
+    candidate_packet_ids = [
+        str(packet.get("evidence_id", "")).strip()
+        for packet in bank.get("candidate_packets", []) or []
+        if isinstance(packet, dict)
+        and str(packet.get("evidence_id", "")).strip() in evidence_by_id
+        and str(packet.get("evidence_id", "")).strip() not in rejected_ids
+    ]
+    if candidate_packet_ids:
+        deduped_candidate_packet_ids = _dedupe_preserve_order(candidate_packet_ids)
+        return [evidence_by_id[evidence_id] for evidence_id in deduped_candidate_packet_ids], "candidate"
+
     candidate_ids = [
         str(evidence_id).strip()
         for evidence_id in bank.get("candidate_evidence_ids", []) or []

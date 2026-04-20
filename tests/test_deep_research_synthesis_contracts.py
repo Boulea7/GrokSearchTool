@@ -135,8 +135,10 @@ def test_build_synthesis_outline_does_not_materialize_open_questions_without_rej
 
 def test_evidence_pool_for_section_prefers_selected_then_candidate_then_global():
     evidence_items = [
-        {"evidence_id": "selected-e1", "summary": "Selected", "detail": "Selected"},
+        {"evidence_id": "selected-e1", "summary": "Selected 1", "detail": "Selected 1"},
+        {"evidence_id": "selected-e2", "summary": "Selected 2", "detail": "Selected 2"},
         {"evidence_id": "candidate-e1", "summary": "Candidate", "detail": "Candidate"},
+        {"evidence_id": "candidate-e2", "summary": "Candidate 2", "detail": "Candidate 2"},
         {"evidence_id": "global-e1", "summary": "Global", "detail": "Global"},
     ]
 
@@ -146,9 +148,10 @@ def test_evidence_pool_for_section_prefers_selected_then_candidate_then_global()
         section_banks=[
             {
                 "section_id": "resume-semantics",
-                "candidate_evidence_ids": ["candidate-e1", "selected-e1"],
-                "selected_evidence_ids": ["selected-e1"],
+                "candidate_evidence_ids": ["candidate-e1", "selected-e1", "selected-e2"],
+                "selected_evidence_ids": ["selected-e1", "selected-e2"],
                 "rejected_evidence_ids": [],
+                "selected_packets": [{"evidence_id": "selected-e2"}],
             }
         ],
     )
@@ -158,9 +161,10 @@ def test_evidence_pool_for_section_prefers_selected_then_candidate_then_global()
         section_banks=[
             {
                 "section_id": "restart-trade-offs",
-                "candidate_evidence_ids": ["candidate-e1"],
+                "candidate_evidence_ids": ["candidate-e1", "candidate-e2"],
                 "selected_evidence_ids": [],
                 "rejected_evidence_ids": [],
+                "candidate_packets": [{"evidence_id": "candidate-e2"}],
             }
         ],
     )
@@ -178,8 +182,14 @@ def test_evidence_pool_for_section_prefers_selected_then_candidate_then_global()
     )
 
     assert selected_mode == "selected"
-    assert [item["evidence_id"] for item in selected_pool] == ["selected-e1"]
+    assert [item["evidence_id"] for item in selected_pool] == ["selected-e2"]
     assert candidate_mode == "candidate"
-    assert [item["evidence_id"] for item in candidate_pool] == ["candidate-e1"]
+    assert [item["evidence_id"] for item in candidate_pool] == ["candidate-e2"]
     assert global_mode == "global"
-    assert [item["evidence_id"] for item in global_pool] == ["selected-e1", "candidate-e1", "global-e1"]
+    assert [item["evidence_id"] for item in global_pool] == [
+        "selected-e1",
+        "selected-e2",
+        "candidate-e1",
+        "candidate-e2",
+        "global-e1",
+    ]

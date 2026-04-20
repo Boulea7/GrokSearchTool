@@ -2589,7 +2589,7 @@ def test_cli_events_prints_operator_batch_summary(monkeypatch, tmp_path, capsys)
     assert exit_code == 0
     assert [event["type"] for event in payload["events"]] == ["phase_started", "job_completed"]
     assert summary_lines(captured.err) == [
-        f"summary: job={job.job_id} events=2 after_seq=0 next_after_seq=2 last_event=job_completed terminal=false"
+        f"summary: job={job.job_id} events=2 after_seq=0 next_after_seq=2 last_event=job_completed terminal=true window_terminal=true"
     ]
 
 
@@ -2625,7 +2625,7 @@ def test_cli_round11_interrupted_status_events_and_result_remain_consistent(monk
     assert exit_code == 0
     assert [event["type"] for event in events_payload["events"]] == ["phase_started", "job_interrupted"]
     assert summary_lines(events_captured.err) == [
-        f"summary: job={job.job_id} events=2 after_seq=0 next_after_seq=2 last_event=job_interrupted terminal=true"
+        f"summary: job={job.job_id} events=2 after_seq=0 next_after_seq=2 last_event=job_interrupted terminal=true window_terminal=true"
     ]
 
     exit_code = deep_research_cli.main(["result", job.job_id])
@@ -2733,7 +2733,7 @@ def test_cli_events_after_seq_replay_matches_round21_stale_worker_reconnect_fixt
     assert payload["events"][1]["type"] == "checkpoint_restored"
     assert payload["events"][1]["data"]["checkpoint_kind"] == snapshot["expected"]["checkpoint_kind"]
     assert summary_lines(captured.err) == [
-        f"summary: job={job.job_id} events=5 after_seq={snapshot['resume_window']['after_seq']} next_after_seq={snapshot['resume_window']['next_after_seq']} last_event=job_interrupted terminal=true"
+        f"summary: job={job.job_id} events=5 after_seq={snapshot['resume_window']['after_seq']} next_after_seq={snapshot['resume_window']['next_after_seq']} last_event=job_interrupted terminal=true window_terminal=true"
     ]
 
 
@@ -2879,6 +2879,10 @@ def test_cli_events_after_seq_replay_matches_round30_worker_restart_fixture(monk
         (event["seq"], event["type"], event["phase"])
         for event in snapshot["resume_events_after_seq_5"]
     ]
+    assert payload["returned_count"] == snapshot["events_public_surface"]["returned_count"]
+    assert payload["last_event_type"] == snapshot["events_public_surface"]["last_event_type"]
+    assert payload["window_has_terminal_event"] is snapshot["events_public_surface"]["window_has_terminal_event"]
+    assert payload["job_terminal"] is snapshot["events_public_surface"]["job_terminal"]
     assert payload["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
     assert payload["events"][1]["data"]["checkpoint_kind"] == snapshot["expected"]["checkpoint_kind"]
     assert_summary_fields(
