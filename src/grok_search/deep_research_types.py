@@ -137,6 +137,8 @@ class DeepResearchContinuation(BaseModel):
     mode: Literal["fresh", "continue"] = "fresh"
     source_job_id: str = ""
     source_job_status: str = ""
+    lineage_root_job_id: str = ""
+    parent_job_id: str = ""
     continuation_identity: str = ""
     compaction_policy: str = ""
     compaction_reason_codes: list[str] = Field(default_factory=list)
@@ -146,11 +148,14 @@ class DeepResearchContinuation(BaseModel):
     continuation_goal: str = ""
     source_count: int = 0
     checkpoint_key: str = ""
+    resume_from_checkpoint_key: str = ""
+    replay_from_checkpoint_key: str = ""
     state_version: int = 2
     confirmed_claims: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
     trusted_source_headers: list[str] = Field(default_factory=list)
     carry_forward_constraints: dict[str, Any] = Field(default_factory=dict)
+    skipped_unit_ids: list[str] = Field(default_factory=list)
 
 
 class DeepResearchContinuationState(DeepResearchContinuation):
