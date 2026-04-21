@@ -16593,6 +16593,27 @@ def test_report_summary_uses_explicit_report_confidence_prefix():
     assert summary.startswith("Medium confidence:")
 
 
+def test_report_rollup_helpers_strip_nested_summary_scaffolding():
+    normalized = deep_research_runtime_module._synthesize_rollup_claim_text(
+        "Executive Summary",
+        "Medium confidence: Key point: Overall, Resume continues from the last durable checkpoint.",
+    )
+    summary = deep_research_runtime_module._build_section_summary(
+        [
+            {
+                "claim_id": "c1",
+                "text": "Key finding: Medium confidence: Resume continues from the last durable checkpoint.",
+                "confidence": "medium",
+            }
+        ]
+    )
+
+    assert "Overall, Overall," not in normalized
+    assert "Medium confidence: Key point: Key finding:" not in summary
+    assert normalized == "Overall, Resume continues from the last durable checkpoint."
+    assert summary == "Medium confidence: Key point: Resume continues from the last durable checkpoint."
+
+
 @pytest.mark.asyncio
 async def test_grounding_diagnostics_include_source_level_usage(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)

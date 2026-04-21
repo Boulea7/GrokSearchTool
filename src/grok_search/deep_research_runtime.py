@@ -1352,8 +1352,33 @@ def _build_report_summary(plan: DeepResearchPlan, sections: list[dict[str, Any]]
     return _trim_text(f"{confidence_prefix}{summary}".strip(), limit=320)
 
 
+def _strip_summary_scaffolding(value: str) -> str:
+    text = _normalize_whitespace(value)
+    lowered = text.lower()
+    prefixes = (
+        "high confidence:",
+        "medium confidence:",
+        "low confidence:",
+        "key point:",
+        "key finding:",
+        "overall,",
+    )
+    changed = True
+    while changed and text:
+        changed = False
+        lowered = text.lower()
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                text = _normalize_whitespace(text[len(prefix) :].lstrip(" ,:"))
+                changed = True
+                break
+    return text
+
+
 def _synthesize_rollup_claim_text(section_title: str, summary_text: str) -> str:
-    normalized_summary = _summarize_evidence_text(summary_text, limit=_MAX_CLAIM_LENGTH)
+    normalized_summary = _strip_summary_scaffolding(
+        _summarize_evidence_text(summary_text, limit=_MAX_CLAIM_LENGTH)
+    )
     if not normalized_summary:
         return ""
     normalized_summary = normalized_summary.rstrip(".")
@@ -9188,7 +9213,9 @@ def _build_section_citations(
 def _build_section_summary(section_claims: list[dict[str, Any]]) -> str:
     summary_parts: list[str] = []
     for claim in section_claims:
-        text = _summarize_evidence_text(str(claim.get("text", "")), limit=220)
+        text = _strip_summary_scaffolding(
+            _summarize_evidence_text(str(claim.get("text", "")), limit=220)
+        )
         if not text:
             continue
         if text in summary_parts:
