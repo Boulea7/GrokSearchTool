@@ -37,3 +37,5 @@ credentials*
 .local/
 .local/docs/
 .local/docs/**
+.tmp-status-dump/
+.tmp-test-runtime/
