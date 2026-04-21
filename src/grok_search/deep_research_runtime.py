@@ -233,8 +233,10 @@ _OUTLINE_VERSIONS_ARTIFACT_KIND = "outline_versions.json"
 _EVIDENCE_LEDGER_ARTIFACT_KIND = "evidence_ledger.json"
 _SECTION_BANKS_ARTIFACT_KIND = "section_banks.json"
 _SELECTED_BANK_ARTIFACT_KIND = "selected_bank.json"
+_EVIDENCE_BANK_ARTIFACT_KIND = "evidence_bank.json"
 _SOURCE_POLICY_ARTIFACT_KIND = "source_policy.json"
 _LINEAGE_ARTIFACT_KIND = "lineage.json"
+_VERIFICATION_ARTIFACT_KIND = "verification.json"
 _CORE_FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 _PROVENANCE_FINAL_ARTIFACT_KINDS = (
     _EVIDENCE_ITEMS_ARTIFACT_KIND,
@@ -3281,6 +3283,242 @@ def _selected_bank_payload(
             }
         )
     return payload
+
+
+def _evidence_bank_payload(
+    *,
+    evidence_items: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    usage_by_evidence_id: dict[str, dict[str, set[str]]] = {}
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        section_id = str(section.get("section_id", "")).strip()
+        for claim in section.get("claims", []) or []:
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get("claim_id", "")).strip()
+            for evidence_id in claim.get("evidence_ids", []) or []:
+                normalized_evidence_id = str(evidence_id).strip()
+                if not normalized_evidence_id:
+                    continue
+                usage = usage_by_evidence_id.setdefault(
+                    normalized_evidence_id,
+                    {"section_ids": set(), "claim_ids": set()},
+                )
+                if section_id:
+                    usage["section_ids"].add(section_id)
+                if claim_id:
+                    usage["claim_ids"].add(claim_id)
+
+    payload: list[dict[str, Any]] = []
+    for item in evidence_items:
+        if not isinstance(item, dict):
+            continue
+        evidence_id = str(item.get("evidence_id", "")).strip()
+        if not evidence_id:
+            continue
+        usage = usage_by_evidence_id.get(evidence_id, {"section_ids": set(), "claim_ids": set()})
+        snippet = _summarize_evidence_text(str(item.get("summary") or item.get("detail") or ""), limit=220)
+        payload.append(
+            {
+                "evidence_id": evidence_id,
+                "source_ids": [
+                    str(source_id).strip()
+                    for source_id in item.get("source_ids", []) or []
+                    if str(source_id).strip()
+                ],
+                "source_url": _normalize_whitespace(
+                    str(item.get("derived_from_source_url") or (item.get("source_urls") or [""])[0] or "")
+                ),
+                "snippet_or_excerpt": snippet,
+                "source_backed": str(item.get("evidence_kind", "")).strip() != "search",
+                "line_span": {
+                    "start": item.get("line_start"),
+                    "end": item.get("line_end"),
+                },
+                "origin_tool": str(item.get("evidence_kind", "")).strip() or "search",
+                "used_by_section_ids": sorted(usage["section_ids"]),
+                "used_by_claim_ids": sorted(usage["claim_ids"]),
+            }
+        )
+    return payload
+
+
+def _build_section_prose(section: dict[str, Any]) -> str:
+    summary = _normalize_whitespace(str(section.get("summary", "") or ""))
+    claim_texts = [
+        _strip_summary_scaffolding(_normalize_whitespace(str(claim.get("text", "") or "")))
+        for claim in section.get("claims", []) or []
+        if isinstance(claim, dict) and _normalize_whitespace(str(claim.get("text", "") or ""))
+    ]
+    prose_sentences: list[str] = []
+    if summary and not _is_noisy_text(summary):
+        prose_sentences.append(summary.rstrip(".") + ".")
+    for text in claim_texts:
+        if not text or _is_noisy_text(text):
+            continue
+        candidate = text.rstrip(".") + "."
+        if candidate in prose_sentences:
+            continue
+        prose_sentences.append(candidate)
+        if len(prose_sentences) >= 3:
+            break
+    return _trim_text(" ".join(prose_sentences), limit=700)
+
+
+def _packet_to_prose_fidelity_payload(
+    *,
+    selected_bank: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+    final_report: str = "",
+) -> dict[str, Any]:
+    section_by_id = {
+        str(section.get("section_id", "")).strip(): dict(section)
+        for section in sections
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    }
+    missing_selected_packet_ids: list[str] = []
+    checked_packet_count = 0
+    final_report_text = _normalize_whitespace(final_report)
+    for bank in selected_bank:
+        if not isinstance(bank, dict):
+            continue
+        section_id = str(bank.get("section_id", "")).strip()
+        section = section_by_id.get(section_id, {})
+        section_text = _normalize_whitespace(
+            " ".join(
+                [
+                    str(section.get("summary", "") or ""),
+                    str(section.get("prose", "") or ""),
+                    *[
+                        str(claim.get("text", "") or "")
+                        for claim in section.get("claims", []) or []
+                        if isinstance(claim, dict)
+                    ],
+                ]
+            )
+        )
+        for row in bank.get("selected_rows", []) or []:
+            if not isinstance(row, dict):
+                continue
+            evidence_id = str(row.get("evidence_id", "")).strip()
+            if not evidence_id:
+                continue
+            checked_packet_count += 1
+            coverage_tags = [
+                _normalize_whitespace(str(tag))
+                for tag in row.get("coverage_tags", []) or []
+                if _normalize_whitespace(str(tag))
+            ]
+            claim_ids = [
+                str(claim_id).strip()
+                for claim_id in row.get("claim_ids", []) or []
+                if str(claim_id).strip()
+            ]
+            packet_reflected = bool(claim_ids)
+            if not packet_reflected and coverage_tags:
+                packet_reflected = any(
+                    _count_keyword_overlap(section_text, _tokenize_keywords(tag)) > 0
+                    or _count_keyword_overlap(final_report_text, _tokenize_keywords(tag)) > 0
+                    for tag in coverage_tags
+                )
+            if not packet_reflected:
+                missing_selected_packet_ids.append(evidence_id)
+    passed = not missing_selected_packet_ids
+    return {
+        "passed": passed,
+        "checked_packet_count": checked_packet_count,
+        "missing_selected_packet_ids": _dedupe_preserve_order(missing_selected_packet_ids),
+        "reason_codes": [] if passed else ["selected_packet_missing_from_prose"],
+    }
+
+
+def _verification_payload(
+    *,
+    sections: list[dict[str, Any]],
+    coverage: dict[str, Any],
+    verifier: dict[str, Any],
+    selected_bank: list[dict[str, Any]],
+    final_report: str,
+) -> dict[str, Any]:
+    flagged_claim_ids = {
+        str(claim_id).strip()
+        for claim_id in verifier.get("flagged_claim_ids", []) or []
+        if str(claim_id).strip()
+    }
+    supported_claims: list[dict[str, Any]] = []
+    single_source_claims: list[dict[str, Any]] = []
+    conflicted_claims: list[dict[str, Any]] = []
+    confidence_by_section: dict[str, str] = {}
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        section_id = str(section.get("section_id", "")).strip()
+        if section_id:
+            confidence_by_section[section_id] = str(section.get("confidence", "") or "")
+        for claim in section.get("claims", []) or []:
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get("claim_id", "")).strip()
+            claim_payload = {
+                "claim_id": claim_id,
+                "section_id": section_id,
+                "text": str(claim.get("text", "") or ""),
+                "confidence": str(claim.get("confidence", "") or ""),
+            }
+            if claim_id and claim_id not in flagged_claim_ids:
+                supported_claims.append(claim_payload)
+            supporting_source_count = len(
+                {
+                    str(source_id).strip()
+                    for source_id in claim.get("source_ids", []) or claim.get("citations", []) or []
+                    if str(source_id).strip()
+                }
+            )
+            if supporting_source_count <= 1:
+                single_source_claims.append(claim_payload)
+    packet_to_prose_fidelity = _packet_to_prose_fidelity_payload(
+        selected_bank=selected_bank,
+        sections=sections,
+        final_report=final_report,
+    )
+    if "conflict" in set(verifier.get("reason_codes", []) or []):
+        conflicted_claims = list(single_source_claims)
+    unresolved_sections = [
+        str(title)
+        for title in [
+            *(coverage.get("unanswered_sections", []) or []),
+            *(coverage.get("hard_uncovered_targets", []) or []),
+        ]
+        if str(title).strip()
+    ]
+    selected_evidence_ids = {
+        str(row.get("evidence_id", "")).strip()
+        for bank in selected_bank
+        if isinstance(bank, dict)
+        for row in bank.get("selected_rows", []) or []
+        if isinstance(row, dict) and str(row.get("evidence_id", "")).strip()
+    }
+    used_evidence_ids = {
+        str(evidence_id).strip()
+        for section in sections
+        if isinstance(section, dict)
+        for claim in section.get("claims", []) or []
+        if isinstance(claim, dict)
+        for evidence_id in claim.get("evidence_ids", []) or []
+        if str(evidence_id).strip()
+    }
+    return {
+        "supported_claims": supported_claims,
+        "single_source_claims": single_source_claims,
+        "conflicted_claims": conflicted_claims,
+        "unmapped_evidence_ids": sorted(selected_evidence_ids - used_evidence_ids),
+        "confidence_by_section": confidence_by_section,
+        "unresolved_sections": _dedupe_preserve_order(unresolved_sections),
+        "packet_to_prose_fidelity": packet_to_prose_fidelity,
+    }
 
 
 def _write_internal_state_artifacts(
@@ -6809,6 +7047,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         evidence_count=sum(len(section.get("claims", [])) for section in citations["sections"]),
     )
     report_summary = _build_report_summary(plan, citations["sections"], confidence=report_confidence)
+    selected_bank = _selected_bank_payload(
+        section_banks=section_banks,
+        evidence_ledger=evidence_ledger,
+    )
+    evidence_bank = _evidence_bank_payload(
+        evidence_items=evidence_items,
+        sections=citations["sections"],
+    )
     report = {
         "query": plan.query,
         "summary": report_summary,
@@ -6850,6 +7096,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         },
     }
     final_report = _build_final_report(plan, citations["sections"], citations["source_registry"], report_summary)
+    verification = _verification_payload(
+        sections=citations["sections"],
+        coverage=report_coverage,
+        verifier=verifier_diagnostics,
+        selected_bank=selected_bank,
+        final_report=final_report,
+    )
+    report["runtime"]["verification"] = verification
     section_graph = _reconcile_section_graph_with_materialized_sections(
         section_graph,
         planned_outline=active_outline,
@@ -6876,6 +7130,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     runtime.write_artifact(job_id, "coverage.json", _json_markdown_block(coverage_diagnostics), "application/json")
     runtime.write_artifact(job_id, "grounding.json", _json_markdown_block(grounding_diagnostics), "application/json")
     runtime.write_artifact(job_id, "verifier.json", _json_markdown_block(verifier_diagnostics), "application/json")
+    runtime.write_artifact(job_id, _EVIDENCE_BANK_ARTIFACT_KIND, _json_markdown_block(evidence_bank), "application/json")
+    runtime.write_artifact(job_id, _VERIFICATION_ARTIFACT_KIND, _json_markdown_block(verification), "application/json")
     runtime.store.update_job(job_id, phase="finalizing", progress_pct=94.0, heartbeat_at=utc_now_iso())
     runtime.store.append_event(
         job_id,
@@ -6909,6 +7165,16 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             {
                 "kind": "verifier.json",
                 "content": _json_markdown_block(verifier_diagnostics),
+                "content_type": "application/json",
+            },
+            {
+                "kind": _EVIDENCE_BANK_ARTIFACT_KIND,
+                "content": _json_markdown_block(evidence_bank),
+                "content_type": "application/json",
+            },
+            {
+                "kind": _VERIFICATION_ARTIFACT_KIND,
+                "content": _json_markdown_block(verification),
                 "content_type": "application/json",
             },
         ],
@@ -9070,6 +9336,7 @@ def _build_section_citations(
             section_id=section_id,
             title=section_title,
             summary=section_summary,
+            prose="",
             claims=section_claims,
             citations=sorted({citation for claim in section_claims for citation in claim.get("citations", [])}),
             source_ids=_dedupe_preserve_order(
@@ -9098,8 +9365,9 @@ def _build_section_citations(
             supporting_domain_count=section_domain_count,
             pool_mode="selected" if selected_bank_evidence_ids else ("global" if enforce_overlap else "candidate"),
             question_ids=question_ids,
-        )
-        return section_model.model_dump()
+        ).model_dump()
+        section_model["prose"] = _build_section_prose(section_model)
+        return section_model
 
     concrete_sections: list[dict[str, Any]] = []
     concrete_section_ids: set[str] = set()
@@ -9214,10 +9482,11 @@ def _build_section_citations(
             [citation for claim in derived_claims for citation in claim.get("citations", [])],
             registry_by_id,
         )
-        return DeepResearchSectionCitations(
+        materialized = DeepResearchSectionCitations(
             section_id=_section_value(section, "section_id"),
             title=_section_value(section, "title"),
             summary=_build_section_summary(derived_claims),
+            prose="",
             claims=derived_claims,
             citations=sorted({citation for claim in derived_claims for citation in claim.get("citations", [])}),
             source_ids=_dedupe_preserve_order(
@@ -9245,6 +9514,8 @@ def _build_section_citations(
             supporting_source_count=section_source_count,
             supporting_domain_count=section_domain_count,
         ).model_dump()
+        materialized["prose"] = _build_section_prose(materialized)
+        return materialized
 
     def build_open_question_section(section: dict[str, Any]) -> dict[str, Any] | None:
         evidence_by_id = {
@@ -9399,13 +9670,12 @@ def _build_final_report(
     for section in sections:
         lines.append(f"## {section['title']}")
         lines.append("")
-        if section.get("summary"):
+        if section.get("prose"):
+            lines.append(section["prose"])
+            lines.append("")
+        elif section.get("summary"):
             lines.append(section["summary"])
             lines.append("")
-        for claim in section.get("claims", []):
-            refs = ", ".join(claim.get("citations", []))
-            lines.append(f"- {claim['text']} [{refs}]".rstrip())
-        lines.append("")
     lines.extend(["## Sources", ""])
     for source_id, item in source_registry.items():
         title = item.get("title") or item["url"]

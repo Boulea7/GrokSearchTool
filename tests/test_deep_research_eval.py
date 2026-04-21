@@ -106,6 +106,8 @@ def evaluate_case_metric(case: dict, metric: str) -> dict:
         return evaluate_release_gate_consistency(case)
     if metric == "resolved_batch_parity":
         return evaluate_resolved_batch_parity(case)
+    if metric == "packet_to_prose_fidelity":
+        return evaluate_packet_to_prose_fidelity(case)
     raise ValueError(f"Unsupported metric: {metric}")
 
 
@@ -497,6 +499,66 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
         "verdict": verdict,
         "score": round(score, 3),
         "reason_tags": sorted(set(reason_tags)),
+    }
+
+
+def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
+    report = case.get("report") or {}
+    sections = report.get("sections") or []
+    section_by_id = {
+        str(section.get("section_id", "")).strip(): dict(section)
+        for section in sections
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    }
+    final_report_text = " ".join(str(report.get("final_report") or case.get("final_report") or "").split()).lower()
+    selected_bank = case.get("selected_bank") or case.get("evidence_bank") or []
+    reason_tags: list[str] = []
+    checked_packets = 0
+    for bank in selected_bank:
+        if not isinstance(bank, dict):
+            continue
+        section_id = str(bank.get("section_id", "")).strip()
+        section = section_by_id.get(section_id, {})
+        section_text = " ".join(
+            " ".join(
+                [
+                    str(section.get("summary", "") or ""),
+                    str(section.get("prose", "") or ""),
+                    *[
+                        str(claim.get("text", "") or "")
+                        for claim in section.get("claims", []) or []
+                        if isinstance(claim, dict)
+                    ],
+                ]
+            ).split()
+        ).lower()
+        for row in bank.get("selected_rows", []) or []:
+            if not isinstance(row, dict):
+                continue
+            evidence_id = str(row.get("evidence_id", "")).strip()
+            if not evidence_id:
+                continue
+            checked_packets += 1
+            packet_reflected = bool([claim_id for claim_id in row.get("claim_ids", []) or [] if str(claim_id).strip()])
+            if not packet_reflected:
+                coverage_tags = [
+                    " ".join(str(tag).split()).lower()
+                    for tag in row.get("coverage_tags", []) or []
+                    if " ".join(str(tag).split())
+                ]
+                packet_reflected = any(
+                    tag and (tag in section_text or tag in final_report_text)
+                    for tag in coverage_tags
+                )
+            if not packet_reflected:
+                reason_tags.append("selected_packet_missing_from_prose")
+    verdict = "pass" if not reason_tags else "fail"
+    return {
+        "metric": "packet_to_prose_fidelity",
+        "verdict": verdict,
+        "score": 1.0 if verdict == "pass" else 0.0,
+        "reason_tags": sorted(set(reason_tags)),
+        "checked_packets": checked_packets,
     }
 
 
@@ -963,6 +1025,82 @@ def test_resolved_batch_parity_detects_mixed_batch_provenance_sidecars():
 
     assert result["verdict"] == "fail"
     assert result["reason_tags"] == ["mixed_batch_artifacts"]
+
+
+def test_packet_to_prose_fidelity_passes_when_selected_packets_are_reflected():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "summary": "RecoveryTimeout and awsdms_txn_state govern AWS DMS recovery behavior.",
+                    "prose": "RecoveryTimeout and awsdms_txn_state govern AWS DMS recovery behavior.",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "RecoveryTimeout governs recovery wait behavior.",
+                        }
+                    ],
+                }
+            ],
+            "final_report": "RecoveryTimeout and awsdms_txn_state govern AWS DMS recovery behavior.",
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_rows": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": ["resume-semantics-claim-1"],
+                        "coverage_tags": ["RecoveryTimeout", "awsdms_txn_state"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "pass"
+    assert result["reason_tags"] == []
+
+
+def test_packet_to_prose_fidelity_detects_selected_packet_missing_from_prose():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "summary": "Resume-processing continues from the last checkpoint.",
+                    "prose": "Resume-processing continues from the last checkpoint.",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "Resume-processing continues from the last checkpoint.",
+                        }
+                    ],
+                }
+            ],
+            "final_report": "Resume-processing continues from the last checkpoint.",
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_rows": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": [],
+                        "coverage_tags": ["RecoveryTimeout"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["selected_packet_missing_from_prose"]
 
 
 @pytest.mark.parametrize(
