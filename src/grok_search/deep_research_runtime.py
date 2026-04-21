@@ -7392,12 +7392,42 @@ def _select_fetch_sources(
         keyword in query_intent_text
         for keyword in ("troubleshooting", "troubleshoot", "support", "error", "issue", "failure")
     )
+    generic_query_terms = {
+        "aws",
+        "dms",
+        "checkpoint",
+        "checkpoints",
+        "resume",
+        "restart",
+        "semantics",
+        "behavior",
+        "task",
+        "tasks",
+        "replication",
+        "processing",
+        "service",
+        "services",
+        "database",
+    }
+    candidate_texts = [
+        f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
+        for source in sources
+    ]
+    distinctive_query_terms = [
+        term
+        for term in query_keywords
+        if term not in generic_query_terms
+        and sum(1 for text in candidate_texts if term in set(_tokenize_keywords(text))) == 1
+    ]
 
-    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, str]:
+    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, str]:
         title = f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
         quality_bias = _source_quality_bias(source)
         lowered_title = title.lower()
         traits = _source_doc_traits(source)
+        non_shell_distinctive_match_count = 0
+        if "prescriptive_guidance" not in traits and "troubleshooting" not in traits:
+            non_shell_distinctive_match_count = _count_keyword_overlap(title, distinctive_query_terms)
         shell_penalty = 0
         if not troubleshooting_intent and "troubleshooting" in lowered_title:
             shell_penalty -= 2
@@ -7408,6 +7438,7 @@ def _select_fetch_sources(
         if _is_low_signal_title(str(source.get("title") or "")):
             shell_penalty -= 2
         return (
+            non_shell_distinctive_match_count,
             quality_bias,
             _count_keyword_overlap(title, outline_keywords) if prefer_outline else 0,
             _count_keyword_overlap(title, query_keywords),
