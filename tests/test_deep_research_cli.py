@@ -3060,7 +3060,7 @@ def test_cli_recent_probe_status_and_result_match_fixture(monkeypatch, tmp_path,
             "phase": snapshot["job"]["phase"],
             "checkpoint": snapshot["job"]["current_checkpoint"],
             "attempts": str(snapshot["job"]["attempt_count"]),
-            "resolved_batch": seeded["batch_id"],
+            "resolved_batch": seeded["batch_id"] or "-",
             "artifact_fallback": "false",
         },
     )

@@ -1,0 +1,310 @@
+{
+  "sample": "probe-round35-lifecycle-public-surface",
+  "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, and selected evidence usage for long-running deep research jobs",
+  "job": {
+    "status": "failed",
+    "phase": "researching",
+    "effort": "deep",
+    "resolved_budget_seconds": 180,
+    "attempt_count": 1,
+    "current_checkpoint": "researching-u5",
+    "current_checkpoint_kind": "research_unit",
+    "last_error": "上游返回了无法解析的 completion 响应",
+    "cancel_requested": false,
+    "continued_from_job_id": ""
+  },
+  "plan": {
+    "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, and selected evidence usage for long-running deep research jobs",
+    "include_domains": [],
+    "exclude_domains": [],
+    "source_policy": {
+      "mode": "mixed_web",
+      "allowed_domains": [],
+      "blocked_domains": [],
+      "allowed_tools": [
+        "search",
+        "fetch",
+        "map"
+      ],
+      "user_data_refs": [],
+      "trust_tiers": [
+        "official_docs",
+        "standard",
+        "paper",
+        "third_party",
+        "community"
+      ],
+      "freshness_window": "current_web",
+      "must_cite_per_section": true,
+      "continuation_mode": "fresh"
+    },
+    "continuation": {
+      "mode": "fresh"
+    },
+    "brief": {
+      "objective": "Track worker recovery and resumed event windows.",
+      "deliverable": "A lifecycle-focused operator probe."
+    },
+    "search_strategy": {
+      "approach": "targeted",
+      "search_queries": [
+        "checkpoint restore checkpointing long-running jobs distributed systems AI workflows",
+        "LangGraph checkpoint restore resume from checkpoint thread update_state"
+      ]
+    },
+    "planner_metadata": {
+      "planner": "probe",
+      "used_fallback": false
+    }
+  },
+  "source_policy": {
+    "mode": "mixed_web",
+    "allowed_domains": [],
+    "blocked_domains": [],
+    "allowed_tools": [
+      "search",
+      "fetch",
+      "map"
+    ],
+    "user_data_refs": [],
+    "trust_tiers": [
+      "official_docs",
+      "standard",
+      "paper",
+      "third_party",
+      "community"
+    ],
+    "freshness_window": "current_web",
+    "must_cite_per_section": true,
+    "continuation_mode": "fresh"
+  },
+  "lineage": {
+    "root_job_id": "a2de1100f2e5ac36416dda75",
+    "parent_job_id": "",
+    "continued_from_job_id": "",
+    "continued_from_checkpoint": "",
+    "fork_type": "fresh",
+    "carried_forward_source_ids": [],
+    "carried_forward_evidence_ids": [],
+    "supersedes_job_id": ""
+  },
+  "selected_bank": [
+    {
+      "section_id": "worker-restart-and-reconnection-handling-failures-reconnection-logic-event-sequencing-after-seq",
+      "selected_evidence_ids": [
+        "evidence-u3-fetch-1"
+      ],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u3-fetch-1",
+          "selected_section_id": "worker-restart-and-reconnection-handling-failures-reconnection-logic-event-sequencing-after-seq",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": [
+            "sq2",
+            "sq4"
+          ],
+          "rejected_reason": "",
+          "claim_ids": [],
+          "question_ids": [
+            "sq2",
+            "sq4"
+          ]
+        }
+      ],
+      "candidate_evidence_ids": [
+        "evidence-u1-fetch-1",
+        "evidence-u3-search",
+        "evidence-u3-fetch-1"
+      ],
+      "rejected_evidence_ids": [
+        "evidence-u1-fetch-1",
+        "evidence-u3-search"
+      ]
+    }
+  ],
+  "non_batch_artifacts": [
+    {
+      "kind": "outline_versions.json",
+      "content": [],
+      "content_type": "application/json"
+    },
+    {
+      "kind": "outline_state.json",
+      "content": {},
+      "content_type": "application/json"
+    },
+    {
+      "kind": "evidence_ledger.json",
+      "content": [],
+      "content_type": "application/json"
+    },
+    {
+      "kind": "section_banks.json",
+      "content": [],
+      "content_type": "application/json"
+    }
+  ],
+  "initial_events": [
+    {
+      "seq": 1,
+      "type": "job_created",
+      "phase": "planning",
+      "message": "Deep research job created.",
+      "data": {
+        "plan_only": false,
+        "continuation_mode": "fresh"
+      }
+    }
+  ],
+  "events_after_seq": [
+    {
+      "seq": 2,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research interrupted during worker recovery.",
+      "data": {
+        "attempt_count": 0,
+        "checkpoint_key": "planning",
+        "checkpoint_kind": "planning",
+        "checkpoint_seq": 1,
+        "reason": "worker_restarted"
+      }
+    },
+    {
+      "seq": 3,
+      "type": "job_resumed",
+      "phase": "researching",
+      "message": "Deep research job resumed from checkpoint.",
+      "data": {
+        "attempt_count": 1,
+        "checkpoint_key": "planning",
+        "checkpoint_kind": "planning",
+        "checkpoint_seq": 1,
+        "completed_units_count": 0,
+        "resume_source": "worker_restarted"
+      }
+    },
+    {
+      "seq": 4,
+      "type": "phase_started",
+      "phase": "planning",
+      "message": "Planning started.",
+      "data": {
+        "unit_count": 6
+      }
+    },
+    {
+      "seq": 5,
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 0
+      }
+    },
+    {
+      "seq": 6,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u1.",
+      "data": {
+        "unit_type": "search"
+      }
+    },
+    {
+      "seq": 7,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u2.",
+      "data": {
+        "unit_type": "search"
+      }
+    },
+    {
+      "seq": 8,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u3.",
+      "data": {
+        "unit_type": "search"
+      }
+    },
+    {
+      "seq": 9,
+      "type": "research_unit_failed",
+      "phase": "researching",
+      "message": "Failed u4.",
+      "data": {
+        "unit_type": "search",
+        "error": "上游返回了无法解析的 completion 响应"
+      }
+    },
+    {
+      "seq": 10,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u5.",
+      "data": {
+        "unit_type": "search"
+      }
+    },
+    {
+      "seq": 11,
+      "type": "research_unit_failed",
+      "phase": "researching",
+      "message": "Failed u6.",
+      "data": {
+        "unit_type": "search",
+        "error": "上游返回了无法解析的 completion 响应"
+      }
+    },
+    {
+      "seq": 12,
+      "type": "job_failed",
+      "phase": "researching",
+      "message": "Deep research failed.",
+      "data": {
+        "error": "上游返回了无法解析的 completion 响应"
+      }
+    }
+  ],
+  "event_window": {
+    "after_seq": 1,
+    "next_after_seq": 12,
+    "returned_count": 11,
+    "last_event_type": "job_failed",
+    "window_has_terminal_event": true,
+    "job_terminal": true
+  },
+  "public_surface": {
+    "status": {
+      "current_checkpoint": "researching-u5",
+      "current_checkpoint_kind": "research_unit",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": false,
+      "resolved_artifact_batch_id": "",
+      "runtime_warnings": [],
+      "artifact_kinds": [
+        "plan.json",
+        "lineage.json",
+        "source_policy.json",
+        "outline_versions.json",
+        "outline_state.json",
+        "evidence_ledger.json",
+        "section_banks.json",
+        "selected_bank.json"
+      ],
+      "operator_summary": {
+        "status": "failed",
+        "phase": "researching",
+        "attempt_count": 1,
+        "current_checkpoint": "researching-u5",
+        "cancel_requested": false,
+        "continued_from_job_id": "",
+        "resolved_artifact_batch_id": "",
+        "planner_fallback_used": false,
+        "runtime_warnings": []
+      }
+    }
+  }
+}
