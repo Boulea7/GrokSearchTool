@@ -12,6 +12,8 @@ RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES = (
     "probe_round33_lifecycle_public_surface.json",
     "probe_round34_aws_dms_official_doc.json",
     "probe_round34_lifecycle_public_surface.json",
+    "probe_round35_aws_dms_official_doc.json",
+    "probe_round35_lifecycle_public_surface.json",
 )
 
 
@@ -346,7 +348,44 @@ def seed_live_probe_fixture_job(runtime, fixture_name: str, *, request_fingerpri
         json.dumps(snapshot.get("plan") or {"query": snapshot["query"]}),
         "application/json",
     )
-    persisted = runtime.write_artifact_batch(job.job_id, _artifact_batch_from_snapshot(snapshot))
+    planner_trace = (
+        (snapshot.get("plan") or {}).get("planner_metadata", {}).get("trace")
+        if isinstance((snapshot.get("plan") or {}).get("planner_metadata"), dict)
+        else None
+    )
+    if planner_trace:
+        runtime.write_artifact(
+            job.job_id,
+            "planner_trace.json",
+            json.dumps(planner_trace),
+            "application/json",
+        )
+    for kind, payload in (
+        ("source_policy.json", snapshot.get("source_policy")),
+        ("lineage.json", snapshot.get("lineage")),
+        ("selected_bank.json", snapshot.get("selected_bank")),
+    ):
+        if payload is None:
+            continue
+        runtime.write_artifact(
+            job.job_id,
+            kind,
+            json.dumps(payload),
+            "application/json",
+        )
+    for artifact in snapshot.get("non_batch_artifacts") or []:
+        content = artifact.get("content")
+        if not isinstance(content, str):
+            content = json.dumps(content)
+        runtime.write_artifact(
+            job.job_id,
+            artifact["kind"],
+            content,
+            artifact.get("content_type") or "application/json",
+        )
+    persisted = []
+    if snapshot.get("artifact_payload") is not None:
+        persisted = runtime.write_artifact_batch(job.job_id, _artifact_batch_from_snapshot(snapshot))
     batch_id = persisted[0]["metadata"]["batch_id"] if persisted else ""
     for event in list(snapshot.get("initial_events") or []) + list(snapshot.get("events_after_seq") or []):
         runtime.store.append_event(
