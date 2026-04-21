@@ -2,11 +2,18 @@ import json
 import asyncio
 import sys
 from pathlib import Path
+import pytest
 
 from grok_search import deep_research_cli
 from grok_search.deep_research_runtime import DeepResearchRuntime
 from grok_search.deep_research_types import utc_now_iso
-from deep_research_test_helpers import assert_summary_fields, summary_lines
+from deep_research_test_helpers import (
+    RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES,
+    assert_fixture_public_surface as assert_recent_probe_fixture_public_surface,
+    assert_summary_fields,
+    seed_live_probe_fixture_job,
+    summary_lines,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
@@ -3020,6 +3027,101 @@ def test_cli_resume_watch_after_seq_replays_only_round30_resumed_window(monkeypa
             "warning_codes": "coverage_incomplete,planner_fallback_used",
         },
         index=1,
+    )
+
+
+@pytest.mark.parametrize("fixture_name", RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES)
+def test_cli_recent_probe_status_and_result_match_fixture(monkeypatch, tmp_path, capsys, fixture_name):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        fixture_name,
+        request_fingerprint=f"fp-cli-{fixture_name.removesuffix('.json')}",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    exit_code = deep_research_cli.main(["status", job.job_id])
+    status_captured = capsys.readouterr()
+    status_payload = json.loads(status_captured.out)
+
+    assert exit_code == 0
+    assert status_payload["status"] == snapshot["job"]["status"]
+    assert status_payload["phase"] == snapshot["job"]["phase"]
+    assert status_payload["attempt_count"] == snapshot["job"]["attempt_count"]
+    assert status_payload["current_checkpoint"] == snapshot["job"]["current_checkpoint"]
+    assert status_payload["current_checkpoint_kind"] == snapshot["job"]["current_checkpoint_kind"]
+    assert_summary_fields(
+        status_captured.err,
+        {
+            "job": job.job_id,
+            "status": snapshot["job"]["status"],
+            "phase": snapshot["job"]["phase"],
+            "checkpoint": snapshot["job"]["current_checkpoint"],
+            "attempts": str(snapshot["job"]["attempt_count"]),
+            "resolved_batch": seeded["batch_id"],
+            "artifact_fallback": "false",
+        },
+    )
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--include-partial"])
+    result_captured = capsys.readouterr()
+    result_payload = json.loads(result_captured.out)
+
+    assert exit_code == 0
+    assert result_payload["status"] == snapshot["job"]["status"]
+    assert result_payload["phase"] == snapshot["job"]["phase"]
+    assert_recent_probe_fixture_public_surface(
+        snapshot,
+        status=status_payload,
+        result=result_payload,
+        seeded_batch_id=seeded["batch_id"],
+    )
+
+
+@pytest.mark.parametrize("fixture_name", RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES)
+def test_cli_recent_probe_events_after_seq_match_fixture(monkeypatch, tmp_path, capsys, fixture_name):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        fixture_name,
+        request_fingerprint=f"fp-cli-events-{fixture_name.removesuffix('.json')}",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+    event_window = snapshot["event_window"]
+
+    exit_code = deep_research_cli.main(
+        ["events", job.job_id, "--after-seq", str(event_window["after_seq"]), "--limit", "20"]
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["next_after_seq"] == event_window["next_after_seq"]
+    assert payload["returned_count"] == event_window["returned_count"]
+    assert payload["last_event_type"] == event_window["last_event_type"]
+    assert payload["window_has_terminal_event"] is event_window["window_has_terminal_event"]
+    assert payload["job_terminal"] is event_window["job_terminal"]
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in payload["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["events_after_seq"]
+    ]
+    assert_summary_fields(
+        captured.err,
+        {
+            "job": job.job_id,
+            "events": str(event_window["returned_count"]),
+            "after_seq": str(event_window["after_seq"]),
+            "next_after_seq": str(event_window["next_after_seq"]),
+            "last_event": event_window["last_event_type"],
+            "terminal": str(event_window["job_terminal"]).lower(),
+        },
     )
 
 

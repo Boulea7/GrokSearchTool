@@ -8,6 +8,11 @@ from grok_search import server
 from grok_search import deep_research_runtime
 from grok_search.deep_research_runtime import DeepResearchRuntime
 from grok_search.deep_research_types import utc_now_iso
+from deep_research_test_helpers import (
+    RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES,
+    assert_fixture_public_surface as assert_recent_probe_fixture_public_surface,
+    seed_live_probe_fixture_job,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
@@ -1167,6 +1172,71 @@ async def test_deep_research_round30_worker_restart_status_and_result_match_fixt
     assert result["final_report"] is None
     assert result["sources"] is None
     assert_fixture_public_surface(snapshot, status=status, result=result, seeded_batch_id=seeded["batch_id"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fixture_name", RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES)
+async def test_deep_research_recent_probe_status_and_result_match_fixture(monkeypatch, tmp_path, fixture_name):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        fixture_name,
+        request_fingerprint=f"fp-server-{fixture_name.removesuffix('.json')}",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == snapshot["job"]["status"]
+    assert status["phase"] == snapshot["job"]["phase"]
+    assert status["attempt_count"] == snapshot["job"]["attempt_count"]
+    assert status["current_checkpoint"] == snapshot["job"]["current_checkpoint"]
+    assert status["current_checkpoint_kind"] == snapshot["job"]["current_checkpoint_kind"]
+    assert result["status"] == snapshot["job"]["status"]
+    assert result["phase"] == snapshot["job"]["phase"]
+    assert_recent_probe_fixture_public_surface(
+        snapshot,
+        status=status,
+        result=result,
+        seeded_batch_id=seeded["batch_id"],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fixture_name", RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES)
+async def test_deep_research_recent_probe_events_after_seq_match_fixture(monkeypatch, tmp_path, fixture_name):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        fixture_name,
+        request_fingerprint=f"fp-server-events-{fixture_name.removesuffix('.json')}",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+    event_window = snapshot["event_window"]
+
+    payload = await server.deep_research_events(
+        job.job_id,
+        after_seq=event_window["after_seq"],
+        limit=20,
+    )
+
+    assert payload["next_after_seq"] == event_window["next_after_seq"]
+    assert payload["returned_count"] == event_window["returned_count"]
+    assert payload["last_event_type"] == event_window["last_event_type"]
+    assert payload["window_has_terminal_event"] is event_window["window_has_terminal_event"]
+    assert payload["job_terminal"] is event_window["job_terminal"]
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in payload["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["events_after_seq"]
+    ]
 
 
 @pytest.mark.asyncio

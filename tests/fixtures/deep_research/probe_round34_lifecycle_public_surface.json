@@ -1,0 +1,362 @@
+{
+  "sample": "probe-round34-lifecycle-public-surface",
+  "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, and selected evidence usage for long-running deep research jobs",
+  "job": {
+    "status": "completed",
+    "phase": "finalizing",
+    "effort": "deep",
+    "resolved_budget_seconds": 300,
+    "attempt_count": 3,
+    "current_checkpoint": "finalizing",
+    "current_checkpoint_kind": "finalizing",
+    "last_error": "",
+    "cancel_requested": false,
+    "continued_from_job_id": "job-lineage-round34"
+  },
+  "plan": {
+    "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, and selected evidence usage for long-running deep research jobs",
+    "include_domains": [
+      "docs.temporal.io",
+      "docs.restate.dev"
+    ],
+    "exclude_domains": [],
+    "continuation": {
+      "mode": "continue",
+      "source_job_id": "job-lineage-round34",
+      "checkpoint_key": "researching-u4"
+    },
+    "brief": {
+      "objective": "Track continuation lineage and replay semantics across worker restarts.",
+      "deliverable": "A lifecycle-focused report with replay coverage."
+    },
+    "search_strategy": {
+      "approach": "targeted",
+      "search_queries": [
+        "Temporal checkpoint restore replay",
+        "Restate durable checkpoint docs"
+      ]
+    },
+    "sub_questions": [
+      {
+        "id": "sq1",
+        "question": "How is continuation lineage preserved after reconnect and replay?",
+        "reason": "Cover lineage handling."
+      }
+    ],
+    "planner_metadata": {
+      "planner": "probe",
+      "used_fallback": true,
+      "fallback_reason": {
+        "stage": "unsafe_plan",
+        "error": "continuation_lineage_gap"
+      }
+    }
+  },
+  "artifact_payload": {
+    "sources": [
+      {
+        "source_id": "R20",
+        "url": "https://docs.temporal.io/workflow-execution/continue-as-new",
+        "title": "Continue-As-New",
+        "domain": "docs.temporal.io",
+        "source_type": "official_docs"
+      },
+      {
+        "source_id": "R21",
+        "url": "https://docs.restate.dev/guides/workflows/checkpoints",
+        "title": "Workflow checkpoints",
+        "domain": "docs.restate.dev",
+        "source_type": "official_docs"
+      }
+    ],
+    "report": {
+      "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, and selected evidence usage for long-running deep research jobs",
+      "summary": "Round34 lifecycle probe keeps continuation lineage in operator summaries while replaying resumed windows from a durable checkpoint.",
+      "status": "degraded",
+      "sections": [
+        {
+          "section_id": "continuation-lineage",
+          "title": "Continuation lineage",
+          "claims": [
+            {
+              "claim_id": "c1",
+              "text": "Operator summaries should keep continued_from_job_id visible after replay recovery.",
+              "citations": [
+                "R20",
+                "R21"
+              ]
+            }
+          ]
+        }
+      ],
+      "unit_results": {
+        "unit-search-1": {
+          "status": "completed",
+          "source_ids": [
+            "R20",
+            "R21"
+          ]
+        }
+      },
+      "runtime": {
+        "warnings": [
+          "coverage_incomplete",
+          "medium_single_source_search_only",
+          "selected_evidence_unused"
+        ],
+        "constraint_violations": [
+          "continuation_lineage_gap"
+        ],
+        "verifier": {
+          "passed": false,
+          "reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ]
+        },
+        "release_gate": {
+          "passed": true,
+          "reason_codes": [],
+          "all_reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ],
+          "soft_reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ]
+        }
+      }
+    },
+    "final_report": "# Final Report\n\nRound34 lifecycle probe keeps continuation lineage in operator summaries while replaying resumed windows from a durable checkpoint.\n",
+    "evidence_items": [
+      {
+        "evidence_id": "ev-r34-life-1",
+        "unit_id": "unit-search-1",
+        "summary": "Continuation lineage remains part of the operator summary surface.",
+        "detail": "Replay recovery should not drop continued_from_job_id or the resumed checkpoint context.",
+        "source_ids": [
+          "R20",
+          "R21"
+        ],
+        "source_urls": [
+          "https://docs.temporal.io/workflow-execution/continue-as-new",
+          "https://docs.restate.dev/guides/workflows/checkpoints"
+        ]
+      }
+    ]
+  },
+  "public_surface": {
+    "status": {
+      "current_checkpoint": "finalizing",
+      "current_checkpoint_kind": "finalizing",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": true,
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "runtime_warnings": [
+        "coverage_incomplete",
+        "medium_single_source_search_only",
+        "selected_evidence_unused"
+      ],
+      "constraint_violations": [
+        "continuation_lineage_gap"
+      ],
+      "artifact_kinds": [
+        "plan.json",
+        "sources.json",
+        "citations.json",
+        "report.json",
+        "final_report.md",
+        "evidence_items.json",
+        "coverage.json",
+        "grounding.json",
+        "verifier.json"
+      ],
+      "operator_summary": {
+        "status": "completed",
+        "phase": "finalizing",
+        "attempt_count": 3,
+        "current_checkpoint": "finalizing",
+        "cancel_requested": false,
+        "continued_from_job_id": "job-lineage-round34",
+        "resolved_artifact_batch_id": "$seeded_batch_id",
+        "planner_fallback_used": true,
+        "runtime_warnings": [
+          "coverage_incomplete",
+          "medium_single_source_search_only",
+          "selected_evidence_unused"
+        ],
+        "constraint_violations": [
+          "continuation_lineage_gap"
+        ]
+      }
+    },
+    "result": {
+      "current_checkpoint_kind": "finalizing",
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": true,
+      "runtime_warnings": [
+        "coverage_incomplete",
+        "medium_single_source_search_only",
+        "selected_evidence_unused"
+      ],
+      "constraint_violations": [
+        "continuation_lineage_gap"
+      ],
+      "operator_summary": {
+        "status": "completed",
+        "phase": "finalizing",
+        "attempt_count": 3,
+        "current_checkpoint": "finalizing",
+        "cancel_requested": false,
+        "continued_from_job_id": "job-lineage-round34",
+        "resolved_artifact_batch_id": "$seeded_batch_id",
+        "planner_fallback_used": true,
+        "runtime_warnings": [
+          "coverage_incomplete",
+          "medium_single_source_search_only",
+          "selected_evidence_unused"
+        ],
+        "constraint_violations": [
+          "continuation_lineage_gap"
+        ]
+      },
+      "report": {
+        "status": "degraded",
+        "summary": "Round34 lifecycle probe keeps continuation lineage in operator summaries while replaying resumed windows from a durable checkpoint.",
+        "runtime": {
+          "warnings": [
+            "coverage_incomplete",
+            "medium_single_source_search_only",
+            "selected_evidence_unused"
+          ],
+          "constraint_violations": [
+            "continuation_lineage_gap"
+          ],
+          "release_gate": {
+            "passed": true,
+            "reason_codes": [],
+            "all_reason_codes": [
+              "selected_evidence_unused",
+              "medium_single_source_search_only"
+            ],
+            "soft_reason_codes": [
+              "selected_evidence_unused",
+              "medium_single_source_search_only"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "event_window": {
+    "after_seq": 5,
+    "next_after_seq": 10,
+    "returned_count": 5,
+    "last_event_type": "job_completed",
+    "window_has_terminal_event": true,
+    "job_terminal": true
+  },
+  "initial_events": [
+    {
+      "seq": 1,
+      "type": "job_created",
+      "phase": "planning",
+      "message": "Deep research job created.",
+      "data": {
+        "continuation_mode": "continue",
+        "plan_only": false
+      }
+    },
+    {
+      "seq": 2,
+      "type": "planner_fallback",
+      "phase": "planning",
+      "message": "Planner fell back to the deterministic backup plan.",
+      "data": {
+        "stage": "unsafe_plan",
+        "error": "continuation_lineage_gap"
+      }
+    },
+    {
+      "seq": 3,
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 0
+      }
+    },
+    {
+      "seq": 4,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed unit-search-1.",
+      "data": {
+        "sources_count": 2,
+        "unit_type": "search"
+      }
+    },
+    {
+      "seq": 5,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research interrupted during worker recovery.",
+      "data": {
+        "attempt_count": 2,
+        "checkpoint_key": "researching-u4",
+        "checkpoint_kind": "research_unit",
+        "reason": "worker_restarted"
+      }
+    }
+  ],
+  "events_after_seq": [
+    {
+      "seq": 6,
+      "type": "job_resumed",
+      "phase": "researching",
+      "message": "Deep research job resumed from checkpoint.",
+      "data": {
+        "attempt_count": 3,
+        "resume_source": "worker_restarted"
+      }
+    },
+    {
+      "seq": 7,
+      "type": "checkpoint_restored",
+      "phase": "researching",
+      "message": "Deep research restored execution from the latest durable checkpoint.",
+      "data": {
+        "checkpoint_key": "researching-u4",
+        "checkpoint_kind": "research_unit"
+      }
+    },
+    {
+      "seq": 8,
+      "type": "phase_started",
+      "phase": "synthesizing",
+      "message": "Synthesizing findings.",
+      "data": {
+        "section_count": 1
+      }
+    },
+    {
+      "seq": 9,
+      "type": "phase_started",
+      "phase": "finalizing",
+      "message": "Finalizing report.",
+      "data": {}
+    },
+    {
+      "seq": 10,
+      "type": "job_completed",
+      "phase": "finalizing",
+      "message": "Deep research completed successfully.",
+      "data": {
+        "artifact_batch_id": "$seeded_batch_id",
+        "sources_count": 2
+      }
+    }
+  ]
+}

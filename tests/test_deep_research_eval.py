@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 
 import pytest
+from deep_research_test_helpers import load_deep_research_fixture
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
@@ -19,6 +20,12 @@ PROBE_PUBLIC_SURFACE_FIXTURES = (
 PROBE_PUBLIC_SURFACE_METRICS = (
     "release_gate_consistency",
     "resolved_batch_parity",
+)
+RECENT_PROBE_EVAL_PARITY_FIXTURES = (
+    ("eval_probe_round33_aws_dms_official_doc.json", "probe_round33_aws_dms_official_doc.json"),
+    ("eval_probe_round33_lifecycle_public_surface.json", "probe_round33_lifecycle_public_surface.json"),
+    ("eval_probe_round34_aws_dms_official_doc.json", "probe_round34_aws_dms_official_doc.json"),
+    ("eval_probe_round34_lifecycle_public_surface.json", "probe_round34_lifecycle_public_surface.json"),
 )
 UNGROUNDED_ANALOGY_MARKERS = ("real-world analogy", "think of ")
 STOPWORDS = {
@@ -994,3 +1001,14 @@ def test_probe_public_surface_goldens(fixture_name):
         golden = case["golden"][metric]
         result = evaluate_case_metric(case, metric)
         assert_metric_matches_golden(result, golden)
+
+
+@pytest.mark.parametrize(("eval_fixture_name", "live_fixture_name"), RECENT_PROBE_EVAL_PARITY_FIXTURES)
+def test_recent_probe_eval_and_live_fixtures_stay_in_parity(eval_fixture_name, live_fixture_name):
+    eval_case = load_eval_case(eval_fixture_name)
+    live_case = load_deep_research_fixture(live_fixture_name)
+
+    assert live_case["query"] == eval_case["query"]
+    assert live_case["job"]["status"] == eval_case["sample"]["status"]
+    assert live_case["job"]["phase"] == eval_case["sample"]["phase"]
+    assert live_case["public_surface"]["status"]["runtime_warnings"] == eval_case["sample"]["runtime_warnings"]
