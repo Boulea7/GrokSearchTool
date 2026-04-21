@@ -1,0 +1,195 @@
+{
+  "sample": "probe-round36-aws-dms-official-doc",
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
+  "include_domains": ["docs.aws.amazon.com"],
+  "exclude_domains": ["repost.aws"],
+  "job": {
+    "status": "completed",
+    "phase": "finalizing",
+    "effort": "deep",
+    "resolved_budget_seconds": 180,
+    "attempt_count": 1,
+    "current_checkpoint": "finalizing",
+    "current_checkpoint_kind": "finalizing",
+    "last_error": "",
+    "cancel_requested": false,
+    "continued_from_job_id": ""
+  },
+  "plan": {
+    "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
+    "include_domains": ["docs.aws.amazon.com"],
+    "exclude_domains": ["repost.aws"],
+    "source_policy": {
+      "mode": "official_docs_only",
+      "allowed_domains": ["docs.aws.amazon.com"],
+      "blocked_domains": ["repost.aws"],
+      "allowed_tools": ["search", "fetch", "map"],
+      "must_cite_per_section": true,
+      "continuation_mode": "fresh"
+    },
+    "continuation": {"mode": "fresh"},
+    "planner_metadata": {"planner": "model", "used_fallback": false}
+  },
+  "source_policy": {
+    "mode": "official_docs_only",
+    "allowed_domains": ["docs.aws.amazon.com"],
+    "blocked_domains": ["repost.aws"],
+    "allowed_tools": ["search", "fetch", "map"],
+    "must_cite_per_section": true,
+    "continuation_mode": "fresh"
+  },
+  "lineage": {
+    "root_job_id": "9cab54ee2ddb7bad46b2b845",
+    "parent_job_id": "",
+    "continued_from_job_id": "",
+    "continued_from_checkpoint": "",
+    "fork_type": "fresh",
+    "carried_forward_source_ids": [],
+    "carried_forward_evidence_ids": [],
+    "skipped_unit_ids": [],
+    "supersedes_job_id": ""
+  },
+  "selected_bank": [
+    {
+      "section_id": "awsdms-txn-state-metadata-table-for-checkpoint-recovery",
+      "selected_evidence_ids": ["evidence-u3-fetch-1"],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u3-fetch-1",
+          "selected_section_id": "awsdms-txn-state-metadata-table-for-checkpoint-recovery",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": ["sq3"],
+          "rejected_reason": "",
+          "claim_ids": ["awsdms-txn-state-metadata-table-for-checkpoint-recovery-claim-8"],
+          "question_ids": ["sq3"]
+        }
+      ],
+      "candidate_evidence_ids": ["evidence-u3-fetch-1"],
+      "rejected_evidence_ids": []
+    }
+  ],
+  "artifact_payload": {
+    "sources": [
+      {
+        "source_id": "R1",
+        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+        "title": "StartReplicationTask",
+        "domain": "docs.aws.amazon.com",
+        "source_type": "official_docs"
+      },
+      {
+        "source_id": "R2",
+        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        "title": "DescribeReplicationTasks",
+        "domain": "docs.aws.amazon.com",
+        "source_type": "official_docs"
+      },
+      {
+        "source_id": "R4",
+        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+        "title": "Change processing tuning settings",
+        "domain": "docs.aws.amazon.com",
+        "source_type": "official_docs"
+      }
+    ],
+    "report": {
+      "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
+      "summary": "Round36 official-doc probe completed with evidence-bank and verification artifacts, but coverage and single-source warnings remain.",
+      "status": "degraded",
+      "sections": [
+        {
+          "section_id": "awsdms-txn-state-metadata-table-for-checkpoint-recovery",
+          "title": "awsdms_txn_state Metadata Table for Checkpoint Recovery",
+          "summary": "The awsdms_txn_state table stores checkpoint recovery state.",
+          "prose": "The awsdms_txn_state table stores checkpoint recovery state.",
+          "claims": [
+            {
+              "claim_id": "awsdms-txn-state-metadata-table-for-checkpoint-recovery-claim-8",
+              "text": "The awsdms_txn_state table stores checkpoint recovery state.",
+              "citations": ["R4"],
+              "evidence_ids": ["evidence-u3-fetch-1"]
+            }
+          ],
+          "citations": ["R4"]
+        }
+      ],
+      "unit_results": {},
+      "runtime": {
+        "warnings": ["coverage_incomplete", "domain_constraints_applied", "medium_single_source_search_only"],
+        "constraint_violations": [{"unit_id": "u1", "removed_source_count": 2, "reason": "domain_constraints_applied"}],
+        "verifier": {"passed": false, "reason_codes": ["medium_single_source_search_only"]},
+        "release_gate": {
+          "passed": true,
+          "reason_codes": [],
+          "all_reason_codes": ["medium_single_source_search_only"],
+          "soft_reason_codes": ["medium_single_source_search_only"]
+        }
+      }
+    },
+    "final_report": "# Final Report\n\nRound36 official-doc probe completed with evidence-bank and verification artifacts, but coverage and single-source warnings remain.\n",
+    "evidence_items": [
+      {
+        "evidence_id": "evidence-u3-fetch-1",
+        "unit_id": "u3",
+        "summary": "The awsdms_txn_state table stores checkpoint recovery state.",
+        "detail": "The awsdms_txn_state table stores checkpoint recovery state.",
+        "source_ids": ["R4"],
+        "source_urls": ["https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html"],
+        "evidence_kind": "fetch"
+      }
+    ],
+    "evidence_bank": [
+      {
+        "evidence_id": "evidence-u3-fetch-1",
+        "source_ids": ["R4"],
+        "source_url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+        "snippet_or_excerpt": "The awsdms_txn_state table stores checkpoint recovery state.",
+        "source_backed": true,
+        "line_span": {"start": null, "end": null},
+        "origin_tool": "fetch",
+        "used_by_section_ids": ["awsdms-txn-state-metadata-table-for-checkpoint-recovery"],
+        "used_by_claim_ids": ["awsdms-txn-state-metadata-table-for-checkpoint-recovery-claim-8"]
+      }
+    ],
+    "verification": {
+      "supported_claims": [{"claim_id": "awsdms-txn-state-metadata-table-for-checkpoint-recovery-claim-8"}],
+      "single_source_claims": [{"claim_id": "awsdms-txn-state-metadata-table-for-checkpoint-recovery-claim-8"}],
+      "conflicted_claims": [],
+      "unmapped_evidence_ids": [],
+      "confidence_by_section": {"awsdms-txn-state-metadata-table-for-checkpoint-recovery": "medium"},
+      "unresolved_sections": ["Key Differences: Resume vs. Restart, Limitations, and Best Practices"],
+      "packet_to_prose_fidelity": {"passed": true, "checked_packet_count": 1, "missing_selected_packet_ids": [], "reason_codes": []}
+    }
+  },
+  "initial_events": [
+    {"seq": 1, "type": "job_created", "phase": "planning", "message": "Deep research job created.", "data": {"plan_only": false, "continuation_mode": "fresh"}}
+  ],
+  "events_after_seq": [
+    {"seq": 2, "type": "phase_started", "phase": "planning", "message": "Planning started.", "data": {"unit_count": 7}},
+    {"seq": 3, "type": "phase_started", "phase": "researching", "message": "Researching source material.", "data": {"completed_units": 0}},
+    {"seq": 4, "type": "research_unit_completed", "phase": "researching", "message": "Completed u1.", "data": {"unit_type": "search"}},
+    {"seq": 5, "type": "research_unit_completed", "phase": "researching", "message": "Completed u2.", "data": {"unit_type": "search"}},
+    {"seq": 6, "type": "research_unit_completed", "phase": "researching", "message": "Completed u3.", "data": {"unit_type": "search"}},
+    {"seq": 7, "type": "research_unit_completed", "phase": "researching", "message": "Completed u4.", "data": {"unit_type": "search"}},
+    {"seq": 8, "type": "research_unit_completed", "phase": "researching", "message": "Completed u5.", "data": {"unit_type": "search"}},
+    {"seq": 9, "type": "research_unit_completed", "phase": "researching", "message": "Completed u6.", "data": {"unit_type": "search"}},
+    {"seq": 10, "type": "research_unit_completed", "phase": "researching", "message": "Completed u7.", "data": {"unit_type": "search"}},
+    {"seq": 11, "type": "phase_started", "phase": "synthesizing", "message": "Synthesizing findings.", "data": {"section_count": 7}},
+    {"seq": 12, "type": "phase_started", "phase": "finalizing", "message": "Finalizing report.", "data": {}},
+    {"seq": 13, "type": "job_completed", "phase": "finalizing", "message": "Deep research completed.", "data": {"artifact_batch_id": "$seeded_batch_id", "release_gate": {"passed": true, "reason_codes": [], "all_reason_codes": ["medium_single_source_search_only"], "soft_reason_codes": ["medium_single_source_search_only"]}, "sources_count": 6}}
+  ],
+  "event_window": {"after_seq": 1, "next_after_seq": 13, "returned_count": 12, "last_event_type": "job_completed", "window_has_terminal_event": true, "job_terminal": true},
+  "public_surface": {
+    "status": {
+      "runtime_warnings": ["coverage_incomplete", "domain_constraints_applied", "medium_single_source_search_only"],
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "planner_fallback_used": false,
+      "operator_summary": {"runtime_warnings": ["coverage_incomplete", "domain_constraints_applied", "medium_single_source_search_only"], "resolved_artifact_batch_id": "$seeded_batch_id"}
+    },
+    "result": {
+      "runtime_warnings": ["coverage_incomplete", "domain_constraints_applied", "medium_single_source_search_only"],
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "report": {"status": "degraded"}
+    }
+  }
+}
