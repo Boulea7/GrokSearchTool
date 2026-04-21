@@ -4223,12 +4223,14 @@ class DeepResearchRuntime:
 
     async def events(self, job_id: str, *, after_seq: int = 0, limit: int = 100) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
-        events = self.store.list_events(job_id, after_seq=after_seq, limit=limit)
+        normalized_after_seq = max(0, int(after_seq or 0))
+        normalized_limit = max(0, int(limit or 0))
+        events = self.store.list_events(job_id, after_seq=normalized_after_seq, limit=normalized_limit)
         terminal_event_types = {"job_completed", "job_failed", "job_canceled", "job_interrupted"}
         return {
             "job_id": job_id,
             "events": [event.model_dump() for event in events],
-            "next_after_seq": events[-1].seq if events else after_seq,
+            "next_after_seq": events[-1].seq if events else normalized_after_seq,
             "returned_count": len(events),
             "last_event_type": events[-1].type if events else "",
             "window_has_terminal_event": any(event.type in terminal_event_types for event in events),

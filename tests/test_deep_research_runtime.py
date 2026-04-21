@@ -5892,9 +5892,22 @@ async def test_resume_interrupted_finalizing_job_with_invalid_final_batch_does_n
     )
 
     resumed = await runtime.resume(job.job_id, schedule=False)
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+    events = await runtime.events(job.job_id)
 
     assert resumed["status"] == "queued"
     assert runtime.store.get_job(job.job_id).status == "queued"
+    assert status["status"] == "queued"
+    assert result["status"] == "queued"
+    assert resumed["resolved_artifact_batch_id"] == ""
+    assert status["resolved_artifact_batch_id"] == ""
+    assert result["resolved_artifact_batch_id"] == ""
+    assert resumed["artifact_visibility_reason"] == ""
+    assert status["artifact_visibility_reason"] == ""
+    assert result["artifact_visibility_reason"] == ""
+    assert any(event["type"] == "job_resumed" for event in events["events"])
+    assert not any(event["type"] == "job_resolved_from_final_batch" for event in events["events"])
 
 
 @pytest.mark.asyncio
@@ -14930,13 +14943,19 @@ async def test_finalizing_result_does_not_resolve_partial_batch_with_current_pro
     assert persisted[0]["metadata"]["batch_id"]
     assert status["artifact_kinds"] == ["plan.json"]
     assert [artifact["kind"] for artifact in status["artifacts"]] == ["plan.json"]
+    assert status["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
     assert status["resolved_artifact_batch_id"] == ""
+    assert result["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
     assert result["resolved_artifact_batch_id"] == ""
     assert result["final_report"] is None
     assert result["report"] is None
     assert result["sources"] is None
     assert result["citations"] is None
     assert result["evidence_items"] is None
+    assert status["operator_summary"]["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["operator_summary"]["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert status["operator_summary"]["current_checkpoint_kind"] == status["current_checkpoint_kind"]
+    assert result["operator_summary"]["current_checkpoint_kind"] == result["current_checkpoint_kind"]
     assert result["artifact_errors"]["coverage.json"] == "missing_required_artifact"
     assert result["artifact_errors"]["grounding.json"] == "missing_required_artifact"
     assert result["artifact_errors"]["verifier.json"] == "missing_required_artifact"
