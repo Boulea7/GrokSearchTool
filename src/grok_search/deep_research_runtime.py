@@ -741,6 +741,8 @@ def _compact_continuation(continuation: DeepResearchContinuationState) -> DeepRe
         mode=continuation.mode,
         source_job_id=continuation.source_job_id,
         source_job_status=continuation.source_job_status,
+        lineage_root_job_id=continuation.lineage_root_job_id,
+        parent_job_id=continuation.parent_job_id,
         continuation_identity=continuation.continuation_identity,
         compaction_policy=continuation.compaction_policy,
         compaction_reason_codes=list(continuation.compaction_reason_codes),
@@ -750,11 +752,14 @@ def _compact_continuation(continuation: DeepResearchContinuationState) -> DeepRe
         continuation_goal=continuation.continuation_goal,
         source_count=continuation.source_count,
         checkpoint_key=continuation.checkpoint_key,
+        resume_from_checkpoint_key=continuation.resume_from_checkpoint_key,
+        replay_from_checkpoint_key=continuation.replay_from_checkpoint_key,
         state_version=continuation.state_version,
         confirmed_claims=list(continuation.confirmed_claims),
         open_questions=list(continuation.open_questions),
         trusted_source_headers=list(continuation.trusted_source_headers),
         carry_forward_constraints=dict(continuation.carry_forward_constraints),
+        skipped_unit_ids=list(continuation.skipped_unit_ids),
     )
 
 
@@ -762,7 +767,11 @@ def _focused_continuation_snapshot(
     *,
     source_job_id: str,
     source_job_status: str,
+    lineage_root_job_id: str,
+    parent_job_id: str,
     checkpoint_key: str,
+    resume_from_checkpoint_key: str,
+    replay_from_checkpoint_key: str,
     continuation_goal: str,
     previous_summary: str,
     prior_plan_summary: str,
@@ -770,6 +779,7 @@ def _focused_continuation_snapshot(
     open_questions: list[str],
     trusted_source_headers: list[str],
     carry_forward_constraints: dict[str, Any],
+    skipped_unit_ids: list[str],
     carry_forward_sources: list[dict[str, Any]],
     carry_forward_outline_versions: list[dict[str, Any]],
     carry_forward_sections: list[dict[str, Any]],
@@ -778,7 +788,11 @@ def _focused_continuation_snapshot(
     return {
         "source_job_id": source_job_id.strip(),
         "source_job_status": source_job_status.strip(),
+        "lineage_root_job_id": lineage_root_job_id.strip(),
+        "parent_job_id": parent_job_id.strip(),
         "checkpoint_key": checkpoint_key.strip(),
+        "resume_from_checkpoint_key": resume_from_checkpoint_key.strip(),
+        "replay_from_checkpoint_key": replay_from_checkpoint_key.strip(),
         "continuation_goal": _trim_text(continuation_goal, limit=200),
         "previous_summary": _trim_text(previous_summary, limit=400),
         "prior_plan_summary": _trim_text(prior_plan_summary, limit=400),
@@ -786,6 +800,7 @@ def _focused_continuation_snapshot(
         "open_questions": _dedupe_preserve_order(open_questions),
         "trusted_source_headers": _dedupe_preserve_order(trusted_source_headers),
         "carry_forward_constraints": dict(carry_forward_constraints or {}),
+        "skipped_unit_ids": _dedupe_preserve_order(skipped_unit_ids),
         "source_ids": [
             str(item.get("source_id", "")).strip()
             for item in carry_forward_sources
@@ -976,8 +991,12 @@ def _continuation_capsule(continuation: DeepResearchContinuationState) -> dict[s
         "mode": continuation.mode,
         "source_job_id": continuation.source_job_id,
         "source_job_status": continuation.source_job_status,
+        "lineage_root_job_id": continuation.lineage_root_job_id,
+        "parent_job_id": continuation.parent_job_id,
         "continuation_identity": continuation.continuation_identity,
         "checkpoint_key": continuation.checkpoint_key,
+        "resume_from_checkpoint_key": continuation.resume_from_checkpoint_key,
+        "replay_from_checkpoint_key": continuation.replay_from_checkpoint_key,
         "continuation_goal": continuation.continuation_goal,
         "source_count": continuation.source_count,
         "compaction_policy": continuation.compaction_policy,
@@ -986,6 +1005,7 @@ def _continuation_capsule(continuation: DeepResearchContinuationState) -> dict[s
         "open_questions": list(continuation.open_questions[:4]),
         "trusted_source_headers": list(continuation.trusted_source_headers[:4]),
         "carry_forward_constraints": dict(continuation.carry_forward_constraints),
+        "skipped_unit_ids": list(continuation.skipped_unit_ids[:10]),
         "carry_forward_source_ids": [
             str(item.get("source_id", "")).strip()
             for item in continuation.carry_forward_sources[:5]
@@ -1012,7 +1032,11 @@ def _hydrate_continuation_snapshot(continuation: DeepResearchContinuationState) 
         snapshot = _focused_continuation_snapshot(
             source_job_id=continuation.source_job_id,
             source_job_status=continuation.source_job_status,
+            lineage_root_job_id=continuation.lineage_root_job_id,
+            parent_job_id=continuation.parent_job_id,
             checkpoint_key=continuation.checkpoint_key,
+            resume_from_checkpoint_key=continuation.resume_from_checkpoint_key,
+            replay_from_checkpoint_key=continuation.replay_from_checkpoint_key,
             continuation_goal=continuation.continuation_goal,
             previous_summary=continuation.previous_summary,
             prior_plan_summary=continuation.prior_plan_summary,
@@ -1020,6 +1044,7 @@ def _hydrate_continuation_snapshot(continuation: DeepResearchContinuationState) 
             open_questions=list(continuation.open_questions),
             trusted_source_headers=list(continuation.trusted_source_headers),
             carry_forward_constraints=dict(continuation.carry_forward_constraints),
+            skipped_unit_ids=list(continuation.skipped_unit_ids),
             carry_forward_sources=list(continuation.carry_forward_sources),
             carry_forward_outline_versions=list(continuation.carry_forward_outline_versions),
             carry_forward_sections=list(continuation.carry_forward_sections),
@@ -1766,13 +1791,6 @@ def _continuation_source_is_recoverable(
         return True
     if _continuation_has_material_carry_forward_state(continuation):
         return True
-    if source_job.status == "completed" and any(
-        (
-            _normalize_whitespace(continuation.previous_summary),
-            _normalize_whitespace(continuation.prior_plan_summary),
-        )
-    ):
-        return True
     for checkpoint in store.list_checkpoints(source_job.job_id):
         if _checkpoint_kind(checkpoint.checkpoint_key) != "research_unit":
             continue
@@ -1887,18 +1905,23 @@ def _operator_summary_payload(
     diagnostics: dict[str, Any],
     final_bundle: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    current_checkpoint = job.current_checkpoint
     return {
         "job_id": job.job_id,
         "status": job.status,
         "phase": job.phase,
         "attempt_count": job.attempt_count,
-        "current_checkpoint": job.current_checkpoint,
+        "current_checkpoint": current_checkpoint,
+        "current_checkpoint_kind": _checkpoint_kind(current_checkpoint),
+        "current_checkpoint_seq": 0,
         "cancel_requested": job.cancel_requested,
         "continued_from_job_id": job.continued_from_job_id,
         "resolved_artifact_batch_id": final_bundle["batch_id"] if final_bundle is not None else "",
         "planner_fallback_used": diagnostics["planner_fallback_used"],
         "runtime_warnings": diagnostics["runtime_warnings"],
         "constraint_violations": diagnostics["constraint_violations"],
+        "artifact_fallback_used": False,
+        "artifact_visibility_reason": "",
     }
 
 
@@ -3167,12 +3190,13 @@ def _lineage_payload(
     job: DeepResearchJob,
     continuation: DeepResearchContinuationState,
 ) -> dict[str, Any]:
-    root_job_id = continuation.source_job_id or job.job_id
+    root_job_id = continuation.lineage_root_job_id or continuation.source_job_id or job.job_id
     return {
         "root_job_id": root_job_id,
-        "parent_job_id": continuation.source_job_id,
+        "parent_job_id": continuation.parent_job_id or continuation.source_job_id,
         "continued_from_job_id": job.continued_from_job_id,
-        "continued_from_checkpoint": continuation.checkpoint_key,
+        "continued_from_checkpoint": continuation.resume_from_checkpoint_key or continuation.checkpoint_key,
+        "replay_from_checkpoint": continuation.replay_from_checkpoint_key or continuation.checkpoint_key,
         "fork_type": continuation.mode,
         "carried_forward_source_ids": [
             str(item.get("source_id", "")).strip()
@@ -3184,7 +3208,12 @@ def _lineage_payload(
             for item in continuation.carry_forward_evidence
             if str(item.get("evidence_id", "")).strip()
         ],
-        "supersedes_job_id": continuation.source_job_id if continuation.mode == "continue" else "",
+        "skipped_unit_ids": list(continuation.skipped_unit_ids),
+        "supersedes_job_id": (
+            continuation.parent_job_id or continuation.source_job_id
+            if continuation.mode == "continue"
+            else ""
+        ),
     }
 
 
@@ -4180,11 +4209,16 @@ class DeepResearchRuntime:
         payload["artifact_visibility_reason"] = (
             "unresolved_batch_backed_final_artifacts_hidden" if unresolved_batch_backed else ""
         )
-        payload["operator_summary"] = _operator_summary_payload(
+        operator_summary = _operator_summary_payload(
             job,
             diagnostics=diagnostics,
             final_bundle=final_bundle,
         )
+        operator_summary["current_checkpoint_kind"] = payload["current_checkpoint_kind"]
+        operator_summary["current_checkpoint_seq"] = payload["current_checkpoint_seq"]
+        operator_summary["artifact_fallback_used"] = payload["artifact_fallback_used"]
+        operator_summary["artifact_visibility_reason"] = payload["artifact_visibility_reason"]
+        payload["operator_summary"] = operator_summary
         return payload
 
     async def events(self, job_id: str, *, after_seq: int = 0, limit: int = 100) -> dict[str, Any]:
@@ -4302,7 +4336,7 @@ class DeepResearchRuntime:
             if artifact_text is None:
                 artifact_errors[kind] = error_code
         diagnostics = _job_runtime_diagnostics(self.store, job_id, final_bundle=final_bundle)
-        return {
+        payload = {
             "job_id": job_id,
             "status": job.status,
             "phase": job.phase,
@@ -4324,11 +4358,6 @@ class DeepResearchRuntime:
             "artifact_visibility_reason": (
                 "unresolved_batch_backed_final_artifacts_hidden" if unresolved_batch_backed else ""
             ),
-            "operator_summary": _operator_summary_payload(
-                job,
-                diagnostics=diagnostics,
-                final_bundle=final_bundle,
-            ),
             "artifacts": [
                 artifact
                 for artifact in _artifact_payloads(
@@ -4339,6 +4368,18 @@ class DeepResearchRuntime:
                 if not (unresolved_batch_backed and artifact.get("kind") in _FINAL_ARTIFACT_KINDS)
             ],
         }
+        payload["operator_summary"] = {
+            **_operator_summary_payload(
+                job,
+                diagnostics=diagnostics,
+                final_bundle=final_bundle,
+            ),
+            "current_checkpoint_kind": payload["current_checkpoint_kind"],
+            "current_checkpoint_seq": payload["current_checkpoint_seq"],
+            "artifact_fallback_used": payload["artifact_fallback_used"],
+            "artifact_visibility_reason": payload["artifact_visibility_reason"],
+        }
+        return payload
 
     def read_artifact_text(self, job_id: str, kind: str) -> str | None:
         job = self.store.get_job(job_id)
@@ -5526,6 +5567,11 @@ class DeepResearchRuntime:
                 mode="fresh",
                 compaction_policy="focused_snapshot_v1",
                 compaction_reason_codes=["fresh_query"],
+                lineage_root_job_id="",
+                parent_job_id="",
+                resume_from_checkpoint_key="",
+                replay_from_checkpoint_key="",
+                skipped_unit_ids=[],
             )
         job = self.store.get_job(continue_from_job_id)
 
@@ -5765,6 +5811,22 @@ class DeepResearchRuntime:
         checkpoint_key = (
             checkpoint_meta.get("fallback_to", "") if checkpoint_meta else ""
         ) or job.current_checkpoint or (checkpoints[-1].checkpoint_key if checkpoints else "")
+        skipped_unit_ids = (
+            list(checkpoint_state.skipped_unit_ids)
+            if checkpoint_state is not None
+            else list(latest_state.get("skipped_unit_ids") or [])
+            if isinstance(latest_state, dict)
+            else []
+        )
+        if job.continued_from_job_id:
+            parent_continuation = self._read_runtime_continuation(job)
+            lineage_root_job_id = (
+                parent_continuation.lineage_root_job_id
+                or parent_continuation.source_job_id
+                or continue_from_job_id
+            )
+        else:
+            lineage_root_job_id = continue_from_job_id
         continuation_goal = plan_payload.get("query") or job.query
         source_count = len(carry_forward_sources)
         carry_forward_constraints = _carry_forward_constraints(job=job, plan_payload=plan_payload)
@@ -5780,7 +5842,11 @@ class DeepResearchRuntime:
         focused_snapshot = _focused_continuation_snapshot(
             source_job_id=continue_from_job_id,
             source_job_status=job.status,
+            lineage_root_job_id=lineage_root_job_id,
+            parent_job_id=continue_from_job_id,
             checkpoint_key=checkpoint_key,
+            resume_from_checkpoint_key=checkpoint_key,
+            replay_from_checkpoint_key=checkpoint_key,
             continuation_goal=_trim_text(continuation_goal, limit=200),
             previous_summary=_trim_text(previous_summary, limit=400),
             prior_plan_summary=_trim_text(prior_plan_summary, limit=400),
@@ -5788,6 +5854,7 @@ class DeepResearchRuntime:
             open_questions=open_questions,
             trusted_source_headers=trusted_source_headers,
             carry_forward_constraints=carry_forward_constraints,
+            skipped_unit_ids=skipped_unit_ids,
             carry_forward_sources=carry_forward_sources,
             carry_forward_outline_versions=carry_forward_outline_versions,
             carry_forward_sections=carry_forward_sections,
@@ -5822,6 +5889,8 @@ class DeepResearchRuntime:
             mode="continue",
             source_job_id=continue_from_job_id,
             source_job_status=job.status,
+            lineage_root_job_id=lineage_root_job_id,
+            parent_job_id=continue_from_job_id,
             continuation_identity=continuation_identity,
             compaction_policy="focused_snapshot_v1",
             compaction_reason_codes=compaction_reason_codes,
@@ -5831,11 +5900,14 @@ class DeepResearchRuntime:
             continuation_goal=_trim_text(continuation_goal, limit=200),
             source_count=source_count,
             checkpoint_key=checkpoint_key,
+            resume_from_checkpoint_key=checkpoint_key,
+            replay_from_checkpoint_key=checkpoint_key,
             state_version=2,
             confirmed_claims=confirmed_claims,
             open_questions=open_questions,
             trusted_source_headers=trusted_source_headers,
             carry_forward_constraints=carry_forward_constraints,
+            skipped_unit_ids=skipped_unit_ids,
             carry_forward_sources=carry_forward_sources,
             carry_forward_outline_versions=carry_forward_outline_versions,
             carry_forward_evidence=carry_forward_evidence,
@@ -6002,12 +6074,13 @@ class DeepResearchRuntime:
                 ):
                     raise ValueError("checkpoint missing runtime state")
                 if isinstance(raw_state.get("plan"), dict):
+                    frozen_continuation = self._read_runtime_continuation(job)
                     raw_state = {
                         **raw_state,
                         "plan": self._normalize_plan_payload(
                             job,
                             raw_state["plan"],
-                            self._build_continuation_context(job.continued_from_job_id),
+                            frozen_continuation,
                         ).model_dump(),
                     }
                 state = DeepResearchCheckpointState.model_validate(raw_state)

@@ -5396,6 +5396,36 @@ async def test_continue_from_interrupted_finalizing_job_with_resolved_final_batc
 
 
 @pytest.mark.asyncio
+async def test_continue_from_completed_job_without_recoverable_surfaces_is_rejected(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = runtime.store.create_job(
+        query="Completed continuation without artifacts",
+        request_fingerprint="fp-completed-continuation-without-artifacts",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(source.job_id, finished_at=utc_now_iso())
+
+    with pytest.raises(ValueError, match="continue_from_job_id source is not recoverable"):
+        await runtime.start(
+            query="Follow up completed continuation without artifacts",
+            continue_from_job_id=source.job_id,
+            plan_only=True,
+            force_new=True,
+            schedule=False,
+        )
+
+
+@pytest.mark.asyncio
 async def test_continue_from_canceled_job_without_recoverable_surfaces_is_rejected_without_orphan(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -5425,6 +5455,49 @@ async def test_continue_from_canceled_job_without_recoverable_surfaces_is_reject
         )
 
     assert [job.job_id for job in runtime.store.list_jobs(limit=20)] == [source.job_id]
+
+
+@pytest.mark.asyncio
+async def test_lineage_preserves_root_and_parent_across_multi_hop_continuations(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = create_completed_source_job(runtime, query="Multi hop lineage source")
+
+    first_response = await runtime.start(
+        query="First follow-up for multi hop lineage",
+        continue_from_job_id=source.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+    first_job = runtime.store.update_job(
+        first_response["job_id"],
+        status="completed",
+        phase="finalizing",
+        current_checkpoint="planning",
+        finished_at=utc_now_iso(),
+    )
+
+    second_response = await runtime.start(
+        query="Second follow-up for multi hop lineage",
+        continue_from_job_id=first_job.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    first_lineage = json.loads(runtime.store.read_artifact_text(first_job.job_id, "lineage.json") or "{}")
+    second_lineage = json.loads(runtime.store.read_artifact_text(second_response["job_id"], "lineage.json") or "{}")
+    second_continuation = json.loads(runtime.store.read_artifact_text(second_response["job_id"], "continuation.json") or "{}")
+
+    assert first_lineage["root_job_id"] == source.job_id
+    assert first_lineage["parent_job_id"] == source.job_id
+    assert first_lineage["supersedes_job_id"] == source.job_id
+    assert second_lineage["root_job_id"] == source.job_id
+    assert second_lineage["parent_job_id"] == first_job.job_id
+    assert second_lineage["supersedes_job_id"] == first_job.job_id
+    assert second_continuation["lineage_root_job_id"] == source.job_id
+    assert second_continuation["parent_job_id"] == first_job.job_id
 
 
 @pytest.mark.asyncio
@@ -8318,6 +8391,96 @@ async def test_load_checkpoint_state_uses_frozen_follow_up_continuation_instead_
         "sources.json",
         json.dumps([{"source_id": "R9", "url": "https://docs.example.com/runtime/updated"}]),
         "application/json",
+    )
+
+    checkpoint_state, checkpoint_meta = runtime._load_checkpoint_state(follow_up_job)
+
+    assert checkpoint_meta is None
+    assert checkpoint_state is not None
+    assert checkpoint_state.plan.continuation.previous_summary == frozen_continuation["previous_summary"]
+    assert checkpoint_state.plan.continuation.source_count == frozen_continuation["source_count"]
+
+
+@pytest.mark.asyncio
+async def test_load_checkpoint_state_keeps_frozen_follow_up_continuation_when_failed_source_job_drifts(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = create_completed_source_job(runtime, query="Frozen failed continuation source")
+    runtime.store.update_job(
+        source.job_id,
+        status="failed",
+        phase="researching",
+        current_checkpoint="researching-u1",
+        last_error="upstream provider failure",
+        finished_at=utc_now_iso(),
+    )
+    runtime.store.save_checkpoint(
+        source.job_id,
+        phase="researching",
+        checkpoint_key="researching-u1",
+        state={
+            "plan": structured_plan_payload(source, {"mode": "fresh"}),
+            "completed_unit_ids": ["unit-search-1"],
+            "unit_results": {
+                "unit-search-1": {
+                    "summary": "Older frozen failed-source summary.",
+                    "detail": "Older frozen failed-source summary.",
+                    "source_ids": ["R1"],
+                }
+            },
+            "sources": [{"source_id": "R1", "url": "https://docs.example.com/runtime/older"}],
+            "sections": [],
+            "evidence_items": [],
+        },
+    )
+
+    response = await runtime.start(
+        query="Follow up frozen failed continuation source",
+        continue_from_job_id=source.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+    follow_up_job = runtime.store.update_job(response["job_id"], current_checkpoint="planning")
+    frozen_continuation = json.loads(runtime.store.read_artifact_text(follow_up_job.job_id, "continuation.json"))
+
+    runtime.write_artifact(
+        source.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "query": "Frozen failed continuation source",
+                "summary": "Updated failed source summary after follow-up creation.",
+                "sections": [],
+                "unit_results": {},
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        source.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://docs.example.com/runtime/updated-failed"}]),
+        "application/json",
+    )
+    runtime.store.save_checkpoint(
+        source.job_id,
+        phase="researching",
+        checkpoint_key="researching-u2",
+        state={
+            "plan": structured_plan_payload(source, {"mode": "fresh"}),
+            "completed_unit_ids": ["unit-search-1"],
+            "unit_results": {
+                "unit-search-1": {
+                    "summary": "Updated failed source summary after follow-up creation.",
+                    "detail": "Updated failed source summary after follow-up creation.",
+                    "source_ids": ["R9"],
+                }
+            },
+            "sources": [{"source_id": "R9", "url": "https://docs.example.com/runtime/updated-failed"}],
+            "sections": [],
+            "evidence_items": [],
+        },
     )
 
     checkpoint_state, checkpoint_meta = runtime._load_checkpoint_state(follow_up_job)
