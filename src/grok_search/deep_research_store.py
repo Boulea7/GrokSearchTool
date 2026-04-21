@@ -369,6 +369,10 @@ class DeepResearchStore:
         return event
 
     def list_events(self, job_id: str, *, after_seq: int = 0, limit: int = 100) -> list[DeepResearchEvent]:
+        normalized_after_seq = max(0, int(after_seq or 0))
+        normalized_limit = max(0, int(limit or 0))
+        if normalized_limit == 0:
+            return []
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -377,7 +381,7 @@ class DeepResearchStore:
                 ORDER BY seq ASC
                 LIMIT ?
                 """,
-                (job_id, after_seq, limit),
+                (job_id, normalized_after_seq, normalized_limit),
             ).fetchall()
         return [
             DeepResearchEvent(
@@ -393,13 +397,16 @@ class DeepResearchStore:
         ]
 
     def list_jobs(self, *, status: str = "", limit: int = 50) -> list[DeepResearchJob]:
+        normalized_limit = max(0, int(limit or 0))
+        if normalized_limit == 0:
+            return []
         query = "SELECT * FROM jobs"
         params: list[Any] = []
         if status:
             query += " WHERE status = ?"
             params.append(status)
-        query += " ORDER BY updated_at DESC LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY updated_at DESC, created_at DESC, job_id DESC LIMIT ?"
+        params.append(normalized_limit)
         with self._connect() as connection:
             rows = connection.execute(query, tuple(params)).fetchall()
         return [self._row_to_job(row) for row in rows]

@@ -887,6 +887,7 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
 
     status = await server.deep_research_status(response["job_id"])
     events = await server.deep_research_events(response["job_id"])
+    empty_events = await server.deep_research_events(response["job_id"], after_seq=-5, limit=0)
     result = await server.deep_research_result(response["job_id"])
     listing = await server.deep_research_list()
 
@@ -902,9 +903,15 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
     assert [event["seq"] for event in events["events"]] == list(range(1, len(events["events"]) + 1))
     assert events["events"][0]["type"] == "job_created"
     assert events["events"][-1]["type"] == "job_completed"
+    assert empty_events["events"] == []
+    assert empty_events["next_after_seq"] == 0
     assert result["final_report"].startswith("# Final Report")
     assert result["partial_report"].startswith("# Partial Report")
     assert result["citations"]["source_registry"]["R1"]["url"] == "https://example.com"
+    assert status["operator_summary"]["current_checkpoint_kind"] == status["current_checkpoint_kind"]
+    assert result["operator_summary"]["current_checkpoint_kind"] == result["current_checkpoint_kind"]
+    assert status["operator_summary"]["artifact_visibility_reason"] == status["artifact_visibility_reason"]
+    assert result["operator_summary"]["artifact_visibility_reason"] == result["artifact_visibility_reason"]
     assert listing["jobs"][0]["job_id"] == response["job_id"]
 
 
