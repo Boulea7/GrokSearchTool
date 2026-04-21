@@ -276,12 +276,20 @@ def _candidate_section_ids(
         origin_query=origin_query,
         include_origin_query=False,
     )
-    matches: list[str] = []
+    scored_matches: list[tuple[int, int, str]] = []
     for section in plan.report_outline:
         keywords = _tokenize_keywords(f"{section.title} {section.goal}")
         overlap = _count_keyword_overlap(evidence_surface, keywords)
         if overlap > 0:
-            matches.append(section.section_id)
+            scored_matches.append((overlap, len(keywords), section.section_id))
+    matches = [
+        section_id
+        for _, _, section_id in sorted(
+            scored_matches,
+            key=lambda item: (item[0], item[1], item[2]),
+            reverse=True,
+        )
+    ]
     if (
         not matches
         and len(plan.report_outline) == 1
@@ -289,6 +297,41 @@ def _candidate_section_ids(
     ):
         return [plan.report_outline[0].section_id]
     return matches
+
+
+def _selected_section_id_for_evidence(
+    plan: DeepResearchPlan,
+    *,
+    candidate_section_ids: list[str],
+    evidence_text: str,
+) -> str:
+    normalized_candidates = [
+        str(section_id).strip()
+        for section_id in candidate_section_ids
+        if str(section_id).strip()
+    ]
+    if len(normalized_candidates) <= 1:
+        return normalized_candidates[0] if normalized_candidates else ""
+    scored_candidates: list[tuple[int, int, str]] = []
+    for section_id in normalized_candidates:
+        selection_score, selection_basis_tokens = _selection_score(
+            plan,
+            evidence_text=evidence_text,
+            selected_section_id=section_id,
+        )
+        scored_candidates.append((selection_score, len(selection_basis_tokens), section_id))
+    if not scored_candidates:
+        return ""
+    ranked = sorted(scored_candidates, key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    if len(ranked) == 1:
+        return ranked[0][2]
+    first_score, first_token_count, first_section_id = ranked[0]
+    second_score, second_token_count, _ = ranked[1]
+    if first_score <= 0:
+        return ""
+    if first_score == second_score and first_token_count == second_token_count:
+        return ""
+    return first_section_id
 
 
 def _selection_score(
@@ -418,13 +461,25 @@ def build_evidence_ledger_entries(
             include_origin_query=False,
         )
         candidate_section_ids = _candidate_section_ids(plan, evidence, origin_query=origin_query)
-        selected_section_id = candidate_section_ids[0] if candidate_section_ids else ""
+        selected_section_id = _selected_section_id_for_evidence(
+            plan,
+            candidate_section_ids=candidate_section_ids,
+            evidence_text=evidence_context_text,
+        )
         question_ids = _question_ids_for_evidence(
             plan,
             evidence_text=evidence_text,
             evidence_context_text=evidence_context_text,
             selected_section_id=selected_section_id,
         )
+        if len(candidate_section_ids) > 1 and len(question_ids) > 1:
+            selected_section_id = ""
+            question_ids = _question_ids_for_evidence(
+                plan,
+                evidence_text=evidence_text,
+                evidence_context_text=evidence_context_text,
+                selected_section_id="",
+            )
         selection_score, selection_basis_tokens = _selection_score(
             plan,
             evidence_text=evidence_context_text,
@@ -555,6 +610,90 @@ def update_section_banks(
         DeepResearchSectionEvidenceBank.model_validate(bank).model_dump()
         for _, bank in sorted(banks_by_section.items())
     ]
+
+
+def reconcile_section_banks_with_materialized_sections(
+    section_banks: list[dict[str, Any]],
+    *,
+    sections: list[dict[str, Any]],
+    updated_at: str = "",
+) -> list[dict[str, Any]]:
+    banks_by_section = {
+        str(bank.get("section_id", "")).strip(): dict(bank)
+        for bank in section_banks
+        if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
+    }
+    claim_ids_by_section_evidence: dict[str, dict[str, list[str]]] = {}
+    question_ids_by_section_evidence: dict[str, dict[str, list[str]]] = {}
+
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        section_id = str(section.get("section_id", "")).strip()
+        if not section_id:
+            continue
+        section_question_ids = _section_question_ids(section)
+        for claim in section.get("claims", []) or []:
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get("claim_id", "")).strip()
+            if not claim_id:
+                continue
+            for evidence_id in claim.get("evidence_ids", []) or []:
+                normalized_evidence_id = str(evidence_id).strip()
+                if not normalized_evidence_id:
+                    continue
+                claim_ids_by_section_evidence.setdefault(section_id, {}).setdefault(normalized_evidence_id, [])
+                if claim_id not in claim_ids_by_section_evidence[section_id][normalized_evidence_id]:
+                    claim_ids_by_section_evidence[section_id][normalized_evidence_id].append(claim_id)
+                if section_question_ids:
+                    question_ids_by_section_evidence.setdefault(section_id, {}).setdefault(normalized_evidence_id, [])
+                    for question_id in section_question_ids:
+                        if question_id not in question_ids_by_section_evidence[section_id][normalized_evidence_id]:
+                            question_ids_by_section_evidence[section_id][normalized_evidence_id].append(question_id)
+
+    def _packet_map(bank: dict[str, Any], key: str) -> dict[str, dict[str, Any]]:
+        return {
+            str(packet.get("evidence_id", "")).strip(): dict(packet)
+            for packet in bank.get(key, []) or []
+            if isinstance(packet, dict) and str(packet.get("evidence_id", "")).strip()
+        }
+
+    reconciled: list[dict[str, Any]] = []
+    for section_id, bank in sorted(banks_by_section.items()):
+        updated_bank = dict(bank)
+        selected_packet_map = _packet_map(updated_bank, "selected_packets")
+        candidate_packet_map = _packet_map(updated_bank, "candidate_packets")
+        claim_ids_by_evidence = claim_ids_by_section_evidence.get(section_id, {})
+        selected_evidence_ids = [
+            evidence_id
+            for evidence_id in updated_bank.get("selected_evidence_ids", []) or []
+            if str(evidence_id).strip() in claim_ids_by_evidence
+        ]
+        for evidence_id in claim_ids_by_evidence:
+            if evidence_id not in selected_evidence_ids:
+                selected_evidence_ids.append(evidence_id)
+        updated_bank["selected_evidence_ids"] = [str(evidence_id).strip() for evidence_id in selected_evidence_ids if str(evidence_id).strip()]
+        updated_packets: list[dict[str, Any]] = []
+        for evidence_id in updated_bank["selected_evidence_ids"]:
+            packet = (
+                dict(selected_packet_map.get(evidence_id) or {})
+                or dict(candidate_packet_map.get(evidence_id) or {})
+                or {"evidence_id": evidence_id}
+            )
+            packet["evidence_id"] = evidence_id
+            packet["claim_ids"] = list(claim_ids_by_evidence.get(evidence_id, []))
+            packet["question_ids"] = list(
+                question_ids_by_section_evidence.get(section_id, {}).get(
+                    evidence_id,
+                    packet.get("question_ids", []) or [],
+                )
+            )
+            updated_packets.append(packet)
+        updated_bank["selected_packets"] = updated_packets
+        updated_bank["last_updated_at"] = updated_at or updated_bank.get("last_updated_at", "")
+        reconciled.append(DeepResearchSectionEvidenceBank.model_validate(updated_bank).model_dump())
+    return reconciled
 
 
 def selected_evidence_ids_by_section(section_banks: list[dict[str, Any]]) -> dict[str, list[str]]:

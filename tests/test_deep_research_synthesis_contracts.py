@@ -182,9 +182,9 @@ def test_evidence_pool_for_section_prefers_selected_then_candidate_then_global()
     )
 
     assert selected_mode == "selected"
-    assert [item["evidence_id"] for item in selected_pool] == ["selected-e2"]
+    assert [item["evidence_id"] for item in selected_pool] == ["selected-e2", "selected-e1"]
     assert candidate_mode == "candidate"
-    assert [item["evidence_id"] for item in candidate_pool] == ["candidate-e2"]
+    assert [item["evidence_id"] for item in candidate_pool] == ["candidate-e2", "candidate-e1"]
     assert global_mode == "global"
     assert [item["evidence_id"] for item in global_pool] == [
         "selected-e1",

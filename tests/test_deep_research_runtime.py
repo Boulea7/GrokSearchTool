@@ -16654,3 +16654,91 @@ async def test_grounding_diagnostics_include_source_level_usage(monkeypatch, tmp
         }
     ]
 
+
+@pytest.mark.asyncio
+async def test_runtime_persists_source_policy_lineage_and_selected_bank_artifacts(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["include_domains"] = ["docs.aws.amazon.com"]
+        payload["exclude_domains"] = ["repost.aws"]
+        payload["brief"]["scope"]["include_domains"] = ["docs.aws.amazon.com"]
+        payload["brief"]["scope"]["exclude_domains"] = ["repost.aws"]
+        payload["brief"]["scope"]["allowed_sources"] = ["docs.aws.amazon.com"]
+        payload["sub_questions"] = [
+            {
+                "id": "sq1",
+                "question": "Explain RecoveryCheckpoint and resume-processing behavior.",
+                "reason": "Primary axis.",
+            }
+        ]
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain RecoveryCheckpoint and resume-processing behavior.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "AWS DMS official docs",
+                "goal": "Explain RecoveryCheckpoint and resume-processing behavior.",
+                "query": "aws dms RecoveryCheckpoint resume-processing",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"]["search_queries"] = ["aws dms RecoveryCheckpoint resume-processing"]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "RecoveryCheckpoint can be reused when resume-processing continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "StartReplicationTask",
+                    "description": "Official AWS DMS API reference for resume-processing and RecoveryCheckpoint behavior.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+
+    response = await runtime.start(
+        query="Follow up AWS DMS RecoveryCheckpoint semantics with official docs only",
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+
+    source_policy = json.loads(runtime.store.read_artifact_text(response["job_id"], "source_policy.json") or "{}")
+    lineage = json.loads(runtime.store.read_artifact_text(response["job_id"], "lineage.json") or "{}")
+    selected_bank = json.loads(runtime.store.read_artifact_text(response["job_id"], "selected_bank.json") or "[]")
+
+    assert source_policy["mode"] == "official_docs_only"
+    assert source_policy["allowed_domains"] == ["docs.aws.amazon.com"]
+    assert source_policy["blocked_domains"] == ["repost.aws"]
+    assert source_policy["must_cite_per_section"] is True
+    assert lineage["root_job_id"] == response["job_id"]
+    assert lineage["fork_type"] == "fresh"
+    assert result["report"]["runtime"]["source_policy"]["mode"] == "official_docs_only"
+    materialized_row = next(
+        row
+        for row in selected_bank
+        if row["selected_rows"] and row["section_id"] not in {"executive-summary", "key-findings", "open-questions"}
+    )
+    assert materialized_row["selected_evidence_ids"]
+    assert materialized_row["selected_rows"][0]["claim_ids"]
