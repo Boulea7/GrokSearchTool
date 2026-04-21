@@ -14,6 +14,8 @@ RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES = (
     "probe_round34_lifecycle_public_surface.json",
     "probe_round35_aws_dms_official_doc.json",
     "probe_round35_lifecycle_public_surface.json",
+    "probe_round36_aws_dms_official_doc.json",
+    "probe_round36_lifecycle_public_surface.json",
 )
 
 
@@ -307,6 +309,17 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
         {
             "kind": "verifier.json",
             "content": json.dumps(verifier),
+            "content_type": "application/json",
+        },
+    ] + [
+        {
+            "kind": "evidence_bank.json",
+            "content": json.dumps(artifact_payload.get("evidence_bank") or []),
+            "content_type": "application/json",
+        },
+        {
+            "kind": "verification.json",
+            "content": json.dumps(artifact_payload.get("verification") or {}),
             "content_type": "application/json",
         },
     ]

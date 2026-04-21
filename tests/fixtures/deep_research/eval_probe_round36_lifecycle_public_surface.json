@@ -1,0 +1,51 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing",
+    "runtime_warnings": [
+      "planner_fallback_used"
+    ]
+  },
+  "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, selected evidence usage, and malformed completion robustness for long-running deep research jobs",
+  "resolved_artifact_batch_id": "20260421T211534-cc90754b",
+  "artifacts": [
+    {"kind": "sources.json", "metadata": {"batch_id": "20260421T211534-cc90754b"}},
+    {"kind": "citations.json", "metadata": {"batch_id": "20260421T211534-cc90754b"}},
+    {"kind": "report.json", "metadata": {"batch_id": "20260421T211534-cc90754b"}},
+    {"kind": "final_report.md", "metadata": {"batch_id": "20260421T211534-cc90754b"}},
+    {"kind": "evidence_items.json", "metadata": {"batch_id": "20260421T211534-cc90754b"}},
+    {"kind": "coverage.json", "metadata": {"batch_id": "20260421T211534-cc90754b"}},
+    {"kind": "grounding.json", "metadata": {"batch_id": "20260421T211534-cc90754b"}},
+    {"kind": "verifier.json", "metadata": {"batch_id": "20260421T211534-cc90754b"}}
+  ],
+  "report": {
+    "status": "degraded",
+    "runtime": {
+      "warnings": [
+        "planner_fallback_used"
+      ],
+      "verifier": {
+        "passed": true,
+        "reason_codes": []
+      },
+      "release_gate": {
+        "passed": true,
+        "reason_codes": [],
+        "all_reason_codes": [],
+        "soft_reason_codes": []
+      }
+    }
+  },
+  "golden": {
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

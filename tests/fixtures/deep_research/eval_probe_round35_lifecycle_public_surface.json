@@ -1,0 +1,23 @@
+{
+  "sample": {
+    "status": "failed",
+    "phase": "researching",
+    "runtime_warnings": []
+  },
+  "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, and selected evidence usage for long-running deep research jobs",
+  "resolved_artifact_batch_id": "",
+  "artifacts": [],
+  "report": {},
+  "golden": {
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
