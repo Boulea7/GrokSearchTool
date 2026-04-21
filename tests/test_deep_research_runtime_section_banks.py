@@ -4,6 +4,7 @@ import pytest
 
 from grok_search.deep_research_evidence import (
     build_evidence_ledger_entries,
+    reconcile_section_banks_with_materialized_sections,
     seed_section_banks_from_question_bindings,
     update_section_banks,
 )
@@ -211,6 +212,132 @@ def test_build_evidence_ledger_entries_does_not_bind_section_from_origin_query_a
 
     assert entries[0]["selected_section_id"] == ""
     assert entries[0]["question_ids"] == []
+
+
+def test_build_evidence_ledger_entries_keeps_multi_hit_official_doc_candidates_unbound_until_materialized():
+    payload = structured_plan_payload(
+        type(
+            "Job",
+            (),
+            {
+                "query": "AWS DMS checkpoint semantics",
+                "context": "",
+                "effort": "deep",
+                "resolved_budget_seconds": 240,
+            },
+        )(),
+        {"mode": "fresh"},
+    )
+    payload["sub_questions"] = [
+        {
+            "id": "sq1",
+            "question": "Explain RecoveryCheckpoint and CdcStartPosition usage.",
+            "reason": "Primary axis.",
+        },
+        {
+            "id": "sq2",
+            "question": "Explain DescribeReplicationTasks recovery visibility.",
+            "reason": "Primary axis.",
+        },
+    ]
+    payload["report_outline"] = [
+        {
+            "section_id": "checkpoint-positioning",
+            "title": "Checkpoint Positioning",
+            "goal": "Explain RecoveryCheckpoint and CdcStartPosition usage.",
+        },
+        {
+            "section_id": "task-visibility",
+            "title": "Task Visibility",
+            "goal": "Explain DescribeReplicationTasks recovery visibility.",
+        },
+    ]
+    plan = DeepResearchPlan.model_validate(payload)
+
+    entries = build_evidence_ledger_entries(
+        plan,
+        unit_id="unit-search-1",
+        origin_query="RecoveryCheckpoint DescribeReplicationTasks official docs",
+        evidence_items=[
+            {
+                "evidence_id": "e1",
+                "summary": "DescribeReplicationTasks exposes RecoveryCheckpoint metadata for replication tasks.",
+                "detail": "RecoveryCheckpoint can be reused with CdcStartPosition and is exposed through DescribeReplicationTasks.",
+                "source_urls": [
+                    "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"
+                ],
+                "source_ids": ["R1"],
+                "evidence_kind": "search",
+            }
+        ],
+        updated_at="2026-04-21T00:00:00Z",
+    )
+
+    assert set(entries[0]["candidate_section_ids"]) == {"task-visibility", "checkpoint-positioning"}
+    assert entries[0]["selected_section_id"] == ""
+    assert entries[0]["question_ids"] == ["sq1", "sq2"]
+
+
+def test_reconcile_section_banks_with_materialized_sections_keeps_only_claim_backed_selected_packets():
+    reconciled = reconcile_section_banks_with_materialized_sections(
+        [
+            {
+                "section_id": "resume-semantics",
+                "candidate_evidence_ids": ["e1", "e2"],
+                "selected_evidence_ids": ["e1", "e2"],
+                "rejected_evidence_ids": [],
+                "candidate_packets": [
+                    {
+                        "evidence_id": "e1",
+                        "question_ids": ["sq1"],
+                        "claim_ids": [],
+                    },
+                    {
+                        "evidence_id": "e2",
+                        "question_ids": ["sq1"],
+                        "claim_ids": [],
+                    },
+                ],
+                "selected_packets": [
+                    {
+                        "evidence_id": "e1",
+                        "question_ids": ["sq1"],
+                        "claim_ids": ["stale-claim-id"],
+                    },
+                    {
+                        "evidence_id": "e2",
+                        "question_ids": ["sq1"],
+                        "claim_ids": [],
+                    },
+                ],
+                "rejected_packets": [],
+                "last_updated_at": "",
+            }
+        ],
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "question_ids": ["sq1"],
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "evidence_ids": ["e1"],
+                    }
+                ],
+            }
+        ],
+        updated_at="2026-04-21T00:00:00Z",
+    )
+
+    assert reconciled[0]["selected_evidence_ids"] == ["e1"]
+    assert reconciled[0]["selected_packets"] == [
+        {
+            "evidence_id": "e1",
+            "question_ids": ["sq1"],
+            "claim_ids": ["resume-semantics-claim-1"],
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -234,17 +234,14 @@ def evidence_pool_for_section(
         for packet in bank.get("selected_packets", []) or []
         if isinstance(packet, dict) and str(packet.get("evidence_id", "")).strip() in evidence_by_id
     ]
-    if selected_packet_ids:
-        deduped_selected_packet_ids = _dedupe_preserve_order(selected_packet_ids)
-        return [evidence_by_id[evidence_id] for evidence_id in deduped_selected_packet_ids], "selected"
-
     selected_ids = [
         str(evidence_id).strip()
         for evidence_id in bank.get("selected_evidence_ids", []) or []
         if str(evidence_id).strip() in evidence_by_id
     ]
-    if selected_ids:
-        return [evidence_by_id[evidence_id] for evidence_id in selected_ids], "selected"
+    selected_pool_ids = _dedupe_preserve_order([*selected_packet_ids, *selected_ids])
+    if selected_pool_ids:
+        return [evidence_by_id[evidence_id] for evidence_id in selected_pool_ids], "selected"
 
     rejected_ids = {
         str(evidence_id).strip()
@@ -258,16 +255,13 @@ def evidence_pool_for_section(
         and str(packet.get("evidence_id", "")).strip() in evidence_by_id
         and str(packet.get("evidence_id", "")).strip() not in rejected_ids
     ]
-    if candidate_packet_ids:
-        deduped_candidate_packet_ids = _dedupe_preserve_order(candidate_packet_ids)
-        return [evidence_by_id[evidence_id] for evidence_id in deduped_candidate_packet_ids], "candidate"
-
     candidate_ids = [
         str(evidence_id).strip()
         for evidence_id in bank.get("candidate_evidence_ids", []) or []
         if str(evidence_id).strip() in evidence_by_id and str(evidence_id).strip() not in rejected_ids
     ]
-    if candidate_ids:
-        return [evidence_by_id[evidence_id] for evidence_id in candidate_ids], "candidate"
+    candidate_pool_ids = _dedupe_preserve_order([*candidate_packet_ids, *candidate_ids])
+    if candidate_pool_ids:
+        return [evidence_by_id[evidence_id] for evidence_id in candidate_pool_ids], "candidate"
 
     return list(evidence_items), "global"

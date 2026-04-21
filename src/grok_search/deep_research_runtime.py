@@ -14,6 +14,7 @@ from .deep_research_evidence import (
     candidate_evidence_ids_by_section,
     evidence_source_ids,
     initialize_section_banks,
+    reconcile_section_banks_with_materialized_sections,
     seed_section_banks_from_question_bindings,
     matched_unit_ids_by_section,
     merge_evidence_ledger,
@@ -231,6 +232,9 @@ _OUTLINE_STATE_ARTIFACT_KIND = "outline_state.json"
 _OUTLINE_VERSIONS_ARTIFACT_KIND = "outline_versions.json"
 _EVIDENCE_LEDGER_ARTIFACT_KIND = "evidence_ledger.json"
 _SECTION_BANKS_ARTIFACT_KIND = "section_banks.json"
+_SELECTED_BANK_ARTIFACT_KIND = "selected_bank.json"
+_SOURCE_POLICY_ARTIFACT_KIND = "source_policy.json"
+_LINEAGE_ARTIFACT_KIND = "lineage.json"
 _CORE_FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 _PROVENANCE_FINAL_ARTIFACT_KINDS = (
     _EVIDENCE_ITEMS_ARTIFACT_KIND,
@@ -1774,10 +1778,13 @@ def _artifact_payloads(
         "planner_trace.json",
         "continuation.json",
         "continuation_capsule.json",
+        _LINEAGE_ARTIFACT_KIND,
+        _SOURCE_POLICY_ARTIFACT_KIND,
         _OUTLINE_VERSIONS_ARTIFACT_KIND,
         _OUTLINE_STATE_ARTIFACT_KIND,
         _EVIDENCE_LEDGER_ARTIFACT_KIND,
         _SECTION_BANKS_ARTIFACT_KIND,
+        _SELECTED_BANK_ARTIFACT_KIND,
         "partial_report.md",
         *_FINAL_ARTIFACT_KINDS,
     ]
@@ -2030,6 +2037,14 @@ def _normalize_brief_payload(
         normalized["stop_policy"] = {}
     normalized["continuation_focus"] = _normalize_string_list(normalized.get("continuation_focus"))
     return normalized
+
+
+def _source_policy_from_job(
+    job: DeepResearchJob,
+    *,
+    continuation: DeepResearchContinuationState,
+) -> dict[str, Any]:
+    return _source_policy_payload(job=job, continuation=continuation)
 
 
 def _finalize_brief_payload(
@@ -3101,15 +3116,142 @@ def _artifact_metadata(content: str, *, batch_id: str = "") -> dict[str, Any]:
     return metadata
 
 
+def _source_policy_payload(
+    *,
+    job: DeepResearchJob,
+    continuation: DeepResearchContinuationState | None = None,
+) -> dict[str, Any]:
+    include_domains = list(job.include_domains)
+    exclude_domains = list(job.exclude_domains)
+    official_doc_mode = any(domain.startswith("docs.") or domain == "docs.aws.amazon.com" for domain in include_domains)
+    return {
+        "mode": "official_docs_only" if official_doc_mode else "mixed_web",
+        "allowed_domains": include_domains,
+        "blocked_domains": exclude_domains,
+        "allowed_tools": ["search", "fetch", "map"],
+        "user_data_refs": [],
+        "trust_tiers": ["official_docs", "standard", "paper", "third_party", "community"],
+        "freshness_window": "current_web",
+        "must_cite_per_section": True,
+        "continuation_mode": continuation.mode if continuation is not None else "fresh",
+    }
+
+
+def _lineage_payload(
+    *,
+    job: DeepResearchJob,
+    continuation: DeepResearchContinuationState,
+) -> dict[str, Any]:
+    root_job_id = continuation.source_job_id or job.job_id
+    return {
+        "root_job_id": root_job_id,
+        "parent_job_id": continuation.source_job_id,
+        "continued_from_job_id": job.continued_from_job_id,
+        "continued_from_checkpoint": continuation.checkpoint_key,
+        "fork_type": continuation.mode,
+        "carried_forward_source_ids": [
+            str(item.get("source_id", "")).strip()
+            for item in continuation.carry_forward_sources
+            if str(item.get("source_id", "")).strip()
+        ],
+        "carried_forward_evidence_ids": [
+            str(item.get("evidence_id", "")).strip()
+            for item in continuation.carry_forward_evidence
+            if str(item.get("evidence_id", "")).strip()
+        ],
+        "supersedes_job_id": continuation.source_job_id if continuation.mode == "continue" else "",
+    }
+
+
+def _selected_bank_payload(
+    *,
+    section_banks: list[dict[str, Any]],
+    evidence_ledger: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    decisions_by_section_evidence: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in evidence_ledger:
+        if not isinstance(entry, dict):
+            continue
+        evidence_id = str(entry.get("evidence_id", "")).strip()
+        if not evidence_id:
+            continue
+        selected_section_id = str(entry.get("selected_section_id", "")).strip()
+        if selected_section_id:
+            decisions_by_section_evidence[(selected_section_id, evidence_id)] = {
+                "selection_reason": str(entry.get("disposition_reason", "")).strip(),
+                "coverage_tags": list(entry.get("question_ids", []) or []),
+                "rejected_reason": "",
+            }
+        for rejected_section_id in entry.get("rejected_section_ids", []) or []:
+            normalized_section_id = str(rejected_section_id).strip()
+            if not normalized_section_id:
+                continue
+            decisions_by_section_evidence[(normalized_section_id, evidence_id)] = {
+                "selection_reason": "",
+                "coverage_tags": list(entry.get("question_ids", []) or []),
+                "rejected_reason": str(entry.get("disposition_reason", "")).strip() or "not_selected_for_section",
+            }
+    payload: list[dict[str, Any]] = []
+    for bank in section_banks:
+        if not isinstance(bank, dict):
+            continue
+        section_id = str(bank.get("section_id", "")).strip()
+        if not section_id:
+            continue
+        selected_rows = []
+        for packet in bank.get("selected_packets", []) or []:
+            if not isinstance(packet, dict):
+                continue
+            evidence_id = str(packet.get("evidence_id", "")).strip()
+            if not evidence_id:
+                continue
+            selection_details = decisions_by_section_evidence.get((section_id, evidence_id), {})
+            selected_rows.append(
+                {
+                    "evidence_id": evidence_id,
+                    "selected_section_id": section_id,
+                    "selection_reason": str(selection_details.get("selection_reason", "")).strip(),
+                    "coverage_tags": list(selection_details.get("coverage_tags", []) or []),
+                    "rejected_reason": str(selection_details.get("rejected_reason", "")).strip(),
+                    "claim_ids": list(packet.get("claim_ids", []) or []),
+                    "question_ids": list(packet.get("question_ids", []) or []),
+                }
+            )
+        payload.append(
+            {
+                "section_id": section_id,
+                "selected_evidence_ids": list(bank.get("selected_evidence_ids", []) or []),
+                "selected_rows": selected_rows,
+                "candidate_evidence_ids": list(bank.get("candidate_evidence_ids", []) or []),
+                "rejected_evidence_ids": list(bank.get("rejected_evidence_ids", []) or []),
+            }
+        )
+    return payload
+
+
 def _write_internal_state_artifacts(
     runtime: "DeepResearchRuntime",
     job_id: str,
     *,
+    source_policy: dict[str, Any],
+    lineage: dict[str, Any],
     outline_versions: list[dict[str, Any]],
     section_graph: dict[str, Any],
     evidence_ledger: list[dict[str, Any]],
     section_banks: list[dict[str, Any]],
 ) -> None:
+    runtime.write_artifact(
+        job_id,
+        _SOURCE_POLICY_ARTIFACT_KIND,
+        _json_markdown_block(source_policy),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job_id,
+        _LINEAGE_ARTIFACT_KIND,
+        _json_markdown_block(lineage),
+        "application/json",
+    )
     runtime.write_artifact(
         job_id,
         _OUTLINE_VERSIONS_ARTIFACT_KIND,
@@ -3132,6 +3274,17 @@ def _write_internal_state_artifacts(
         job_id,
         _SECTION_BANKS_ARTIFACT_KIND,
         _json_markdown_block(section_banks),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job_id,
+        _SELECTED_BANK_ARTIFACT_KIND,
+        _json_markdown_block(
+            _selected_bank_payload(
+                section_banks=section_banks,
+                evidence_ledger=evidence_ledger,
+            )
+        ),
         "application/json",
     )
 
@@ -3901,6 +4054,8 @@ class DeepResearchRuntime:
         _write_internal_state_artifacts(
             self,
             job.job_id,
+            source_policy=dict(plan.source_policy),
+            lineage=_lineage_payload(job=job, continuation=continuation),
             outline_versions=outline_versions,
             section_graph=section_graph,
             evidence_ledger=evidence_ledger,
@@ -5326,6 +5481,7 @@ class DeepResearchRuntime:
             "time_budget_seconds": job.resolved_budget_seconds,
             "include_domains": job.include_domains,
             "exclude_domains": job.exclude_domains,
+            "source_policy": _source_policy_from_job(job, continuation=continuation),
             "brief": normalized_brief,
             "sub_questions": sub_questions,
             "search_strategy": strategy,
@@ -5961,6 +6117,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     _write_internal_state_artifacts(
         runtime,
         job_id,
+        source_policy=dict(plan.source_policy),
+        lineage=_lineage_payload(job=job, continuation=continuation),
         outline_versions=outline_versions,
         section_graph=section_graph,
         evidence_ledger=evidence_ledger,
@@ -6275,6 +6433,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             _write_internal_state_artifacts(
                 runtime,
                 job_id,
+                source_policy=dict(plan.source_policy),
+                lineage=_lineage_payload(job=job, continuation=continuation),
                 outline_versions=outline_versions,
                 section_graph=section_graph,
                 evidence_ledger=evidence_ledger,
@@ -6496,6 +6656,15 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         ledger_entries=evidence_ledger,
         updated_at=utc_now_iso(),
     )
+    section_banks = reconcile_section_banks_with_materialized_sections(
+        section_banks,
+        sections=citations["sections"],
+        updated_at=utc_now_iso(),
+    )
+    citations["sections"] = _reconcile_section_bindings_with_section_banks(
+        citations["sections"],
+        section_banks=section_banks,
+    )
     runtime_warnings = sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])})
     report_coverage = _coverage_for_report(
         plan,
@@ -6550,6 +6719,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "unit_results": unit_results,
         "runtime": {
             "warnings": runtime_warnings,
+            "source_policy": dict(plan.source_policy),
             "coverage": {
                 "must_cover_count": len(plan.brief.must_cover),
                 "uncovered_sub_question_count": len(report_coverage.get("uncovered_sub_questions", [])),
@@ -6596,6 +6766,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     _write_internal_state_artifacts(
         runtime,
         job_id,
+        source_policy=dict(plan.source_policy),
+        lineage=_lineage_payload(job=job, continuation=continuation),
         outline_versions=outline_versions,
         section_graph=section_graph,
         evidence_ledger=evidence_ledger,
@@ -8483,6 +8655,59 @@ def _attach_materialized_claim_ids_to_evidence_ledger(
     return hydrated
 
 
+def _reconcile_section_bindings_with_section_banks(
+    sections: list[dict[str, Any]],
+    *,
+    section_banks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    banks_by_section = {
+        str(bank.get("section_id", "")).strip(): dict(bank)
+        for bank in section_banks
+        if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
+    }
+    reconciled_sections: list[dict[str, Any]] = []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        normalized_section = dict(section)
+        section_id = str(normalized_section.get("section_id", "")).strip()
+        bank = banks_by_section.get(section_id, {})
+        selected_evidence_ids = {
+            str(evidence_id).strip()
+            for evidence_id in bank.get("selected_evidence_ids", []) or []
+            if str(evidence_id).strip()
+        }
+        candidate_evidence_ids = {
+            str(evidence_id).strip()
+            for evidence_id in bank.get("candidate_evidence_ids", []) or []
+            if str(evidence_id).strip()
+        }
+        claims: list[dict[str, Any]] = []
+        for claim in normalized_section.get("claims", []) or []:
+            if not isinstance(claim, dict):
+                continue
+            normalized_claim = dict(claim)
+            reconciled_bindings: list[dict[str, Any]] = []
+            for binding in normalized_claim.get("evidence_bindings", []) or []:
+                if not isinstance(binding, dict):
+                    continue
+                normalized_binding = dict(binding)
+                evidence_id = str(normalized_binding.get("evidence_id", "")).strip()
+                normalized_binding["section_id"] = section_id
+                if evidence_id and evidence_id in selected_evidence_ids:
+                    normalized_binding["selected_for_section"] = True
+                    normalized_binding["pool_mode"] = "selected"
+                elif evidence_id and evidence_id in candidate_evidence_ids:
+                    normalized_binding["selected_for_section"] = False
+                    normalized_binding["pool_mode"] = "candidate"
+                reconciled_bindings.append(normalized_binding)
+            normalized_claim["evidence_bindings"] = reconciled_bindings
+            claims.append(normalized_claim)
+        normalized_section["claims"] = claims
+        reconciled_sections.append(normalized_section)
+    return reconciled_sections
+
+
 def _build_section_citations(
     plan: DeepResearchPlan,
     evidence_items: list[dict[str, Any]],
@@ -8574,16 +8799,28 @@ def _build_section_citations(
             for packet in section_bank.get("selected_packets", []) or []
             if isinstance(packet, dict) and str(packet.get("evidence_id", "")).strip()
         ]
-        active_packet_evidence_ids = selected_packet_evidence_ids or candidate_packet_evidence_ids
-        packet_backed_pool = (
-            [evidence for evidence in evidence_pool if evidence.evidence_id in set(active_packet_evidence_ids)]
-            if active_packet_evidence_ids
-            else []
+        selected_bank_evidence_ids = _dedupe_preserve_order(
+            [*selected_packet_evidence_ids, *selected_evidence_ids]
         )
-        ranking_pool = packet_backed_pool or evidence_pool
+        candidate_bank_evidence_ids = _dedupe_preserve_order(
+            [*candidate_packet_evidence_ids, *[
+                str(evidence_id).strip()
+                for evidence_id in section_bank.get("candidate_evidence_ids", []) or []
+                if str(evidence_id).strip()
+            ]]
+        )
+        active_packet_evidence_ids = selected_packet_evidence_ids or candidate_packet_evidence_ids
+        active_bank_evidence_ids = selected_bank_evidence_ids or candidate_bank_evidence_ids
+        bank_filtered_pool = (
+            [evidence for evidence in evidence_pool if evidence.evidence_id in set(active_bank_evidence_ids)]
+            if active_bank_evidence_ids
+            else list(evidence_pool)
+        )
+        ranking_pool = bank_filtered_pool or list(evidence_pool)
         ranked_pool = sorted(
             ranking_pool,
             key=lambda evidence: (
+                1 if evidence.evidence_id in set(active_packet_evidence_ids) else 0,
                 _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords),
                 evidence.weight,
                 sum(_source_quality_score(registry_by_id.get(source_id, {})) for source_id in evidence.source_ids),
@@ -8671,8 +8908,8 @@ def _build_section_citations(
                     cluster,
                     registry_by_id,
                     section_id=section_id,
-                    pool_mode="selected" if active_packet_evidence_ids else ("global" if enforce_overlap else "candidate"),
-                    selected_evidence_ids=list(active_packet_evidence_ids or selected_evidence_ids),
+                    pool_mode="selected" if selected_bank_evidence_ids else ("global" if enforce_overlap else "candidate"),
+                    selected_evidence_ids=list(selected_bank_evidence_ids),
                     question_ids=question_ids,
                 ),
                 cluster_type=cluster_type,
@@ -8728,7 +8965,7 @@ def _build_section_citations(
             claim_cluster_count=len(section_claims),
             supporting_source_count=section_source_count,
             supporting_domain_count=section_domain_count,
-            pool_mode="selected" if selected_evidence_ids else ("global" if enforce_overlap else "candidate"),
+            pool_mode="selected" if selected_bank_evidence_ids else ("global" if enforce_overlap else "candidate"),
             question_ids=question_ids,
         )
         return section_model.model_dump()
@@ -8806,7 +9043,12 @@ def _build_section_citations(
                         ]
                     ),
                     evidence_bindings=[
-                        dict(binding)
+                        {
+                            **dict(binding),
+                            "section_id": _section_value(section, "section_id"),
+                            "pool_mode": "selected",
+                            "selected_for_section": True,
+                        }
                         for binding in base_claim.get("evidence_bindings", []) or []
                         if isinstance(binding, dict)
                     ],

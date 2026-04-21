@@ -287,6 +287,7 @@ class DeepResearchPlan(BaseModel):
     time_budget_seconds: int
     include_domains: list[str] = Field(default_factory=list)
     exclude_domains: list[str] = Field(default_factory=list)
+    source_policy: dict[str, Any] = Field(default_factory=dict)
     brief: DeepResearchBrief
     sub_questions: list[DeepResearchSubQuestion] = Field(default_factory=list)
     search_strategy: DeepResearchSearchStrategy
