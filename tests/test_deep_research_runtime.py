@@ -16210,6 +16210,84 @@ async def test_selective_fetch_avoids_same_domain_prescriptive_guidance_shell_wi
     assert source_registry[0]["title"] != "4"
 
 
+@pytest.mark.asyncio
+async def test_selective_fetch_prefers_deeper_official_doc_when_it_uniquely_answers_target_detail(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fetched_urls = []
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "dms-recovery-details",
+                "title": "AWS DMS Recovery Details",
+                "goal": "Explain RecoveryTimeout, awsdms_txn_state, and Postgres restart nuance.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "AWS DMS recovery details require the deeper task settings documentation.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "StartReplicationTask",
+                    "description": "AWS DMS API reference for resume-processing and reload-target start behavior.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+                    "title": "Change processing tuning settings",
+                    "description": "AWS DMS user guide for RecoveryTimeout, TaskRecoveryTableEnabled, awsdms_txn_state, and PostgreSQL task recovery.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/aws-dms-checkpoint-resume-restart-recovery-timeout.html",
+                    "title": "AWS DMS checkpoint resume restart recovery timeout pattern",
+                    "description": "Prescriptive guidance shell for a migration pattern.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        fetched_urls.append(url)
+        if "ChangeProcessingTuning" in url:
+            return (
+                "# Change processing tuning settings\n\n"
+                "RecoveryTimeout controls how long AWS DMS waits for a checkpoint before failing recovery.\n"
+                "TaskRecoveryTableEnabled creates the awsdms_txn_state table for transaction state recovery.\n"
+                "PostgreSQL restart behavior depends on retained source logs and task recovery state.\n"
+            )
+        if "prescriptive-guidance" in url:
+            return "# 4\n\nValidate checkpoint information.\n"
+        return "# StartReplicationTask\n\nUse resume-processing to continue from the last checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(
+        query="AWS DMS RecoveryTimeout awsdms_txn_state Postgres restart nuance",
+        include_domains=["docs.aws.amazon.com"],
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+
+    assert fetched_urls == [
+        "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html"
+    ]
+    assert "TaskRecoveryTableEnabled" in result["final_report"]
+    assert "awsdms_txn_state" in result["final_report"]
+    assert "Validate checkpoint information" not in result["final_report"]
+
+
 def test_extract_markdown_title_ignores_numeric_headings():
     title = deep_research_runtime_module._extract_markdown_title(
         "# 4\n\nValidate checkpoint information.\n\nResume-processing continues from the last checkpoint."
