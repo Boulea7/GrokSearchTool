@@ -17008,6 +17008,8 @@ async def test_runtime_persists_source_policy_lineage_and_selected_bank_artifact
     source_policy = json.loads(runtime.store.read_artifact_text(response["job_id"], "source_policy.json") or "{}")
     lineage = json.loads(runtime.store.read_artifact_text(response["job_id"], "lineage.json") or "{}")
     selected_bank = json.loads(runtime.store.read_artifact_text(response["job_id"], "selected_bank.json") or "[]")
+    evidence_bank = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_bank.json") or "[]")
+    verification = json.loads(runtime.store.read_artifact_text(response["job_id"], "verification.json") or "{}")
 
     assert source_policy["mode"] == "official_docs_only"
     assert source_policy["allowed_domains"] == ["docs.aws.amazon.com"]
@@ -17023,3 +17025,6 @@ async def test_runtime_persists_source_policy_lineage_and_selected_bank_artifact
     )
     assert materialized_row["selected_evidence_ids"]
     assert materialized_row["selected_rows"][0]["claim_ids"]
+    assert evidence_bank
+    assert evidence_bank[0]["used_by_section_ids"]
+    assert verification["packet_to_prose_fidelity"]["passed"] is True

@@ -211,6 +211,7 @@ class DeepResearchSectionCitations(BaseModel):
     section_id: str
     title: str
     summary: str = ""
+    prose: str = ""
     claims: list[DeepResearchClaim] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
