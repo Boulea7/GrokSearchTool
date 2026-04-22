@@ -595,7 +595,8 @@ def _docs_aws_namespace_priority(source: dict[str, Any], reference_texts: list[s
     domain = str(source.get("domain", "") or "").lower()
     if "docs.aws.amazon.com" not in url and domain != "docs.aws.amazon.com":
         return 0
-    reference = " ".join(str(value or "") for value in reference_texts or []).lower()
+    reference_text_values = [str(value or "") for value in reference_texts or []]
+    reference = " ".join(reference_text_values).lower()
     dms_signals = (
         "aws dms",
         " describereplicationtasks",
@@ -610,6 +611,24 @@ def _docs_aws_namespace_priority(source: dict[str, Any], reference_texts: list[s
         return 0
     if "/dms/latest/" in url:
         return 2
+    identifier_terms = _query_identifier_terms(reference)
+    source_text = " ".join(
+        str(source.get(key, "") or "").lower()
+        for key in ("title", "description", "url")
+    )
+    dms_source_signals = (
+        "databasemigrationservice",
+        "/dms/",
+        " aws dms",
+        "replicationtask",
+        "recoverytimeout",
+        "awsdms_txn_state",
+        "cdcstartposition",
+    )
+    if any(term and term in source_text for term in identifier_terms) and any(
+        signal in f" {source_text} " for signal in dms_source_signals
+    ):
+        return 3
     return -2
 
 

@@ -17080,6 +17080,79 @@ def test_select_fetch_sources_prefers_matching_dms_namespace_over_same_domain_no
     assert ranked[0]["url"] == "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html"
 
 
+def test_select_fetch_sources_keeps_exact_identifier_aws_doc_even_outside_dms_namespace():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint API visibility",
+            "context": "",
+            "effort": "deep",
+            "time_budget_seconds": 180,
+            "include_domains": ["docs.aws.amazon.com"],
+            "exclude_domains": ["repost.aws"],
+            "brief": {
+                "objective": "Explain RecoveryCheckpoint API visibility.",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Prefer the most identifier-aligned official AWS docs."],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "How is RecoveryCheckpoint exposed in AWS DMS APIs?",
+                    "reason": "Primary axis.",
+                }
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["RecoveryCheckpoint site:docs.aws.amazon.com"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {
+                    "section_id": "recoverycheckpoint",
+                    "title": "RecoveryCheckpoint",
+                    "goal": "Explain RecoveryCheckpoint API visibility.",
+                }
+            ],
+            "research_units": [],
+        }
+    )
+    unit = DeepResearchResearchUnit.model_validate(
+        {
+            "unit_id": "u1",
+            "unit_type": "search",
+            "title": "RecoveryCheckpoint docs",
+            "goal": "Explain RecoveryCheckpoint API visibility.",
+            "query": "RecoveryCheckpoint site:docs.aws.amazon.com",
+            "depends_on": [],
+            "status": "pending",
+            "notes": "",
+        }
+    )
+
+    ranked = deep_research_runtime_module._select_fetch_sources(
+        [
+            {
+                "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                "title": "Creating tasks for ongoing replication using AWS DMS",
+                "description": "User guide for AWS DMS CDC task behavior.",
+                "domain": "docs.aws.amazon.com",
+                "provider": "grok",
+            },
+            {
+                "url": "https://docs.aws.amazon.com/AWSJavaSDK/latest/javadoc/com/amazonaws/services/databasemigrationservice/model/RecoveryCheckpoint.html",
+                "title": "RecoveryCheckpoint (AWS SDK for Java)",
+                "description": "Typed API model exposing the RecoveryCheckpoint field.",
+                "domain": "docs.aws.amazon.com",
+                "provider": "grok",
+            },
+        ],
+        plan,
+        unit,
+    )
+
+    assert ranked[0]["url"] == "https://docs.aws.amazon.com/AWSJavaSDK/latest/javadoc/com/amazonaws/services/databasemigrationservice/model/RecoveryCheckpoint.html"
+
+
 @pytest.mark.asyncio
 async def test_selective_fetch_without_outline_preference_still_returns_ranked_sources(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
