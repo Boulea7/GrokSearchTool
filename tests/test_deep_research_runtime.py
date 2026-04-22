@@ -6349,6 +6349,9 @@ async def test_start_does_not_reuse_interrupted_finalizing_job_with_empty_final_
 async def test_run_job_executes_independent_units_concurrently(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     started = []
+    both_started = asyncio.Event()
+    active = 0
+    max_active = 0
 
     async def fake_planner(job, continuation):
         payload = structured_plan_payload(job, continuation)
@@ -6382,8 +6385,15 @@ async def test_run_job_executes_independent_units_concurrently(monkeypatch, tmp_
         return payload
 
     async def fake_search(query):
+        nonlocal active, max_active
         started.append(query)
-        await asyncio.sleep(0.05)
+        active += 1
+        max_active = max(max_active, active)
+        if len(started) >= 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=0.1)
+        await asyncio.sleep(0.01)
+        active -= 1
         return (f"Answer for {query}", [{"url": f"https://example.com/{query}", "title": query}])
 
     async def no_fetch(url):
@@ -6396,12 +6406,10 @@ async def test_run_job_executes_independent_units_concurrently(monkeypatch, tmp_
 
     response = await runtime.start(query="Concurrent runtime", force_new=True, schedule=False)
 
-    start = asyncio.get_running_loop().time()
     await runtime.run_job(response["job_id"])
-    elapsed = asyncio.get_running_loop().time() - start
 
     assert started == ["one", "two"]
-    assert elapsed < 0.14
+    assert max_active >= 2
 
 
 @pytest.mark.asyncio
@@ -8340,6 +8348,24 @@ async def test_status_and_result_mirror_attempt_window_and_partial_payload_field
     )
     runtime.write_artifact(
         job.job_id,
+        "evidence_bank.json",
+        json.dumps([{"evidence_id": "e1", "source_ids": ["R1"]}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "verification.json",
+        json.dumps({"packet_to_prose_fidelity": {"passed": True, "checked_packet_count": 1}}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "coverage_gaps.json",
+        json.dumps({"coverage_gate_passed": True, "total_gap_count": 0, "unanswered_sections": [], "uncovered_sub_questions": [], "hard_uncovered_targets": [], "gaps": []}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
         "partial_report.md",
         "# Partial Report\n\nStill working.\n",
         "text/markdown",
@@ -8388,6 +8414,136 @@ async def test_status_and_result_mirror_attempt_window_and_partial_payload_field
     assert result["partial_payload"]["evidence_ledger"][0]["evidence_id"] == "e1"
     assert result["partial_payload"]["section_banks"][0]["section_id"] == "summary"
     assert result["partial_payload"]["selected_bank"][0]["section_id"] == "summary"
+    assert result["partial_payload"]["evidence_bank"][0]["evidence_id"] == "e1"
+    assert result["partial_payload"]["verification"]["packet_to_prose_fidelity"]["passed"] is True
+    assert result["partial_payload"]["coverage_gaps"]["total_gap_count"] == 0
+    assert result["partial_payload"]["partial_artifact_errors"] == {}
+    assert status["partial_payload"]["evidence_bank"][0]["evidence_id"] == "e1"
+    assert status["partial_payload"]["verification"]["packet_to_prose_fidelity"]["passed"] is True
+    assert status["partial_payload"]["coverage_gaps"]["total_gap_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_result_without_include_partial_hides_partial_payload_bundle(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="No partial bundle",
+        request_fingerprint="fp-no-partial-bundle",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "partial_report.md", "# Partial Report\n\nStill working.\n", "text/markdown")
+    runtime.write_artifact(job.job_id, "verification.json", json.dumps({"packet_to_prose_fidelity": {"passed": True}}), "application/json")
+
+    result = await runtime.result(job.job_id, include_partial=False)
+
+    assert result["partial_report"] is None
+    assert result["partial_payload"] is None
+    assert result["operator_summary"]["partial_payload_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_result_partial_payload_surfaces_partial_artifact_errors(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Broken partial sidecars",
+        request_fingerprint="fp-broken-partial-sidecars",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"brief": {"objective": "Broken partial sidecars"}}), "application/json")
+    runtime.write_artifact(job.job_id, "evidence_bank.json", "{", "application/json")
+    runtime.write_artifact(job.job_id, "verification.json", json.dumps([]), "application/json")
+    runtime.write_artifact(job.job_id, "coverage_gaps.json", json.dumps({"gaps": "bad"}), "application/json")
+
+    result = await runtime.result(job.job_id)
+
+    assert result["partial_payload"] is not None
+    assert result["partial_payload"]["evidence_bank"] is None
+    assert result["partial_payload"]["verification"] is None
+    assert result["partial_payload"]["coverage_gaps"] is None
+    assert result["partial_payload"]["partial_artifact_errors"] == {
+        "evidence_bank.json": "invalid_json",
+        "verification.json": "invalid_shape",
+        "coverage_gaps.json": "invalid_shape",
+    }
+
+
+@pytest.mark.asyncio
+async def test_resume_resolved_final_batch_clears_cancel_requested(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Resolved final batch clears cancel flag",
+        request_fingerprint="fp-resolved-final-batch-clears-cancel",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="finalizing",
+        attempt_count=2,
+        cancel_requested=True,
+        finished_at=utc_now_iso(),
+    )
+    runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered final batch report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Resolved final batch clears cancel flag",
+        ),
+    )
+
+    resumed = await runtime.resume(job.job_id, schedule=False)
+
+    assert resumed["status"] == "completed"
+    assert resumed["cancel_requested"] is False
+    resolved_event = next(event for event in (await runtime.events(job.job_id))["events"] if event["type"] == "job_resolved_from_final_batch")
+    assert resolved_event["data"]["attempt_id"] == "attempt-2"
 
 
 @pytest.mark.asyncio
@@ -12091,7 +12247,90 @@ def test_verifier_allows_duplicate_claim_text_across_different_specific_sections
                     {
                         "claim_id": "checkpoint-resume-claim-1",
                         "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R2"],
+                        "evidence_ids": ["e2"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e2",
+                                "source_id": "R2",
+                                "source_backed": True,
+                                "line_start": 12,
+                                "line_end": 13,
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            },
+            "R2": {
+                "source_id": "R2",
+                "url": "https://docs.example.com/runtime/operators",
+                "domain": "docs.example.com",
+            },
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R2"], "evidence_kind": "fetch"},
+        ],
+    )
+
+    assert "duplicate_claims" not in verifier["reason_codes"]
+    assert verifier["summary"]["duplicate_claims"] == 0
+
+
+def test_verifier_flags_cross_section_restatement_same_source_different_evidence():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 2,
+            "ungrounded_claims": 0,
+            "single_source_claims": 2,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 2,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "operator-resume",
+                "title": "Operator Resume",
+                "claims": [
+                    {
+                        "claim_id": "operator-resume-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
                         "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 10,
+                                "line_end": 11,
+                                "excerpt_hash": "same-excerpt",
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "section_id": "checkpoint-resume",
+                "title": "Checkpoint Resume",
+                "claims": [
+                    {
+                        "claim_id": "checkpoint-resume-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
                         "evidence_ids": ["e2"],
                         "confidence": "medium",
                         "evidence_bindings": [
@@ -12101,6 +12340,7 @@ def test_verifier_allows_duplicate_claim_text_across_different_specific_sections
                                 "source_backed": True,
                                 "line_start": 12,
                                 "line_end": 13,
+                                "excerpt_hash": "same-excerpt",
                             }
                         ],
                     }
@@ -12120,8 +12360,85 @@ def test_verifier_allows_duplicate_claim_text_across_different_specific_sections
         ],
     )
 
-    assert "duplicate_claims" not in verifier["reason_codes"]
-    assert verifier["summary"]["duplicate_claims"] == 0
+    assert "duplicate_claims" in verifier["reason_codes"]
+    assert verifier["summary"]["duplicate_claims"] == 1
+    assert "checkpoint-resume-claim-1" in verifier["flagged_claim_ids"]
+
+
+def test_verifier_flags_cross_section_conflict():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 2,
+            "ungrounded_claims": 0,
+            "single_source_claims": 2,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 2,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 10,
+                                "line_end": 11,
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "section_id": "restart-semantics",
+                "title": "Restart Semantics",
+                "claims": [
+                    {
+                        "claim_id": "claim-2",
+                        "text": "Resume does not continue from the last durable checkpoint after interruption.",
+                        "citations": ["R2"],
+                        "source_ids": ["R2"],
+                        "evidence_ids": ["e2"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e2",
+                                "source_id": "R2",
+                                "source_backed": True,
+                                "line_start": 12,
+                                "line_end": 13,
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+        source_registry={
+            "R1": {"source_id": "R1", "url": "https://docs.example.com/resume", "domain": "docs.example.com"},
+            "R2": {"source_id": "R2", "url": "https://docs.example.com/restart", "domain": "docs.example.com"},
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R2"], "evidence_kind": "fetch"},
+        ],
+        section_banks=[],
+    )
+
+    assert "conflict" in verifier["reason_codes"]
+    assert verifier["summary"]["conflicted_claims"] == 2
+    assert {"claim-1", "claim-2"} <= set(verifier["flagged_claim_ids"])
 
 
 def test_verifier_allows_medium_single_source_search_only_for_selected_official_docs_section():

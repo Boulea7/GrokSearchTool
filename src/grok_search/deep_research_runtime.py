@@ -2420,12 +2420,19 @@ def _iter_job_events_paginated(
         after_seq = max(int(getattr(page[-1], "seq", after_seq) or after_seq), after_seq)
 
 
-def _safe_load_optional_json_artifact(store: DeepResearchStore, job_id: str, kind: str) -> Any | None:
+def _safe_load_optional_json_artifact_with_error(
+    store: DeepResearchStore,
+    job_id: str,
+    kind: str,
+) -> tuple[Any | None, str | None]:
     text = store.read_artifact_text(job_id, kind)
     value, error = _safe_load_json_artifact(text)
     if error is not None:
-        return None
-    return value
+        return None, error
+    shape_error = _validate_json_artifact_shape(kind, value)
+    if shape_error is not None:
+        return None, shape_error
+    return value, None
 
 
 def _partial_payload(
@@ -2434,21 +2441,35 @@ def _partial_payload(
     *,
     include_partial_report: bool,
 ) -> dict[str, Any] | None:
+    if not include_partial_report:
+        return None
     if _job_prefers_resolved_final_bundle(job) and _resolve_final_artifact_bundle(store, job.job_id) is not None:
         return None
-    payload = {
-        "plan": _safe_load_optional_json_artifact(store, job.job_id, "plan.json"),
-        "partial_report": store.read_artifact_text(job.job_id, "partial_report.md") if include_partial_report else None,
-        "source_policy": _safe_load_optional_json_artifact(store, job.job_id, "source_policy.json"),
-        "lineage": _safe_load_optional_json_artifact(store, job.job_id, "lineage.json"),
-        "outline_state": _safe_load_optional_json_artifact(store, job.job_id, "outline_state.json"),
-        "outline_versions": _safe_load_optional_json_artifact(store, job.job_id, "outline_versions.json"),
-        "section_graph": _safe_load_optional_json_artifact(store, job.job_id, "section_graph.json"),
-        "evidence_ledger": _safe_load_optional_json_artifact(store, job.job_id, "evidence_ledger.json"),
-        "section_banks": _safe_load_optional_json_artifact(store, job.job_id, "section_banks.json"),
-        "selected_bank": _safe_load_optional_json_artifact(store, job.job_id, _SELECTED_BANK_ARTIFACT_KIND),
+    payload: dict[str, Any] = {
+        "partial_report": store.read_artifact_text(job.job_id, "partial_report.md"),
     }
-    if not any(value not in (None, "", [], {}) for value in payload.values()):
+    artifact_errors: dict[str, str] = {}
+    json_fields = {
+        "plan": "plan.json",
+        "source_policy": "source_policy.json",
+        "lineage": "lineage.json",
+        "outline_state": "outline_state.json",
+        "outline_versions": "outline_versions.json",
+        "section_graph": "section_graph.json",
+        "evidence_ledger": "evidence_ledger.json",
+        "section_banks": "section_banks.json",
+        "selected_bank": _SELECTED_BANK_ARTIFACT_KIND,
+        "evidence_bank": _EVIDENCE_BANK_ARTIFACT_KIND,
+        "verification": _VERIFICATION_ARTIFACT_KIND,
+        "coverage_gaps": _COVERAGE_GAPS_ARTIFACT_KIND,
+    }
+    for field_name, kind in json_fields.items():
+        value, error = _safe_load_optional_json_artifact_with_error(store, job.job_id, kind)
+        payload[field_name] = value
+        if error is not None:
+            artifact_errors[kind] = error
+    payload["partial_artifact_errors"] = artifact_errors
+    if not any(value not in (None, "", [], {}) for value in payload.values()) and not artifact_errors:
         return None
     return payload
 
@@ -4141,32 +4162,11 @@ def _packet_to_prose_fidelity_payload(
     sections: list[dict[str, Any]],
     final_report: str = "",
 ) -> dict[str, Any]:
-    section_by_id = {
-        str(section.get("section_id", "")).strip(): dict(section)
-        for section in sections
-        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
-    }
     missing_selected_packet_ids: list[str] = []
     checked_packet_count = 0
-    final_report_text = _normalize_whitespace(final_report)
     for bank in selected_bank:
         if not isinstance(bank, dict):
             continue
-        section_id = str(bank.get("section_id", "")).strip()
-        section = section_by_id.get(section_id, {})
-        section_text = _normalize_whitespace(
-            " ".join(
-                [
-                    str(section.get("summary", "") or ""),
-                    str(section.get("prose", "") or ""),
-                    *[
-                        str(claim.get("text", "") or "")
-                        for claim in section.get("claims", []) or []
-                        if isinstance(claim, dict)
-                    ],
-                ]
-            )
-        )
         for row in bank.get("selected_rows", []) or []:
             if not isinstance(row, dict):
                 continue
@@ -4174,23 +4174,12 @@ def _packet_to_prose_fidelity_payload(
             if not evidence_id:
                 continue
             checked_packet_count += 1
-            coverage_tags = [
-                _normalize_whitespace(str(tag))
-                for tag in row.get("coverage_tags", []) or []
-                if _normalize_whitespace(str(tag))
-            ]
             claim_ids = [
                 str(claim_id).strip()
                 for claim_id in row.get("claim_ids", []) or []
                 if str(claim_id).strip()
             ]
             packet_reflected = bool(claim_ids)
-            if not packet_reflected and coverage_tags:
-                packet_reflected = any(
-                    _count_keyword_overlap(section_text, _tokenize_keywords(tag)) > 0
-                    or _count_keyword_overlap(final_report_text, _tokenize_keywords(tag)) > 0
-                    for tag in coverage_tags
-                )
             if not packet_reflected:
                 missing_selected_packet_ids.append(evidence_id)
     passed = not missing_selected_packet_ids
@@ -5605,6 +5594,7 @@ class DeepResearchRuntime:
                     finished_at=completed_at,
                     heartbeat_at=utc_now_iso(),
                     last_error="",
+                    cancel_requested=False,
                 )
                 self.store.append_event(
                     job_id,
@@ -9520,6 +9510,7 @@ def _build_verifier_diagnostics(
         if isinstance(item, dict) and str(item.get("evidence_id", "")).strip()
     }
     seen_claim_keys: dict[str, dict[str, Any]] = {}
+    specific_claim_snapshots: list[dict[str, Any]] = []
     section_bank_by_id = {
         str(bank.get("section_id", "")).strip(): dict(bank)
         for bank in section_banks or []
@@ -9690,6 +9681,11 @@ def _build_verifier_diagnostics(
                     for evidence_id in claim.get("evidence_ids", []) or []
                     if str(evidence_id).strip()
                 }
+                current_excerpt_hashes = {
+                    str(binding.get("excerpt_hash", "")).strip()
+                    for binding in bindings
+                    if isinstance(binding, dict) and str(binding.get("excerpt_hash", "")).strip()
+                }
                 if previous_claim is not None:
                     previous_is_rollup = bool(previous_claim.get("is_rollup"))
                     previous_section_id = str(previous_claim.get("section_id", "")).strip()
@@ -9705,6 +9701,7 @@ def _build_verifier_diagnostics(
                             "section_id": section_id,
                             "source_ids": list(current_source_ids),
                             "evidence_ids": list(current_evidence_ids),
+                            "excerpt_hashes": list(current_excerpt_hashes),
                         }
                     elif (
                         not section_is_rollup
@@ -9712,6 +9709,8 @@ def _build_verifier_diagnostics(
                         and (
                             previous_section_id == section_id
                             or bool(previous_evidence_ids & current_evidence_ids)
+                            or bool(set(previous_claim.get("source_ids", []) or []) & current_source_ids)
+                            or bool(set(previous_claim.get("excerpt_hashes", []) or []) & current_excerpt_hashes)
                         )
                     ):
                         if claim_id:
@@ -9725,6 +9724,7 @@ def _build_verifier_diagnostics(
                         "section_id": section_id,
                         "source_ids": list(current_source_ids),
                         "evidence_ids": list(current_evidence_ids),
+                        "excerpt_hashes": list(current_excerpt_hashes),
                     }
                 if _is_noisy_text(raw_claim_text) or _is_noisy_text(claim_text):
                     if claim_id:
@@ -9831,6 +9831,15 @@ def _build_verifier_diagnostics(
                     "evidence_ids": list(claim.get("evidence_ids", []) or []),
                 }
             )
+            if not section_is_rollup and claim_id:
+                specific_claim_snapshots.append(
+                    {
+                        "claim_id": claim_id,
+                        "section_id": section_id,
+                        "text": claim_text or raw_claim_text,
+                        "confidence": str(claim.get("confidence", "") or ""),
+                    }
+                )
         for index, left_claim in enumerate(section_claim_snapshots):
             left_text = str(left_claim.get("text", "") or "")
             if not left_text:
@@ -9855,6 +9864,37 @@ def _build_verifier_diagnostics(
                     )
                 integrity_counts["conflicted_claims"] += 2
                 reason_codes.append("conflict")
+        if not section_is_rollup:
+            current_section_claims = [
+                claim for claim in specific_claim_snapshots if str(claim.get("section_id", "")).strip() == section_id
+            ]
+            previous_section_claims = [
+                claim for claim in specific_claim_snapshots if str(claim.get("section_id", "")).strip() != section_id
+            ]
+            for left_claim in current_section_claims:
+                left_text = str(left_claim.get("text", "") or "")
+                if not left_text:
+                    continue
+                for right_claim in previous_section_claims:
+                    right_text = str(right_claim.get("text", "") or "")
+                    conflict_reason = _claim_conflict_reason(left_text, right_text)
+                    if not conflict_reason:
+                        continue
+                    for conflicted in (left_claim, right_claim):
+                        conflict_claim_id = str(conflicted.get("claim_id", "")).strip()
+                        if conflict_claim_id:
+                            flagged_claim_ids.append(conflict_claim_id)
+                        conflicted_claims.append(
+                            {
+                                "claim_id": conflict_claim_id,
+                                "section_id": str(conflicted.get("section_id", "") or ""),
+                                "text": str(conflicted.get("text", "") or ""),
+                                "confidence": str(conflicted.get("confidence", "") or ""),
+                                "reason": conflict_reason,
+                            }
+                        )
+                    integrity_counts["conflicted_claims"] += 2
+                    reason_codes.append("conflict")
         unused_selected_evidence_ids = [
             evidence_id
             for evidence_id in selected_evidence_ids
