@@ -329,6 +329,23 @@ def _tokenize_keywords(value: str) -> list[str]:
     return [token for token in tokens if len(token) > 2 and token not in _STOPWORDS and not token.isdigit()]
 
 
+def _query_identifier_terms(value: str) -> list[str]:
+    identifiers: list[str] = []
+    for raw_term in re.findall(r"[A-Za-z][A-Za-z0-9_]{4,}", str(value or "")):
+        normalized_term = raw_term.strip().lower()
+        if (
+            normalized_term
+            and (
+                "_" in raw_term
+                or re.search(r"[A-Z]", raw_term)
+                or len(normalized_term) >= 14
+            )
+            and normalized_term not in identifiers
+        ):
+            identifiers.append(normalized_term)
+    return identifiers
+
+
 def _is_noisy_text(value: str) -> bool:
     text = (value or "").strip()
     lowered = text.lower()
@@ -8260,6 +8277,7 @@ def _select_fetch_sources(
     prefer_outline = bool(plan.search_strategy.selective_fetch.prefer_titles_matching_outline)
     outline_keywords = _tokenize_keywords(" ".join(f"{section.title} {section.goal}" for section in plan.report_outline))
     query_keywords = _tokenize_keywords(f"{unit.title} {unit.goal} {unit.query}")
+    query_identifier_terms = _query_identifier_terms(f"{unit.title} {unit.goal} {unit.query}")
 
     query_intent_text = f"{unit.title} {unit.goal} {unit.query}".lower()
     troubleshooting_intent = any(
@@ -8294,11 +8312,12 @@ def _select_fetch_sources(
         and sum(1 for text in candidate_texts if term in set(_tokenize_keywords(text))) == 1
     ]
 
-    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, str]:
+    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, int, str]:
         title = f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
         quality_bias = _source_quality_bias(source)
         lowered_title = title.lower()
         traits = _source_doc_traits(source)
+        identifier_match_count = sum(1 for term in query_identifier_terms if term and term in lowered_title)
         non_shell_distinctive_match_count = 0
         if "prescriptive_guidance" not in traits and "troubleshooting" not in traits:
             non_shell_distinctive_match_count = _count_keyword_overlap(title, distinctive_query_terms)
@@ -8315,6 +8334,7 @@ def _select_fetch_sources(
         if _is_low_signal_title(str(source.get("title") or "")):
             shell_penalty -= 2
         return (
+            identifier_match_count,
             non_shell_distinctive_match_count,
             quality_bias,
             _count_keyword_overlap(title, outline_keywords) if prefer_outline else 0,
