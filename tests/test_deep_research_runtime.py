@@ -27,7 +27,13 @@ from grok_search.deep_research_synthesis import build_synthesis_outline
 from grok_search.deep_research_section_graph import initialize_section_graph, update_section_graph
 import grok_search.deep_research_runtime as deep_research_runtime_module
 from grok_search.providers.grok import GrokSearchProvider
-from grok_search.deep_research_types import DeepResearchContinuationState, DeepResearchEvidenceItem, DeepResearchPlan, utc_now_iso
+from grok_search.deep_research_types import (
+    DeepResearchContinuationState,
+    DeepResearchEvidenceItem,
+    DeepResearchPlan,
+    DeepResearchResearchUnit,
+    utc_now_iso,
+)
 from deep_research_test_helpers import (
     RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES,
     assert_fixture_public_surface as assert_recent_probe_fixture_public_surface,
@@ -5498,6 +5504,63 @@ async def test_continue_from_canceled_job_without_recoverable_surfaces_is_reject
     assert [job.job_id for job in runtime.store.list_jobs(limit=20)] == [source.job_id]
 
 
+def test_completed_continuation_summary_without_plan_or_checkpoint_is_not_recoverable(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = runtime.store.create_job(
+        query="Completed summary-only source",
+        request_fingerprint="fp-completed-summary-only-source",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(source.job_id, finished_at=utc_now_iso())
+
+    continuation = DeepResearchContinuationState(
+        mode="continue",
+        source_job_id=source.job_id,
+        source_job_status="completed",
+        previous_summary="Resume continues from the last checkpoint.",
+    )
+
+    assert deep_research_runtime_module._continuation_source_is_recoverable(runtime.store, source, continuation) is False
+
+
+def test_completed_continuation_summary_with_plan_artifact_is_recoverable(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = runtime.store.create_job(
+        query="Completed summary-plan source",
+        request_fingerprint="fp-completed-summary-plan-source",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(source.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(source.job_id, "plan.json", json.dumps({"query": source.query}), "application/json")
+
+    continuation = DeepResearchContinuationState(
+        mode="continue",
+        source_job_id=source.job_id,
+        source_job_status="completed",
+        previous_summary="Resume continues from the last checkpoint.",
+    )
+
+    assert deep_research_runtime_module._continuation_source_is_recoverable(runtime.store, source, continuation) is True
+
+
 @pytest.mark.asyncio
 async def test_lineage_preserves_root_and_parent_across_multi_hop_continuations(tmp_path):
     runtime = build_runtime(tmp_path)
@@ -7390,6 +7453,8 @@ async def test_resume_from_research_checkpoint_restores_without_replaying_planni
 
     assert resumed_types[0] == "job_resumed"
     assert resumed_types[1] == "checkpoint_restored"
+    assert resumed_events["events"][0]["data"]["attempt_id"] == "attempt-2"
+    assert resumed_events["events"][1]["data"]["attempt_id"] == "attempt-2"
     assert ("phase_started", "planning") not in resumed_phases
     assert ("phase_started", "researching") in resumed_phases
 
@@ -7477,6 +7542,8 @@ async def test_events_after_seq_replays_only_new_events_after_research_resume(mo
     )
     assert resumed_events["events"][0]["type"] == "job_resumed"
     assert resumed_events["events"][1]["type"] == "checkpoint_restored"
+    assert resumed_events["events"][0]["data"]["attempt_id"] == "attempt-2"
+    assert resumed_events["events"][1]["data"]["attempt_id"] == "attempt-2"
 
 
 @pytest.mark.asyncio
@@ -7977,6 +8044,62 @@ async def test_recent_probe_events_after_seq_match_fixture(tmp_path, fixture_nam
             (event["seq"], event["type"], event["phase"])
             for event in snapshot["events_after_seq"]
         ]
+
+
+@pytest.mark.asyncio
+async def test_round38_aws_dms_partial_failure_fixture_preserves_partial_artifacts(tmp_path):
+    runtime = build_runtime(tmp_path)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        "probe_round38_aws_dms_partial_failure.json",
+        request_fingerprint="fp-runtime-round38-aws-dms-partial-failure",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+
+    status_surface = snapshot["public_surface"]["status"]
+    result_surface = snapshot["public_surface"]["result"]
+    assert status["status"] == status_surface["status"]
+    assert status["phase"] == status_surface["phase"]
+    assert status["current_checkpoint"] == status_surface["current_checkpoint"]
+    assert status["current_checkpoint_kind"] == status_surface["current_checkpoint_kind"]
+    assert status["resolved_artifact_batch_id"] == status_surface["resolved_artifact_batch_id"]
+    assert status["artifact_visibility_reason"] == status_surface["artifact_visibility_reason"]
+    assert status["runtime_warnings"] == status_surface["runtime_warnings"]
+    assert all(kind in status["artifact_kinds"] for kind in status_surface["artifact_kinds"])
+    assert result["status"] == result_surface["status"]
+    assert result["phase"] == result_surface["phase"]
+    assert result["resolved_artifact_batch_id"] == result_surface["resolved_artifact_batch_id"]
+    assert result["artifact_visibility_reason"] == result_surface["artifact_visibility_reason"]
+    assert result["runtime_warnings"] == result_surface["runtime_warnings"]
+    assert result["report"] is None
+    assert result["final_report"] is None
+    assert result["selected_bank"] == snapshot["selected_bank"]
+    assert result["artifact_errors"] == result_surface["artifact_errors"]
+    evidence_ledger = json.loads(runtime.store.read_artifact_text(job.job_id, "evidence_ledger.json") or "[]")
+    source_urls_by_evidence_id = {
+        entry.get("evidence_id"): list(entry.get("source_urls") or [])
+        for entry in evidence_ledger
+        if entry.get("evidence_id")
+    }
+    selected_section_ids = [
+        bank["section_id"]
+        for bank in result["selected_bank"]
+        if bank.get("selected_rows")
+    ]
+    assert selected_section_ids == [
+        "overview-of-aws-dms-cdc-checkpoint-and-resume-mechanics",
+        "describereplicationtasks-and-related-apis-for-checkpoint-visibility",
+    ]
+    assert any(
+        "flink-restart.html" in url
+        for bank in result["selected_bank"]
+        for row in bank.get("selected_rows", [])
+        for url in source_urls_by_evidence_id.get(row.get("evidence_id"), [])
+    )
 
 
 @pytest.mark.asyncio
@@ -16534,6 +16657,64 @@ async def test_selective_fetch_avoids_same_domain_off_topic_page(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_search_backing_source_prefers_dms_namespace_over_same_domain_off_topic_page(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        payload["report_outline"] = [
+            {
+                "section_id": "dms-semantics",
+                "title": "AWS DMS Resume Semantics",
+                "goal": "Explain AWS DMS checkpoint resume and restart semantics.",
+            }
+        ]
+        return payload
+
+    async def search(query):
+        return (
+            "AWS DMS resume-processing continues from the last checkpoint while restart uses a fresh starting point.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/emr/latest/ReleaseGuide/flink-restart.html",
+                    "title": "Restart a Flink job",
+                    "description": "Restart behavior for Amazon EMR Flink jobs.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "StartReplicationTask",
+                    "description": "AWS DMS API reference for resume-processing and reload-target behavior.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+
+    response = await runtime.start(query="AWS DMS checkpoint resume restart semantics", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    evidence_ledger = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_ledger.json") or "[]")
+
+    assert "resume-processing continues from the last checkpoint" in result["final_report"]
+    assert any(
+        entry.get("source_urls") == ["https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"]
+        for entry in evidence_ledger
+        if entry.get("evidence_id") == "evidence-unit-search-1-search"
+    )
+    assert not any(
+        "flink-restart.html" in url
+        for entry in evidence_ledger
+        for url in entry.get("source_urls", []) or []
+    )
+
+
+@pytest.mark.asyncio
 async def test_selective_fetch_prefers_api_reference_over_prescriptive_guidance(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     fetched_urls = []
@@ -16824,6 +17005,79 @@ def test_summarize_evidence_text_skips_shell_like_validation_step():
 
     assert "Validate checkpoint information" not in summary
     assert "resume-processing" in summary
+
+
+def test_select_fetch_sources_prefers_matching_dms_namespace_over_same_domain_non_dms_page():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint and restart behavior",
+            "context": "",
+            "effort": "deep",
+            "time_budget_seconds": 180,
+            "include_domains": ["docs.aws.amazon.com"],
+            "exclude_domains": ["repost.aws"],
+            "brief": {
+                "objective": "Explain AWS DMS RecoveryCheckpoint behavior.",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Prefer official AWS DMS docs."],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "How does AWS DMS expose RecoveryCheckpoint and restart behavior?",
+                    "reason": "Primary axis.",
+                }
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["RecoveryCheckpoint site:docs.aws.amazon.com"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {
+                    "section_id": "recoverycheckpoint",
+                    "title": "RecoveryCheckpoint",
+                    "goal": "Explain AWS DMS RecoveryCheckpoint API and restart behavior.",
+                }
+            ],
+            "research_units": [],
+        }
+    )
+    unit = DeepResearchResearchUnit.model_validate(
+        {
+            "unit_id": "u1",
+            "unit_type": "search",
+            "title": "RecoveryCheckpoint docs",
+            "goal": "Explain AWS DMS RecoveryCheckpoint API and restart behavior.",
+            "query": "RecoveryCheckpoint site:docs.aws.amazon.com",
+            "depends_on": [],
+            "status": "pending",
+            "notes": "",
+        }
+    )
+
+    ranked = deep_research_runtime_module._select_fetch_sources(
+        [
+            {
+                "url": "https://docs.aws.amazon.com/emr/latest/ReleaseGuide/flink-restart.html",
+                "title": "RecoveryCheckpoint restart guide for Flink",
+                "description": "Checkpoint recovery and restart steps for Amazon EMR Flink jobs.",
+                "domain": "docs.aws.amazon.com",
+                "provider": "grok",
+            },
+            {
+                "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                "title": "Creating tasks for ongoing replication using AWS DMS",
+                "description": "User guide for AWS DMS CDC task behavior.",
+                "domain": "docs.aws.amazon.com",
+                "provider": "grok",
+            },
+        ],
+        plan,
+        unit,
+    )
+
+    assert ranked[0]["url"] == "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html"
 
 
 @pytest.mark.asyncio
@@ -17630,6 +17884,112 @@ def test_verifier_flags_conflicting_claims_with_negation_mismatch():
     assert {item["claim_id"] for item in verifier["conflicted_claims"]} == {"claim-1", "claim-2"}
 
 
+def test_claim_conflict_reason_detects_numeric_mismatch():
+    reason = deep_research_runtime_module._claim_conflict_reason(
+        "RecoveryTimeout waits 5 minutes before failing resume.",
+        "RecoveryTimeout waits 10 minutes before failing resume.",
+    )
+
+    assert reason == "numeric_mismatch"
+
+
+def test_verification_payload_falls_back_to_verifier_conflicted_claims():
+    payload = deep_research_runtime_module._verification_payload(
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "Resume continues from the last durable checkpoint.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                    }
+                ],
+            }
+        ],
+        coverage={"unanswered_sections": [], "hard_uncovered_targets": []},
+        verifier={
+            "reason_codes": ["conflict"],
+            "flagged_claim_ids": ["other-claim"],
+            "conflicted_claims": [
+                {
+                    "claim_id": "fallback-claim",
+                    "section_id": "resume-semantics",
+                    "text": "Fallback conflict payload.",
+                    "confidence": "low",
+                }
+            ],
+        },
+        selected_bank=[],
+        final_report="",
+    )
+
+    assert payload["conflicted_claims"] == [
+        {
+            "claim_id": "fallback-claim",
+            "section_id": "resume-semantics",
+            "text": "Fallback conflict payload.",
+            "confidence": "low",
+        }
+    ]
+
+
+def test_rebuild_verified_rollup_sections_uses_non_generic_inventory_when_supported_ids_absent():
+    rebuilt = deep_research_runtime_module._rebuild_verified_rollup_sections(
+        [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "summary": "Mixed generic rollup.",
+                "prose": "",
+                "claims": [
+                    {
+                        "claim_id": "summary-match",
+                        "text": "RecoveryTimeout controls checkpoint wait behavior.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                    },
+                    {
+                        "claim_id": "summary-noise",
+                        "text": "A generic migration shell describes background setup.",
+                        "citations": ["R2"],
+                        "source_ids": ["R2"],
+                        "evidence_ids": ["e2"],
+                    },
+                ],
+            },
+            {
+                "section_id": "recoverytimeout",
+                "title": "Recovery Timeout",
+                "summary": "RecoveryTimeout controls checkpoint wait behavior.",
+                "prose": "",
+                "claims": [
+                    {
+                        "claim_id": "detail-1",
+                        "text": "RecoveryTimeout controls checkpoint wait behavior.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                    }
+                ],
+            },
+        ],
+        {
+            "supported_claims": [],
+            "flagged_claim_ids": [],
+        },
+    )
+
+    summary_section = rebuilt[0]
+    assert [claim["claim_id"] for claim in summary_section["claims"]] == ["summary-match"]
+    assert "background setup" not in summary_section["summary"]
+
+
 @pytest.mark.asyncio
 async def test_grounding_diagnostics_include_source_level_usage(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
@@ -17797,3 +18157,81 @@ async def test_runtime_persists_source_policy_lineage_and_selected_bank_artifact
     assert public_result["evidence_bank"] == evidence_bank
     assert public_result["verification"] == verification
     assert public_result["coverage_gaps"] == coverage_gaps
+
+
+@pytest.mark.asyncio
+async def test_runtime_generic_rollup_only_artifacts_remain_usable(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "key-findings",
+                "title": "Key Findings",
+                "goal": "List the strongest findings.",
+            },
+        ]
+        payload["sub_questions"] = [
+            {
+                "id": "sq1",
+                "question": "Explain checkpoint resume semantics.",
+                "reason": "Primary axis.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Checkpoint resume",
+                "goal": "Explain checkpoint resume semantics.",
+                "query": "checkpoint resume semantics",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        payload["search_strategy"] = {
+            "approach": "targeted",
+            "search_queries": ["checkpoint resume semantics"],
+            "selective_fetch": {"max_urls_per_search": 0, "prefer_titles_matching_outline": True},
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Official checkpoint resume docs.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+
+    response = await runtime.start(query="Generic rollup only runtime probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    status = await runtime.status(response["job_id"])
+    public_result = await runtime.result(response["job_id"])
+    selected_bank = json.loads(runtime.store.read_artifact_text(response["job_id"], "selected_bank.json") or "[]")
+
+    assert result["artifact_errors"] == {}
+    assert status["resolved_artifact_batch_id"]
+    assert public_result["selected_bank"] == selected_bank
+    assert any(bank.get("selected_rows") for bank in selected_bank)
+    assert all(
+        claim_id
+        for bank in selected_bank
+        for row in bank.get("selected_rows", [])
+        for claim_id in row.get("claim_ids", [])
+    )

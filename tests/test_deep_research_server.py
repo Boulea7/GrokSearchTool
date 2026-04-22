@@ -1496,6 +1496,42 @@ async def test_deep_research_round37_lifecycle_fixture_malformed_batch_probe_mat
 
 
 @pytest.mark.asyncio
+async def test_deep_research_round38_aws_dms_partial_failure_fixture_preserves_partial_artifacts(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        "probe_round38_aws_dms_partial_failure.json",
+        request_fingerprint="fp-server-round38-aws-dms-partial-failure",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    status_surface = snapshot["public_surface"]["status"]
+    result_surface = snapshot["public_surface"]["result"]
+    assert status["status"] == status_surface["status"]
+    assert status["phase"] == status_surface["phase"]
+    assert status["current_checkpoint"] == status_surface["current_checkpoint"]
+    assert status["current_checkpoint_kind"] == status_surface["current_checkpoint_kind"]
+    assert status["resolved_artifact_batch_id"] == status_surface["resolved_artifact_batch_id"]
+    assert status["artifact_visibility_reason"] == status_surface["artifact_visibility_reason"]
+    assert status["runtime_warnings"] == status_surface["runtime_warnings"]
+    assert all(kind in status["artifact_kinds"] for kind in status_surface["artifact_kinds"])
+    assert result["status"] == result_surface["status"]
+    assert result["phase"] == result_surface["phase"]
+    assert result["resolved_artifact_batch_id"] == result_surface["resolved_artifact_batch_id"]
+    assert result["artifact_visibility_reason"] == result_surface["artifact_visibility_reason"]
+    assert result["runtime_warnings"] == result_surface["runtime_warnings"]
+    assert result["report"] is None
+    assert result["final_report"] is None
+    assert result["selected_bank"] == snapshot["selected_bank"]
+    assert result["artifact_errors"] == result_surface["artifact_errors"]
+
+
+@pytest.mark.asyncio
 async def test_deep_research_resume_from_draft_preserves_plan_only_job(tmp_path):
     response = await server.deep_research_start(
         query="Plan first, run later",

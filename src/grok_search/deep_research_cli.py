@@ -150,6 +150,17 @@ def _event_attempt_count(event: dict[str, Any]) -> int | None:
         return None
 
 
+def _event_attempt_id(event: dict[str, Any]) -> str:
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return ""
+    value = str(data.get("attempt_id", "") or "").strip()
+    if value:
+        return value
+    attempt_count = _event_attempt_count(event)
+    return f"attempt-{attempt_count}" if attempt_count is not None and attempt_count > 0 else ""
+
+
 async def _resolve_watch_attach_after_seq(
     runtime: DeepResearchRuntime,
     job_id: str,
@@ -163,6 +174,10 @@ async def _resolve_watch_attach_after_seq(
         numeric_attempts = int(attempts)
     except (TypeError, ValueError):
         numeric_attempts = 0
+    payload_attempt_id = str(payload.get("attempt_id", "") or "").strip()
+    if not payload_attempt_id and numeric_attempts > 0:
+        payload_attempt_id = f"attempt-{numeric_attempts}"
+    previous_attempt_id = f"attempt-{max(0, numeric_attempts - 1)}" if numeric_attempts > 1 else ""
     if numeric_attempts <= 1 and continued_from == "-":
         return 0
 
@@ -182,15 +197,21 @@ async def _resolve_watch_attach_after_seq(
             except (TypeError, ValueError):
                 event_seq = 0
             attempt_count = _event_attempt_count(event)
+            attempt_id = _event_attempt_id(event)
             event_type = str(event.get("type", ""))
             if (
-                previous_attempt_count > 0
-                and attempt_count == previous_attempt_count
+                (
+                    (previous_attempt_id and attempt_id == previous_attempt_id)
+                    or (previous_attempt_count > 0 and attempt_count == previous_attempt_count)
+                )
                 and event_type in ATTACH_TERMINAL_EVENT_TYPES
             ):
                 previous_attempt_after_seq = max(previous_attempt_after_seq, event_seq)
                 continue
-            if attempt_count != numeric_attempts:
+            if payload_attempt_id:
+                if attempt_id != payload_attempt_id:
+                    continue
+            elif attempt_count != numeric_attempts:
                 continue
             if event_type == "job_resumed":
                 return previous_attempt_after_seq or max(0, event_seq - 1)

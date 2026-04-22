@@ -1,0 +1,393 @@
+{
+  "sample": "probe-round38-aws-dms-partial-failure",
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
+  "include_domains": ["docs.aws.amazon.com"],
+  "exclude_domains": ["repost.aws"],
+  "job": {
+    "status": "failed",
+    "phase": "researching",
+    "effort": "deep",
+    "resolved_budget_seconds": 180,
+    "attempt_count": 1,
+    "current_checkpoint": "researching-dispatch-a1-u7",
+    "current_checkpoint_kind": "research_dispatch",
+    "last_error": "上游返回了无法解析的 completion 响应",
+    "cancel_requested": false,
+    "continued_from_job_id": ""
+  },
+  "plan": {
+    "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
+    "context": "",
+    "effort": "deep",
+    "time_budget_seconds": 180,
+    "include_domains": ["docs.aws.amazon.com"],
+    "exclude_domains": ["repost.aws"],
+    "sub_questions": [
+      {
+        "id": "sq1",
+        "question": "How is RecoveryCheckpoint exposed and used in DescribeReplicationTasks, StartReplicationTask, ModifyReplicationTask, and console for resuming CDC?",
+        "reason": "Primary API and console retrieval path."
+      },
+      {
+        "id": "sq2",
+        "question": "What is the structure and usage of awsdms_txn_state table for retrieving checkpoints (including when TaskRecoveryTableEnabled is set)?",
+        "reason": "Metadata table path."
+      },
+      {
+        "id": "sq3",
+        "question": "What are the exact semantics of resume-processing vs. restart for CDC tasks, and how does CdcStartPosition interact with RecoveryCheckpoint?",
+        "reason": "Behavioral comparison."
+      },
+      {
+        "id": "sq4",
+        "question": "How does RecoveryTimeout control waiting for resume checkpoint in CDC mode, including defaults and failure behavior?",
+        "reason": "Timeout semantics."
+      },
+      {
+        "id": "sq5",
+        "question": "What are Postgres-specific behaviors for CDC restart (slot recreation) vs. resume, including logical decoding and WAL retention?",
+        "reason": "Postgres nuance."
+      },
+      {
+        "id": "sq6",
+        "question": "How are CDC checkpoints presented and set in the AWS DMS console for ongoing replication tasks?",
+        "reason": "Console behavior."
+      }
+    ],
+    "report_outline": [
+      {
+        "section_id": "overview-of-aws-dms-cdc-checkpoint-and-resume-mechanics",
+        "title": "Overview of AWS DMS CDC Checkpoint and Resume Mechanics",
+        "goal": "Summarize AWS DMS CDC checkpoint and resume behavior."
+      },
+      {
+        "section_id": "recoverycheckpoint-field-api-usage-and-console-integration",
+        "title": "RecoveryCheckpoint Field: API Usage and Console Integration",
+        "goal": "Explain RecoveryCheckpoint API and console integration."
+      },
+      {
+        "section_id": "awsdms-txn-state-metadata-table-for-checkpoint-retrieval",
+        "title": "awsdms_txn_state Metadata Table for Checkpoint Retrieval",
+        "goal": "Explain awsdms_txn_state usage."
+      },
+      {
+        "section_id": "describereplicationtasks-and-related-apis-for-checkpoint-visibility",
+        "title": "DescribeReplicationTasks and Related APIs for Checkpoint Visibility",
+        "goal": "Explain DescribeReplicationTasks visibility."
+      },
+      {
+        "section_id": "recoverytimeout-setting-and-resume-checkpoint-waiting-behavior",
+        "title": "RecoveryTimeout Setting and Resume Checkpoint Waiting Behavior",
+        "goal": "Explain RecoveryTimeout waiting behavior."
+      },
+      {
+        "section_id": "postgres-specific-restart-vs-resume-semantics-slots-wal-logical-decoding",
+        "title": "Postgres-Specific Restart vs. Resume Semantics (Slots, WAL, Logical Decoding)",
+        "goal": "Explain Postgres-specific restart nuance."
+      },
+      {
+        "section_id": "console-cdc-checkpoint-handling-and-best-practices",
+        "title": "Console CDC Checkpoint Handling and Best Practices",
+        "goal": "Explain console CDC checkpoint handling."
+      },
+      {
+        "section_id": "key-differences-resume-processing-vs-full-restart-cdcstartposition-interactions",
+        "title": "Key Differences: Resume-Processing vs. Full Restart, CdcStartPosition Interactions",
+        "goal": "Compare resume-processing, restart, and CdcStartPosition."
+      }
+    ]
+  },
+  "source_policy": {
+    "mode": "official_docs_only",
+    "allowed_domains": ["docs.aws.amazon.com"],
+    "blocked_domains": ["repost.aws"],
+    "allowed_tools": ["search", "fetch", "map"],
+    "user_data_refs": [],
+    "trust_tiers": ["official_docs", "standard", "paper", "third_party", "community"],
+    "freshness_window": "current_web",
+    "must_cite_per_section": true,
+    "continuation_mode": "fresh"
+  },
+  "lineage": {
+    "root_job_id": "25ac44c2928039a049be07a8",
+    "parent_job_id": "",
+    "continued_from_job_id": "",
+    "continued_from_checkpoint": "",
+    "replay_from_checkpoint": "",
+    "fork_type": "fresh",
+    "carried_forward_source_ids": [],
+    "carried_forward_evidence_ids": [],
+    "skipped_unit_ids": [],
+    "supersedes_job_id": ""
+  },
+  "selected_bank": [
+    {
+      "section_id": "overview-of-aws-dms-cdc-checkpoint-and-resume-mechanics",
+      "selected_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u3-search",
+        "evidence-u3-fetch-1",
+        "evidence-u4-search",
+        "evidence-u4-fetch-1",
+        "evidence-u5-search",
+        "evidence-u5-fetch-1",
+        "evidence-u6-search",
+        "evidence-u6-fetch-1"
+      ],
+      "candidate_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u3-search",
+        "evidence-u3-fetch-1",
+        "evidence-u4-search",
+        "evidence-u4-fetch-1",
+        "evidence-u5-search",
+        "evidence-u5-fetch-1",
+        "evidence-u6-search",
+        "evidence-u6-fetch-1"
+      ],
+      "rejected_evidence_ids": [],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u1-search",
+          "selected_section_id": "overview-of-aws-dms-cdc-checkpoint-and-resume-mechanics",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": ["sq6", "sq4", "sq3"],
+          "rejected_reason": "",
+          "claim_ids": [],
+          "question_ids": ["sq6", "sq4", "sq3"]
+        },
+        {
+          "evidence_id": "evidence-u1-fetch-1",
+          "selected_section_id": "overview-of-aws-dms-cdc-checkpoint-and-resume-mechanics",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": ["sq6", "sq4", "sq3"],
+          "rejected_reason": "",
+          "claim_ids": [],
+          "question_ids": ["sq6", "sq4", "sq3"]
+        },
+        {
+          "evidence_id": "evidence-u3-search",
+          "selected_section_id": "overview-of-aws-dms-cdc-checkpoint-and-resume-mechanics",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": ["sq6", "sq4", "sq3"],
+          "rejected_reason": "",
+          "claim_ids": [],
+          "question_ids": ["sq6", "sq4", "sq3"]
+        },
+        {
+          "evidence_id": "evidence-u5-search",
+          "selected_section_id": "overview-of-aws-dms-cdc-checkpoint-and-resume-mechanics",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": ["sq6", "sq4", "sq3"],
+          "rejected_reason": "",
+          "claim_ids": [],
+          "question_ids": ["sq6", "sq4", "sq3"]
+        }
+      ]
+    },
+    {
+      "section_id": "describereplicationtasks-and-related-apis-for-checkpoint-visibility",
+      "selected_evidence_ids": ["evidence-u2-search", "evidence-u2-fetch-1"],
+      "candidate_evidence_ids": ["evidence-u2-search", "evidence-u2-fetch-1"],
+      "rejected_evidence_ids": [],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u2-search",
+          "selected_section_id": "describereplicationtasks-and-related-apis-for-checkpoint-visibility",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": ["sq1"],
+          "rejected_reason": "",
+          "claim_ids": [],
+          "question_ids": ["sq1"]
+        },
+        {
+          "evidence_id": "evidence-u2-fetch-1",
+          "selected_section_id": "describereplicationtasks-and-related-apis-for-checkpoint-visibility",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": ["sq1"],
+          "rejected_reason": "",
+          "claim_ids": [],
+          "question_ids": ["sq1"]
+        }
+      ]
+    },
+    {
+      "section_id": "awsdms-txn-state-metadata-table-for-checkpoint-retrieval",
+      "selected_evidence_ids": [],
+      "candidate_evidence_ids": ["evidence-u3-search", "evidence-u3-fetch-1"],
+      "rejected_evidence_ids": ["evidence-u3-search", "evidence-u3-fetch-1"],
+      "selected_rows": []
+    },
+    {
+      "section_id": "recoverytimeout-setting-and-resume-checkpoint-waiting-behavior",
+      "selected_evidence_ids": [],
+      "candidate_evidence_ids": ["evidence-u4-search", "evidence-u4-fetch-1"],
+      "rejected_evidence_ids": ["evidence-u4-search", "evidence-u4-fetch-1"],
+      "selected_rows": []
+    },
+    {
+      "section_id": "postgres-specific-restart-vs-resume-semantics-slots-wal-logical-decoding",
+      "selected_evidence_ids": [],
+      "candidate_evidence_ids": ["evidence-u5-search", "evidence-u5-fetch-1"],
+      "rejected_evidence_ids": ["evidence-u5-search", "evidence-u5-fetch-1"],
+      "selected_rows": []
+    },
+    {
+      "section_id": "console-cdc-checkpoint-handling-and-best-practices",
+      "selected_evidence_ids": [],
+      "candidate_evidence_ids": ["evidence-u6-search", "evidence-u6-fetch-1"],
+      "rejected_evidence_ids": ["evidence-u6-search", "evidence-u6-fetch-1"],
+      "selected_rows": []
+    }
+  ],
+  "non_batch_artifacts": [
+    {
+      "kind": "planner_trace.json",
+      "content_type": "application/json",
+      "content": {
+        "requested_model": "grok-4.20-expert",
+        "effective_model": "grok-4.20-expert-4-agent",
+        "model_resolution": "preferred_profile_match",
+        "fallback_used": false,
+        "final_status": "normalized"
+      }
+    },
+    {
+      "kind": "outline_versions.json",
+      "content_type": "application/json",
+      "content": []
+    },
+    {
+      "kind": "outline_state.json",
+      "content_type": "application/json",
+      "content": {
+        "materialized_sections": [],
+        "answered_section_ids": [],
+        "pending_titles": []
+      }
+    },
+    {
+      "kind": "section_banks.json",
+      "content_type": "application/json",
+      "content": [
+        {
+          "section_id": "overview-of-aws-dms-cdc-checkpoint-and-resume-mechanics",
+          "candidate_evidence_ids": [
+            "evidence-u1-search",
+            "evidence-u1-fetch-1",
+            "evidence-u3-search",
+            "evidence-u3-fetch-1",
+            "evidence-u4-search",
+            "evidence-u4-fetch-1",
+            "evidence-u5-search",
+            "evidence-u5-fetch-1",
+            "evidence-u6-search",
+            "evidence-u6-fetch-1"
+          ],
+          "selected_evidence_ids": [
+            "evidence-u1-search",
+            "evidence-u1-fetch-1",
+            "evidence-u3-search",
+            "evidence-u3-fetch-1",
+            "evidence-u4-search",
+            "evidence-u4-fetch-1",
+            "evidence-u5-search",
+            "evidence-u5-fetch-1",
+            "evidence-u6-search",
+            "evidence-u6-fetch-1"
+          ],
+          "rejected_evidence_ids": []
+        },
+        {
+          "section_id": "describereplicationtasks-and-related-apis-for-checkpoint-visibility",
+          "candidate_evidence_ids": ["evidence-u2-search", "evidence-u2-fetch-1"],
+          "selected_evidence_ids": ["evidence-u2-search", "evidence-u2-fetch-1"],
+          "rejected_evidence_ids": []
+        }
+      ]
+    },
+    {
+      "kind": "evidence_ledger.json",
+      "content_type": "application/json",
+      "content": [
+        {
+          "evidence_id": "evidence-u1-search",
+          "disposition": "selected",
+          "selected_section_id": "overview-of-aws-dms-cdc-checkpoint-and-resume-mechanics",
+          "question_ids": ["sq6", "sq4", "sq3"],
+          "source_urls": ["https://docs.aws.amazon.com/emr/latest/ReleaseGuide/flink-restart.html"],
+          "summary": "Recovery checkpoint guidance for restarting Flink jobs on Amazon EMR."
+        },
+        {
+          "evidence_id": "evidence-u2-search",
+          "disposition": "selected",
+          "selected_section_id": "describereplicationtasks-and-related-apis-for-checkpoint-visibility",
+          "question_ids": ["sq1"],
+          "source_urls": ["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+          "summary": "DescribeReplicationTasks exposes RecoveryCheckpoint and task status metadata."
+        },
+        {
+          "evidence_id": "evidence-u3-search",
+          "disposition": "selected",
+          "selected_section_id": "overview-of-aws-dms-cdc-checkpoint-and-resume-mechanics",
+          "question_ids": ["sq6", "sq4", "sq3"],
+          "source_urls": ["https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html"],
+          "summary": "TaskRecoveryTableEnabled creates the awsdms_txn_state table."
+        }
+      ]
+    }
+  ],
+  "initial_events": [],
+  "events_after_seq": [
+    {
+      "seq": 1,
+      "type": "job_failed",
+      "phase": "researching",
+      "message": "Deep research failed.",
+      "data": {
+        "error": "上游返回了无法解析的 completion 响应"
+      }
+    }
+  ],
+  "event_window": {
+    "after_seq": 0,
+    "next_after_seq": 1,
+    "returned_count": 1,
+    "last_event_type": "job_failed",
+    "window_has_terminal_event": true,
+    "job_terminal": true
+  },
+  "public_surface": {
+    "status": {
+      "status": "failed",
+      "phase": "researching",
+      "current_checkpoint": "researching-dispatch-a1-u7",
+      "current_checkpoint_kind": "research_dispatch",
+      "resolved_artifact_batch_id": "",
+      "artifact_visibility_reason": "",
+      "runtime_warnings": [],
+      "artifact_kinds": [
+        "plan.json",
+        "planner_trace.json",
+        "lineage.json",
+        "source_policy.json",
+        "outline_versions.json",
+        "outline_state.json",
+        "evidence_ledger.json",
+        "section_banks.json",
+        "selected_bank.json"
+      ]
+    },
+    "result": {
+      "status": "failed",
+      "phase": "researching",
+      "resolved_artifact_batch_id": "",
+      "artifact_visibility_reason": "",
+      "runtime_warnings": [],
+      "artifact_errors": {}
+    }
+  },
+  "strict_public_surface": true
+}

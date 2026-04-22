@@ -1636,6 +1636,13 @@ def test_cli_continue_creates_follow_up_job(monkeypatch, tmp_path, capsys):
         resolved_budget_seconds=240,
         continued_from_job_id="",
     )
+    runtime.store.update_job(original.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(
+        original.job_id,
+        "plan.json",
+        json.dumps({"query": "Original job"}),
+        "application/json",
+    )
 
     exit_code = deep_research_cli.main(["continue", original.job_id, "Continue from previous findings"])
 
@@ -2016,6 +2023,46 @@ def test_resolve_watch_attach_after_seq_falls_back_to_previous_terminal_anchor()
     )
 
     assert attach_after_seq == 4
+
+
+def test_resolve_watch_attach_after_seq_prefers_attempt_id_over_missing_attempt_count():
+    class FakeRuntime:
+        async def events(self, job_id, after_seq=0, limit=100):
+            if after_seq == 0:
+                return {
+                    "events": [
+                        {
+                            "seq": 1,
+                            "type": "job_interrupted",
+                            "phase": "researching",
+                            "message": "worker restarted",
+                            "data": {"attempt_id": "attempt-1", "reason": "worker_restarted"},
+                        },
+                        {
+                            "seq": 2,
+                            "type": "job_resumed",
+                            "phase": "researching",
+                            "message": "resumed",
+                            "data": {"attempt_id": "attempt-2"},
+                        },
+                    ],
+                    "next_after_seq": 2,
+                }
+            return {"events": [], "next_after_seq": after_seq}
+
+    payload = {
+        "job_id": "job-123",
+        "attempt_count": 2,
+        "attempt_id": "attempt-2",
+        "current_checkpoint": "researching-u1",
+        "continued_from_job_id": "",
+    }
+
+    attach_after_seq = asyncio.run(
+        deep_research_cli._resolve_watch_attach_after_seq(FakeRuntime(), "job-123", payload, page_limit=4)
+    )
+
+    assert attach_after_seq == 1
 
 
 def test_cli_resume_watch_passes_resume_response_as_initial_status(monkeypatch, capsys):
