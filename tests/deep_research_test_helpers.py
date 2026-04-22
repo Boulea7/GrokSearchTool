@@ -221,7 +221,14 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
     query = snapshot["query"]
     sources = list(artifact_payload.get("sources") or [])
     report = json.loads(json.dumps(artifact_payload.get("report") or {}))
-    if not snapshot.get("preserve_claim_sections", False):
+    preserve_claim_sections = bool(
+        snapshot.get("preserve_claim_sections", False)
+        or snapshot.get("selected_bank")
+        or artifact_payload.get("evidence_bank")
+        or artifact_payload.get("verification")
+        or artifact_payload.get("coverage_gaps")
+    )
+    if not preserve_claim_sections:
         report["sections"] = []
     evidence_items = list(artifact_payload.get("evidence_items") or [])
     citations = artifact_payload.get("citations") or _default_citations_payload(sources, report, evidence_items)
@@ -242,6 +249,9 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
     verifier = artifact_payload.get("verifier")
     if verifier is None:
         verifier = runtime_payload.get("verifier")
+    verification = artifact_payload.get("verification")
+    if verification is None:
+        verification = runtime_payload.get("verification")
     default_coverage, default_grounding, default_verifier, default_coverage_gaps = _minimal_provenance_payloads(
         query=query,
         report=report,
@@ -270,6 +280,21 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
         verifier = normalized_verifier
     else:
         verifier = json.loads(json.dumps(default_verifier))
+    if not isinstance(verification, dict):
+        verification = {
+            "supported_claims": [],
+            "single_source_claims": [],
+            "conflicted_claims": [],
+            "unmapped_evidence_ids": [],
+            "confidence_by_section": {},
+            "unresolved_sections": [],
+            "packet_to_prose_fidelity": {
+                "passed": True,
+                "checked_packet_count": 0,
+                "missing_selected_packet_ids": [],
+                "reason_codes": [],
+            },
+        }
     report.setdefault("sections", [])
     report.setdefault("unit_results", {})
     report_coverage = report.setdefault("coverage", {})
@@ -308,6 +333,7 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
             report_verifier["summary"] = json.loads(json.dumps(verifier["summary"]))
     else:
         runtime_payload["verifier"] = json.loads(json.dumps(verifier))
+    runtime_payload["verification"] = json.loads(json.dumps(verification))
     return [
         {
             "kind": "sources.json",

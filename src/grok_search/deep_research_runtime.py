@@ -1928,6 +1928,29 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
         evidence_items_value=evidence_items_value,
     ):
         return False
+    if not _selected_bank_matches_bundle(
+        selected_bank_value=selected_bank_value,
+        report_value=report_value,
+        evidence_items_value=evidence_items_value,
+    ):
+        return False
+    if not _evidence_bank_matches_bundle(
+        evidence_bank_value=evidence_bank_value,
+        report_value=report_value,
+        evidence_items_value=evidence_items_value,
+        citations_value=citations_value,
+    ):
+        return False
+    if not _verification_matches_report(
+        verification_value=verification_value,
+        report_value=report_value,
+    ):
+        return False
+    if not _coverage_gaps_matches_report(
+        coverage_gaps_value=coverage_gaps_value,
+        report_value=report_value,
+    ):
+        return False
     return True
 
 
@@ -2007,7 +2030,7 @@ def _artifact_hidden_by_visibility_reason(kind: str, visibility_reason: str) -> 
 
 
 def _required_artifact_error_code(kind: str, visibility_reason: str) -> str:
-    if bool(visibility_reason) and kind in _CORE_FINAL_ARTIFACT_KINDS:
+    if bool(visibility_reason) and kind in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS:
         return visibility_reason
     return "missing_required_artifact"
 
@@ -4903,6 +4926,8 @@ class DeepResearchRuntime:
                 evidence_items_value=evidence_items_value,
             )
         )
+        if final_text is None and not unresolved_batch_backed:
+            final_text = _fallback_final_report_text(report_value)
         required = _report_artifact_contract_error(job)
         for kind, error_code in required.items():
             artifact_text = (
@@ -6847,6 +6872,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     stop_policy = dict(plan.brief.stop_policy or {})
     max_search_queries = max(1, int(stop_policy.get("max_search_queries", len(plan.search_strategy.search_queries) or unit_total) or 1))
     stop_on_sufficient_coverage = bool(stop_policy.get("stop_on_sufficient_coverage", True))
+    allow_one_post_resume_batch = bool(restored_from_checkpoint and completed_unit_ids)
     while len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids) < len(plan.research_units):
         ready_units = [
             unit
@@ -6959,7 +6985,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             _mark_canceled(runtime, job_id, "researching")
             return
         elapsed_seconds = (dt.datetime.now(dt.UTC) - started_at_dt).total_seconds()
-        if elapsed_seconds >= job.resolved_budget_seconds:
+        if elapsed_seconds >= job.resolved_budget_seconds and not allow_one_post_resume_batch:
             _write_partial_outputs(runtime, job_id, plan, completed_unit_ids, unit_results, sections)
             latest_checkpoint_key = (
                 f"researching-{completed_unit_ids[-1]}"
@@ -7028,6 +7054,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             *[_execute_research_unit(runtime, plan, unit) for unit in batch_units],
             return_exceptions=True,
         )
+        allow_one_post_resume_batch = False
         if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
             return
         batch_error: Exception | None = None
@@ -10114,6 +10141,40 @@ def _build_final_report(
         else:
             lines.append(f"- [{source_id}] {title} - {item['url']}")
     return "\n".join(lines).strip() + "\n"
+
+
+def _fallback_final_report_text(report_value: dict[str, Any] | None) -> str | None:
+    if not isinstance(report_value, dict):
+        return None
+    query = _normalize_whitespace(str(report_value.get("query", "") or ""))
+    summary = _normalize_whitespace(str(report_value.get("summary", "") or ""))
+    sections = report_value.get("sections")
+    if not isinstance(sections, list):
+        sections = []
+    lines = [f"# {query or 'Final Report'}", ""]
+    if summary:
+        lines.extend(["## Summary", "", summary, ""])
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        title = _normalize_whitespace(str(section.get("title", "") or ""))
+        if not title:
+            continue
+        lines.extend([f"## {title}", ""])
+        section_summary = _normalize_whitespace(str(section.get("summary", "") or ""))
+        if section_summary:
+            lines.extend([section_summary, ""])
+        prose = _normalize_whitespace(str(section.get("prose", "") or ""))
+        if prose:
+            lines.extend([prose, ""])
+        for claim in section.get("claims", []) or []:
+            if not isinstance(claim, dict):
+                continue
+            text = _normalize_whitespace(str(claim.get("text", "") or ""))
+            if text:
+                lines.extend([f"- {text}", ""])
+    rendered = "\n".join(lines).strip()
+    return rendered + "\n" if rendered else None
 
 
 async def _search_query(query: str, *, effort: str = "standard") -> tuple[str, list[dict]]:

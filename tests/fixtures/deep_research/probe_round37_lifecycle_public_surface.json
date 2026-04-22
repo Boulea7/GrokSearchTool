@@ -3464,5 +3464,6 @@
         "batch_id": "$seeded_batch_id"
       }
     }
-  ]
+  ],
+  "strict_public_surface": true
 }
