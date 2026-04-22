@@ -11592,6 +11592,81 @@ def test_verifier_ignores_intentional_rollup_duplicates_in_summary_sections():
     assert verifier["summary"]["duplicate_claims"] == 0
 
 
+def test_verifier_allows_duplicate_claim_text_across_different_specific_sections():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 2,
+            "ungrounded_claims": 0,
+            "single_source_claims": 2,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 2,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "operator-resume",
+                "title": "Operator Resume",
+                "claims": [
+                    {
+                        "claim_id": "operator-resume-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 10,
+                                "line_end": 11,
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "section_id": "checkpoint-resume",
+                "title": "Checkpoint Resume",
+                "claims": [
+                    {
+                        "claim_id": "checkpoint-resume-claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e2"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e2",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 12,
+                                "line_end": 13,
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            }
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R1"], "evidence_kind": "fetch"},
+        ],
+    )
+
+    assert "duplicate_claims" not in verifier["reason_codes"]
+    assert verifier["summary"]["duplicate_claims"] == 0
+
+
 def test_verifier_allows_medium_single_source_search_only_for_selected_official_docs_section():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},

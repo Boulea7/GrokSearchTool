@@ -9017,12 +9017,18 @@ def _build_verifier_diagnostics(
                 previous_claim = seen_claim_keys.get(claim_key)
                 if previous_claim is not None:
                     previous_is_rollup = bool(previous_claim.get("is_rollup"))
+                    previous_section_id = str(previous_claim.get("section_id", "")).strip()
                     if not section_is_rollup and previous_is_rollup:
                         seen_claim_keys[claim_key] = {
                             "claim_id": claim_id,
                             "is_rollup": False,
+                            "section_id": section_id,
                         }
-                    elif not section_is_rollup and not previous_is_rollup:
+                    elif (
+                        not section_is_rollup
+                        and not previous_is_rollup
+                        and previous_section_id == section_id
+                    ):
                         if claim_id:
                             flagged_claim_ids.append(claim_id)
                         integrity_counts["duplicate_claims"] += 1
@@ -9031,6 +9037,7 @@ def _build_verifier_diagnostics(
                     seen_claim_keys[claim_key] = {
                         "claim_id": claim_id,
                         "is_rollup": section_is_rollup,
+                        "section_id": section_id,
                     }
                 if _is_noisy_text(raw_claim_text) or _is_noisy_text(claim_text):
                     if claim_id:
