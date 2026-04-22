@@ -1798,6 +1798,14 @@ def _continuation_source_is_recoverable(
             continue
         if _checkpoint_state_has_material_carry_forward(checkpoint.state or {}):
             return True
+    if source_job.status == "completed":
+        if any(
+            (
+                _normalize_whitespace(continuation.previous_summary),
+                _normalize_whitespace(continuation.prior_plan_summary),
+            )
+        ):
+            return True
     return False
 
 
@@ -7651,9 +7659,9 @@ def _select_fetch_sources(
 ) -> list[dict[str, Any]]:
     prefer_outline = bool(plan.search_strategy.selective_fetch.prefer_titles_matching_outline)
     outline_keywords = _tokenize_keywords(" ".join(f"{section.title} {section.goal}" for section in plan.report_outline))
-    query_keywords = _tokenize_keywords(f"{plan.query} {unit.title} {unit.goal} {unit.query}")
+    query_keywords = _tokenize_keywords(f"{unit.title} {unit.goal} {unit.query}")
 
-    query_intent_text = f"{plan.query} {unit.title} {unit.goal} {unit.query}".lower()
+    query_intent_text = f"{unit.title} {unit.goal} {unit.query}".lower()
     troubleshooting_intent = any(
         keyword in query_intent_text
         for keyword in ("troubleshooting", "troubleshoot", "support", "error", "issue", "failure")
@@ -7686,7 +7694,7 @@ def _select_fetch_sources(
         and sum(1 for text in candidate_texts if term in set(_tokenize_keywords(text))) == 1
     ]
 
-    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, str]:
+    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, str]:
         title = f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
         quality_bias = _source_quality_bias(source)
         lowered_title = title.lower()
@@ -7694,11 +7702,14 @@ def _select_fetch_sources(
         non_shell_distinctive_match_count = 0
         if "prescriptive_guidance" not in traits and "troubleshooting" not in traits:
             non_shell_distinctive_match_count = _count_keyword_overlap(title, distinctive_query_terms)
+        substring_query_overlap = sum(1 for keyword in query_keywords if keyword and keyword in lowered_title)
         shell_penalty = 0
         if not troubleshooting_intent and "troubleshooting" in lowered_title:
             shell_penalty -= 2
         if not troubleshooting_intent and "support" in lowered_title:
             shell_penalty -= 1
+        if "background" in lowered_title:
+            shell_penalty -= 2
         if "prescriptive_guidance" in traits:
             shell_penalty -= 3
         if _is_low_signal_title(str(source.get("title") or "")):
@@ -7707,6 +7718,7 @@ def _select_fetch_sources(
             non_shell_distinctive_match_count,
             quality_bias,
             _count_keyword_overlap(title, outline_keywords) if prefer_outline else 0,
+            substring_query_overlap,
             _count_keyword_overlap(title, query_keywords),
             _source_topic_match_score(source, [plan.query, unit.goal, unit.query]),
             shell_penalty,
@@ -9670,11 +9682,11 @@ def _build_final_report(
     for section in sections:
         lines.append(f"## {section['title']}")
         lines.append("")
+        if section.get("summary"):
+            lines.append(section["summary"])
+            lines.append("")
         if section.get("prose"):
             lines.append(section["prose"])
-            lines.append("")
-        elif section.get("summary"):
-            lines.append(section["summary"])
             lines.append("")
     lines.extend(["## Sources", ""])
     for source_id, item in source_registry.items():
