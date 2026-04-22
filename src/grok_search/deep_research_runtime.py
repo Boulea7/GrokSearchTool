@@ -4940,7 +4940,10 @@ class DeepResearchRuntime:
                         type="job_resolved_from_final_batch",
                         phase="finalizing",
                         message="Deep research recovered a usable final artifact batch without rerunning finalization.",
-                        data={"resolved_artifact_batch_id": final_bundle["batch_id"]},
+                        data={
+                            "resolved_artifact_batch_id": final_bundle["batch_id"],
+                            "attempt_id": _attempt_id(max(1, reused_job.attempt_count)),
+                        },
                     )
             return self._job_payload(reused_job, reused=True)
 
@@ -5382,7 +5385,10 @@ class DeepResearchRuntime:
                     type="job_resolved_from_final_batch",
                     phase="finalizing",
                     message="Deep research recovered a usable final artifact batch without rerunning finalization.",
-                    data={"resolved_artifact_batch_id": final_bundle["batch_id"]},
+                    data={
+                        "resolved_artifact_batch_id": final_bundle["batch_id"],
+                        "attempt_id": _attempt_id(max(1, job.attempt_count)),
+                    },
                 )
                 return await self.status(job_id)
         checkpoint_state, _ = self._load_checkpoint_state(job)
@@ -5555,6 +5561,7 @@ class DeepResearchRuntime:
                 data={
                     "resolved_artifact_batch_id": final_bundle["batch_id"],
                     "resolved_status": refreshed.status,
+                    "attempt_id": _attempt_id(max(1, refreshed.attempt_count)),
                     "recovery_reason": job.last_error or ("cancel_requested_during_recovery" if job.cancel_requested else ""),
                 },
             )
