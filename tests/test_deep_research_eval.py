@@ -20,6 +20,8 @@ PROBE_PUBLIC_SURFACE_FIXTURES = (
     "eval_probe_round35_lifecycle_public_surface.json",
     "eval_probe_round36_aws_dms_official_doc.json",
     "eval_probe_round36_lifecycle_public_surface.json",
+    "eval_probe_round37_aws_dms_official_doc.json",
+    "eval_probe_round37_lifecycle_public_surface.json",
 )
 PROBE_PUBLIC_SURFACE_METRICS = (
     "release_gate_consistency",
@@ -34,6 +36,8 @@ RECENT_PROBE_EVAL_PARITY_FIXTURES = (
     ("eval_probe_round35_lifecycle_public_surface.json", "probe_round35_lifecycle_public_surface.json"),
     ("eval_probe_round36_aws_dms_official_doc.json", "probe_round36_aws_dms_official_doc.json"),
     ("eval_probe_round36_lifecycle_public_surface.json", "probe_round36_lifecycle_public_surface.json"),
+    ("eval_probe_round37_aws_dms_official_doc.json", "probe_round37_aws_dms_official_doc.json"),
+    ("eval_probe_round37_lifecycle_public_surface.json", "probe_round37_lifecycle_public_surface.json"),
 )
 UNGROUNDED_ANALOGY_MARKERS = ("real-world analogy", "think of ")
 STOPWORDS = {
@@ -1180,3 +1184,31 @@ def test_recent_probe_eval_and_live_fixtures_stay_in_parity(eval_fixture_name, l
     assert live_case["job"]["status"] == eval_case["sample"]["status"]
     assert live_case["job"]["phase"] == eval_case["sample"]["phase"]
     assert live_case["public_surface"]["status"]["runtime_warnings"] == eval_case["sample"]["runtime_warnings"]
+    live_batch_id = live_case["public_surface"]["status"].get("resolved_artifact_batch_id", "")
+    eval_batch_id = eval_case["resolved_artifact_batch_id"]
+    if live_batch_id != "$seeded_batch_id":
+        assert live_batch_id == eval_batch_id
+    if live_case.get("artifacts"):
+        assert [artifact["kind"] for artifact in live_case.get("artifacts", [])] == [
+            artifact["kind"] for artifact in eval_case.get("artifacts", [])
+        ]
+    if "artifact_payload" in live_case:
+        assert live_case["artifact_payload"]["report"]["status"] == eval_case["report"]["status"]
+        assert live_case["artifact_payload"]["report"]["runtime"]["release_gate"] == eval_case["report"]["runtime"]["release_gate"]
+        assert live_case["artifact_payload"]["report"]["runtime"]["verifier"] == eval_case["report"]["runtime"]["verifier"]
+        if any(artifact.get("kind") == "selected_bank.json" for artifact in eval_case.get("artifacts", [])):
+            assert bool(live_case["selected_bank"]) == any(
+                artifact.get("kind") == "selected_bank.json" for artifact in eval_case.get("artifacts", [])
+            )
+        if any(artifact.get("kind") == "evidence_bank.json" for artifact in eval_case.get("artifacts", [])):
+            assert bool(live_case["artifact_payload"]["evidence_bank"]) == any(
+                artifact.get("kind") == "evidence_bank.json" for artifact in eval_case.get("artifacts", [])
+            )
+        if any(artifact.get("kind") == "verification.json" for artifact in eval_case.get("artifacts", [])):
+            assert bool(live_case["artifact_payload"]["verification"]) == any(
+                artifact.get("kind") == "verification.json" for artifact in eval_case.get("artifacts", [])
+            )
+        if any(artifact.get("kind") == "coverage_gaps.json" for artifact in eval_case.get("artifacts", [])):
+            assert bool(live_case["artifact_payload"]["coverage_gaps"]) == any(
+                artifact.get("kind") == "coverage_gaps.json" for artifact in eval_case.get("artifacts", [])
+            )

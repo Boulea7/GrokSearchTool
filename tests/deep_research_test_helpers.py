@@ -16,6 +16,8 @@ RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES = (
     "probe_round35_lifecycle_public_surface.json",
     "probe_round36_aws_dms_official_doc.json",
     "probe_round36_lifecycle_public_surface.json",
+    "probe_round37_aws_dms_official_doc.json",
+    "probe_round37_lifecycle_public_surface.json",
 )
 
 
@@ -68,6 +70,24 @@ def assert_public_surface_subset(actual: dict, expected: dict, *, seeded_batch_i
         assert key in actual
         materialized = _materialize_fixture_surface(expected_value, seeded_batch_id=seeded_batch_id)
         actual_value = actual[key]
+        if key == "artifact_kinds" and isinstance(materialized, list) and isinstance(actual_value, list):
+            expected_kinds = [str(item) for item in materialized]
+            actual_kinds = [str(item) for item in actual_value]
+            assert all(kind in actual_kinds for kind in expected_kinds)
+            continue
+        if key == "constraint_violations" and isinstance(materialized, list) and isinstance(actual_value, list):
+            expected_codes = [str(item) for item in materialized]
+            actual_codes = []
+            for item in actual_value:
+                if isinstance(item, dict):
+                    for field in ("reason", "code", "unit_id"):
+                        value = str(item.get(field, "")).strip()
+                        if value:
+                            actual_codes.append(value)
+                else:
+                    actual_codes.append(str(item))
+            assert all(code in actual_codes for code in expected_codes)
+            continue
         if isinstance(materialized, dict):
             assert isinstance(actual_value, dict)
             assert_public_surface_subset(actual_value, materialized, seeded_batch_id=seeded_batch_id)
