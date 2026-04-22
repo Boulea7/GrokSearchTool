@@ -3,44 +3,20 @@ from pathlib import Path
 import re
 
 import pytest
-from deep_research_test_helpers import load_deep_research_fixture
+from deep_research_test_helpers import (
+    RECENT_DEEP_RESEARCH_EVAL_LIVE_PARITY_FIXTURES,
+    RECENT_DEEP_RESEARCH_PUBLIC_SURFACE_EVAL_FIXTURES,
+    load_deep_research_fixture,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
-PROBE_PUBLIC_SURFACE_FIXTURES = (
-    "eval_probe_round24_worker_restart_public_surface.json",
-    "eval_probe_round26_aws_dms_public_surface.json",
-    "eval_probe_round30_aws_dms_official_doc.json",
-    "eval_probe_round30_lifecycle_public_surface.json",
-    "eval_probe_round33_aws_dms_official_doc.json",
-    "eval_probe_round33_lifecycle_public_surface.json",
-    "eval_probe_round34_aws_dms_official_doc.json",
-    "eval_probe_round34_lifecycle_public_surface.json",
-    "eval_probe_round35_aws_dms_official_doc.json",
-    "eval_probe_round35_lifecycle_public_surface.json",
-    "eval_probe_round36_aws_dms_official_doc.json",
-    "eval_probe_round36_lifecycle_public_surface.json",
-    "eval_probe_round37_aws_dms_official_doc.json",
-    "eval_probe_round37_lifecycle_public_surface.json",
-    "eval_probe_round38_aws_dms_partial_failure.json",
-)
+PROBE_PUBLIC_SURFACE_FIXTURES = RECENT_DEEP_RESEARCH_PUBLIC_SURFACE_EVAL_FIXTURES
 PROBE_PUBLIC_SURFACE_METRICS = (
     "release_gate_consistency",
     "resolved_batch_parity",
 )
-RECENT_PROBE_EVAL_PARITY_FIXTURES = (
-    ("eval_probe_round33_aws_dms_official_doc.json", "probe_round33_aws_dms_official_doc.json"),
-    ("eval_probe_round33_lifecycle_public_surface.json", "probe_round33_lifecycle_public_surface.json"),
-    ("eval_probe_round34_aws_dms_official_doc.json", "probe_round34_aws_dms_official_doc.json"),
-    ("eval_probe_round34_lifecycle_public_surface.json", "probe_round34_lifecycle_public_surface.json"),
-    ("eval_probe_round35_aws_dms_official_doc.json", "probe_round35_aws_dms_official_doc.json"),
-    ("eval_probe_round35_lifecycle_public_surface.json", "probe_round35_lifecycle_public_surface.json"),
-    ("eval_probe_round36_aws_dms_official_doc.json", "probe_round36_aws_dms_official_doc.json"),
-    ("eval_probe_round36_lifecycle_public_surface.json", "probe_round36_lifecycle_public_surface.json"),
-    ("eval_probe_round37_aws_dms_official_doc.json", "probe_round37_aws_dms_official_doc.json"),
-    ("eval_probe_round37_lifecycle_public_surface.json", "probe_round37_lifecycle_public_surface.json"),
-    ("eval_probe_round38_aws_dms_partial_failure.json", "probe_round38_aws_dms_partial_failure.json"),
-)
+RECENT_PROBE_EVAL_PARITY_FIXTURES = RECENT_DEEP_RESEARCH_EVAL_LIVE_PARITY_FIXTURES
 UNGROUNDED_ANALOGY_MARKERS = ("real-world analogy", "think of ")
 STOPWORDS = {
     "about",
@@ -778,6 +754,7 @@ def test_planner_boundary_probe_goldens(fixture_name):
         "eval_probe_round22_noise_filters.json",
         "eval_probe_round23_aws_dms_ranking_noise.json",
         "eval_probe_round24_aws_dms_ranking_success.json",
+        "eval_probe_round39_aws_dms_operation_ranking.json",
         "eval_probe_round30_aws_dms_official_doc.json",
     ],
 )
@@ -1123,6 +1100,7 @@ def test_packet_to_prose_fidelity_detects_selected_packet_missing_from_prose():
     "fixture_name",
     [
         "eval_probe_round22_provenance_bundle.json",
+        "eval_probe_round39_aws_dms_binding_consistency.json",
     ],
 )
 def test_provenance_bundle_consistency_probe_goldens(fixture_name):
