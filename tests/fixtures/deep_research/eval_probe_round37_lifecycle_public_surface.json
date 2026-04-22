@@ -1,0 +1,333 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing",
+    "runtime_warnings": [
+      "coverage_incomplete",
+      "medium_single_source_search_only"
+    ]
+  },
+  "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, selected evidence usage, and malformed completion robustness for long-running deep research jobs",
+  "resolved_artifact_batch_id": "20260422T082512-c8557c59",
+  "artifacts": [
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "plan.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/plan.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:01Z",
+      "updated_at": "2026-04-22T08:23:01Z",
+      "metadata": {
+        "bytes": 17734
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "planner_trace.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/planner_trace.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:01Z",
+      "updated_at": "2026-04-22T08:23:01Z",
+      "metadata": {
+        "bytes": 1299
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "lineage.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/lineage.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:01Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 319
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "source_policy.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/source_policy.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:01Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 373
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "outline_versions.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/outline_versions.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:01Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 3912
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "outline_state.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/outline_state.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:01Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 17201
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "evidence_ledger.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/evidence_ledger.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:01Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 42008
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "section_banks.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/section_banks.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:01Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 57285
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "selected_bank.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/selected_bank.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:01Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 14190,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "partial_report.md",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/partial_report.md",
+      "content_type": "text/markdown",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 7198
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "sources.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/sources.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 7508,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "citations.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/citations.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 47307,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "report.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/report.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 82215,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "final_report.md",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/final_report.md",
+      "content_type": "text/markdown",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 9499,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "evidence_items.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/evidence_items.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 15524,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "coverage.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/coverage.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 18047,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "grounding.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/grounding.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 13661,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "verifier.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/verifier.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 1142,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "selected_bank.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/selected_bank.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:01Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 14190,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "evidence_bank.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/evidence_bank.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 10342,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "verification.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/verification.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 12955,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    },
+    {
+      "job_id": "2d9ebbf88891ad47a7c67191",
+      "kind": "coverage_gaps.json",
+      "path": "artifacts/2d9ebbf88891ad47a7c67191/batches/20260422T082512-c8557c59/coverage_gaps.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:25:12Z",
+      "updated_at": "2026-04-22T08:25:12Z",
+      "metadata": {
+        "bytes": 2368,
+        "batch_id": "20260422T082512-c8557c59"
+      }
+    }
+  ],
+  "report": {
+    "status": "degraded",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "medium_single_source_search_only"
+      ],
+      "verifier": {
+        "passed": false,
+        "reason_codes": [
+          "medium_single_source_search_only"
+        ],
+        "flagged_claim_ids": [
+          "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts-claim-3",
+          "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts-claim-4",
+          "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems-claim-9"
+        ],
+        "summary": {
+          "section_count": 8,
+          "total_claims": 13,
+          "low_confidence_claims": 0,
+          "single_source_claims": 13,
+          "source_backed_binding_count": 10,
+          "search_only_binding_count": 6,
+          "null_span_binding_count": 0,
+          "missing_evidence_items": 0,
+          "mismatched_binding_source": 0,
+          "mismatched_binding_evidence": 0,
+          "invalid_source_backed_span": 0,
+          "duplicate_claims": 0,
+          "low_value_claims": 0,
+          "medium_single_source_search_only": 3,
+          "same_domain_off_topic_dominance": 0,
+          "unbound_citation_sources": 0,
+          "unbound_evidence_ids": 0,
+          "claim_outside_selected_bank": 0,
+          "selected_evidence_unused": 0,
+          "section_packet_mismatch": 0
+        }
+      },
+      "release_gate": {
+        "passed": true,
+        "reason_codes": [],
+        "all_reason_codes": [
+          "medium_single_source_search_only"
+        ],
+        "soft_reason_codes": [
+          "medium_single_source_search_only"
+        ]
+      }
+    }
+  },
+  "golden": {
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
