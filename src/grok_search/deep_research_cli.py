@@ -168,6 +168,13 @@ async def _resolve_watch_attach_after_seq(
     *,
     page_limit: int = 100,
 ) -> int:
+    explicit_anchor = payload.get("watch_attach_after_seq")
+    try:
+        normalized_explicit_anchor = int(explicit_anchor)
+    except (TypeError, ValueError):
+        normalized_explicit_anchor = None
+    if normalized_explicit_anchor is not None and normalized_explicit_anchor >= 0:
+        return normalized_explicit_anchor
     attempts = payload.get("attempt_count")
     continued_from = _summary_value(payload.get("continued_from_job_id"))
     try:

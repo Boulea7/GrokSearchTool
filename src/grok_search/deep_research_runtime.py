@@ -253,6 +253,13 @@ _ADDITIVE_FINAL_ARTIFACT_KINDS = (
     _COVERAGE_GAPS_ARTIFACT_KIND,
 )
 _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS = _FINAL_ARTIFACT_KINDS + _ADDITIVE_FINAL_ARTIFACT_KINDS
+_TERMINAL_EVENT_TYPES = {
+    "job_canceled",
+    "job_completed",
+    "job_failed",
+    "job_interrupted",
+    "job_resolved_from_final_batch",
+}
 _UNRESOLVED_BATCH_BACKED_FINAL_ARTIFACTS_HIDDEN = "unresolved_batch_backed_final_artifacts_hidden"
 _DEFAULT_SEARCH_QUERY_FN = None
 _RUNTIME_RECONCILE_STALE_SECONDS = 30
@@ -1525,6 +1532,27 @@ def _parse_json_object(value: str) -> dict[str, Any]:
     return parsed
 
 
+def _extract_embedded_json_object(text: str) -> tuple[dict[str, Any], str] | None:
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char not in "{[":
+            continue
+        try:
+            parsed, end_index = decoder.raw_decode(text[index:])
+        except Exception:
+            continue
+        if isinstance(parsed, str):
+            nested = parsed.strip()
+            if nested.startswith("{") or nested.startswith("["):
+                try:
+                    parsed = json.loads(nested)
+                except Exception:
+                    continue
+        if isinstance(parsed, dict):
+            return parsed, text[index : index + end_index]
+    return None
+
+
 def _parse_json_object_with_trace(value: str) -> tuple[dict[str, Any], dict[str, Any]]:
     text = (value or "").strip()
     trace = {
@@ -1540,7 +1568,15 @@ def _parse_json_object_with_trace(value: str) -> tuple[dict[str, Any], dict[str,
         trace["fenced_json_detected"] = True
         trace["parse_path"] = "fenced_json"
         text = fenced.group(1).strip()
-    parsed = json.loads(text)
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        embedded = _extract_embedded_json_object(text)
+        if embedded is None:
+            raise
+        parsed, extracted_text = embedded
+        trace["parse_path"] = "embedded_json"
+        trace["embedded_json_preview"] = _trim_text(extracted_text, limit=200)
     trace["parsed_type"] = type(parsed).__name__
     if isinstance(parsed, str):
         nested = parsed.strip()
@@ -1661,14 +1697,25 @@ def _current_final_artifact_bundle(store: DeepResearchStore, job_id: str) -> dic
     return {"batch_id": batch_id, "paths": paths}
 
 
+def _read_batch_manifest(batch_dir: Path) -> dict[str, Any]:
+    manifest_path = batch_dir / "manifest.json"
+    text = _read_text_if_exists(manifest_path)
+    value, error = _safe_load_json_artifact(text)
+    if error is not None or not isinstance(value, dict):
+        return {}
+    return value
+
+
 def _batch_bundle_candidate_from_dir(batch_dir: Path) -> dict[str, Any]:
+    manifest = _read_batch_manifest(batch_dir)
     return {
-        "batch_id": batch_dir.name,
+        "batch_id": str(manifest.get("batch_id", "") or batch_dir.name),
         "paths": {
             kind: batch_dir / kind
             for kind in _FINAL_ARTIFACT_KINDS
             if (batch_dir / kind).exists()
         },
+        "manifest": manifest,
     }
 
 
@@ -1676,12 +1723,31 @@ def _batch_bundle_candidates(store: DeepResearchStore, job_id: str) -> list[dict
     batches_dir = store.artifacts_dir / job_id / "batches"
     if not batches_dir.exists():
         return []
-    candidates = sorted(
-        (path for path in batches_dir.iterdir() if path.is_dir()),
-        key=lambda path: (path.stat().st_mtime_ns, path.name),
-        reverse=True,
-    )
-    return [_batch_bundle_candidate_from_dir(path) for path in candidates]
+    candidates = [_batch_bundle_candidate_from_dir(path) for path in batches_dir.iterdir() if path.is_dir()]
+
+    def sort_key(candidate: dict[str, Any]) -> tuple[int, int, dt.datetime, int, str]:
+        manifest = candidate.get("manifest") or {}
+        completeness_ok = 1 if bool(manifest.get("completeness_ok")) else 0
+        try:
+            attempt_count = int(manifest.get("attempt_count") or 0)
+        except (TypeError, ValueError):
+            attempt_count = 0
+        created_at = _parse_utc_iso(str(manifest.get("created_at", "") or "")) or dt.datetime.fromtimestamp(
+            next(iter(candidate.get("paths", {}).values()), batches_dir).stat().st_mtime,
+            tz=dt.UTC,
+        )
+        latest_mtime_ns = max(
+            [path.stat().st_mtime_ns for path in candidate.get("paths", {}).values()] or [0]
+        )
+        return (
+            completeness_ok,
+            attempt_count,
+            created_at,
+            latest_mtime_ns,
+            str(candidate.get("batch_id", "") or ""),
+        )
+
+    return sorted(candidates, key=sort_key, reverse=True)
 
 
 def _latest_batch_bundle_candidate(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
@@ -2268,6 +2334,75 @@ def _operator_summary_payload(
         "artifact_fallback_used": False,
         "artifact_visibility_reason": "",
     }
+
+
+def _attempt_window_anchor_seq(
+    store: DeepResearchStore,
+    job: DeepResearchJob,
+) -> int:
+    try:
+        numeric_attempts = int(job.attempt_count or 0)
+    except (TypeError, ValueError):
+        numeric_attempts = 0
+    if numeric_attempts <= 1 and not str(job.continued_from_job_id or "").strip():
+        return 0
+    current_attempt_id = _attempt_id(numeric_attempts)
+    previous_attempt_id = _attempt_id(max(0, numeric_attempts - 1)) if numeric_attempts > 1 else ""
+    previous_attempt_count = max(0, numeric_attempts - 1)
+    anchor_seq = 0
+    for event in store.list_events(job.job_id, after_seq=0, limit=10_000):
+        event_type = str(event.type or "").strip()
+        data = event.data if isinstance(event.data, dict) else {}
+        attempt_id = str(data.get("attempt_id", "") or "").strip()
+        attempt_count_value = data.get("attempt_count")
+        try:
+            attempt_count = int(attempt_count_value)
+        except (TypeError, ValueError):
+            attempt_count = None
+        if event_type in _TERMINAL_EVENT_TYPES and (
+            (previous_attempt_id and attempt_id == previous_attempt_id)
+            or (previous_attempt_count > 0 and attempt_count == previous_attempt_count)
+        ):
+            anchor_seq = max(anchor_seq, event.seq)
+            continue
+        if event_type == "job_resumed" and (
+            attempt_id == current_attempt_id or (attempt_count is not None and attempt_count == numeric_attempts)
+        ):
+            return max(anchor_seq, max(0, event.seq - 1))
+    return anchor_seq
+
+
+def _safe_load_optional_json_artifact(store: DeepResearchStore, job_id: str, kind: str) -> Any | None:
+    text = store.read_artifact_text(job_id, kind)
+    value, error = _safe_load_json_artifact(text)
+    if error is not None:
+        return None
+    return value
+
+
+def _partial_payload(
+    store: DeepResearchStore,
+    job: DeepResearchJob,
+    *,
+    include_partial_report: bool,
+) -> dict[str, Any] | None:
+    if _job_prefers_resolved_final_bundle(job) and _resolve_final_artifact_bundle(store, job.job_id) is not None:
+        return None
+    payload = {
+        "plan": _safe_load_optional_json_artifact(store, job.job_id, "plan.json"),
+        "partial_report": store.read_artifact_text(job.job_id, "partial_report.md") if include_partial_report else None,
+        "source_policy": _safe_load_optional_json_artifact(store, job.job_id, "source_policy.json"),
+        "lineage": _safe_load_optional_json_artifact(store, job.job_id, "lineage.json"),
+        "outline_state": _safe_load_optional_json_artifact(store, job.job_id, "outline_state.json"),
+        "outline_versions": _safe_load_optional_json_artifact(store, job.job_id, "outline_versions.json"),
+        "section_graph": _safe_load_optional_json_artifact(store, job.job_id, "section_graph.json"),
+        "evidence_ledger": _safe_load_optional_json_artifact(store, job.job_id, "evidence_ledger.json"),
+        "section_banks": _safe_load_optional_json_artifact(store, job.job_id, "section_banks.json"),
+        "selected_bank": _safe_load_optional_json_artifact(store, job.job_id, _SELECTED_BANK_ARTIFACT_KIND),
+    }
+    if not any(value not in (None, "", [], {}) for value in payload.values()):
+        return None
+    return payload
 
 
 def _job_prefers_resolved_final_bundle(job: DeepResearchJob) -> bool:
@@ -3516,6 +3651,30 @@ def _artifact_metadata(content: str, *, batch_id: str = "") -> dict[str, Any]:
     if batch_id:
         metadata["batch_id"] = batch_id
     return metadata
+
+
+def _batch_manifest_payload(
+    *,
+    batch_id: str,
+    artifacts: list[dict[str, Any]],
+    batch_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = dict(batch_metadata or {})
+    manifest = {
+        "batch_id": batch_id,
+        "attempt_id": str(metadata.get("attempt_id", "") or "").strip(),
+        "attempt_count": int(metadata.get("attempt_count", 0) or 0),
+        "phase": str(metadata.get("phase", "") or "").strip(),
+        "created_at": str(metadata.get("created_at", "") or utc_now_iso()),
+        "artifact_kinds": [
+            str(item.get("kind", "")).strip()
+            for item in artifacts
+            if str(item.get("kind", "")).strip()
+        ],
+        "completeness_ok": bool(metadata.get("completeness_ok", True)),
+        "provenance_digest": str(metadata.get("provenance_digest", "") or "").strip(),
+    }
+    return manifest
 
 
 def _source_policy_payload(
@@ -5082,6 +5241,11 @@ class DeepResearchRuntime:
         payload["runtime_warnings"] = diagnostics["runtime_warnings"]
         payload["constraint_violations"] = diagnostics["constraint_violations"]
         payload["artifact_visibility_reason"] = visibility_reason
+        watch_attach_after_seq = _attempt_window_anchor_seq(self.store, job)
+        payload["watch_attach_after_seq"] = watch_attach_after_seq
+        payload["attempt_window_start_seq"] = watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0
+        partial_payload = _partial_payload(self.store, job, include_partial_report=True)
+        payload["partial_payload"] = partial_payload
         operator_summary = _operator_summary_payload(
             job,
             diagnostics=diagnostics,
@@ -5091,6 +5255,9 @@ class DeepResearchRuntime:
         operator_summary["current_checkpoint_seq"] = payload["current_checkpoint_seq"]
         operator_summary["artifact_fallback_used"] = payload["artifact_fallback_used"]
         operator_summary["artifact_visibility_reason"] = payload["artifact_visibility_reason"]
+        operator_summary["partial_payload_available"] = partial_payload is not None
+        operator_summary["watch_attach_after_seq"] = watch_attach_after_seq
+        operator_summary["attempt_window_start_seq"] = payload["attempt_window_start_seq"]
         payload["operator_summary"] = operator_summary
         return payload
 
@@ -5298,6 +5465,11 @@ class DeepResearchRuntime:
                 if not (unresolved_batch_backed and artifact.get("kind") in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS)
             ],
         }
+        watch_attach_after_seq = _attempt_window_anchor_seq(self.store, job)
+        payload["watch_attach_after_seq"] = watch_attach_after_seq
+        payload["attempt_window_start_seq"] = watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0
+        partial_payload = _partial_payload(self.store, job, include_partial_report=include_partial)
+        payload["partial_payload"] = partial_payload
         payload["operator_summary"] = {
             **_operator_summary_payload(
                 job,
@@ -5308,6 +5480,9 @@ class DeepResearchRuntime:
             "current_checkpoint_seq": payload["current_checkpoint_seq"],
             "artifact_fallback_used": payload["artifact_fallback_used"],
             "artifact_visibility_reason": payload["artifact_visibility_reason"],
+            "partial_payload_available": partial_payload is not None,
+            "watch_attach_after_seq": watch_attach_after_seq,
+            "attempt_window_start_seq": payload["attempt_window_start_seq"],
         }
         return payload
 
@@ -5496,7 +5671,13 @@ class DeepResearchRuntime:
         )
         return artifact.model_dump()
 
-    def write_artifact_batch(self, job_id: str, artifacts: list[dict[str, str]]) -> list[dict[str, Any]]:
+    def write_artifact_batch(
+        self,
+        job_id: str,
+        artifacts: list[dict[str, str]],
+        *,
+        batch_metadata: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         batch_id = utc_now_iso().replace(":", "").replace("-", "").replace("Z", "") + "-" + secrets.token_hex(4)
         persisted: list[dict[str, Any]] = []
         payloads: list[dict[str, Any]] = []
@@ -5518,6 +5699,15 @@ class DeepResearchRuntime:
                     "metadata": _artifact_metadata(content, batch_id=batch_id),
                 }
             )
+        manifest_payload = _batch_manifest_payload(
+            batch_id=batch_id,
+            artifacts=payloads,
+            batch_metadata=batch_metadata,
+        )
+        manifest_path = batch_dir / "manifest.json"
+        manifest_temp_path = manifest_path.with_name(f".manifest.json.{secrets.token_hex(4)}.tmp")
+        manifest_temp_path.write_text(_json_markdown_block(manifest_payload), encoding="utf-8")
+        manifest_temp_path.replace(manifest_path)
         persisted_artifacts = self.store.upsert_artifact_batch(job_id, artifacts=payloads)
         for artifact in persisted_artifacts:
             persisted.append(artifact.model_dump())
@@ -6928,6 +7118,25 @@ class DeepResearchRuntime:
         payload["runtime_warnings"] = diagnostics["runtime_warnings"]
         payload["constraint_violations"] = diagnostics["constraint_violations"]
         payload["artifact_visibility_reason"] = visibility_reason
+        watch_attach_after_seq = _attempt_window_anchor_seq(self.store, job)
+        payload["watch_attach_after_seq"] = watch_attach_after_seq
+        payload["attempt_window_start_seq"] = watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0
+        partial_payload = _partial_payload(self.store, job, include_partial_report=True)
+        payload["partial_payload"] = partial_payload
+        payload["operator_summary"] = {
+            **_operator_summary_payload(
+                job,
+                diagnostics=diagnostics,
+                final_bundle=final_bundle,
+            ),
+            "current_checkpoint_kind": payload["current_checkpoint_kind"],
+            "current_checkpoint_seq": payload["current_checkpoint_seq"],
+            "artifact_fallback_used": payload["artifact_fallback_used"],
+            "artifact_visibility_reason": payload["artifact_visibility_reason"],
+            "partial_payload_available": partial_payload is not None,
+            "watch_attach_after_seq": watch_attach_after_seq,
+            "attempt_window_start_seq": watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0,
+        }
         return payload
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
@@ -7814,6 +8023,13 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "runtime": {
             "warnings": runtime_warnings,
             "source_policy": dict(plan.source_policy),
+            "research_brief": {
+                "objective": plan.brief.objective,
+                "deliverable": plan.brief.deliverable,
+                "success_criteria": list(plan.brief.success_criteria),
+                "must_cover_count": len(plan.brief.must_cover),
+                "coverage_checklist_count": len(plan.brief.coverage_checklist),
+            },
             "coverage": {
                 "must_cover_count": len(plan.brief.must_cover),
                 "uncovered_sub_question_count": len(report_coverage.get("uncovered_sub_questions", [])),
@@ -7942,6 +8158,13 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "content_type": "application/json",
             },
         ],
+        batch_metadata={
+            "attempt_id": _attempt_id(worker_attempt_count),
+            "attempt_count": worker_attempt_count,
+            "phase": "finalizing",
+            "created_at": utc_now_iso(),
+            "completeness_ok": True,
+        },
     )
     artifact_batch_id = next(
         (artifact.get("metadata", {}).get("batch_id", "") for artifact in persisted_artifacts if artifact.get("metadata")),

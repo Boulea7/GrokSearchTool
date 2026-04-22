@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1663,6 +1664,19 @@ async def test_planner_repair_recovers_invalid_json_and_records_trace(monkeypatc
     assert trace["initial_parse_error"]
     assert trace["repair_parse_path"] == "direct_json"
     assert trace["final_status"] == "normalized"
+
+
+def test_parse_json_object_with_trace_salvages_embedded_json_object():
+    parsed, trace = deep_research_runtime_module._parse_json_object_with_trace(
+        "Planner notes before JSON.\n"
+        "{\"brief\": {\"objective\": \"Embedded plan\"}, \"planner_metadata\": {\"planner\": \"embedded\"}}\n"
+        "Trailing commentary after JSON."
+    )
+
+    assert parsed["brief"]["objective"] == "Embedded plan"
+    assert parsed["planner_metadata"]["planner"] == "embedded"
+    assert trace["parse_path"] == "embedded_json"
+    assert trace["parsed_type"] == "dict"
 
 
 @pytest.mark.asyncio
@@ -4862,6 +4876,63 @@ async def test_result_prefers_resolved_final_batch_from_fixture(tmp_path):
     assert result["sources"][0]["url"] == fixture["expected"]["resolved_source_url"]
     assert result["artifact_fallback_used"] is fixture["expected"]["artifact_fallback_used"]
     assert result["resolved_artifact_batch_id"] == persisted_batches[0][0]["metadata"]["batch_id"]
+
+
+def test_batch_bundle_candidates_prefer_manifest_rank_over_directory_mtime(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Manifest-ranked batches",
+        request_fingerprint="fp-manifest-ranked-batches",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    batches_dir = runtime.store.artifacts_dir / job.job_id / "batches"
+    older_dir = batches_dir / "batch-older"
+    newer_dir = batches_dir / "batch-newer"
+    older_dir.mkdir(parents=True, exist_ok=True)
+    newer_dir.mkdir(parents=True, exist_ok=True)
+    (older_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "batch_id": "batch-older",
+                "attempt_id": "attempt-3",
+                "attempt_count": 3,
+                "phase": "finalizing",
+                "created_at": "2026-04-23T00:00:00Z",
+                "artifact_kinds": ["report.json"],
+                "completeness_ok": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (newer_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "batch_id": "batch-newer",
+                "attempt_id": "attempt-2",
+                "attempt_count": 2,
+                "phase": "finalizing",
+                "created_at": "2026-04-23T00:05:00Z",
+                "artifact_kinds": ["report.json"],
+                "completeness_ok": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(older_dir, (1, 1))
+    os.utime(newer_dir, (2, 2))
+
+    candidates = deep_research_runtime_module._batch_bundle_candidates(runtime.store, job.job_id)
+
+    assert [candidate["batch_id"] for candidate in candidates[:2]] == ["batch-older", "batch-newer"]
 
 
 @pytest.mark.asyncio
@@ -8079,6 +8150,10 @@ async def test_round38_aws_dms_partial_failure_fixture_preserves_partial_artifac
     assert result["runtime_warnings"] == result_surface["runtime_warnings"]
     assert result["report"] is None
     assert result["final_report"] is None
+    assert result["partial_payload"]["selected_bank"] == snapshot["selected_bank"]
+    assert result["partial_payload"]["evidence_ledger"] is not None
+    assert result["partial_payload"]["section_banks"] is not None
+    assert result["operator_summary"]["partial_payload_available"] is True
     assert result["selected_bank"] == snapshot["selected_bank"]
     assert result["artifact_errors"] == result_surface["artifact_errors"]
     evidence_ledger = json.loads(runtime.store.read_artifact_text(job.job_id, "evidence_ledger.json") or "[]")
@@ -17155,6 +17230,79 @@ def test_select_fetch_sources_keeps_exact_identifier_aws_doc_even_outside_dms_na
     assert ranked[0]["url"] == "https://docs.aws.amazon.com/AWSJavaSDK/latest/javadoc/com/amazonaws/services/databasemigrationservice/model/RecoveryCheckpoint.html"
 
 
+def test_select_fetch_sources_prefers_modify_replication_task_for_modify_intent():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Follow up AWS DMS ModifyReplicationTask CdcStartPosition RecoveryCheckpoint semantics with official docs only",
+            "context": "",
+            "effort": "deep",
+            "time_budget_seconds": 180,
+            "include_domains": ["docs.aws.amazon.com"],
+            "exclude_domains": ["repost.aws"],
+            "brief": {
+                "objective": "Explain ModifyReplicationTask checkpoint semantics.",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Prefer operation-specific official AWS docs."],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "How does ModifyReplicationTask interact with CdcStartPosition and RecoveryCheckpoint?",
+                    "reason": "Primary axis.",
+                }
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["ModifyReplicationTask CdcStartPosition RecoveryCheckpoint site:docs.aws.amazon.com"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {
+                    "section_id": "modify-replication-task",
+                    "title": "ModifyReplicationTask",
+                    "goal": "Explain ModifyReplicationTask checkpoint semantics.",
+                }
+            ],
+            "research_units": [],
+        }
+    )
+    unit = DeepResearchResearchUnit.model_validate(
+        {
+            "unit_id": "u1",
+            "unit_type": "search",
+            "title": "ModifyReplicationTask docs",
+            "goal": "Explain ModifyReplicationTask checkpoint semantics.",
+            "query": "ModifyReplicationTask CdcStartPosition RecoveryCheckpoint site:docs.aws.amazon.com",
+            "depends_on": [],
+            "status": "pending",
+            "notes": "",
+        }
+    )
+
+    ranked = deep_research_runtime_module._select_fetch_sources(
+        [
+            {
+                "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                "title": "StartReplicationTask",
+                "description": "AWS DMS API reference for resume-processing and reload-target behavior.",
+                "domain": "docs.aws.amazon.com",
+                "provider": "grok",
+            },
+            {
+                "url": "https://docs.aws.amazon.com/cli/latest/reference/dms/modify-replication-task.html",
+                "title": "modify-replication-task",
+                "description": "AWS CLI reference for ModifyReplicationTask, CdcStartPosition, and task settings updates.",
+                "domain": "docs.aws.amazon.com",
+                "provider": "grok",
+            },
+        ],
+        plan,
+        unit,
+    )
+
+    assert ranked[0]["url"] == "https://docs.aws.amazon.com/cli/latest/reference/dms/modify-replication-task.html"
+
+
 @pytest.mark.asyncio
 async def test_selective_fetch_without_outline_preference_still_returns_ranked_sources(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
@@ -18098,6 +18246,62 @@ def test_verifier_flags_cross_section_duplicate_claims_when_same_evidence_is_reu
     assert "duplicate_claims" in verifier["reason_codes"]
     assert verifier["summary"]["duplicate_claims"] == 1
     assert set(verifier["flagged_claim_ids"]) >= {"claim-2"}
+
+
+def test_verifier_flags_same_domain_off_topic_dominance():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 1,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "This section is dominated by same-domain off-topic shell content.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 4,
+                                "line_end": 5,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/aws-dms-checkpoint-resume-restart-recovery-timeout.html",
+                "domain": "docs.aws.amazon.com",
+                "ranking_penalties": ["same_domain_off_topic"],
+            },
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+        ],
+        section_banks=[],
+    )
+
+    assert "same_domain_off_topic_dominance" in verifier["reason_codes"]
+    assert verifier["summary"]["same_domain_off_topic_dominance"] == 1
+    assert verifier["flagged_claim_ids"] == ["claim-1"]
 
 
 def test_claim_conflict_reason_detects_numeric_mismatch():
