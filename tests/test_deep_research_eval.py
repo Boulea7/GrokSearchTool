@@ -495,35 +495,12 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
 
 
 def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
-    report = case.get("report") or {}
-    sections = report.get("sections") or []
-    section_by_id = {
-        str(section.get("section_id", "")).strip(): dict(section)
-        for section in sections
-        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
-    }
-    final_report_text = " ".join(str(report.get("final_report") or case.get("final_report") or "").split()).lower()
     selected_bank = case.get("selected_bank") or case.get("evidence_bank") or []
     reason_tags: list[str] = []
     checked_packets = 0
     for bank in selected_bank:
         if not isinstance(bank, dict):
             continue
-        section_id = str(bank.get("section_id", "")).strip()
-        section = section_by_id.get(section_id, {})
-        section_text = " ".join(
-            " ".join(
-                [
-                    str(section.get("summary", "") or ""),
-                    str(section.get("prose", "") or ""),
-                    *[
-                        str(claim.get("text", "") or "")
-                        for claim in section.get("claims", []) or []
-                        if isinstance(claim, dict)
-                    ],
-                ]
-            ).split()
-        ).lower()
         for row in bank.get("selected_rows", []) or []:
             if not isinstance(row, dict):
                 continue
@@ -532,16 +509,6 @@ def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
                 continue
             checked_packets += 1
             packet_reflected = bool([claim_id for claim_id in row.get("claim_ids", []) or [] if str(claim_id).strip()])
-            if not packet_reflected:
-                coverage_tags = [
-                    " ".join(str(tag).split()).lower()
-                    for tag in row.get("coverage_tags", []) or []
-                    if " ".join(str(tag).split())
-                ]
-                packet_reflected = any(
-                    tag and (tag in section_text or tag in final_report_text)
-                    for tag in coverage_tags
-                )
             if not packet_reflected:
                 reason_tags.append("selected_packet_missing_from_prose")
     verdict = "pass" if not reason_tags else "fail"
@@ -1084,6 +1051,43 @@ def test_packet_to_prose_fidelity_detects_selected_packet_missing_from_prose():
                         "evidence_id": "e1",
                         "claim_ids": [],
                         "coverage_tags": ["RecoveryTimeout"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "fail"
+
+
+def test_packet_to_prose_fidelity_rejects_generic_coverage_tag_without_claim_binding():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "summary": "Checkpoint behavior depends on the replication task mode.",
+                    "prose": "Checkpoint behavior depends on the replication task mode.",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "Checkpoint behavior depends on the replication task mode.",
+                        }
+                    ],
+                }
+            ],
+            "final_report": "Checkpoint behavior depends on the replication task mode.",
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_rows": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": [],
+                        "coverage_tags": ["checkpoint"],
                     }
                 ],
             }
