@@ -1,0 +1,67 @@
+{
+  "sample": "probe-round39-aws-dms-operation-ranking",
+  "query": "Follow up AWS DMS ModifyReplicationTask and DescribeReplicationTasks checkpoint semantics with official docs only; focus on CdcStartPosition, RecoveryCheckpoint, and operation-specific API visibility",
+  "plan": {
+    "brief": {
+      "scope": {
+        "include_domains": [
+          "docs.aws.amazon.com"
+        ],
+        "exclude_domains": [
+          "repost.aws"
+        ],
+        "allowed_sources": [
+          "docs.aws.amazon.com"
+        ]
+      }
+    }
+  },
+  "report": {
+    "status": "completed",
+    "runtime": {
+      "warnings": [],
+      "release_gate": {
+        "passed": true,
+        "reason_codes": []
+      },
+      "verifier": {
+        "reason_codes": []
+      }
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+      "title": "API_DescribeReplicationTasks",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": [
+        "allowlisted_domain",
+        "official_docs",
+        "api_reference",
+        "identifier_match"
+      ],
+      "ranking_penalties": []
+    },
+    {
+      "source_id": "R2",
+      "url": "https://docs.aws.amazon.com/cli/latest/reference/dms/modify-replication-task.html",
+      "title": "modify-replication-task",
+      "domain": "docs.aws.amazon.com",
+      "ranking_reasons": [
+        "allowlisted_domain",
+        "official_docs",
+        "cli_reference",
+        "identifier_match"
+      ],
+      "ranking_penalties": []
+    }
+  ],
+  "golden": {
+    "ranking_noise_suppression": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

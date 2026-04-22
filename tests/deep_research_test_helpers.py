@@ -20,6 +20,42 @@ RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES = (
     "probe_round37_lifecycle_public_surface.json",
     "probe_round38_aws_dms_partial_failure.json",
 )
+RECENT_DEEP_RESEARCH_PUBLIC_SURFACE_EVAL_FIXTURES = (
+    "eval_probe_round24_worker_restart_public_surface.json",
+    "eval_probe_round26_aws_dms_public_surface.json",
+    "eval_probe_round30_aws_dms_official_doc.json",
+    "eval_probe_round30_lifecycle_public_surface.json",
+    "eval_probe_round33_aws_dms_official_doc.json",
+    "eval_probe_round33_lifecycle_public_surface.json",
+    "eval_probe_round34_aws_dms_official_doc.json",
+    "eval_probe_round34_lifecycle_public_surface.json",
+    "eval_probe_round35_aws_dms_official_doc.json",
+    "eval_probe_round35_lifecycle_public_surface.json",
+    "eval_probe_round36_aws_dms_official_doc.json",
+    "eval_probe_round36_lifecycle_public_surface.json",
+    "eval_probe_round37_aws_dms_official_doc.json",
+    "eval_probe_round37_lifecycle_public_surface.json",
+    "eval_probe_round38_aws_dms_partial_failure.json",
+)
+RECENT_DEEP_RESEARCH_EVAL_LIVE_PARITY_FIXTURES = tuple(
+    (
+        fixture_name,
+        fixture_name.replace("eval_", "", 1),
+    )
+    for fixture_name in (
+        "eval_probe_round33_aws_dms_official_doc.json",
+        "eval_probe_round33_lifecycle_public_surface.json",
+        "eval_probe_round34_aws_dms_official_doc.json",
+        "eval_probe_round34_lifecycle_public_surface.json",
+        "eval_probe_round35_aws_dms_official_doc.json",
+        "eval_probe_round35_lifecycle_public_surface.json",
+        "eval_probe_round36_aws_dms_official_doc.json",
+        "eval_probe_round36_lifecycle_public_surface.json",
+        "eval_probe_round37_aws_dms_official_doc.json",
+        "eval_probe_round37_lifecycle_public_surface.json",
+        "eval_probe_round38_aws_dms_partial_failure.json",
+    )
+)
 
 
 def summary_lines(text: str) -> list[str]:
