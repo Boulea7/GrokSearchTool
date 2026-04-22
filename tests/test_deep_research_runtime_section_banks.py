@@ -214,7 +214,7 @@ def test_build_evidence_ledger_entries_does_not_bind_section_from_origin_query_a
     assert entries[0]["question_ids"] == []
 
 
-def test_build_evidence_ledger_entries_keeps_multi_hit_official_doc_candidates_unbound_until_materialized():
+def test_build_evidence_ledger_entries_uses_stable_tiebreak_for_multi_hit_official_doc_candidates():
     payload = structured_plan_payload(
         type(
             "Job",
@@ -274,8 +274,9 @@ def test_build_evidence_ledger_entries_keeps_multi_hit_official_doc_candidates_u
     )
 
     assert set(entries[0]["candidate_section_ids"]) == {"task-visibility", "checkpoint-positioning"}
-    assert entries[0]["selected_section_id"] == ""
-    assert entries[0]["question_ids"] == ["sq1", "sq2"]
+    assert entries[0]["selected_section_id"] == "task-visibility"
+    assert entries[0]["question_ids"] == ["sq2"]
+    assert entries[0]["disposition"] == "selected"
 
 
 def test_reconcile_section_banks_with_materialized_sections_keeps_only_claim_backed_selected_packets():

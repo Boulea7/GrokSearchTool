@@ -123,7 +123,7 @@ def _minimal_provenance_payloads(
     report: dict,
     sources: list[dict],
     evidence_items: list[dict],
-) -> tuple[dict, dict, dict]:
+) -> tuple[dict, dict, dict, dict]:
     section_ids = [section["section_id"] for section in report.get("sections") or [] if section.get("section_id")]
     sub_question_ids = [item["id"] for item in report.get("sub_questions") or [] if item.get("id")]
     total_claims = sum(len(section.get("claims") or []) for section in report.get("sections") or [])
@@ -178,7 +178,22 @@ def _minimal_provenance_payloads(
             "unbound_evidence_ids": 0,
         },
     }
-    return coverage_payload, grounding_payload, verifier_payload
+    coverage_gaps_payload = {
+        "query": query,
+        "unanswered_sections": list(coverage_payload.get("unanswered_sections") or []),
+        "uncovered_sub_questions": list(coverage_payload.get("uncovered_sub_questions") or []),
+        "hard_uncovered_targets": list(coverage_payload.get("hard_uncovered_targets") or []),
+        "coverage_gate_passed": bool(coverage_payload.get("coverage_gate_passed")),
+        "hard_coverage_gate_passed": bool(coverage_payload.get("hard_coverage_gate_passed", True)),
+        "blocking_gap_count": len(coverage_payload.get("unanswered_sections") or [])
+        + len(coverage_payload.get("uncovered_sub_questions") or []),
+        "hard_gap_count": len(coverage_payload.get("hard_uncovered_targets") or []),
+        "total_gap_count": len(coverage_payload.get("unanswered_sections") or [])
+        + len(coverage_payload.get("uncovered_sub_questions") or [])
+        + len(coverage_payload.get("hard_uncovered_targets") or []),
+        "gaps": [],
+    }
+    return coverage_payload, grounding_payload, verifier_payload, coverage_gaps_payload
 
 
 def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
@@ -207,7 +222,7 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
     verifier = artifact_payload.get("verifier")
     if verifier is None:
         verifier = runtime_payload.get("verifier")
-    default_coverage, default_grounding, default_verifier = _minimal_provenance_payloads(
+    default_coverage, default_grounding, default_verifier, default_coverage_gaps = _minimal_provenance_payloads(
         query=query,
         report=report,
         sources=sources,
@@ -216,6 +231,9 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
     coverage = default_coverage if coverage is None else coverage
     grounding = default_grounding if grounding is None else grounding
     verifier = default_verifier if verifier is None else verifier
+    coverage_gaps = artifact_payload.get("coverage_gaps")
+    if coverage_gaps is None:
+        coverage_gaps = default_coverage_gaps
     if isinstance(grounding, dict):
         normalized_grounding = json.loads(json.dumps(default_grounding))
         normalized_grounding.update(grounding)
@@ -297,6 +315,11 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
             "content_type": "application/json",
         },
         {
+            "kind": "selected_bank.json",
+            "content": json.dumps(snapshot.get("selected_bank") or []),
+            "content_type": "application/json",
+        },
+        {
             "kind": "coverage.json",
             "content": json.dumps(coverage),
             "content_type": "application/json",
@@ -311,7 +334,6 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
             "content": json.dumps(verifier),
             "content_type": "application/json",
         },
-    ] + [
         {
             "kind": "evidence_bank.json",
             "content": json.dumps(artifact_payload.get("evidence_bank") or []),
@@ -320,6 +342,11 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
         {
             "kind": "verification.json",
             "content": json.dumps(artifact_payload.get("verification") or {}),
+            "content_type": "application/json",
+        },
+        {
+            "kind": "coverage_gaps.json",
+            "content": json.dumps(coverage_gaps),
             "content_type": "application/json",
         },
     ]

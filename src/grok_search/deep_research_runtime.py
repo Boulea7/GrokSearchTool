@@ -237,6 +237,7 @@ _EVIDENCE_BANK_ARTIFACT_KIND = "evidence_bank.json"
 _SOURCE_POLICY_ARTIFACT_KIND = "source_policy.json"
 _LINEAGE_ARTIFACT_KIND = "lineage.json"
 _VERIFICATION_ARTIFACT_KIND = "verification.json"
+_COVERAGE_GAPS_ARTIFACT_KIND = "coverage_gaps.json"
 _CORE_FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 _PROVENANCE_FINAL_ARTIFACT_KINDS = (
     _EVIDENCE_ITEMS_ARTIFACT_KIND,
@@ -245,6 +246,14 @@ _PROVENANCE_FINAL_ARTIFACT_KINDS = (
     "verifier.json",
 )
 _FINAL_ARTIFACT_KINDS = _CORE_FINAL_ARTIFACT_KINDS + _PROVENANCE_FINAL_ARTIFACT_KINDS
+_ADDITIVE_FINAL_ARTIFACT_KINDS = (
+    _SELECTED_BANK_ARTIFACT_KIND,
+    _EVIDENCE_BANK_ARTIFACT_KIND,
+    _VERIFICATION_ARTIFACT_KIND,
+    _COVERAGE_GAPS_ARTIFACT_KIND,
+)
+_RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS = _FINAL_ARTIFACT_KINDS + _ADDITIVE_FINAL_ARTIFACT_KINDS
+_UNRESOLVED_BATCH_BACKED_FINAL_ARTIFACTS_HIDDEN = "unresolved_batch_backed_final_artifacts_hidden"
 _DEFAULT_SEARCH_QUERY_FN = None
 _RUNTIME_RECONCILE_STALE_SECONDS = 30
 
@@ -1498,6 +1507,10 @@ def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
         if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
             return "invalid_shape"
         return None
+    if kind in {_SELECTED_BANK_ARTIFACT_KIND, _EVIDENCE_BANK_ARTIFACT_KIND}:
+        if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+            return "invalid_shape"
+        return None
     if kind == "sources.json":
         if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
             return "invalid_shape"
@@ -1543,6 +1556,20 @@ def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
     if kind in {"coverage.json", "grounding.json", "verifier.json"}:
         if not isinstance(value, dict):
             return "invalid_shape"
+        return None
+    if kind == _VERIFICATION_ARTIFACT_KIND:
+        if not isinstance(value, dict):
+            return "invalid_shape"
+        packet_to_prose = value.get("packet_to_prose_fidelity")
+        if packet_to_prose is not None and not isinstance(packet_to_prose, dict):
+            return "invalid_shape"
+        return None
+    if kind == _COVERAGE_GAPS_ARTIFACT_KIND:
+        if not isinstance(value, dict):
+            return "invalid_shape"
+        for key in ("unanswered_sections", "uncovered_sub_questions", "hard_uncovered_targets", "gaps"):
+            if not isinstance(value.get(key, []), list):
+                return "invalid_shape"
         return None
     return None
 
@@ -1667,6 +1694,168 @@ def _provenance_sidecars_match_report(
     return True
 
 
+def _selected_bank_matches_bundle(
+    *,
+    selected_bank_value: list[dict[str, Any]] | None,
+    report_value: dict[str, Any] | None,
+    evidence_items_value: list[dict[str, Any]] | None,
+) -> bool:
+    if selected_bank_value is None:
+        return True
+    if not isinstance(report_value, dict) or not isinstance(evidence_items_value, list):
+        return False
+    sections = report_value.get("sections")
+    if not isinstance(sections, list):
+        return False
+    section_ids = {
+        str(section.get("section_id", "")).strip()
+        for section in sections
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    }
+    claim_ids_by_section = {
+        str(section.get("section_id", "")).strip(): {
+            str(claim.get("claim_id", "")).strip()
+            for claim in section.get("claims", []) or []
+            if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
+        }
+        for section in sections
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    }
+    evidence_ids = {
+        str(item.get("evidence_id", "")).strip()
+        for item in evidence_items_value
+        if isinstance(item, dict) and str(item.get("evidence_id", "")).strip()
+    }
+    for bank in selected_bank_value:
+        if not isinstance(bank, dict):
+            return False
+        section_id = str(bank.get("section_id", "")).strip()
+        if not section_id or section_id not in section_ids:
+            return False
+        for field in ("selected_evidence_ids", "candidate_evidence_ids", "rejected_evidence_ids"):
+            values = [
+                str(item).strip()
+                for item in bank.get(field, []) or []
+                if str(item).strip()
+            ]
+            if any(value not in evidence_ids for value in values):
+                return False
+        for row in bank.get("selected_rows", []) or []:
+            if not isinstance(row, dict):
+                return False
+            evidence_id = str(row.get("evidence_id", "")).strip()
+            if evidence_id and evidence_id not in evidence_ids:
+                return False
+            selected_section_id = str(row.get("selected_section_id", "")).strip()
+            if selected_section_id and selected_section_id != section_id:
+                return False
+            claim_ids = [
+                str(claim_id).strip()
+                for claim_id in row.get("claim_ids", []) or []
+                if str(claim_id).strip()
+            ]
+            if any(claim_id not in claim_ids_by_section.get(section_id, set()) for claim_id in claim_ids):
+                return False
+    return True
+
+
+def _evidence_bank_matches_bundle(
+    *,
+    evidence_bank_value: list[dict[str, Any]] | None,
+    report_value: dict[str, Any] | None,
+    evidence_items_value: list[dict[str, Any]] | None,
+    citations_value: dict[str, Any] | None,
+) -> bool:
+    if evidence_bank_value is None:
+        return True
+    if not isinstance(report_value, dict) or not isinstance(evidence_items_value, list) or not isinstance(citations_value, dict):
+        return False
+    sections = report_value.get("sections")
+    source_registry = citations_value.get("source_registry")
+    if not isinstance(sections, list) or not isinstance(source_registry, dict):
+        return False
+    section_ids = {
+        str(section.get("section_id", "")).strip()
+        for section in sections
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    }
+    claim_ids = {
+        str(claim.get("claim_id", "")).strip()
+        for section in sections
+        if isinstance(section, dict)
+        for claim in section.get("claims", []) or []
+        if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
+    }
+    evidence_ids = {
+        str(item.get("evidence_id", "")).strip()
+        for item in evidence_items_value
+        if isinstance(item, dict) and str(item.get("evidence_id", "")).strip()
+    }
+    source_ids = {str(source_id).strip() for source_id in source_registry if str(source_id).strip()}
+    for entry in evidence_bank_value:
+        if not isinstance(entry, dict):
+            return False
+        evidence_id = str(entry.get("evidence_id", "")).strip()
+        if evidence_id and evidence_id not in evidence_ids:
+            return False
+        if any(
+            str(section_id).strip() not in section_ids
+            for section_id in entry.get("used_by_section_ids", []) or []
+            if str(section_id).strip()
+        ):
+            return False
+        if any(
+            str(claim_id).strip() not in claim_ids
+            for claim_id in entry.get("used_by_claim_ids", []) or []
+            if str(claim_id).strip()
+        ):
+            return False
+        if any(
+            str(source_id).strip() not in source_ids
+            for source_id in entry.get("source_ids", []) or []
+            if str(source_id).strip()
+        ):
+            return False
+    return True
+
+
+def _verification_matches_report(
+    *,
+    verification_value: dict[str, Any] | None,
+    report_value: dict[str, Any] | None,
+) -> bool:
+    if verification_value is None:
+        return True
+    if not isinstance(report_value, dict):
+        return False
+    runtime_payload = report_value.get("runtime")
+    if not isinstance(runtime_payload, dict):
+        return False
+    report_verification = runtime_payload.get("verification")
+    if not isinstance(report_verification, dict):
+        return False
+    return all(verification_value.get(key) == value for key, value in report_verification.items())
+
+
+def _coverage_gaps_matches_report(
+    *,
+    coverage_gaps_value: dict[str, Any] | None,
+    report_value: dict[str, Any] | None,
+) -> bool:
+    if coverage_gaps_value is None:
+        return True
+    if not isinstance(report_value, dict):
+        return False
+    report_coverage = report_value.get("coverage")
+    if not isinstance(report_coverage, dict):
+        return False
+    expected_payload = _coverage_gaps_payload(
+        query=str(coverage_gaps_value.get("query", "") or report_value.get("query", "") or ""),
+        coverage=report_coverage,
+    )
+    return coverage_gaps_value == expected_payload
+
+
 def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
     if bundle is None:
         return False
@@ -1706,6 +1895,25 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
         elif kind == "final_report.md":
             if not _final_report_text_is_meaningful(text, report_value=report_value):
                 return False
+    selected_bank_value: list[dict[str, Any]] | None = None
+    evidence_bank_value: list[dict[str, Any]] | None = None
+    verification_value: dict[str, Any] | None = None
+    coverage_gaps_value: dict[str, Any] | None = None
+    for kind in _ADDITIVE_FINAL_ARTIFACT_KINDS:
+        text = _read_batch_artifact_text(bundle, kind)
+        if text is None:
+            continue
+        value, error = _safe_load_json_artifact(text)
+        if error is not None or _validate_json_artifact_shape(kind, value) is not None:
+            return False
+        if kind == _SELECTED_BANK_ARTIFACT_KIND and isinstance(value, list):
+            selected_bank_value = value
+        elif kind == _EVIDENCE_BANK_ARTIFACT_KIND and isinstance(value, list):
+            evidence_bank_value = value
+        elif kind == _VERIFICATION_ARTIFACT_KIND and isinstance(value, dict):
+            verification_value = value
+        elif kind == _COVERAGE_GAPS_ARTIFACT_KIND and isinstance(value, dict):
+            coverage_gaps_value = value
     if not _provenance_sidecars_match_report(
         report_value=report_value,
         coverage_value=coverage_value,
@@ -1776,6 +1984,34 @@ def _artifact_bundle_differs_from_current(store: DeepResearchStore, job_id: str,
     return current_bundle.get("batch_id") != bundle.get("batch_id")
 
 
+def _artifact_surface_context(
+    store: DeepResearchStore,
+    job_id: str,
+    *,
+    job: DeepResearchJob | None = None,
+) -> tuple[dict[str, Any] | None, bool, str]:
+    current_job = job or store.get_job(job_id)
+    final_bundle = _resolve_final_artifact_bundle(store, job_id) if _job_prefers_resolved_final_bundle(current_job) else None
+    unresolved_batch_backed = bool(
+        current_job.status != "completed"
+        and _job_prefers_resolved_final_bundle(current_job)
+        and final_bundle is None
+        and any(_current_artifact_is_batch_backed(store, job_id, kind) for kind in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS)
+    )
+    visibility_reason = _UNRESOLVED_BATCH_BACKED_FINAL_ARTIFACTS_HIDDEN if unresolved_batch_backed else ""
+    return final_bundle, unresolved_batch_backed, visibility_reason
+
+
+def _artifact_hidden_by_visibility_reason(kind: str, visibility_reason: str) -> bool:
+    return bool(visibility_reason) and kind in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS
+
+
+def _required_artifact_error_code(kind: str, visibility_reason: str) -> str:
+    if bool(visibility_reason) and kind in _CORE_FINAL_ARTIFACT_KINDS:
+        return visibility_reason
+    return "missing_required_artifact"
+
+
 def _artifact_bundle_identity(store: DeepResearchStore, job_id: str) -> str:
     bundle = _resolve_final_artifact_bundle(store, job_id)
     if _artifact_bundle_is_usable(bundle):
@@ -1839,7 +2075,7 @@ def _artifact_payloads(
         _SECTION_BANKS_ARTIFACT_KIND,
         _SELECTED_BANK_ARTIFACT_KIND,
         "partial_report.md",
-        *_FINAL_ARTIFACT_KINDS,
+        *_RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS,
     ]
     for kind in ordered_kinds:
         artifact = current_artifacts.get(kind)
@@ -1863,7 +2099,7 @@ def _artifact_payloads(
                 }
             )
             continue
-        if candidate_bundle is not None and kind in _FINAL_ARTIFACT_KINDS:
+        if candidate_bundle is not None and kind in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS:
             continue
         if artifact is not None:
             payloads.append(artifact.model_dump())
@@ -1983,6 +2219,15 @@ def _entry_question_ids(entry: dict[str, Any]) -> list[str]:
 def _append_unique(items: list[str], value: str) -> None:
     if value and value not in items:
         items.append(value)
+
+
+def _window_has_terminal_event(events: list[Any], *, job_terminal: bool) -> bool:
+    terminal_event_types = {"job_completed", "job_failed", "job_canceled", "job_interrupted"}
+    if any(str(getattr(event, "type", "")).strip() in terminal_event_types for event in events):
+        return True
+    return job_terminal and any(
+        str(getattr(event, "type", "")).strip() == "job_resolved_from_final_batch" for event in events
+    )
 
 
 def _normalize_search_strategy_approach(
@@ -3529,6 +3774,44 @@ def _verification_payload(
     }
 
 
+def _coverage_gaps_payload(
+    *,
+    query: str,
+    coverage: dict[str, Any],
+) -> dict[str, Any]:
+    unanswered_sections = _dedupe_preserve_order(
+        [str(item) for item in coverage.get("unanswered_sections", []) or [] if str(item).strip()]
+    )
+    uncovered_sub_questions = _dedupe_preserve_order(
+        [str(item) for item in coverage.get("uncovered_sub_questions", []) or [] if str(item).strip()]
+    )
+    hard_uncovered_targets = _dedupe_preserve_order(
+        [str(item) for item in coverage.get("hard_uncovered_targets", []) or [] if str(item).strip()]
+    )
+    gaps = [
+        {"gap_type": "unanswered_section", "target": item, "blocking": True}
+        for item in unanswered_sections
+    ] + [
+        {"gap_type": "uncovered_sub_question", "target": item, "blocking": True}
+        for item in uncovered_sub_questions
+    ] + [
+        {"gap_type": "hard_uncovered_target", "target": item, "blocking": False}
+        for item in hard_uncovered_targets
+    ]
+    return {
+        "query": query,
+        "unanswered_sections": unanswered_sections,
+        "uncovered_sub_questions": uncovered_sub_questions,
+        "hard_uncovered_targets": hard_uncovered_targets,
+        "coverage_gate_passed": bool(coverage.get("coverage_gate_passed", not gaps)),
+        "hard_coverage_gate_passed": bool(coverage.get("hard_coverage_gate_passed", not hard_uncovered_targets)),
+        "blocking_gap_count": len(unanswered_sections) + len(uncovered_sub_questions),
+        "hard_gap_count": len(hard_uncovered_targets),
+        "total_gap_count": len(gaps),
+        "gaps": gaps,
+    }
+
+
 def _write_internal_state_artifacts(
     runtime: "DeepResearchRuntime",
     job_id: str,
@@ -4431,11 +4714,10 @@ class DeepResearchRuntime:
         await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
         payload = self._serialize_job(job)
-        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
-        unresolved_batch_backed = bool(
-            _job_prefers_resolved_final_bundle(job)
-            and final_bundle is None
-            and any(_current_artifact_is_batch_backed(self.store, job_id, kind) for kind in _CORE_FINAL_ARTIFACT_KINDS)
+        final_bundle, unresolved_batch_backed, visibility_reason = _artifact_surface_context(
+            self.store,
+            job_id,
+            job=job,
         )
         artifacts = _artifact_payloads(
             self.store,
@@ -4443,7 +4725,7 @@ class DeepResearchRuntime:
             final_bundle=final_bundle,
         )
         if unresolved_batch_backed:
-            artifacts = [artifact for artifact in artifacts if artifact.get("kind") not in _FINAL_ARTIFACT_KINDS]
+            artifacts = [artifact for artifact in artifacts if artifact.get("kind") not in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS]
         payload["artifact_kinds"] = [artifact["kind"] for artifact in artifacts]
         payload["artifacts"] = artifacts
         payload["artifact_fallback_used"] = _artifact_bundle_differs_from_current(self.store, job_id, final_bundle)
@@ -4452,9 +4734,7 @@ class DeepResearchRuntime:
         payload["planner_fallback_used"] = diagnostics["planner_fallback_used"]
         payload["runtime_warnings"] = diagnostics["runtime_warnings"]
         payload["constraint_violations"] = diagnostics["constraint_violations"]
-        payload["artifact_visibility_reason"] = (
-            "unresolved_batch_backed_final_artifacts_hidden" if unresolved_batch_backed else ""
-        )
+        payload["artifact_visibility_reason"] = visibility_reason
         operator_summary = _operator_summary_payload(
             job,
             diagnostics=diagnostics,
@@ -4472,15 +4752,15 @@ class DeepResearchRuntime:
         normalized_after_seq = max(0, int(after_seq or 0))
         normalized_limit = max(0, int(limit or 0))
         events = self.store.list_events(job_id, after_seq=normalized_after_seq, limit=normalized_limit)
-        terminal_event_types = {"job_completed", "job_failed", "job_canceled", "job_interrupted"}
+        job_terminal = self.store.get_job(job_id).status in {"completed", "failed", "canceled", "interrupted"}
         return {
             "job_id": job_id,
             "events": [event.model_dump() for event in events],
             "next_after_seq": events[-1].seq if events else normalized_after_seq,
             "returned_count": len(events),
             "last_event_type": events[-1].type if events else "",
-            "window_has_terminal_event": any(event.type in terminal_event_types for event in events),
-            "job_terminal": self.store.get_job(job_id).status in {"completed", "failed", "canceled", "interrupted"},
+            "window_has_terminal_event": _window_has_terminal_event(events, job_terminal=job_terminal),
+            "job_terminal": job_terminal,
         }
 
     async def result(self, job_id: str, *, include_partial: bool = True) -> dict[str, Any]:
@@ -4489,11 +4769,10 @@ class DeepResearchRuntime:
         current_checkpoint = self.store.get_checkpoint(job_id, job.current_checkpoint) if job.current_checkpoint else None
         plan_text = self.store.read_artifact_text(job_id, "plan.json")
         partial_text = self.store.read_artifact_text(job_id, "partial_report.md") if include_partial else None
-        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
-        unresolved_batch_backed = bool(
-            _job_prefers_resolved_final_bundle(job)
-            and final_bundle is None
-            and any(_current_artifact_is_batch_backed(self.store, job_id, kind) for kind in _CORE_FINAL_ARTIFACT_KINDS)
+        final_bundle, unresolved_batch_backed, visibility_reason = _artifact_surface_context(
+            self.store,
+            job_id,
+            job=job,
         )
         final_text = (
             _read_text_if_exists(final_bundle["paths"]["final_report.md"])
@@ -4530,12 +4809,44 @@ class DeepResearchRuntime:
             if unresolved_batch_backed
             else self.store.read_artifact_text(job_id, "sources.json")
         )
+        selected_bank_text = (
+            _read_batch_artifact_text(final_bundle, _SELECTED_BANK_ARTIFACT_KIND)
+            if final_bundle is not None
+            else None
+            if unresolved_batch_backed
+            else self.store.read_artifact_text(job_id, _SELECTED_BANK_ARTIFACT_KIND)
+        )
+        evidence_bank_text = (
+            _read_batch_artifact_text(final_bundle, _EVIDENCE_BANK_ARTIFACT_KIND)
+            if final_bundle is not None
+            else None
+            if unresolved_batch_backed
+            else self.store.read_artifact_text(job_id, _EVIDENCE_BANK_ARTIFACT_KIND)
+        )
+        verification_text = (
+            _read_batch_artifact_text(final_bundle, _VERIFICATION_ARTIFACT_KIND)
+            if final_bundle is not None
+            else None
+            if unresolved_batch_backed
+            else self.store.read_artifact_text(job_id, _VERIFICATION_ARTIFACT_KIND)
+        )
+        coverage_gaps_text = (
+            _read_batch_artifact_text(final_bundle, _COVERAGE_GAPS_ARTIFACT_KIND)
+            if final_bundle is not None
+            else None
+            if unresolved_batch_backed
+            else self.store.read_artifact_text(job_id, _COVERAGE_GAPS_ARTIFACT_KIND)
+        )
         artifact_errors: dict[str, str] = {}
         plan_value, plan_error = _safe_load_json_artifact(plan_text)
         report_value, report_error = _safe_load_json_artifact(report_text)
         sources_value, sources_error = _safe_load_json_artifact(sources_text)
         citations_value, citations_error = _safe_load_json_artifact(citations_text)
         evidence_items_value, evidence_items_error = _safe_load_json_artifact(evidence_items_text)
+        selected_bank_value, selected_bank_error = _safe_load_json_artifact(selected_bank_text)
+        evidence_bank_value, evidence_bank_error = _safe_load_json_artifact(evidence_bank_text)
+        verification_value, verification_error = _safe_load_json_artifact(verification_text)
+        coverage_gaps_value, coverage_gaps_error = _safe_load_json_artifact(coverage_gaps_text)
         if plan_error:
             artifact_errors["plan.json"] = plan_error
         if report_error:
@@ -4546,12 +4857,24 @@ class DeepResearchRuntime:
             artifact_errors["citations.json"] = citations_error
         if evidence_items_error:
             artifact_errors[_EVIDENCE_ITEMS_ARTIFACT_KIND] = evidence_items_error
+        if selected_bank_error:
+            artifact_errors[_SELECTED_BANK_ARTIFACT_KIND] = selected_bank_error
+        if evidence_bank_error:
+            artifact_errors[_EVIDENCE_BANK_ARTIFACT_KIND] = evidence_bank_error
+        if verification_error:
+            artifact_errors[_VERIFICATION_ARTIFACT_KIND] = verification_error
+        if coverage_gaps_error:
+            artifact_errors[_COVERAGE_GAPS_ARTIFACT_KIND] = coverage_gaps_error
         citations = _normalize_citations_payload(citations_value)
         for kind, value in (
             ("report.json", report_value),
             ("sources.json", sources_value),
             ("citations.json", citations),
             (_EVIDENCE_ITEMS_ARTIFACT_KIND, evidence_items_value),
+            (_SELECTED_BANK_ARTIFACT_KIND, selected_bank_value),
+            (_EVIDENCE_BANK_ARTIFACT_KIND, evidence_bank_value),
+            (_VERIFICATION_ARTIFACT_KIND, verification_value),
+            (_COVERAGE_GAPS_ARTIFACT_KIND, coverage_gaps_value),
         ):
             shape_error = _validate_json_artifact_shape(kind, value)
             if shape_error:
@@ -4564,6 +4887,14 @@ class DeepResearchRuntime:
                     citations = None
                 elif kind == _EVIDENCE_ITEMS_ARTIFACT_KIND:
                     evidence_items_value = None
+                elif kind == _SELECTED_BANK_ARTIFACT_KIND:
+                    selected_bank_value = None
+                elif kind == _EVIDENCE_BANK_ARTIFACT_KIND:
+                    evidence_bank_value = None
+                elif kind == _VERIFICATION_ARTIFACT_KIND:
+                    verification_value = None
+                elif kind == _COVERAGE_GAPS_ARTIFACT_KIND:
+                    coverage_gaps_value = None
         artifact_errors.update(
             _validate_provenance_bundle(
                 report_value=report_value,
@@ -4582,7 +4913,7 @@ class DeepResearchRuntime:
                 else self.store.read_artifact_text(job_id, kind)
             )
             if artifact_text is None:
-                artifact_errors[kind] = error_code
+                artifact_errors[kind] = _required_artifact_error_code(kind, visibility_reason)
         diagnostics = _job_runtime_diagnostics(self.store, job_id, final_bundle=final_bundle)
         payload = {
             "job_id": job_id,
@@ -4596,6 +4927,10 @@ class DeepResearchRuntime:
             "sources": sources_value,
             "citations": citations,
             "evidence_items": evidence_items_value,
+            "selected_bank": selected_bank_value,
+            "evidence_bank": evidence_bank_value,
+            "verification": verification_value,
+            "coverage_gaps": coverage_gaps_value,
             "report": report_value,
             "artifact_errors": artifact_errors,
             "artifact_fallback_used": _artifact_bundle_differs_from_current(self.store, job_id, final_bundle),
@@ -4603,9 +4938,7 @@ class DeepResearchRuntime:
             "planner_fallback_used": diagnostics["planner_fallback_used"],
             "runtime_warnings": diagnostics["runtime_warnings"],
             "constraint_violations": diagnostics["constraint_violations"],
-            "artifact_visibility_reason": (
-                "unresolved_batch_backed_final_artifacts_hidden" if unresolved_batch_backed else ""
-            ),
+            "artifact_visibility_reason": visibility_reason,
             "artifacts": [
                 artifact
                 for artifact in _artifact_payloads(
@@ -4613,7 +4946,7 @@ class DeepResearchRuntime:
                     job_id,
                     final_bundle=final_bundle,
                 )
-                if not (unresolved_batch_backed and artifact.get("kind") in _FINAL_ARTIFACT_KINDS)
+                if not (unresolved_batch_backed and artifact.get("kind") in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS)
             ],
         }
         payload["operator_summary"] = {
@@ -4629,18 +4962,42 @@ class DeepResearchRuntime:
         }
         return payload
 
-    def read_artifact_text(self, job_id: str, kind: str) -> str | None:
+    def read_artifact(self, job_id: str, kind: str) -> dict[str, Any]:
         job = self.store.get_job(job_id)
-        final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
+        final_bundle, unresolved_batch_backed, visibility_reason = _artifact_surface_context(
+            self.store,
+            job_id,
+            job=job,
+        )
         if final_bundle is not None:
             if kind in final_bundle["paths"]:
-                return _read_text_if_exists(final_bundle["paths"][kind])
+                return {
+                    "content": _read_text_if_exists(final_bundle["paths"][kind]),
+                    "state": "available",
+                    "artifact_visibility_reason": "",
+                }
             batch_text = _read_batch_artifact_text(final_bundle, kind)
             if batch_text is not None:
-                return batch_text
-        if _job_prefers_resolved_final_bundle(job) and _current_artifact_is_batch_backed(self.store, job_id, kind):
-            return None
-        return self.store.read_artifact_text(job_id, kind)
+                return {
+                    "content": batch_text,
+                    "state": "available",
+                    "artifact_visibility_reason": "",
+                }
+        if unresolved_batch_backed and _artifact_hidden_by_visibility_reason(kind, visibility_reason):
+            return {
+                "content": None,
+                "state": "hidden",
+                "artifact_visibility_reason": visibility_reason,
+            }
+        content = self.store.read_artifact_text(job_id, kind)
+        return {
+            "content": content,
+            "state": "available" if content is not None else "missing",
+            "artifact_visibility_reason": "",
+        }
+
+    def read_artifact_text(self, job_id: str, kind: str) -> str | None:
+        return self.read_artifact(job_id, kind)["content"]
 
     async def resume(self, job_id: str, *, schedule: bool = True) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
@@ -6201,7 +6558,11 @@ class DeepResearchRuntime:
 
     def _job_payload(self, job: DeepResearchJob, *, reused: bool) -> dict[str, Any]:
         payload = self._serialize_job(job)
-        final_bundle = _resolve_final_artifact_bundle(self.store, job.job_id) if _job_prefers_resolved_final_bundle(job) else None
+        final_bundle, _, visibility_reason = _artifact_surface_context(
+            self.store,
+            job.job_id,
+            job=job,
+        )
         payload["reused"] = reused
         plan_text = self.store.read_artifact_text(job.job_id, "plan.json")
         plan_value, _ = _safe_load_json_artifact(plan_text)
@@ -6212,6 +6573,7 @@ class DeepResearchRuntime:
         payload["planner_fallback_used"] = diagnostics["planner_fallback_used"]
         payload["runtime_warnings"] = diagnostics["runtime_warnings"]
         payload["constraint_violations"] = diagnostics["constraint_violations"]
+        payload["artifact_visibility_reason"] = visibility_reason
         return payload
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
@@ -7036,7 +7398,12 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         evidence_items=evidence_items,
         section_banks=section_banks,
     )
-    release_gate = _build_release_gate(report_coverage, grounding_diagnostics, verifier_diagnostics)
+    release_gate = _build_release_gate(
+        report_coverage,
+        grounding_diagnostics,
+        verifier_diagnostics,
+        source_policy=plan.source_policy,
+    )
     runtime_warnings = sorted(
         {
             *runtime_warnings,
@@ -7111,6 +7478,10 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         selected_bank=selected_bank,
         final_report=final_report,
     )
+    coverage_gaps = _coverage_gaps_payload(
+        query=plan.query,
+        coverage=report_coverage,
+    )
     report["runtime"]["verification"] = verification
     section_graph = _reconcile_section_graph_with_materialized_sections(
         section_graph,
@@ -7138,8 +7509,10 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     runtime.write_artifact(job_id, "coverage.json", _json_markdown_block(coverage_diagnostics), "application/json")
     runtime.write_artifact(job_id, "grounding.json", _json_markdown_block(grounding_diagnostics), "application/json")
     runtime.write_artifact(job_id, "verifier.json", _json_markdown_block(verifier_diagnostics), "application/json")
+    runtime.write_artifact(job_id, _SELECTED_BANK_ARTIFACT_KIND, _json_markdown_block(selected_bank), "application/json")
     runtime.write_artifact(job_id, _EVIDENCE_BANK_ARTIFACT_KIND, _json_markdown_block(evidence_bank), "application/json")
     runtime.write_artifact(job_id, _VERIFICATION_ARTIFACT_KIND, _json_markdown_block(verification), "application/json")
+    runtime.write_artifact(job_id, _COVERAGE_GAPS_ARTIFACT_KIND, _json_markdown_block(coverage_gaps), "application/json")
     runtime.store.update_job(job_id, phase="finalizing", progress_pct=94.0, heartbeat_at=utc_now_iso())
     runtime.store.append_event(
         job_id,
@@ -7181,8 +7554,18 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "content_type": "application/json",
             },
             {
+                "kind": _SELECTED_BANK_ARTIFACT_KIND,
+                "content": _json_markdown_block(selected_bank),
+                "content_type": "application/json",
+            },
+            {
                 "kind": _VERIFICATION_ARTIFACT_KIND,
                 "content": _json_markdown_block(verification),
+                "content_type": "application/json",
+            },
+            {
+                "kind": _COVERAGE_GAPS_ARTIFACT_KIND,
+                "content": _json_markdown_block(coverage_gaps),
                 "content_type": "application/json",
             },
         ],
@@ -8324,11 +8707,20 @@ def _build_release_gate(
     coverage: dict[str, Any],
     grounding: dict[str, Any],
     verifier: dict[str, Any] | None = None,
+    *,
+    source_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     all_reason_codes: list[str] = []
     blocking_reason_codes: list[str] = []
     hard_coverage_gate_passed = bool(
         coverage.get("hard_coverage_gate_passed", coverage.get("coverage_gate_passed", False))
+    )
+    official_docs_only = str((source_policy or {}).get("mode", "")).strip() == "official_docs_only"
+    coverage_incomplete = bool(
+        not hard_coverage_gate_passed
+        or coverage.get("unanswered_sections")
+        or coverage.get("uncovered_sub_questions")
+        or coverage.get("hard_uncovered_targets")
     )
     if not hard_coverage_gate_passed:
         all_reason_codes.append("coverage_incomplete")
@@ -8344,6 +8736,13 @@ def _build_release_gate(
             if not code:
                 continue
             all_reason_codes.append(code)
+            if (
+                official_docs_only
+                and coverage_incomplete
+                and code == "medium_single_source_search_only"
+            ):
+                blocking_reason_codes.append(code)
+                continue
             if code not in _NON_BLOCKING_VERIFIER_REASON_CODES:
                 blocking_reason_codes.append(code)
     all_reason_codes = _dedupe_preserve_order(all_reason_codes)
@@ -8513,6 +8912,12 @@ def _build_verifier_diagnostics(
     hard_coverage_gate_passed = bool(
         coverage.get("hard_coverage_gate_passed", coverage.get("coverage_gate_passed", False))
     )
+    coverage_incomplete = bool(
+        not hard_coverage_gate_passed
+        or coverage.get("unanswered_sections")
+        or coverage.get("uncovered_sub_questions")
+        or coverage.get("hard_uncovered_targets")
+    )
     if not hard_coverage_gate_passed:
         reason_codes.append("coverage_incomplete")
     if int(grounding.get("missing_evidence_binding_claims", 0) or 0) > 0:
@@ -8675,6 +9080,7 @@ def _build_verifier_diagnostics(
                 }
                 acceptable_official_section = (
                     not section_is_gap
+                    and not coverage_incomplete
                     and (
                         (
                             not section_is_rollup
@@ -9161,7 +9567,6 @@ def _build_section_citations(
 
     sections: list[dict[str, Any]] = []
     claim_counter = {"value": 1}
-    used_claim_keys: set[str] = set()
     query_keywords = _tokenize_keywords(plan.query)
 
     def _section_value(section: dict[str, Any], key: str) -> str:
@@ -9259,6 +9664,7 @@ def _build_section_citations(
         if not relevant_evidence:
             return None
         section_claims: list[dict[str, Any]] = []
+        section_claim_keys: set[str] = set()
         clusters: list[list[DeepResearchEvidenceItem]] = []
         cluster_seed_items = [evidence for evidence in relevant_evidence if evidence.evidence_kind != "search"] or relevant_evidence
         supplemental_items = [evidence for evidence in relevant_evidence if evidence not in cluster_seed_items]
@@ -9301,7 +9707,7 @@ def _build_section_citations(
             if not claim_text or _is_noisy_text(claim_text):
                 continue
             claim_key = _stable_text_key(claim_text)
-            if claim_key in used_claim_keys:
+            if claim_key in section_claim_keys:
                 continue
             cluster_source_ids = _dedupe_preserve_order([source_id for item in cluster for source_id in item.source_ids])
             supporting_domain_count = _supporting_domain_count(cluster_source_ids, registry_by_id)
@@ -9332,7 +9738,7 @@ def _build_section_citations(
                 ),
             )
             section_claims.append(claim.model_dump())
-            used_claim_keys.add(claim_key)
+            section_claim_keys.add(claim_key)
             claim_counter["value"] += 1
             if len(section_claims) >= 2:
                 break

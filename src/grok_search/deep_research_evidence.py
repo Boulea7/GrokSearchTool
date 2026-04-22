@@ -304,6 +304,8 @@ def _selected_section_id_for_evidence(
     *,
     candidate_section_ids: list[str],
     evidence_text: str,
+    question_ids: list[str] | None = None,
+    source_hint_text: str = "",
 ) -> str:
     normalized_candidates = [
         str(section_id).strip()
@@ -312,24 +314,65 @@ def _selected_section_id_for_evidence(
     ]
     if len(normalized_candidates) <= 1:
         return normalized_candidates[0] if normalized_candidates else ""
-    scored_candidates: list[tuple[int, int, str]] = []
+    question_text_by_id = {
+        item.id: _normalize_whitespace(item.question)
+        for item in plan.sub_questions
+        if _normalize_whitespace(item.question)
+    }
+    outline_index_by_section_id = {
+        section.section_id: index
+        for index, section in enumerate(plan.report_outline)
+    }
+    scored_candidates: list[tuple[int, int, int, int, str]] = []
     for section_id in normalized_candidates:
         selection_score, selection_basis_tokens = _selection_score(
             plan,
             evidence_text=evidence_text,
             selected_section_id=section_id,
         )
-        scored_candidates.append((selection_score, len(selection_basis_tokens), section_id))
+        source_hint_score = _count_keyword_overlap(source_hint_text, selection_basis_tokens)
+        question_alignment_score = sum(
+            _count_keyword_overlap(
+                f"{question_text_by_id.get(question_id, '')} {evidence_text}",
+                selection_basis_tokens,
+            )
+            for question_id in question_ids or []
+            if question_id in question_text_by_id
+        )
+        specific_section_bonus = int(
+            not _is_generic_section_title(
+                next(
+                    (
+                        section.title
+                        for section in plan.report_outline
+                        if section.section_id == section_id
+                    ),
+                    "",
+                )
+            )
+        )
+        scored_candidates.append(
+            (
+                source_hint_score,
+                question_alignment_score,
+                selection_score,
+                specific_section_bonus,
+                -outline_index_by_section_id.get(section_id, 10_000),
+                section_id,
+            )
+        )
     if not scored_candidates:
         return ""
-    ranked = sorted(scored_candidates, key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    ranked = sorted(
+        scored_candidates,
+        key=lambda item: (item[0], item[1], item[2], item[3], item[4], item[5]),
+        reverse=True,
+    )
     if len(ranked) == 1:
-        return ranked[0][2]
-    first_score, first_token_count, first_section_id = ranked[0]
-    second_score, second_token_count, _ = ranked[1]
+        return ranked[0][5]
+    _, _, first_score, _, _, first_section_id = ranked[0]
+    _, _, second_score, _, _, _ = ranked[1]
     if first_score <= 0:
-        return ""
-    if first_score == second_score and first_token_count == second_token_count:
         return ""
     return first_section_id
 
@@ -441,6 +484,40 @@ def _question_ids_for_evidence(
     ]
 
 
+def _prioritize_question_ids_for_section(
+    plan: DeepResearchPlan,
+    *,
+    section_id: str,
+    question_ids: list[str],
+) -> list[str]:
+    normalized_section_id = str(section_id).strip()
+    if not normalized_section_id:
+        return [str(question_id).strip() for question_id in question_ids if str(question_id).strip()]
+    selected_section = next(
+        (section for section in plan.report_outline if section.section_id == normalized_section_id),
+        None,
+    )
+    if selected_section is None:
+        return [str(question_id).strip() for question_id in question_ids if str(question_id).strip()]
+    section_keywords = _tokenize_keywords(f"{selected_section.title} {selected_section.goal}")
+    scored_question_ids: list[tuple[int, str]] = []
+    for item in plan.sub_questions:
+        if item.id not in question_ids:
+            continue
+        score = _count_keyword_overlap(item.question, section_keywords)
+        if score <= 0:
+            continue
+        scored_question_ids.append((score, item.id))
+    if scored_question_ids:
+        top_score = max(score for score, _ in scored_question_ids)
+        return [
+            question_id
+            for score, question_id in sorted(scored_question_ids, key=lambda item: (item[0], item[1]), reverse=True)
+            if score == top_score
+        ]
+    return [str(question_id).strip() for question_id in question_ids if str(question_id).strip()]
+
+
 def build_evidence_ledger_entries(
     plan: DeepResearchPlan,
     *,
@@ -461,10 +538,18 @@ def build_evidence_ledger_entries(
             include_origin_query=False,
         )
         candidate_section_ids = _candidate_section_ids(plan, evidence, origin_query=origin_query)
+        broad_question_ids = _question_ids_for_evidence(
+            plan,
+            evidence_text=evidence_text,
+            evidence_context_text=evidence_context_text,
+            selected_section_id="",
+        )
         selected_section_id = _selected_section_id_for_evidence(
             plan,
             candidate_section_ids=candidate_section_ids,
             evidence_text=evidence_context_text,
+            question_ids=broad_question_ids,
+            source_hint_text=" ".join(str(url).strip() for url in evidence.get("source_urls", []) or []),
         )
         question_ids = _question_ids_for_evidence(
             plan,
@@ -472,14 +557,13 @@ def build_evidence_ledger_entries(
             evidence_context_text=evidence_context_text,
             selected_section_id=selected_section_id,
         )
-        if len(candidate_section_ids) > 1 and len(question_ids) > 1:
-            selected_section_id = ""
-            question_ids = _question_ids_for_evidence(
-                plan,
-                evidence_text=evidence_text,
-                evidence_context_text=evidence_context_text,
-                selected_section_id="",
-            )
+        if not question_ids:
+            question_ids = broad_question_ids
+        question_ids = _prioritize_question_ids_for_section(
+            plan,
+            section_id=selected_section_id,
+            question_ids=question_ids,
+        )
         selection_score, selection_basis_tokens = _selection_score(
             plan,
             evidence_text=evidence_context_text,
