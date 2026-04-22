@@ -590,6 +590,29 @@ def _source_doc_traits(source: dict[str, Any]) -> set[str]:
     return traits
 
 
+def _docs_aws_namespace_priority(source: dict[str, Any], reference_texts: list[str] | None = None) -> int:
+    url = str(source.get("url", "") or "").lower()
+    domain = str(source.get("domain", "") or "").lower()
+    if "docs.aws.amazon.com" not in url and domain != "docs.aws.amazon.com":
+        return 0
+    reference = " ".join(str(value or "") for value in reference_texts or []).lower()
+    dms_signals = (
+        "aws dms",
+        " describereplicationtasks",
+        " startreplicationtask",
+        " modifyreplicationtask",
+        " cdcstartposition",
+        " awsdms_txn_state",
+        " recoverytimeout",
+        " replication task",
+    )
+    if not any(signal in f" {reference} " for signal in dms_signals):
+        return 0
+    if "/dms/latest/" in url:
+        return 2
+    return -2
+
+
 def _continuation_anchor_terms(continuation: DeepResearchContinuationState) -> list[str]:
     texts = [
         continuation.continuation_goal,
@@ -2059,6 +2082,14 @@ def _artifact_bundle_identity(store: DeepResearchStore, job_id: str) -> str:
     return ""
 
 
+def _attempt_id(attempt_count: int | None) -> str:
+    try:
+        normalized = int(attempt_count or 0)
+    except (TypeError, ValueError):
+        normalized = 0
+    return f"attempt-{normalized}" if normalized > 0 else ""
+
+
 def _continuation_source_is_recoverable(
     store: DeepResearchStore,
     source_job: DeepResearchJob,
@@ -2081,7 +2112,12 @@ def _continuation_source_is_recoverable(
                 _normalize_whitespace(continuation.prior_plan_summary),
             )
         ):
-            return True
+            if store.read_artifact_text(source_job.job_id, "report.json"):
+                return True
+            if store.read_artifact_text(source_job.job_id, "plan.json"):
+                return True
+            if store.list_checkpoints(source_job.job_id):
+                return True
     return False
 
 
@@ -2197,6 +2233,7 @@ def _operator_summary_payload(
         "status": job.status,
         "phase": job.phase,
         "attempt_count": job.attempt_count,
+        "attempt_id": _attempt_id(job.attempt_count),
         "current_checkpoint": current_checkpoint,
         "current_checkpoint_kind": _checkpoint_kind(current_checkpoint),
         "current_checkpoint_seq": 0,
@@ -5350,6 +5387,7 @@ class DeepResearchRuntime:
                 "checkpoint_seq": current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0,
                 "resume_source": resume_source,
                 "attempt_count": next_attempt_count,
+                "attempt_id": _attempt_id(next_attempt_count),
                 "completed_units_count": completed_units_count,
             },
         )
@@ -6865,6 +6903,7 @@ class DeepResearchRuntime:
             if job.current_checkpoint
             else None
         )
+        payload["attempt_id"] = _attempt_id(job.attempt_count)
         payload["current_checkpoint_kind"] = _checkpoint_kind(job.current_checkpoint)
         payload["current_checkpoint_seq"] = current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0
         return payload
@@ -7045,6 +7084,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "checkpoint_kind": _checkpoint_kind(current_checkpoint.checkpoint_key),
                 "checkpoint_seq": current_checkpoint.checkpoint_seq,
                 "attempt_count": worker_attempt_count,
+                "attempt_id": _attempt_id(worker_attempt_count),
                 "completed_units_count": len(checkpoint_state.completed_unit_ids) if checkpoint_state else 0,
             },
         )
@@ -7274,6 +7314,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     "checkpoint_kind": _checkpoint_kind(latest_checkpoint_key),
                     "checkpoint_seq": latest_checkpoint.checkpoint_seq if latest_checkpoint is not None else 0,
                     "attempt_count": worker_attempt_count,
+                    "attempt_id": _attempt_id(worker_attempt_count),
                     "completed_units_count": len(completed_unit_ids),
                 },
             )
@@ -8381,6 +8422,10 @@ def _select_fetch_sources(
         quality_bias = _source_quality_bias(source)
         lowered_title = title.lower()
         traits = _source_doc_traits(source)
+        namespace_priority = _docs_aws_namespace_priority(
+            source,
+            [plan.query, unit.title, unit.goal, unit.query, *[section.goal for section in plan.report_outline]],
+        )
         trait_priority = 0
         if "api_reference" in traits or "reference" in traits:
             trait_priority = 2
@@ -8405,6 +8450,7 @@ def _select_fetch_sources(
         if _is_low_signal_title(str(source.get("title") or "")):
             shell_penalty -= 2
         return (
+            namespace_priority,
             non_shell_distinctive_match_count,
             trait_priority,
             identifier_match_count,

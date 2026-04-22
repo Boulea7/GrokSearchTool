@@ -18,6 +18,7 @@ RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES = (
     "probe_round36_lifecycle_public_surface.json",
     "probe_round37_aws_dms_official_doc.json",
     "probe_round37_lifecycle_public_surface.json",
+    "probe_round38_aws_dms_partial_failure.json",
 )
 
 
