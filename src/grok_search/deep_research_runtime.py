@@ -609,8 +609,11 @@ def _docs_aws_namespace_priority(source: dict[str, Any], reference_texts: list[s
     )
     if not any(signal in f" {reference} " for signal in dms_signals):
         return 0
+    traits = _source_doc_traits(source)
     if "/dms/latest/" in url:
         return 2
+    if "prescriptive_guidance" in traits or "troubleshooting" in traits:
+        return -2
     identifier_terms = _query_identifier_terms(reference)
     source_text = " ".join(
         str(source.get(key, "") or "").lower()
@@ -9417,11 +9420,6 @@ def _build_verifier_diagnostics(
                 if previous_claim is not None:
                     previous_is_rollup = bool(previous_claim.get("is_rollup"))
                     previous_section_id = str(previous_claim.get("section_id", "")).strip()
-                    previous_source_ids = {
-                        str(source_id).strip()
-                        for source_id in previous_claim.get("source_ids", []) or []
-                        if str(source_id).strip()
-                    }
                     previous_evidence_ids = {
                         str(evidence_id).strip()
                         for evidence_id in previous_claim.get("evidence_ids", []) or []
@@ -9440,7 +9438,6 @@ def _build_verifier_diagnostics(
                         and not previous_is_rollup
                         and (
                             previous_section_id == section_id
-                            or bool(previous_source_ids & current_source_ids)
                             or bool(previous_evidence_ids & current_evidence_ids)
                         )
                     ):
