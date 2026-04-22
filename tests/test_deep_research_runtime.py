@@ -6069,6 +6069,8 @@ async def test_resume_interrupted_finalizing_job_with_usable_final_batch_short_c
     assert resumed["status"] == "completed"
     assert status["status"] == "completed"
     assert any(event["type"] == "job_resolved_from_final_batch" for event in events["events"])
+    resolved_event = next(event for event in events["events"] if event["type"] == "job_resolved_from_final_batch")
+    assert resolved_event["data"]["attempt_id"] == "attempt-1"
     assert not any(event["type"] == "job_completed" for event in events["events"])
     assert runtime.read_artifact_text(job.job_id, "final_report.md") == "# Final Report\n\nRecovered final report.\n"
 
