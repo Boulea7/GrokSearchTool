@@ -2065,6 +2065,27 @@ def test_resolve_watch_attach_after_seq_prefers_attempt_id_over_missing_attempt_
     assert attach_after_seq == 1
 
 
+def test_resolve_watch_attach_after_seq_uses_runtime_anchor_when_present():
+    class FakeRuntime:
+        async def events(self, job_id, after_seq=0, limit=100):
+            raise AssertionError("runtime.events should not be called when payload already has watch_attach_after_seq")
+
+    payload = {
+        "job_id": "job-123",
+        "attempt_count": 2,
+        "attempt_id": "attempt-2",
+        "current_checkpoint": "researching-u1",
+        "continued_from_job_id": "",
+        "watch_attach_after_seq": 7,
+    }
+
+    attach_after_seq = asyncio.run(
+        deep_research_cli._resolve_watch_attach_after_seq(FakeRuntime(), "job-123", payload, page_limit=4)
+    )
+
+    assert attach_after_seq == 7
+
+
 def test_cli_resume_watch_passes_resume_response_as_initial_status(monkeypatch, capsys):
     response = {
         "job_id": "job-123",
