@@ -3610,7 +3610,12 @@ def _selected_bank_payload(
                     str(raw_claim_id).strip()
                     for raw_claim_id in packet.get("claim_ids", []) or []
                 )
-                if claim_id and (valid_claim_ids is None or claim_id in valid_claim_ids)
+                if claim_id
+                and (
+                    sections is None
+                    or section_id in valid_claim_ids_by_section
+                    and claim_id in valid_claim_ids
+                )
             ]
             selection_details = decisions_by_section_evidence.get((section_id, evidence_id), {})
             selected_rows.append(
@@ -4090,7 +4095,7 @@ def _coverage_gaps_payload(
         {"gap_type": "uncovered_sub_question", "target": item, "blocking": True}
         for item in uncovered_sub_questions
     ] + [
-        {"gap_type": "hard_uncovered_target", "target": item, "blocking": False}
+        {"gap_type": "hard_uncovered_target", "target": item, "blocking": True}
         for item in hard_uncovered_targets
     ]
     return {
@@ -4100,7 +4105,7 @@ def _coverage_gaps_payload(
         "hard_uncovered_targets": hard_uncovered_targets,
         "coverage_gate_passed": bool(coverage.get("coverage_gate_passed", not gaps)),
         "hard_coverage_gate_passed": bool(coverage.get("hard_coverage_gate_passed", not hard_uncovered_targets)),
-        "blocking_gap_count": len(unanswered_sections) + len(uncovered_sub_questions),
+        "blocking_gap_count": len(unanswered_sections) + len(uncovered_sub_questions) + len(hard_uncovered_targets),
         "hard_gap_count": len(hard_uncovered_targets),
         "total_gap_count": len(gaps),
         "gaps": gaps,
@@ -9373,19 +9378,45 @@ def _build_verifier_diagnostics(
             if claim_text:
                 claim_key = _stable_text_key(claim_text)
                 previous_claim = seen_claim_keys.get(claim_key)
+                current_source_ids = {
+                    str(source_id).strip()
+                    for source_id in claim.get("source_ids", []) or claim.get("citations", []) or []
+                    if str(source_id).strip()
+                }
+                current_evidence_ids = {
+                    str(evidence_id).strip()
+                    for evidence_id in claim.get("evidence_ids", []) or []
+                    if str(evidence_id).strip()
+                }
                 if previous_claim is not None:
                     previous_is_rollup = bool(previous_claim.get("is_rollup"))
                     previous_section_id = str(previous_claim.get("section_id", "")).strip()
+                    previous_source_ids = {
+                        str(source_id).strip()
+                        for source_id in previous_claim.get("source_ids", []) or []
+                        if str(source_id).strip()
+                    }
+                    previous_evidence_ids = {
+                        str(evidence_id).strip()
+                        for evidence_id in previous_claim.get("evidence_ids", []) or []
+                        if str(evidence_id).strip()
+                    }
                     if not section_is_rollup and previous_is_rollup:
                         seen_claim_keys[claim_key] = {
                             "claim_id": claim_id,
                             "is_rollup": False,
                             "section_id": section_id,
+                            "source_ids": list(current_source_ids),
+                            "evidence_ids": list(current_evidence_ids),
                         }
                     elif (
                         not section_is_rollup
                         and not previous_is_rollup
-                        and previous_section_id == section_id
+                        and (
+                            previous_section_id == section_id
+                            or bool(previous_source_ids & current_source_ids)
+                            or bool(previous_evidence_ids & current_evidence_ids)
+                        )
                     ):
                         if claim_id:
                             flagged_claim_ids.append(claim_id)
@@ -9396,6 +9427,8 @@ def _build_verifier_diagnostics(
                         "claim_id": claim_id,
                         "is_rollup": section_is_rollup,
                         "section_id": section_id,
+                        "source_ids": list(current_source_ids),
+                        "evidence_ids": list(current_evidence_ids),
                     }
                 if _is_noisy_text(raw_claim_text) or _is_noisy_text(claim_text):
                     if claim_id:
@@ -10219,6 +10252,7 @@ def _build_section_citations(
             return build_section_from_pool(section, claims_pool, enforce_overlap=False)
         derived_claims: list[dict[str, Any]] = []
         seen_claim_keys: set[str] = set()
+        max_rollup_claims = 3
         for concrete in concrete_sections:
             concrete_claims = [dict(claim) for claim in concrete.get("claims", []) if isinstance(claim, dict)]
             if not concrete_claims:
@@ -10289,9 +10323,7 @@ def _build_section_citations(
                 ).model_dump()
             )
             seen_claim_keys.add(claim_key)
-            if len(derived_claims) >= 2:
-                break
-            if len(derived_claims) >= 2:
+            if len(derived_claims) >= max_rollup_claims:
                 break
         if not derived_claims:
             return None
@@ -10407,6 +10439,7 @@ def _build_section_citations(
 
 def _build_section_summary(section_claims: list[dict[str, Any]]) -> str:
     summary_parts: list[str] = []
+    max_summary_parts = 3
     for claim in section_claims:
         text = _strip_summary_scaffolding(
             _summarize_evidence_text(str(claim.get("text", "")), limit=220)
@@ -10416,7 +10449,7 @@ def _build_section_summary(section_claims: list[dict[str, Any]]) -> str:
         if text in summary_parts:
             continue
         summary_parts.append(text)
-        if len(summary_parts) >= 2:
+        if len(summary_parts) >= max_summary_parts:
             break
     if not summary_parts:
         return ""

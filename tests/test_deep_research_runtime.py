@@ -17749,6 +17749,50 @@ def test_selected_bank_payload_drops_claim_ids_missing_from_final_sections():
     assert payload[0]["selected_rows"][0]["claim_ids"] == ["executive-summary-claim-1"]
 
 
+def test_selected_bank_payload_clears_claim_ids_for_non_materialized_section():
+    payload = deep_research_runtime_module._selected_bank_payload(
+        section_banks=[
+            {
+                "section_id": "stale-section",
+                "selected_evidence_ids": ["e1"],
+                "candidate_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+                "selected_packets": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": ["stale-claim-1"],
+                        "question_ids": ["sq1"],
+                    }
+                ],
+            }
+        ],
+        evidence_ledger=[
+            {
+                "section_id": "stale-section",
+                "evidence_id": "e1",
+                "selection_reason": "keyword_overlap",
+                "coverage_tags": ["sq1"],
+                "rejected_reason": "",
+            }
+        ],
+        sections=[
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "claims": [
+                    {
+                        "claim_id": "executive-summary-claim-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert payload[0]["selected_rows"][0]["claim_ids"] == []
+
+
 def test_rebuild_verified_rollup_sections_filters_rollups_to_supported_claim_inventory():
     rebuilt = deep_research_runtime_module._rebuild_verified_rollup_sections(
         [
@@ -17830,6 +17874,29 @@ def test_rebuild_verified_rollup_sections_preserves_generic_claims_when_no_concr
     assert "Resume continues from the last checkpoint." in rebuilt[0]["summary"]
 
 
+def test_coverage_gaps_payload_marks_hard_uncovered_targets_as_blocking():
+    payload = deep_research_runtime_module._coverage_gaps_payload(
+        query="Checkpoint resume semantics",
+        coverage={
+            "coverage_gate_passed": False,
+            "hard_coverage_gate_passed": False,
+            "unanswered_sections": [],
+            "uncovered_sub_questions": [],
+            "hard_uncovered_targets": ["Explain RecoveryTimeout behavior."],
+        },
+    )
+
+    assert payload["hard_gap_count"] == 1
+    assert payload["blocking_gap_count"] == 1
+    assert payload["gaps"] == [
+        {
+            "gap_type": "hard_uncovered_target",
+            "target": "Explain RecoveryTimeout behavior.",
+            "blocking": True,
+        }
+    ]
+
+
 def test_verifier_flags_conflicting_claims_with_negation_mismatch():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
@@ -17882,6 +17949,80 @@ def test_verifier_flags_conflicting_claims_with_negation_mismatch():
     assert "conflict" in verifier["reason_codes"]
     assert verifier["summary"]["conflicted_claims"] == 2
     assert {item["claim_id"] for item in verifier["conflicted_claims"]} == {"claim-1", "claim-2"}
+
+
+def test_verifier_flags_cross_section_duplicate_claims_when_same_evidence_is_reused():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 2,
+            "ungrounded_claims": 0,
+            "single_source_claims": 0,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 2,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "Resume continues from the last durable checkpoint.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "high",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 4,
+                                "line_end": 5,
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "section_id": "checkpoint-overview",
+                "title": "Checkpoint Overview",
+                "claims": [
+                    {
+                        "claim_id": "claim-2",
+                        "text": "Resume continues from the last durable checkpoint.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "high",
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 4,
+                                "line_end": 5,
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+        source_registry={
+            "R1": {"source_id": "R1", "url": "https://docs.example.com/resume", "domain": "docs.example.com"},
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+        ],
+        section_banks=[],
+    )
+
+    assert "duplicate_claims" in verifier["reason_codes"]
+    assert verifier["summary"]["duplicate_claims"] == 1
+    assert set(verifier["flagged_claim_ids"]) >= {"claim-2"}
 
 
 def test_claim_conflict_reason_detects_numeric_mismatch():
@@ -17988,6 +18129,115 @@ def test_rebuild_verified_rollup_sections_uses_non_generic_inventory_when_suppor
     summary_section = rebuilt[0]
     assert [claim["claim_id"] for claim in summary_section["claims"]] == ["summary-match"]
     assert "background setup" not in summary_section["summary"]
+
+
+def test_build_section_citations_key_findings_keep_three_grounded_sections():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Compare resume, restart, and console checkpoint behavior",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Compare resume, restart, and console checkpoint behavior",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "How does resume work?", "reason": "Primary axis."},
+                {"id": "sq2", "question": "How does restart differ?", "reason": "Primary axis."},
+                {"id": "sq3", "question": "How does the console expose checkpoints?", "reason": "Primary axis."},
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["resume semantics", "restart semantics", "console checkpoint behavior"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."},
+                {"section_id": "key-findings", "title": "Key Findings", "goal": "Cover the strongest findings."},
+                {"section_id": "resume-semantics", "title": "Resume Semantics", "goal": "Explain resume semantics."},
+                {"section_id": "restart-semantics", "title": "Restart Semantics", "goal": "Explain restart semantics."},
+                {"section_id": "console-checkpoints", "title": "Console Checkpoints", "goal": "Explain console checkpoint behavior."},
+            ],
+            "research_units": [],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/resume",
+            "title": "Resume docs",
+            "source_type": "official_docs",
+        },
+        {
+            "source_id": "R2",
+            "url": "https://docs.example.com/runtime/restart",
+            "title": "Restart docs",
+            "source_type": "official_docs",
+        },
+        {
+            "source_id": "R3",
+            "url": "https://docs.example.com/runtime/console",
+            "title": "Console docs",
+            "source_type": "official_docs",
+        },
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-resume",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/resume"],
+            "summary": "Resume continues from the last durable checkpoint after interruption.",
+            "detail": "Resume continues from the last durable checkpoint after interruption.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+        {
+            "evidence_id": "evidence-restart",
+            "unit_id": "unit-search-2",
+            "source_ids": ["R2"],
+            "source_urls": ["https://docs.example.com/runtime/restart"],
+            "summary": "Restart replays work from a fresh starting point and may re-run completed work.",
+            "detail": "Restart replays work from a fresh starting point and may re-run completed work.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+        {
+            "evidence_id": "evidence-console",
+            "unit_id": "unit-search-3",
+            "source_ids": ["R3"],
+            "source_urls": ["https://docs.example.com/runtime/console"],
+            "summary": "The console exposes the last checkpoint and lets operators set a restart point.",
+            "detail": "The console exposes the last checkpoint and lets operators set a restart point.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+    ]
+    section_banks = [
+        {"section_id": "executive-summary", "candidate_evidence_ids": [], "selected_evidence_ids": [], "rejected_evidence_ids": []},
+        {"section_id": "key-findings", "candidate_evidence_ids": [], "selected_evidence_ids": [], "rejected_evidence_ids": []},
+        {"section_id": "resume-semantics", "candidate_evidence_ids": ["evidence-resume"], "selected_evidence_ids": ["evidence-resume"], "rejected_evidence_ids": []},
+        {"section_id": "restart-semantics", "candidate_evidence_ids": ["evidence-restart"], "selected_evidence_ids": ["evidence-restart"], "rejected_evidence_ids": []},
+        {"section_id": "console-checkpoints", "candidate_evidence_ids": ["evidence-console"], "selected_evidence_ids": ["evidence-console"], "rejected_evidence_ids": []},
+    ]
+
+    sections = _build_section_citations(
+        plan,
+        evidence_items,
+        source_registry,
+        section_banks=section_banks,
+        evidence_ledger=[],
+    )
+    key_findings = next(section for section in sections if section["section_id"] == "key-findings")
+
+    assert len(key_findings["claims"]) == 3
+    assert "Resume continues from the last durable checkpoint" in key_findings["summary"]
+    assert "Restart replays work from a fresh starting point" in key_findings["summary"]
+    assert "console exposes the last checkpoint" in key_findings["summary"].lower()
 
 
 @pytest.mark.asyncio
