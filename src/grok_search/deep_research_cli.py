@@ -413,8 +413,15 @@ async def _handle_events(args: argparse.Namespace) -> int:
 async def _handle_result(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
     if args.artifact:
-        content = runtime.read_artifact_text(args.job_id, args.artifact)
+        artifact = runtime.read_artifact(args.job_id, args.artifact)
+        content = artifact.get("content")
         if content is None:
+            if artifact.get("state") == "hidden":
+                print(
+                    f"artifact_hidden: {args.artifact} reason={artifact.get('artifact_visibility_reason') or '-'}",
+                    file=sys.stderr,
+                )
+                return 1
             print(f"artifact_not_found: {args.artifact}", file=sys.stderr)
             return 1
         status = await runtime.status(args.job_id)

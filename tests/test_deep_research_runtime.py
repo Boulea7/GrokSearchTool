@@ -250,6 +250,32 @@ def with_minimal_provenance_artifacts(
             "unbound_evidence_ids": 0,
         },
     }
+    verification_payload = {
+        "supported_claims": [],
+        "single_source_claims": [],
+        "conflicted_claims": [],
+        "unmapped_evidence_ids": [],
+        "confidence_by_section": {},
+        "unresolved_sections": [],
+        "packet_to_prose_fidelity": {
+            "passed": True,
+            "checked_packet_count": 0,
+            "missing_selected_packet_ids": [],
+            "reason_codes": [],
+        },
+    }
+    coverage_gaps_payload = {
+        "query": query,
+        "unanswered_sections": [],
+        "uncovered_sub_questions": [],
+        "hard_uncovered_targets": [],
+        "coverage_gate_passed": True,
+        "hard_coverage_gate_passed": True,
+        "blocking_gap_count": 0,
+        "hard_gap_count": 0,
+        "total_gap_count": 0,
+        "gaps": [],
+    }
     for item in payload:
         if item.get("kind") != "report.json":
             continue
@@ -318,6 +344,26 @@ def with_minimal_provenance_artifacts(
             {
                 "kind": "verifier.json",
                 "content": json.dumps(verifier_payload),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "selected_bank.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "evidence_bank.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verification.json",
+                "content": json.dumps(verification_payload),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "coverage_gaps.json",
+                "content": json.dumps(coverage_gaps_payload),
                 "content_type": "application/json",
             },
         ]
@@ -5940,6 +5986,64 @@ async def test_resume_interrupted_finalizing_job_with_usable_final_batch_short_c
 
 
 @pytest.mark.asyncio
+async def test_events_window_treats_resolved_final_batch_as_terminal_window(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Resolved final batch events window",
+        request_fingerprint="fp-resolved-final-batch-events-window",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Recovered final report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered final report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query=job.query,
+        ),
+    )
+
+    before_resume = await runtime.events(job.job_id)
+    resumed = await runtime.resume(job.job_id, schedule=False)
+    replay = await runtime.events(job.job_id, after_seq=before_resume["next_after_seq"])
+
+    assert resumed["status"] == "completed"
+    assert [event["type"] for event in replay["events"]] == ["job_resolved_from_final_batch"]
+    assert replay["job_terminal"] is True
+    assert replay["window_has_terminal_event"] is True
+
+
+@pytest.mark.asyncio
 async def test_start_does_not_reuse_interrupted_finalizing_job_with_empty_final_report(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -11121,6 +11225,79 @@ def test_release_gate_degrades_but_does_not_fail_medium_single_source_search_onl
     assert release_gate["soft_reason_codes"] == ["medium_single_source_search_only"]
 
 
+def test_release_gate_blocks_medium_single_source_search_only_for_official_docs_when_coverage_is_incomplete():
+    grounding = {
+        "total_claims": 1,
+        "ungrounded_claims": 0,
+        "single_source_claims": 1,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0,
+    }
+    verifier = _build_verifier_diagnostics(
+        coverage={
+            "coverage_gate_passed": False,
+            "hard_coverage_gate_passed": True,
+            "unanswered_sections": ["Key Differences"],
+        },
+        grounding=grounding,
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "confidence": "medium",
+                        "evidence_ids": ["e1"],
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": False,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+                "domain": "docs.aws.amazon.com",
+                "source_type": "official_docs",
+                "quality_tier": "official",
+            }
+        },
+        evidence_items=[{"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "search"}],
+        section_banks=[
+            {
+                "section_id": "resume-semantics",
+                "candidate_evidence_ids": ["e1"],
+                "selected_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+                "last_updated_at": "2026-04-18T00:00:00Z",
+            }
+        ],
+    )
+    release_gate = _build_release_gate(
+        {
+            "coverage_gate_passed": False,
+            "hard_coverage_gate_passed": True,
+            "unanswered_sections": ["Key Differences"],
+        },
+        grounding,
+        verifier,
+        source_policy={"mode": "official_docs_only"},
+    )
+
+    assert verifier["reason_codes"] == ["medium_single_source_search_only"]
+    assert release_gate["passed"] is False
+    assert release_gate["reason_codes"] == ["medium_single_source_search_only"]
+
+
 def test_verifier_flags_missing_evidence_items_and_mismatched_bindings():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True},
@@ -12852,6 +13029,97 @@ def test_build_section_citations_derives_key_findings_from_grounded_sections():
     assert sections_by_id["key-findings"]["claims"]
     assert "Resume continues from the last durable checkpoint" in sections_by_id["key-findings"]["summary"]
     assert "Restart replays work from a fresh starting point" in sections_by_id["key-findings"]["summary"]
+
+
+def test_build_section_citations_dedupes_claims_within_a_section_only():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Explain resume semantics across two scoped sections",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Explain resume semantics across two scoped sections",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "Resume semantics for operators", "reason": "Primary axis."},
+                {"id": "sq2", "question": "Resume semantics for checkpoints", "reason": "Primary axis."},
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["resume semantics operators", "resume semantics checkpoints"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {"section_id": "operator-resume", "title": "Operator Resume", "goal": "Explain operator-side resume semantics."},
+                {"section_id": "checkpoint-resume", "title": "Checkpoint Resume", "goal": "Explain checkpoint-side resume semantics."},
+            ],
+            "research_units": [],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/resume",
+            "title": "Resume docs",
+            "source_type": "official_docs",
+        }
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-operator",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/resume"],
+            "summary": "Resume continues from the last durable checkpoint after interruption.",
+            "detail": "Resume continues from the last durable checkpoint after interruption.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+        {
+            "evidence_id": "evidence-checkpoint",
+            "unit_id": "unit-search-2",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/resume"],
+            "summary": "Resume continues from the last durable checkpoint after interruption.",
+            "detail": "Resume continues from the last durable checkpoint after interruption.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+    ]
+    section_banks = [
+        {
+            "section_id": "operator-resume",
+            "candidate_evidence_ids": ["evidence-operator"],
+            "selected_evidence_ids": ["evidence-operator"],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-22T00:00:00Z",
+        },
+        {
+            "section_id": "checkpoint-resume",
+            "candidate_evidence_ids": ["evidence-checkpoint"],
+            "selected_evidence_ids": ["evidence-checkpoint"],
+            "rejected_evidence_ids": [],
+            "last_updated_at": "2026-04-22T00:00:00Z",
+        },
+    ]
+
+    sections = _build_section_citations(
+        plan,
+        evidence_items,
+        source_registry,
+        section_banks=section_banks,
+        evidence_ledger=[],
+    )
+    sections_by_id = {section["section_id"]: section for section in sections}
+
+    assert sections_by_id["operator-resume"]["claims"]
+    assert sections_by_id["checkpoint-resume"]["claims"]
+    assert sections_by_id["operator-resume"]["claims"][0]["text"] == sections_by_id["checkpoint-resume"]["claims"][0]["text"]
 
 
 def test_build_section_citations_rewrites_generic_outline_from_evidence_ledger_question_ids():
@@ -14932,6 +15200,92 @@ async def test_finalizing_result_does_not_resolve_partial_batch_with_current_pro
 
 
 @pytest.mark.asyncio
+async def test_finalizing_result_marks_hidden_final_artifacts_without_claiming_they_are_missing(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Interrupted partial bundle hidden vs missing",
+        request_fingerprint="fp-interrupted-partial-bundle-hidden-vs-missing",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}},
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "coverage.json",
+        json.dumps({"query": job.query, "planned_section_ids": ["s1"], "answered_section_ids": []}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "grounding.json",
+        json.dumps({"total_claims": 99, "ungrounded_claims": 99}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "verifier.json",
+        json.dumps({"passed": False, "reason_codes": ["stale_current_only"]}),
+        "application/json",
+    )
+
+    result = await runtime.result(job.job_id)
+
+    assert result["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["artifact_errors"]["sources.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["artifact_errors"]["citations.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["artifact_errors"]["report.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["artifact_errors"]["final_report.md"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["artifact_errors"]["evidence_items.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["artifact_errors"]["coverage.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["artifact_errors"]["grounding.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["artifact_errors"]["verifier.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+
+
+@pytest.mark.asyncio
 async def test_stop_policy_does_not_skip_pending_unit_when_only_one_completed_unit_mentions_all_targets(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     search_calls: list[str] = []
@@ -16974,12 +17328,15 @@ async def test_runtime_persists_source_policy_lineage_and_selected_bank_artifact
         schedule=False,
     )
     result = await runtime.run_job(response["job_id"])
+    status = await runtime.status(response["job_id"])
+    public_result = await runtime.result(response["job_id"])
 
     source_policy = json.loads(runtime.store.read_artifact_text(response["job_id"], "source_policy.json") or "{}")
     lineage = json.loads(runtime.store.read_artifact_text(response["job_id"], "lineage.json") or "{}")
     selected_bank = json.loads(runtime.store.read_artifact_text(response["job_id"], "selected_bank.json") or "[]")
     evidence_bank = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_bank.json") or "[]")
     verification = json.loads(runtime.store.read_artifact_text(response["job_id"], "verification.json") or "{}")
+    coverage_gaps = json.loads(runtime.store.read_artifact_text(response["job_id"], "coverage_gaps.json") or "{}")
 
     assert source_policy["mode"] == "official_docs_only"
     assert source_policy["allowed_domains"] == ["docs.aws.amazon.com"]
@@ -16998,3 +17355,13 @@ async def test_runtime_persists_source_policy_lineage_and_selected_bank_artifact
     assert evidence_bank
     assert evidence_bank[0]["used_by_section_ids"]
     assert verification["packet_to_prose_fidelity"]["passed"] is True
+    assert coverage_gaps["coverage_gate_passed"] is True
+    assert coverage_gaps["total_gap_count"] == 0
+    assert "selected_bank.json" in status["artifact_kinds"]
+    assert "evidence_bank.json" in status["artifact_kinds"]
+    assert "verification.json" in status["artifact_kinds"]
+    assert "coverage_gaps.json" in status["artifact_kinds"]
+    assert public_result["selected_bank"] == selected_bank
+    assert public_result["evidence_bank"] == evidence_bank
+    assert public_result["verification"] == verification
+    assert public_result["coverage_gaps"] == coverage_gaps

@@ -132,6 +132,32 @@ def with_minimal_provenance_artifacts(
             "unbound_evidence_ids": 0,
         },
     }
+    verification_payload = {
+        "supported_claims": [],
+        "single_source_claims": [],
+        "conflicted_claims": [],
+        "unmapped_evidence_ids": [],
+        "confidence_by_section": {},
+        "unresolved_sections": [],
+        "packet_to_prose_fidelity": {
+            "passed": True,
+            "checked_packet_count": 0,
+            "missing_selected_packet_ids": [],
+            "reason_codes": [],
+        },
+    }
+    coverage_gaps_payload = {
+        "query": query,
+        "unanswered_sections": [],
+        "uncovered_sub_questions": [],
+        "hard_uncovered_targets": [],
+        "coverage_gate_passed": True,
+        "hard_coverage_gate_passed": True,
+        "blocking_gap_count": 0,
+        "hard_gap_count": 0,
+        "total_gap_count": 0,
+        "gaps": [],
+    }
     for item in payload:
         if item.get("kind") != "report.json":
             continue
@@ -197,6 +223,26 @@ def with_minimal_provenance_artifacts(
                 "content": json.dumps(verifier_payload),
                 "content_type": "application/json",
             },
+            {
+                "kind": "selected_bank.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "evidence_bank.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verification.json",
+                "content": json.dumps(verification_payload),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "coverage_gaps.json",
+                "content": json.dumps(coverage_gaps_payload),
+                "content_type": "application/json",
+            },
         ]
     )
     if not any(item.get("kind") == "evidence_items.json" for item in payload):
@@ -208,6 +254,25 @@ def with_minimal_provenance_artifacts(
             }
         )
     return payload
+
+
+def test_cli_result_surfaces_resolved_final_batch_sidecars(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        "probe_round36_lifecycle_public_surface.json",
+        request_fingerprint="fp-cli-resolved-final-sidecars",
+    )
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+
+    exit_code = deep_research_cli.main(["result", seeded["job"].job_id])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["selected_bank"] == seeded["snapshot"]["selected_bank"]
+    assert payload["evidence_bank"] == seeded["snapshot"]["artifact_payload"]["evidence_bank"]
+    assert payload["verification"] == seeded["snapshot"]["artifact_payload"]["verification"]
+    assert payload["coverage_gaps"]["total_gap_count"] == 0
 
 
 def assert_no_traceback(text: str) -> None:
@@ -962,6 +1027,87 @@ def test_cli_result_artifact_missing_file_returns_nonzero(monkeypatch, tmp_path,
     assert exit_code == 1
     assert captured.out == ""
     assert "artifact_not_found: missing.md" in captured.err
+
+
+def test_cli_result_artifact_hidden_file_reports_visibility_reason(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="CLI hidden artifact job",
+        request_fingerprint="fp-cli-hidden-artifact",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}},
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "coverage.json",
+        json.dumps({"query": job.query, "planned_section_ids": ["s1"], "answered_section_ids": []}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "grounding.json",
+        json.dumps({"total_claims": 99, "ungrounded_claims": 99}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "verifier.json",
+        json.dumps({"passed": False, "reason_codes": ["stale_current_only"]}),
+        "application/json",
+    )
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--artifact", "final_report.md"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "artifact_hidden: final_report.md reason=unresolved_batch_backed_final_artifacts_hidden" in captured.err
 
 
 def test_cli_result_artifact_prefers_resolved_final_batch(monkeypatch, tmp_path, capsys):
@@ -2600,6 +2746,71 @@ def test_cli_events_prints_operator_batch_summary(monkeypatch, tmp_path, capsys)
     ]
 
 
+def test_cli_events_after_seq_treats_resolved_final_batch_window_as_terminal(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="CLI resolved final batch events window",
+        request_fingerprint="fp-cli-resolved-final-batch-events-window",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Recovered final report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered final report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query=job.query,
+        ),
+    )
+    before_resume = asyncio.run(runtime.events(job.job_id))
+    asyncio.run(runtime.resume(job.job_id, schedule=False))
+
+    exit_code = deep_research_cli.main(
+        ["events", job.job_id, "--after-seq", str(before_resume["next_after_seq"]), "--limit", "10"]
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert [event["type"] for event in payload["events"]] == ["job_resolved_from_final_batch"]
+    assert payload["job_terminal"] is True
+    assert payload["window_has_terminal_event"] is True
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} events=1 after_seq={before_resume['next_after_seq']} next_after_seq={before_resume['next_after_seq'] + 1} last_event=job_resolved_from_final_batch terminal=true window_terminal=true"
+    ]
+
+
 def test_cli_round11_interrupted_status_events_and_result_remain_consistent(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
@@ -3027,6 +3238,70 @@ def test_cli_resume_watch_after_seq_replays_only_round30_resumed_window(monkeypa
             "warning_codes": "coverage_incomplete,planner_fallback_used",
         },
         index=1,
+    )
+
+
+def test_cli_resume_watch_replays_only_resolved_final_batch_window(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="CLI resume watch resolved final batch",
+        request_fingerprint="fp-cli-resume-watch-resolved-final-batch",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso(), attempt_count=2)
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Recovered final report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered final report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query=job.query,
+        ),
+    )
+    before_resume = asyncio.run(runtime.events(job.job_id))
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    monkeypatch.setattr(deep_research_cli, "_spawn_worker", lambda job_id: None)
+
+    exit_code = deep_research_cli.main(
+        ["resume", job.job_id, "--watch", "--after-seq", str(before_resume["next_after_seq"]), "--interval-seconds", "0.01"]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "[1] planning job_created: Deep research job created." not in captured.err
+    assert "job_resolved_from_final_batch: Deep research recovered a usable final artifact batch without rerunning finalization." in captured.err
+    assert summary_lines(captured.err)[-1] == (
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=100.0% checkpoint=finalizing attempts=2 cancel_requested=false continued_from=- resolved_batch="
+        f"{json.loads(captured.out)['resolved_artifact_batch_id']} artifact_fallback=false"
     )
 
 

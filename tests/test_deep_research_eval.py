@@ -486,6 +486,10 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
                 "coverage.json",
                 "grounding.json",
                 "verifier.json",
+                "selected_bank.json",
+                "evidence_bank.json",
+                "verification.json",
+                "coverage_gaps.json",
             }
         ]
         mismatched = [
@@ -1147,6 +1151,24 @@ def test_probe_public_surface_goldens(fixture_name):
         golden = case["golden"][metric]
         result = evaluate_case_metric(case, metric)
         assert_metric_matches_golden(result, golden)
+
+
+def test_resolved_batch_parity_flags_additive_final_sidecar_mismatch():
+    result = evaluate_case_metric(
+        {
+            "resolved_artifact_batch_id": "batch-good",
+            "artifacts": [
+                {"kind": "selected_bank.json", "metadata": {"batch_id": "batch-good"}},
+                {"kind": "evidence_bank.json", "metadata": {"batch_id": "batch-good"}},
+                {"kind": "verification.json", "metadata": {"batch_id": "batch-good"}},
+                {"kind": "coverage_gaps.json", "metadata": {"batch_id": "batch-bad"}},
+            ],
+        },
+        "resolved_batch_parity",
+    )
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["mixed_batch_artifacts"]
 
 
 @pytest.mark.parametrize(("eval_fixture_name", "live_fixture_name"), RECENT_PROBE_EVAL_PARITY_FIXTURES)
