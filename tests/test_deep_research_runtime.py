@@ -16740,6 +16740,73 @@ async def test_selective_fetch_prefers_deeper_official_doc_when_it_uniquely_answ
     assert "Validate checkpoint information" not in result["final_report"]
 
 
+@pytest.mark.asyncio
+async def test_selective_fetch_prefers_exact_operation_identifier_for_replication_visibility(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fetched_urls = []
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "task-visibility",
+                "title": "Task Visibility",
+                "goal": "Explain DescribeReplicationTasks RecoveryCheckpoint visibility.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "DescribeReplicationTasks exposes replication task checkpoint visibility fields in the API response.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                    "title": "StartReplicationTask",
+                    "description": "AWS DMS API reference for resume-processing and reload-target behavior.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+                    "title": "DescribeReplicationTasks",
+                    "description": "AWS DMS API reference for task visibility, RecoveryCheckpoint, and replication task status fields.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        fetched_urls.append(url)
+        if "DescribeReplicationTasks" in url:
+            return (
+                "# DescribeReplicationTasks\n\n"
+                "DescribeReplicationTasks returns RecoveryCheckpoint and replication task status metadata."
+            )
+        return "# StartReplicationTask\n\nUse resume-processing to continue from the last checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(
+        query="AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility",
+        include_domains=["docs.aws.amazon.com"],
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+
+    assert fetched_urls == [
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"
+    ]
+    assert "DescribeReplicationTasks returns RecoveryCheckpoint" in result["final_report"]
+    assert "resume-processing" not in result["final_report"]
+
+
 def test_extract_markdown_title_ignores_numeric_headings():
     title = deep_research_runtime_module._extract_markdown_title(
         "# 4\n\nValidate checkpoint information.\n\nResume-processing continues from the last checkpoint."
