@@ -22,6 +22,7 @@ PROBE_PUBLIC_SURFACE_FIXTURES = (
     "eval_probe_round36_lifecycle_public_surface.json",
     "eval_probe_round37_aws_dms_official_doc.json",
     "eval_probe_round37_lifecycle_public_surface.json",
+    "eval_probe_round38_aws_dms_partial_failure.json",
 )
 PROBE_PUBLIC_SURFACE_METRICS = (
     "release_gate_consistency",
@@ -38,6 +39,7 @@ RECENT_PROBE_EVAL_PARITY_FIXTURES = (
     ("eval_probe_round36_lifecycle_public_surface.json", "probe_round36_lifecycle_public_surface.json"),
     ("eval_probe_round37_aws_dms_official_doc.json", "probe_round37_aws_dms_official_doc.json"),
     ("eval_probe_round37_lifecycle_public_surface.json", "probe_round37_lifecycle_public_surface.json"),
+    ("eval_probe_round38_aws_dms_partial_failure.json", "probe_round38_aws_dms_partial_failure.json"),
 )
 UNGROUNDED_ANALOGY_MARKERS = ("real-world analogy", "think of ")
 STOPWORDS = {
