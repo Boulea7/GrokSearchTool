@@ -3623,25 +3623,165 @@ def _evidence_bank_payload(
 
 
 def _build_section_prose(section: dict[str, Any]) -> str:
-    summary = _normalize_whitespace(str(section.get("summary", "") or ""))
-    claim_texts = [
+    summary = _strip_summary_scaffolding(_normalize_whitespace(str(section.get("summary", "") or "")))
+    raw_claim_texts = [
         _strip_summary_scaffolding(_normalize_whitespace(str(claim.get("text", "") or "")))
         for claim in section.get("claims", []) or []
         if isinstance(claim, dict) and _normalize_whitespace(str(claim.get("text", "") or ""))
     ]
-    prose_sentences: list[str] = []
-    if summary and not _is_noisy_text(summary):
-        prose_sentences.append(summary.rstrip(".") + ".")
-    for text in claim_texts:
-        if not text or _is_noisy_text(text):
+    unique_sentences: list[str] = []
+    seen_sentence_keys: set[str] = set()
+    for candidate in [summary, *raw_claim_texts]:
+        if not candidate or _is_noisy_text(candidate):
             continue
-        candidate = text.rstrip(".") + "."
-        if candidate in prose_sentences:
+        normalized_candidate = candidate.rstrip(".")
+        candidate_key = _stable_text_key(normalized_candidate)
+        if candidate_key and candidate_key in seen_sentence_keys:
             continue
-        prose_sentences.append(candidate)
-        if len(prose_sentences) >= 3:
+        replacement_index: int | None = None
+        should_skip = False
+        for index, existing in enumerate(unique_sentences):
+            existing_text = existing.rstrip(".")
+            if _stable_text_equivalent(normalized_candidate, existing_text):
+                should_skip = True
+                break
+            if normalized_candidate in existing:
+                should_skip = True
+                break
+            if existing_text in normalized_candidate:
+                if len(normalized_candidate) > len(existing_text) + 12:
+                    replacement_index = index
+                    break
+                should_skip = True
+                break
+        if should_skip:
+            continue
+        if replacement_index is not None:
+            existing_key = _stable_text_key(unique_sentences[replacement_index].rstrip("."))
+            if existing_key:
+                seen_sentence_keys.discard(existing_key)
+            unique_sentences.pop(replacement_index)
+        unique_sentences.append(normalized_candidate + ".")
+        if candidate_key:
+            seen_sentence_keys.add(candidate_key)
+        if len(unique_sentences) >= 3:
             break
-    return _trim_text(" ".join(prose_sentences), limit=700)
+    return _trim_text(" ".join(unique_sentences), limit=700)
+
+
+def _supported_claim_ids(verifier: dict[str, Any]) -> set[str]:
+    flagged_claim_ids = {
+        str(claim_id).strip()
+        for claim_id in verifier.get("flagged_claim_ids", []) or []
+        if str(claim_id).strip()
+    }
+    return {
+        str(claim.get("claim_id", "")).strip()
+        for claim in verifier.get("supported_claims", []) or []
+        if isinstance(claim, dict)
+        and str(claim.get("claim_id", "")).strip()
+        and str(claim.get("claim_id", "")).strip() not in flagged_claim_ids
+    }
+
+
+def _supported_claim_inventory(
+    sections: list[dict[str, Any]],
+    verifier: dict[str, Any],
+) -> tuple[set[str], set[str], set[str]]:
+    supported_ids = _supported_claim_ids(verifier)
+    supported_evidence_ids: set[str] = set()
+    supported_source_ids: set[str] = set()
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        for claim in section.get("claims", []) or []:
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get("claim_id", "")).strip()
+            if claim_id and claim_id not in supported_ids:
+                continue
+            for evidence_id in claim.get("evidence_ids", []) or []:
+                normalized_evidence_id = str(evidence_id).strip()
+                if normalized_evidence_id:
+                    supported_evidence_ids.add(normalized_evidence_id)
+            for source_id in [*(claim.get("source_ids", []) or []), *(claim.get("citations", []) or [])]:
+                normalized_source_id = str(source_id).strip()
+                if normalized_source_id:
+                    supported_source_ids.add(normalized_source_id)
+    return supported_ids, supported_evidence_ids, supported_source_ids
+
+
+def _rebuild_verified_rollup_sections(
+    sections: list[dict[str, Any]],
+    verifier: dict[str, Any],
+) -> list[dict[str, Any]]:
+    supported_ids, supported_evidence_ids, supported_source_ids = _supported_claim_inventory(sections, verifier)
+    rebuilt_sections: list[dict[str, Any]] = []
+    for section in sections:
+        if not isinstance(section, dict):
+            rebuilt_sections.append(section)
+            continue
+        title = str(section.get("title", "") or "")
+        normalized_section = dict(section)
+        claims = [dict(claim) for claim in normalized_section.get("claims", []) or [] if isinstance(claim, dict)]
+        if is_summary_section_title(title) or is_key_findings_section_title(title):
+            filtered_claims: list[dict[str, Any]] = []
+            for claim in claims:
+                claim_id = str(claim.get("claim_id", "")).strip()
+                claim_evidence_ids = {
+                    str(evidence_id).strip()
+                    for evidence_id in claim.get("evidence_ids", []) or []
+                    if str(evidence_id).strip()
+                }
+                claim_source_ids = {
+                    str(source_id).strip()
+                    for source_id in [*(claim.get("source_ids", []) or []), *(claim.get("citations", []) or [])]
+                    if str(source_id).strip()
+                }
+                if claim_id and claim_id in supported_ids:
+                    filtered_claims.append(claim)
+                    continue
+                if claim_evidence_ids and claim_evidence_ids & supported_evidence_ids:
+                    filtered_claims.append(claim)
+                    continue
+                if claim_source_ids and claim_source_ids & supported_source_ids:
+                    filtered_claims.append(claim)
+            normalized_section["claims"] = filtered_claims
+            normalized_section["summary"] = _build_section_summary(filtered_claims) if filtered_claims else ""
+            normalized_section["prose"] = _build_section_prose(normalized_section) if filtered_claims else ""
+            normalized_section["citations"] = sorted(
+                {
+                    str(citation).strip()
+                    for claim in filtered_claims
+                    for citation in claim.get("citations", []) or []
+                    if str(citation).strip()
+                }
+            )
+            normalized_section["source_ids"] = sorted(
+                {
+                    str(source_id).strip()
+                    for claim in filtered_claims
+                    for source_id in claim.get("source_ids", []) or []
+                    if str(source_id).strip()
+                }
+            )
+            normalized_section["evidence_ids"] = sorted(
+                {
+                    str(evidence_id).strip()
+                    for claim in filtered_claims
+                    for evidence_id in claim.get("evidence_ids", []) or []
+                    if str(evidence_id).strip()
+                }
+            )
+            if filtered_claims:
+                normalized_section["confidence"] = _cluster_confidence(
+                    source_count=len({citation for claim in filtered_claims for citation in claim.get("citations", [])}),
+                    evidence_count=sum(len(claim.get("evidence_ids", []) or []) for claim in filtered_claims),
+                )
+        elif claims:
+            normalized_section["prose"] = _build_section_prose(normalized_section)
+        rebuilt_sections.append(normalized_section)
+    return rebuilt_sections
 
 
 def _packet_to_prose_fidelity_payload(
@@ -3761,7 +3901,22 @@ def _verification_payload(
         final_report=final_report,
     )
     if "conflict" in set(verifier.get("reason_codes", []) or []):
-        conflicted_claims = list(single_source_claims)
+        conflicted_claims = [
+            claim_payload
+            for claim_payload in [*supported_claims, *single_source_claims]
+            if str(claim_payload.get("claim_id", "")).strip() in flagged_claim_ids
+        ]
+        if not conflicted_claims:
+            conflicted_claims = [
+                {
+                    "claim_id": str(claim.get("claim_id", "")).strip(),
+                    "section_id": str(claim.get("section_id", "") or ""),
+                    "text": str(claim.get("text", "") or ""),
+                    "confidence": str(claim.get("confidence", "") or ""),
+                }
+                for claim in verifier.get("conflicted_claims", []) or []
+                if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
+            ]
     unresolved_sections = [
         str(title)
         for title in [
@@ -3833,6 +3988,28 @@ def _coverage_gaps_payload(
         "total_gap_count": len(gaps),
         "gaps": gaps,
     }
+
+
+def _claim_conflict_reason(left_text: str, right_text: str) -> str:
+    left = _normalize_whitespace(left_text)
+    right = _normalize_whitespace(right_text)
+    if not left or not right:
+        return ""
+    left_tokens = set(_tokenize_keywords(left))
+    right_tokens = set(_tokenize_keywords(right))
+    overlap = left_tokens & right_tokens
+    if len(overlap) < 2:
+        return ""
+    left_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", left))
+    right_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", right))
+    if left_numbers and right_numbers and left_numbers != right_numbers:
+        return "numeric_mismatch"
+    negation_markers = (" no ", " not ", " never ", " without ", " cannot ", " can't ", " unavailable ")
+    left_has_negation = any(marker in f" {left.lower()} " for marker in negation_markers)
+    right_has_negation = any(marker in f" {right.lower()} " for marker in negation_markers)
+    if left_has_negation != right_has_negation:
+        return "negation_mismatch"
+    return ""
 
 
 def _write_internal_state_artifacts(
@@ -7425,6 +7602,19 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         evidence_items=evidence_items,
         section_banks=section_banks,
     )
+    citations["sections"] = _rebuild_verified_rollup_sections(
+        citations["sections"],
+        verifier_diagnostics,
+    )
+    grounding_diagnostics = _build_grounding_diagnostics(citations["sections"], citations["source_registry"])
+    verifier_diagnostics = _build_verifier_diagnostics(
+        coverage=report_coverage,
+        grounding=grounding_diagnostics,
+        sections=citations["sections"],
+        source_registry=citations["source_registry"],
+        evidence_items=evidence_items,
+        section_banks=section_banks,
+    )
     release_gate = _build_release_gate(
         report_coverage,
         grounding_diagnostics,
@@ -8927,6 +9117,7 @@ def _build_verifier_diagnostics(
         "mismatched_binding_evidence": 0,
         "invalid_source_backed_span": 0,
         "duplicate_claims": 0,
+        "conflicted_claims": 0,
         "low_value_claims": 0,
         "medium_single_source_search_only": 0,
         "same_domain_off_topic_dominance": 0,
@@ -8955,6 +9146,7 @@ def _build_verifier_diagnostics(
     null_span_binding_count = int(grounding.get("null_span_binding_count", 0) or 0)
     if source_backed_binding_count > 0 and (null_span_binding_count / source_backed_binding_count) > 0.5:
         reason_codes.append("high_null_span_ratio")
+    conflicted_claims: list[dict[str, Any]] = []
 
     for section in sections:
         section_title = str(section.get("title", "") or "").strip()
@@ -8988,6 +9180,7 @@ def _build_verifier_diagnostics(
             for source_id in selected_evidence_source_ids
         )
         used_selected_evidence_ids: set[str] = set()
+        section_claim_snapshots: list[dict[str, Any]] = []
         for claim in section.get("claims", []):
             claim_id = str(claim.get("claim_id", "")).strip()
             raw_claim_text = str(claim.get("text", "") or "")
@@ -9161,6 +9354,40 @@ def _build_verifier_diagnostics(
                     flagged_claim_ids.append(claim_id)
                 integrity_counts["invalid_source_backed_span"] += len(null_span_bindings)
                 reason_codes.append("invalid_source_backed_span")
+            section_claim_snapshots.append(
+                {
+                    "claim_id": claim_id,
+                    "section_id": section_id,
+                    "text": claim_text or raw_claim_text,
+                    "confidence": str(claim.get("confidence", "") or ""),
+                    "source_ids": list(claim.get("source_ids", []) or claim.get("citations", []) or []),
+                    "evidence_ids": list(claim.get("evidence_ids", []) or []),
+                }
+            )
+        for index, left_claim in enumerate(section_claim_snapshots):
+            left_text = str(left_claim.get("text", "") or "")
+            if not left_text:
+                continue
+            for right_claim in section_claim_snapshots[index + 1 :]:
+                right_text = str(right_claim.get("text", "") or "")
+                conflict_reason = _claim_conflict_reason(left_text, right_text)
+                if not conflict_reason:
+                    continue
+                for conflicted in (left_claim, right_claim):
+                    claim_id = str(conflicted.get("claim_id", "")).strip()
+                    if claim_id:
+                        flagged_claim_ids.append(claim_id)
+                    conflicted_claims.append(
+                        {
+                            "claim_id": claim_id,
+                            "section_id": section_id,
+                            "text": str(conflicted.get("text", "") or ""),
+                            "confidence": str(conflicted.get("confidence", "") or ""),
+                            "reason": conflict_reason,
+                        }
+                    )
+                integrity_counts["conflicted_claims"] += 2
+                reason_codes.append("conflict")
         unused_selected_evidence_ids = [
             evidence_id
             for evidence_id in selected_evidence_ids
@@ -9189,6 +9416,7 @@ def _build_verifier_diagnostics(
         "passed": not reason_codes,
         "reason_codes": _dedupe_preserve_order(reason_codes),
         "flagged_claim_ids": _dedupe_preserve_order(flagged_claim_ids),
+        "conflicted_claims": conflicted_claims,
         "summary": {
             "section_count": len(sections),
             "total_claims": int(grounding.get("total_claims", 0) or 0),
@@ -10122,11 +10350,16 @@ def _build_final_report(
     for section in sections:
         lines.append(f"## {section['title']}")
         lines.append("")
-        if section.get("summary"):
-            lines.append(section["summary"])
+        section_summary = str(section.get("summary", "") or "").strip()
+        section_prose = str(section.get("prose", "") or "").strip()
+        if section_summary and (
+            not section_prose
+            or not _stable_text_equivalent(section_summary, section_prose)
+        ):
+            lines.append(section_summary)
             lines.append("")
-        if section.get("prose"):
-            lines.append(section["prose"])
+        if section_prose:
+            lines.append(section_prose)
             lines.append("")
     lines.extend(["## Sources", ""])
     for source_id, item in source_registry.items():
