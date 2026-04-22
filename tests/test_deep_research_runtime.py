@@ -17451,6 +17451,50 @@ def test_build_final_report_omits_duplicate_section_summary_when_prose_is_equiva
     assert "## Resume Semantics\n\nResume continues from the last durable checkpoint.\n\nResume continues" not in report
 
 
+def test_selected_bank_payload_drops_claim_ids_missing_from_final_sections():
+    payload = deep_research_runtime_module._selected_bank_payload(
+        section_banks=[
+            {
+                "section_id": "executive-summary",
+                "selected_evidence_ids": ["e1"],
+                "candidate_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+                "selected_packets": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": ["executive-summary-claim-1", "stale-claim"],
+                        "question_ids": [],
+                    }
+                ],
+            }
+        ],
+        evidence_ledger=[
+            {
+                "section_id": "executive-summary",
+                "evidence_id": "e1",
+                "selection_reason": "keyword_overlap",
+                "coverage_tags": [],
+                "rejected_reason": "",
+            }
+        ],
+        sections=[
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "claims": [
+                    {
+                        "claim_id": "executive-summary-claim-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert payload[0]["selected_rows"][0]["claim_ids"] == ["executive-summary-claim-1"]
+
+
 def test_rebuild_verified_rollup_sections_filters_rollups_to_supported_claim_inventory():
     rebuilt = deep_research_runtime_module._rebuild_verified_rollup_sections(
         [
@@ -17501,6 +17545,35 @@ def test_rebuild_verified_rollup_sections_filters_rollups_to_supported_claim_inv
     summary_section = rebuilt[0]
     assert [claim["claim_id"] for claim in summary_section["claims"]] == ["summary-1"]
     assert "Unsupported restart claim" not in summary_section["summary"]
+
+
+def test_rebuild_verified_rollup_sections_preserves_generic_claims_when_no_concrete_inventory_exists():
+    rebuilt = deep_research_runtime_module._rebuild_verified_rollup_sections(
+        [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "summary": "Resume continues from the last checkpoint.",
+                "prose": "",
+                "claims": [
+                    {
+                        "claim_id": "summary-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                    }
+                ],
+            }
+        ],
+        {
+            "supported_claims": [],
+            "flagged_claim_ids": [],
+        },
+    )
+
+    assert [claim["claim_id"] for claim in rebuilt[0]["claims"]] == ["summary-1"]
+    assert "Resume continues from the last checkpoint." in rebuilt[0]["summary"]
 
 
 def test_verifier_flags_conflicting_claims_with_negation_mismatch():

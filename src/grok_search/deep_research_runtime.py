@@ -3516,8 +3516,20 @@ def _selected_bank_payload(
     *,
     section_banks: list[dict[str, Any]],
     evidence_ledger: list[dict[str, Any]],
+    sections: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     decisions_by_section_evidence: dict[tuple[str, str], dict[str, Any]] = {}
+    valid_claim_ids_by_section: dict[str, set[str]] = {}
+    if sections:
+        valid_claim_ids_by_section = {
+            str(section.get("section_id", "")).strip(): {
+                str(claim.get("claim_id", "")).strip()
+                for claim in section.get("claims", []) or []
+                if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
+            }
+            for section in sections
+            if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+        }
     for entry in evidence_ledger:
         if not isinstance(entry, dict):
             continue
@@ -3554,6 +3566,15 @@ def _selected_bank_payload(
             evidence_id = str(packet.get("evidence_id", "")).strip()
             if not evidence_id:
                 continue
+            valid_claim_ids = valid_claim_ids_by_section.get(section_id)
+            claim_ids = [
+                claim_id
+                for claim_id in (
+                    str(raw_claim_id).strip()
+                    for raw_claim_id in packet.get("claim_ids", []) or []
+                )
+                if claim_id and (valid_claim_ids is None or claim_id in valid_claim_ids)
+            ]
             selection_details = decisions_by_section_evidence.get((section_id, evidence_id), {})
             selected_rows.append(
                 {
@@ -3562,7 +3583,7 @@ def _selected_bank_payload(
                     "selection_reason": str(selection_details.get("selection_reason", "")).strip(),
                     "coverage_tags": list(selection_details.get("coverage_tags", []) or []),
                     "rejected_reason": str(selection_details.get("rejected_reason", "")).strip(),
-                    "claim_ids": list(packet.get("claim_ids", []) or []),
+                    "claim_ids": claim_ids,
                     "question_ids": list(packet.get("question_ids", []) or []),
                 }
             )
@@ -3713,6 +3734,7 @@ def _supported_claim_inventory(
     }
     supported_evidence_ids: set[str] = set()
     supported_source_ids: set[str] = set()
+    has_non_generic_claim_inventory = False
     for section in sections:
         if not isinstance(section, dict):
             continue
@@ -3732,6 +3754,8 @@ def _supported_claim_inventory(
             if not claim_is_supported and not supported_ids:
                 if section_is_generic or (claim_id and claim_id in flagged_claim_ids):
                     continue
+            if not section_is_generic:
+                has_non_generic_claim_inventory = True
             for evidence_id in claim.get("evidence_ids", []) or []:
                 normalized_evidence_id = str(evidence_id).strip()
                 if normalized_evidence_id:
@@ -3740,6 +3764,30 @@ def _supported_claim_inventory(
                 normalized_source_id = str(source_id).strip()
                 if normalized_source_id:
                     supported_source_ids.add(normalized_source_id)
+    if not supported_ids and not has_non_generic_claim_inventory:
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            section_title = str(section.get("title", "") or "")
+            if not (
+                is_summary_section_title(section_title)
+                or is_key_findings_section_title(section_title)
+            ):
+                continue
+            for claim in section.get("claims", []) or []:
+                if not isinstance(claim, dict):
+                    continue
+                claim_id = str(claim.get("claim_id", "")).strip()
+                if claim_id and claim_id in flagged_claim_ids:
+                    continue
+                for evidence_id in claim.get("evidence_ids", []) or []:
+                    normalized_evidence_id = str(evidence_id).strip()
+                    if normalized_evidence_id:
+                        supported_evidence_ids.add(normalized_evidence_id)
+                for source_id in [*(claim.get("source_ids", []) or []), *(claim.get("citations", []) or [])]:
+                    normalized_source_id = str(source_id).strip()
+                    if normalized_source_id:
+                        supported_source_ids.add(normalized_source_id)
     return supported_ids, supported_evidence_ids, supported_source_ids
 
 
@@ -7674,6 +7722,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     selected_bank = _selected_bank_payload(
         section_banks=section_banks,
         evidence_ledger=evidence_ledger,
+        sections=citations["sections"],
     )
     evidence_bank = _evidence_bank_payload(
         evidence_items=evidence_items,
