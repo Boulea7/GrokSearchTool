@@ -1470,6 +1470,32 @@ async def test_deep_research_recent_probe_events_after_seq_match_fixture(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_deep_research_round37_lifecycle_fixture_malformed_batch_probe_matches_server_result(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        "probe_round37_lifecycle_public_surface.json",
+        request_fingerprint="fp-server-round37-lifecycle-malformed-batch",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+    malformed_probe = snapshot["malformed_batch_probe"]
+    report_path = runtime.store.artifacts_dir / job.job_id / "batches" / seeded["batch_id"] / "report.json"
+
+    report_path.write_text("{not-valid-json", encoding="utf-8")
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == malformed_probe["after_corrupt_result_status"]
+    assert result["status"] == malformed_probe["after_corrupt_result_status"]
+    assert (result["report"] is None) is malformed_probe["after_corrupt_report_is_none"]
+    assert result["artifact_errors"] == malformed_probe["after_corrupt_artifact_errors"]
+    assert result["artifact_visibility_reason"] == malformed_probe["after_corrupt_artifact_visibility_reason"]
+
+
+@pytest.mark.asyncio
 async def test_deep_research_resume_from_draft_preserves_plan_only_job(tmp_path):
     response = await server.deep_research_start(
         query="Plan first, run later",
