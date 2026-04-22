@@ -3706,17 +3706,32 @@ def _supported_claim_inventory(
     verifier: dict[str, Any],
 ) -> tuple[set[str], set[str], set[str]]:
     supported_ids = _supported_claim_ids(verifier)
+    flagged_claim_ids = {
+        str(claim_id).strip()
+        for claim_id in verifier.get("flagged_claim_ids", []) or []
+        if str(claim_id).strip()
+    }
     supported_evidence_ids: set[str] = set()
     supported_source_ids: set[str] = set()
     for section in sections:
         if not isinstance(section, dict):
             continue
+        section_title = str(section.get("title", "") or "")
+        section_is_generic = (
+            is_summary_section_title(section_title)
+            or is_key_findings_section_title(section_title)
+            or is_open_questions_section_title(section_title)
+        )
         for claim in section.get("claims", []) or []:
             if not isinstance(claim, dict):
                 continue
             claim_id = str(claim.get("claim_id", "")).strip()
-            if claim_id and claim_id not in supported_ids:
+            claim_is_supported = bool(claim_id and claim_id in supported_ids)
+            if not claim_is_supported and supported_ids:
                 continue
+            if not claim_is_supported and not supported_ids:
+                if section_is_generic or (claim_id and claim_id in flagged_claim_ids):
+                    continue
             for evidence_id in claim.get("evidence_ids", []) or []:
                 normalized_evidence_id = str(evidence_id).strip()
                 if normalized_evidence_id:
