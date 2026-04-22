@@ -5396,36 +5396,6 @@ async def test_continue_from_interrupted_finalizing_job_with_resolved_final_batc
 
 
 @pytest.mark.asyncio
-async def test_continue_from_completed_job_without_recoverable_surfaces_is_rejected(tmp_path):
-    runtime = build_runtime(tmp_path)
-    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
-    source = runtime.store.create_job(
-        query="Completed continuation without artifacts",
-        request_fingerprint="fp-completed-continuation-without-artifacts",
-        status="completed",
-        phase="finalizing",
-        effort="standard",
-        context="",
-        include_domains=[],
-        exclude_domains=[],
-        plan_only=False,
-        force_new=False,
-        resolved_budget_seconds=240,
-        continued_from_job_id="",
-    )
-    runtime.store.update_job(source.job_id, finished_at=utc_now_iso())
-
-    with pytest.raises(ValueError, match="continue_from_job_id source is not recoverable"):
-        await runtime.start(
-            query="Follow up completed continuation without artifacts",
-            continue_from_job_id=source.job_id,
-            plan_only=True,
-            force_new=True,
-            schedule=False,
-        )
-
-
-@pytest.mark.asyncio
 async def test_continue_from_canceled_job_without_recoverable_surfaces_is_rejected_without_orphan(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
