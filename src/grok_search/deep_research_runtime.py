@@ -8376,11 +8376,18 @@ def _select_fetch_sources(
         and sum(1 for text in candidate_texts if term in set(_tokenize_keywords(text))) == 1
     ]
 
-    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, int, str]:
+    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, int, int, str]:
         title = f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
         quality_bias = _source_quality_bias(source)
         lowered_title = title.lower()
         traits = _source_doc_traits(source)
+        trait_priority = 0
+        if "api_reference" in traits or "reference" in traits:
+            trait_priority = 2
+        elif "user_guide" in traits:
+            trait_priority = 1
+        elif "prescriptive_guidance" in traits:
+            trait_priority = -1
         identifier_match_count = sum(1 for term in query_identifier_terms if term and term in lowered_title)
         non_shell_distinctive_match_count = 0
         if "prescriptive_guidance" not in traits and "troubleshooting" not in traits:
@@ -8398,8 +8405,9 @@ def _select_fetch_sources(
         if _is_low_signal_title(str(source.get("title") or "")):
             shell_penalty -= 2
         return (
-            identifier_match_count,
             non_shell_distinctive_match_count,
+            trait_priority,
+            identifier_match_count,
             quality_bias,
             _count_keyword_overlap(title, outline_keywords) if prefer_outline else 0,
             substring_query_overlap,
