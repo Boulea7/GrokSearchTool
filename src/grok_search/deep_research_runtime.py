@@ -1534,6 +1534,7 @@ def _parse_json_object(value: str) -> dict[str, Any]:
 
 def _extract_embedded_json_object(text: str) -> tuple[dict[str, Any], str] | None:
     decoder = json.JSONDecoder()
+    best_candidate: tuple[dict[str, Any], str, int] | None = None
     for index, char in enumerate(text):
         if char not in "{[":
             continue
@@ -1549,8 +1550,36 @@ def _extract_embedded_json_object(text: str) -> tuple[dict[str, Any], str] | Non
                 except Exception:
                     continue
         if isinstance(parsed, dict):
-            return parsed, text[index : index + end_index]
-    return None
+            extracted_text = text[index : index + end_index]
+            score = _embedded_json_object_score(parsed)
+            if best_candidate is None or score > best_candidate[2]:
+                best_candidate = (parsed, extracted_text, score)
+                if score >= 12:
+                    break
+    if best_candidate is None:
+        return None
+    return best_candidate[0], best_candidate[1]
+
+
+def _embedded_json_object_score(parsed: dict[str, Any]) -> int:
+    score = 0
+    if isinstance(parsed.get("brief"), dict):
+        score += 8
+    if isinstance(parsed.get("sub_questions"), list):
+        score += 4
+    if isinstance(parsed.get("search_strategy"), dict):
+        score += 4
+    if isinstance(parsed.get("report_outline"), list):
+        score += 4
+    if isinstance(parsed.get("research_units"), list):
+        score += 3
+    if isinstance(parsed.get("planner_metadata"), dict):
+        score += 2
+    if isinstance(parsed.get("query"), str) and parsed.get("query", "").strip():
+        score += 1
+    if isinstance(parsed.get("context"), str):
+        score += 1
+    return score
 
 
 def _parse_json_object_with_trace(value: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2350,7 +2379,7 @@ def _attempt_window_anchor_seq(
     previous_attempt_id = _attempt_id(max(0, numeric_attempts - 1)) if numeric_attempts > 1 else ""
     previous_attempt_count = max(0, numeric_attempts - 1)
     anchor_seq = 0
-    for event in store.list_events(job.job_id, after_seq=0, limit=10_000):
+    for event in _iter_job_events_paginated(store, job.job_id, page_limit=10_000):
         event_type = str(event.type or "").strip()
         data = event.data if isinstance(event.data, dict) else {}
         attempt_id = str(data.get("attempt_id", "") or "").strip()
@@ -2370,6 +2399,25 @@ def _attempt_window_anchor_seq(
         ):
             return max(anchor_seq, max(0, event.seq - 1))
     return anchor_seq
+
+
+def _iter_job_events_paginated(
+    store: DeepResearchStore,
+    job_id: str,
+    *,
+    page_limit: int,
+):
+    after_seq = 0
+    normalized_limit = max(1, int(page_limit or 0))
+    while True:
+        page = list(store.list_events(job_id, after_seq=after_seq, limit=normalized_limit))
+        if not page:
+            return
+        for event in page:
+            yield event
+        if len(page) < normalized_limit:
+            return
+        after_seq = max(int(getattr(page[-1], "seq", after_seq) or after_seq), after_seq)
 
 
 def _safe_load_optional_json_artifact(store: DeepResearchStore, job_id: str, kind: str) -> Any | None:
@@ -7412,7 +7460,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     stop_policy = dict(plan.brief.stop_policy or {})
     max_search_queries = max(1, int(stop_policy.get("max_search_queries", len(plan.search_strategy.search_queries) or unit_total) or 1))
     stop_on_sufficient_coverage = bool(stop_policy.get("stop_on_sufficient_coverage", True))
-    allow_one_post_resume_batch = bool(restored_from_checkpoint and completed_unit_ids)
+    # If planning or checkpoint restoration already consumed the budget, still allow
+    # one research batch so the job can materialize a useful checkpoint before pausing.
+    allow_one_budget_overrun_batch = bool(restored_from_checkpoint and completed_unit_ids) or not completed_unit_ids
     while len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids) < len(plan.research_units):
         ready_units = [
             unit
@@ -7525,7 +7575,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             _mark_canceled(runtime, job_id, "researching")
             return
         elapsed_seconds = (dt.datetime.now(dt.UTC) - started_at_dt).total_seconds()
-        if elapsed_seconds >= job.resolved_budget_seconds and not allow_one_post_resume_batch:
+        if elapsed_seconds >= job.resolved_budget_seconds and not allow_one_budget_overrun_batch:
             _write_partial_outputs(runtime, job_id, plan, completed_unit_ids, unit_results, sections)
             latest_checkpoint_key = (
                 f"researching-{completed_unit_ids[-1]}"
@@ -7595,7 +7645,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             *[_execute_research_unit(runtime, plan, unit) for unit in batch_units],
             return_exceptions=True,
         )
-        allow_one_post_resume_batch = False
+        allow_one_budget_overrun_batch = False
         if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
             return
         batch_error: Exception | None = None

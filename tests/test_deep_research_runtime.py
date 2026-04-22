@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -1677,6 +1678,85 @@ def test_parse_json_object_with_trace_salvages_embedded_json_object():
     assert parsed["planner_metadata"]["planner"] == "embedded"
     assert trace["parse_path"] == "embedded_json"
     assert trace["parsed_type"] == "dict"
+
+
+def test_parse_json_object_with_trace_prefers_plan_like_embedded_object_over_debug_blob():
+    parsed, trace = deep_research_runtime_module._parse_json_object_with_trace(
+        "Planner debug:\n"
+        "{\"debug\": true, \"message\": \"ignore this blob\"}\n"
+        "Recovered plan:\n"
+        "{\"brief\": {\"objective\": \"Recovered embedded plan\"}, "
+        "\"sub_questions\": [{\"id\": \"sq1\", \"question\": \"Recovered embedded plan\", \"reason\": \"Primary axis.\"}], "
+        "\"search_strategy\": {\"approach\": \"targeted\", \"search_queries\": [\"Recovered embedded plan\"]}, "
+        "\"report_outline\": [{\"section_id\": \"summary\", \"title\": \"Summary\", \"goal\": \"Summarize the answer.\"}]}\n"
+        "Trailing commentary."
+    )
+
+    assert parsed["brief"]["objective"] == "Recovered embedded plan"
+    assert parsed["sub_questions"][0]["id"] == "sq1"
+    assert trace["parse_path"] == "embedded_json"
+    assert "Recovered embedded plan" in trace["embedded_json_preview"]
+
+
+def test_attempt_window_anchor_seq_paginates_past_first_ten_thousand_events(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Paginate watch anchor lookup",
+        request_fingerprint="fp-paginate-watch-anchor-lookup",
+        status="interrupted",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    job = runtime.store.update_job(job.job_id, attempt_count=2, current_checkpoint="researching-u6")
+
+    class FakeStore:
+        def __init__(self):
+            self.calls = []
+
+        def list_events(self, job_id, *, after_seq=0, limit=100):
+            self.calls.append((job_id, after_seq, limit))
+            all_events = [
+                SimpleNamespace(seq=seq, type="phase_started", data={})
+                for seq in range(1, 10_001)
+            ]
+            all_events.extend(
+                [
+                    SimpleNamespace(
+                        seq=10_001,
+                        type="job_interrupted",
+                        data={"attempt_id": "attempt-1", "attempt_count": 1, "reason": "worker_restarted"},
+                    ),
+                    SimpleNamespace(
+                        seq=10_002,
+                        type="job_resumed",
+                        data={"attempt_id": "attempt-2", "attempt_count": 2},
+                    ),
+                ]
+            )
+            page = []
+            for event in all_events:
+                if event.seq <= after_seq:
+                    continue
+                page.append(event)
+                if len(page) >= limit:
+                    break
+            return page
+
+    store = FakeStore()
+
+    anchor_seq = deep_research_runtime_module._attempt_window_anchor_seq(store, job)
+
+    assert anchor_seq == 10_001
+    assert len(store.calls) >= 2
+    assert store.calls[0][1] == 0
+    assert any(after_seq >= 10_000 for _, after_seq, _ in store.calls[1:])
 
 
 @pytest.mark.asyncio
@@ -8177,6 +8257,137 @@ async def test_round38_aws_dms_partial_failure_fixture_preserves_partial_artifac
         for row in bank.get("selected_rows", [])
         for url in source_urls_by_evidence_id.get(row.get("evidence_id"), [])
     )
+
+
+@pytest.mark.asyncio
+async def test_status_and_result_mirror_attempt_window_and_partial_payload_fields(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Mirror attempt window surface",
+        request_fingerprint="fp-mirror-attempt-window-surface",
+        status="interrupted",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    job = runtime.store.update_job(job.job_id, attempt_count=2, current_checkpoint="researching-u2")
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "brief": {"objective": "Mirror attempt window surface"},
+                "sub_questions": [{"id": "sq1", "question": "Mirror attempt window surface", "reason": "Primary axis."}],
+                "search_strategy": {"approach": "targeted", "search_queries": ["Mirror attempt window surface"]},
+                "report_outline": [{"section_id": "summary", "title": "Summary", "goal": "Summarize the answer."}],
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "source_policy.json",
+        json.dumps({"allow_domains": ["docs.example.com"], "web_mode": "restrict"}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "lineage.json",
+        json.dumps({"continued_from_job_id": "job-prev", "resume_source": "worker_restarted"}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "outline_state.json",
+        json.dumps({"status": "draft", "current_version": 2}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "outline_versions.json",
+        json.dumps([{"version": 1}, {"version": 2}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "section_graph.json",
+        json.dumps({"root_section_ids": ["summary"], "sections": [{"section_id": "summary"}]}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "evidence_ledger.json",
+        json.dumps([{"ledger_id": "ledger-1", "evidence_id": "e1", "source_urls": ["https://docs.example.com/1"]}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "section_banks.json",
+        json.dumps([{"section_id": "summary", "selected_evidence_ids": ["e1"]}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "selected_bank.json",
+        json.dumps([{"section_id": "summary", "selected_rows": [{"evidence_id": "e1"}]}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "partial_report.md",
+        "# Partial Report\n\nStill working.\n",
+        "text/markdown",
+    )
+    runtime.store.append_event(
+        job.job_id,
+        type="job_interrupted",
+        phase="researching",
+        message="attempt 1 stopped",
+        data={"attempt_id": "attempt-1", "attempt_count": 1, "reason": "worker_restarted"},
+    )
+    runtime.store.append_event(
+        job.job_id,
+        type="job_resumed",
+        phase="researching",
+        message="attempt 2 resumed",
+        data={"attempt_id": "attempt-2", "attempt_count": 2},
+    )
+    runtime.store.append_event(
+        job.job_id,
+        type="research_unit_completed",
+        phase="researching",
+        message="u2 done",
+        data={"attempt_id": "attempt-2", "unit_id": "u2"},
+    )
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+
+    assert status["watch_attach_after_seq"] == 1
+    assert result["watch_attach_after_seq"] == 1
+    assert status["attempt_window_start_seq"] == 2
+    assert result["attempt_window_start_seq"] == 2
+    assert status["operator_summary"]["watch_attach_after_seq"] == status["watch_attach_after_seq"]
+    assert result["operator_summary"]["watch_attach_after_seq"] == result["watch_attach_after_seq"]
+    assert status["operator_summary"]["attempt_window_start_seq"] == status["attempt_window_start_seq"]
+    assert result["operator_summary"]["attempt_window_start_seq"] == result["attempt_window_start_seq"]
+    assert status["operator_summary"]["partial_payload_available"] is True
+    assert result["operator_summary"]["partial_payload_available"] is True
+    assert status["partial_payload"]["plan"]["brief"]["objective"] == "Mirror attempt window surface"
+    assert result["partial_payload"]["source_policy"]["web_mode"] == "restrict"
+    assert result["partial_payload"]["lineage"]["continued_from_job_id"] == "job-prev"
+    assert result["partial_payload"]["outline_state"]["current_version"] == 2
+    assert result["partial_payload"]["outline_versions"] == [{"version": 1}, {"version": 2}]
+    assert result["partial_payload"]["section_graph"]["root_section_ids"] == ["summary"]
+    assert result["partial_payload"]["evidence_ledger"][0]["evidence_id"] == "e1"
+    assert result["partial_payload"]["section_banks"][0]["section_id"] == "summary"
+    assert result["partial_payload"]["selected_bank"][0]["section_id"] == "summary"
 
 
 @pytest.mark.asyncio

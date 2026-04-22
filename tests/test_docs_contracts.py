@@ -513,6 +513,20 @@ def test_docs_explain_continuation_source_fallback_and_resume_attempt_reset():
     assert "new attempt time window" in readme_en
 
 
+def test_docs_explain_attempt_window_and_partial_payload_operator_surfaces():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+
+    assert "`watch_attach_after_seq`" in readme
+    assert "`attempt_window_start_seq`" in readme
+    assert "`partial_payload`" in readme
+    assert "`operator_summary`" in readme
+    assert "`watch_attach_after_seq`" in readme_en
+    assert "`attempt_window_start_seq`" in readme_en
+    assert "`partial_payload`" in readme_en
+    assert "`operator_summary`" in readme_en
+
+
 def test_docs_explain_runtime_concurrency_as_ready_unit_parallelism():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
