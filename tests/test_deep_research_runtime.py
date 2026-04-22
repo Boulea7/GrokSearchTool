@@ -17326,6 +17326,170 @@ def test_report_rollup_helpers_strip_nested_summary_scaffolding():
     assert summary == "Medium confidence: Key point: Resume continues from the last durable checkpoint."
 
 
+def test_build_section_prose_dedupes_summary_and_claim_repetition():
+    prose = deep_research_runtime_module._build_section_prose(
+        {
+            "section_id": "resume-semantics",
+            "title": "Resume Semantics",
+            "summary": "Medium confidence: Resume continues from the last durable checkpoint.",
+            "claims": [
+                {
+                    "claim_id": "c1",
+                    "text": "Resume continues from the last durable checkpoint.",
+                },
+                {
+                    "claim_id": "c2",
+                    "text": "Resume continues from the last durable checkpoint when recovery metadata is still available.",
+                },
+            ],
+        }
+    )
+
+    assert prose.count("Resume continues from the last durable checkpoint.") == 0
+    assert "Medium confidence:" not in prose
+    assert "recovery metadata is still available" in prose
+
+
+def test_build_final_report_omits_duplicate_section_summary_when_prose_is_equivalent():
+    report = deep_research_runtime_module._build_final_report(
+        DeepResearchPlan.model_validate(
+            structured_plan_payload(
+                type(
+                    "Job",
+                    (),
+                    {
+                        "query": "Checkpoint resume semantics",
+                        "context": "",
+                        "effort": "standard",
+                        "resolved_budget_seconds": 240,
+                    },
+                )(),
+                {"mode": "fresh"},
+            )
+        ),
+        [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "summary": "Resume continues from the last durable checkpoint.",
+                "prose": "Resume continues from the last durable checkpoint.",
+                "claims": [],
+            }
+        ],
+        {},
+        "Medium confidence: Resume continues from the last durable checkpoint.",
+    )
+
+    assert report.count("Resume continues from the last durable checkpoint.") == 2
+    assert "## Resume Semantics\n\nResume continues from the last durable checkpoint.\n\nResume continues" not in report
+
+
+def test_rebuild_verified_rollup_sections_filters_rollups_to_supported_claim_inventory():
+    rebuilt = deep_research_runtime_module._rebuild_verified_rollup_sections(
+        [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "summary": "Overall, supported and unsupported claims appear together.",
+                "prose": "",
+                "claims": [
+                    {
+                        "claim_id": "summary-1",
+                        "text": "RecoveryTimeout governs recovery wait behavior.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                    },
+                    {
+                        "claim_id": "summary-2",
+                        "text": "Unsupported restart claim.",
+                        "citations": ["R2"],
+                        "source_ids": ["R2"],
+                        "evidence_ids": ["e2"],
+                    },
+                ],
+            },
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "summary": "RecoveryTimeout governs recovery wait behavior.",
+                "prose": "",
+                "claims": [
+                    {
+                        "claim_id": "resume-1",
+                        "text": "RecoveryTimeout governs recovery wait behavior.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                    }
+                ],
+            },
+        ],
+        {
+            "supported_claims": [{"claim_id": "resume-1"}],
+            "flagged_claim_ids": ["resume-2"],
+        },
+    )
+
+    summary_section = rebuilt[0]
+    assert [claim["claim_id"] for claim in summary_section["claims"]] == ["summary-1"]
+    assert "Unsupported restart claim" not in summary_section["summary"]
+
+
+def test_verifier_flags_conflicting_claims_with_negation_mismatch():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        grounding={
+            "total_claims": 2,
+            "ungrounded_claims": 0,
+            "single_source_claims": 2,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 2,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "Resume continues from the last durable checkpoint after interruption.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "evidence_bindings": [{"evidence_id": "e1", "source_id": "R1", "source_backed": True}],
+                    },
+                    {
+                        "claim_id": "claim-2",
+                        "text": "Resume does not continue from the last durable checkpoint after interruption.",
+                        "citations": ["R2"],
+                        "source_ids": ["R2"],
+                        "evidence_ids": ["e2"],
+                        "confidence": "medium",
+                        "evidence_bindings": [{"evidence_id": "e2", "source_id": "R2", "source_backed": True}],
+                    },
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {"source_id": "R1", "url": "https://docs.example.com/resume", "domain": "docs.example.com"},
+            "R2": {"source_id": "R2", "url": "https://docs.example.com/restart", "domain": "docs.example.com"},
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R2"], "evidence_kind": "fetch"},
+        ],
+        section_banks=[],
+    )
+
+    assert "conflict" in verifier["reason_codes"]
+    assert verifier["summary"]["conflicted_claims"] == 2
+    assert {item["claim_id"] for item in verifier["conflicted_claims"]} == {"claim-1", "claim-2"}
+
+
 @pytest.mark.asyncio
 async def test_grounding_diagnostics_include_source_level_usage(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
