@@ -505,12 +505,19 @@ def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
     for bank in selected_bank:
         if not isinstance(bank, dict):
             continue
+        selected_evidence_ids = [
+            str(evidence_id).strip()
+            for evidence_id in bank.get("selected_evidence_ids", []) or []
+            if str(evidence_id).strip()
+        ]
+        selected_row_ids: list[str] = []
         for row in bank.get("selected_rows", []) or []:
             if not isinstance(row, dict):
                 continue
             evidence_id = str(row.get("evidence_id", "")).strip()
             if not evidence_id:
                 continue
+            selected_row_ids.append(evidence_id)
             checked_packets += 1
             claim_ids = [str(claim_id).strip() for claim_id in row.get("claim_ids", []) or [] if str(claim_id).strip()]
             if not claim_ids:
@@ -518,6 +525,9 @@ def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
                 continue
             if any(claim_id not in surface_claim_ids for claim_id in claim_ids):
                 reason_tags.append("selected_packet_claim_missing_from_surface")
+        selected_row_id_set = set(selected_row_ids)
+        if any(evidence_id not in selected_row_id_set for evidence_id in selected_evidence_ids):
+            reason_tags.append("selected_packet_row_missing")
     verdict = "pass" if not reason_tags else "fail"
     return {
         "metric": "packet_to_prose_fidelity",
@@ -1138,6 +1148,37 @@ def test_packet_to_prose_fidelity_detects_selected_packet_missing_from_prose():
     assert result["verdict"] == "fail"
 
 
+def test_packet_to_prose_fidelity_detects_selected_evidence_missing_selected_row():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "summary": "AWS DMS can resume CDC from a checkpoint.",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "AWS DMS can resume CDC from a checkpoint.",
+                        }
+                    ],
+                }
+            ],
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_evidence_ids": ["e1"],
+                "selected_rows": [],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["selected_packet_row_missing"]
+
+
 def test_packet_to_prose_fidelity_rejects_generic_coverage_tag_without_claim_binding():
     case = {
         "report": {
@@ -1208,6 +1249,22 @@ def test_packet_to_prose_fidelity_rejects_claim_id_missing_from_report_surface()
 
     assert result["verdict"] == "fail"
     assert result["reason_tags"] == ["selected_packet_claim_missing_from_surface"]
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        "eval_probe_round40_aws_dms_packet_fidelity.json",
+        "eval_probe_round40_aws_dms_packet_fidelity_negative.json",
+    ],
+)
+def test_packet_to_prose_fidelity_aws_dms_probe_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+    golden = case["golden"]["packet_to_prose_fidelity"]
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert_metric_matches_golden(result, golden)
 
 
 def test_surface_consistency_detects_operator_summary_mirror_gap():

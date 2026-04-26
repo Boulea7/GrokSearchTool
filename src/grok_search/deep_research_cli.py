@@ -175,6 +175,13 @@ async def _resolve_watch_attach_after_seq(
         normalized_explicit_anchor = None
     if normalized_explicit_anchor is not None and normalized_explicit_anchor >= 0:
         return normalized_explicit_anchor
+    attempt_window_start_seq = payload.get("attempt_window_start_seq")
+    try:
+        normalized_attempt_window_start_seq = int(attempt_window_start_seq)
+    except (TypeError, ValueError):
+        normalized_attempt_window_start_seq = None
+    if normalized_attempt_window_start_seq is not None and normalized_attempt_window_start_seq > 0:
+        return normalized_attempt_window_start_seq - 1
     attempts = payload.get("attempt_count")
     continued_from = _summary_value(payload.get("continued_from_job_id"))
     try:
