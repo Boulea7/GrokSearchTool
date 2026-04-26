@@ -269,6 +269,7 @@ def with_minimal_provenance_artifacts(
             "passed": True,
             "checked_packet_count": 0,
             "missing_selected_packet_ids": [],
+            "missing_selected_row_ids": [],
             "reason_codes": [],
         },
     }
@@ -10996,6 +10997,82 @@ def test_coverage_for_report_requires_grounded_claims_to_mark_answered_or_covere
     assert coverage["uncovered_sub_questions"] == ["Compare checkpoint resume and restart semantics"]
 
 
+def test_coverage_for_report_keeps_candidate_only_ledger_out_of_selected_count():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Explain AWS DMS checkpoint resume behavior",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Explain AWS DMS checkpoint resume behavior",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "How does AWS DMS resume CDC from checkpoints?",
+                    "reason": "Primary official-doc behavior.",
+                }
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["AWS DMS resume CDC checkpoint"],
+                "selective_fetch": {
+                    "max_urls_per_search": 1,
+                    "prefer_titles_matching_outline": True,
+                },
+            },
+            "report_outline": [
+                {
+                    "section_id": "checkpoint-resume",
+                    "title": "Checkpoint Resume",
+                    "goal": "Explain checkpoint resume behavior.",
+                    "question_id": "sq1",
+                }
+            ],
+            "research_units": [],
+        }
+    )
+
+    coverage = _coverage_for_report(
+        plan,
+        [
+            {
+                "section_id": "checkpoint-resume",
+                "title": "Checkpoint Resume",
+                "summary": "",
+                "claims": [],
+                "citations": [],
+            }
+        ],
+        planned_outline=plan.report_outline,
+        section_banks=[
+            {
+                "section_id": "checkpoint-resume",
+                "candidate_evidence_ids": ["e1"],
+                "selected_evidence_ids": [],
+                "rejected_evidence_ids": [],
+            }
+        ],
+        evidence_ledger=[
+            {
+                "ledger_id": "ledger-1",
+                "evidence_id": "e1",
+                "question_ids": ["sq1"],
+                "source_urls": ["https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html"],
+            }
+        ],
+    )
+
+    section_coverage = coverage["section_coverage"][0]
+    assert section_coverage["candidate_evidence_count"] == 1
+    assert section_coverage["selected_evidence_count"] == 0
+
+
 @pytest.mark.asyncio
 async def test_runtime_honors_max_search_queries_stop_policy(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
@@ -18891,6 +18968,74 @@ def test_verification_payload_falls_back_to_verifier_conflicted_claims():
             "confidence": "low",
         }
     ]
+
+
+def test_verification_payload_preserves_all_verifier_conflicted_claims():
+    payload = deep_research_runtime_module._verification_payload(
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "AWS DMS resumes CDC from a checkpoint.",
+                        "citations": ["R1"],
+                        "source_ids": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                    }
+                ],
+            }
+        ],
+        coverage={"unanswered_sections": [], "hard_uncovered_targets": []},
+        verifier={
+            "reason_codes": ["conflict"],
+            "flagged_claim_ids": ["claim-1", "claim-2"],
+            "conflicted_claims": [
+                {
+                    "claim_id": "claim-2",
+                    "section_id": "resume-semantics",
+                    "text": "AWS DMS always restarts from zero.",
+                    "confidence": "low",
+                }
+            ],
+        },
+        selected_bank=[],
+        final_report="",
+    )
+
+    assert [claim["claim_id"] for claim in payload["conflicted_claims"]] == ["claim-1", "claim-2"]
+
+
+def test_packet_to_prose_fidelity_fails_when_selected_row_is_missing():
+    payload = deep_research_runtime_module._packet_to_prose_fidelity_payload(
+        selected_bank=[
+            {
+                "section_id": "resume-semantics",
+                "selected_evidence_ids": ["e1"],
+                "selected_rows": [],
+            }
+        ],
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "AWS DMS resumes CDC from a checkpoint.",
+                        "evidence_ids": ["e1"],
+                    }
+                ],
+            }
+        ],
+        final_report="AWS DMS resumes CDC from a checkpoint.",
+    )
+
+    assert payload["passed"] is False
+    assert payload["checked_packet_count"] == 0
+    assert payload["missing_selected_row_ids"] == ["e1"]
+    assert payload["reason_codes"] == ["selected_packet_row_missing"]
 
 
 def test_rebuild_verified_rollup_sections_uses_non_generic_inventory_when_supported_ids_absent():

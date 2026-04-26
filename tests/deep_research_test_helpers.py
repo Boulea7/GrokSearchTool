@@ -331,6 +331,7 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
                 "passed": True,
                 "checked_packet_count": 0,
                 "missing_selected_packet_ids": [],
+                "missing_selected_row_ids": [],
                 "reason_codes": [],
             },
         }

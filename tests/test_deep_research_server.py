@@ -131,6 +131,7 @@ def with_minimal_provenance_artifacts(
             "passed": True,
             "checked_packet_count": 0,
             "missing_selected_packet_ids": [],
+            "missing_selected_row_ids": [],
             "reason_codes": [],
         },
     }
@@ -987,6 +988,15 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
     assert result["operator_summary"]["current_checkpoint_kind"] == result["current_checkpoint_kind"]
     assert status["operator_summary"]["artifact_visibility_reason"] == status["artifact_visibility_reason"]
     assert result["operator_summary"]["artifact_visibility_reason"] == result["artifact_visibility_reason"]
+    for field in (
+        "watch_attach_after_seq",
+        "attempt_window_start_seq",
+        "partial_payload_available",
+        "artifact_fallback_used",
+        "resolved_artifact_batch_id",
+    ):
+        assert status["operator_summary"][field] == status[field]
+        assert result["operator_summary"][field] == result[field]
     assert listing["jobs"][0]["job_id"] == response["job_id"]
 
 
@@ -1772,6 +1782,40 @@ async def test_deep_research_result_forwards_include_partial_flag(monkeypatch, t
     result = await server.deep_research_result("job-include-partial", include_partial=False)
 
     assert result == {"job_id": "job-include-partial", "include_partial": False}
+
+
+@pytest.mark.asyncio
+async def test_deep_research_result_include_partial_false_hides_real_partial_payload(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    job = runtime.store.create_job(
+        query="Server include_partial false",
+        request_fingerprint="fp-server-include-partial-false",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "partial_report.md", "# Partial Report\n\nStill working.\n", "text/markdown")
+    runtime.write_artifact(
+        job.job_id,
+        "verification.json",
+        json.dumps({"packet_to_prose_fidelity": {"passed": True}}),
+        "application/json",
+    )
+
+    result = await server.deep_research_result(job.job_id, include_partial=False)
+
+    assert result["partial_report"] is None
+    assert result["partial_payload"] is None
+    assert result["operator_summary"]["partial_payload_available"] is False
+    assert result["operator_summary"]["partial_payload_available"] == result["partial_payload_available"]
 
 
 @pytest.mark.asyncio

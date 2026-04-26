@@ -2498,6 +2498,7 @@ def _attach_operator_surface_fields(
     payload["attempt_window_start_seq"] = watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0
     partial_payload = _partial_payload(store, job, include_partial_report=include_partial_report)
     payload["partial_payload"] = partial_payload
+    payload["partial_payload_available"] = partial_payload is not None
     payload["operator_summary"] = {
         **_operator_summary_payload(
             job,
@@ -2508,7 +2509,8 @@ def _attach_operator_surface_fields(
         "current_checkpoint_seq": payload["current_checkpoint_seq"],
         "artifact_fallback_used": payload["artifact_fallback_used"],
         "artifact_visibility_reason": payload["artifact_visibility_reason"],
-        "partial_payload_available": partial_payload is not None,
+        "resolved_artifact_batch_id": payload["resolved_artifact_batch_id"],
+        "partial_payload_available": payload["partial_payload_available"],
         "watch_attach_after_seq": watch_attach_after_seq,
         "attempt_window_start_seq": payload["attempt_window_start_seq"],
     }
@@ -4204,16 +4206,26 @@ def _packet_to_prose_fidelity_payload(
     final_report: str = "",
 ) -> dict[str, Any]:
     missing_selected_packet_ids: list[str] = []
+    missing_selected_row_ids: list[str] = []
     checked_packet_count = 0
     for bank in selected_bank:
         if not isinstance(bank, dict):
             continue
+        selected_evidence_ids = _dedupe_preserve_order(
+            [
+                str(evidence_id).strip()
+                for evidence_id in bank.get("selected_evidence_ids", []) or []
+                if str(evidence_id).strip()
+            ]
+        )
+        selected_row_ids: list[str] = []
         for row in bank.get("selected_rows", []) or []:
             if not isinstance(row, dict):
                 continue
             evidence_id = str(row.get("evidence_id", "")).strip()
             if not evidence_id:
                 continue
+            selected_row_ids.append(evidence_id)
             checked_packet_count += 1
             claim_ids = [
                 str(claim_id).strip()
@@ -4223,12 +4235,24 @@ def _packet_to_prose_fidelity_payload(
             packet_reflected = bool(claim_ids)
             if not packet_reflected:
                 missing_selected_packet_ids.append(evidence_id)
-    passed = not missing_selected_packet_ids
+        selected_row_id_set = set(selected_row_ids)
+        missing_selected_row_ids.extend(
+            evidence_id for evidence_id in selected_evidence_ids if evidence_id not in selected_row_id_set
+        )
+    missing_selected_packet_ids = _dedupe_preserve_order(missing_selected_packet_ids)
+    missing_selected_row_ids = _dedupe_preserve_order(missing_selected_row_ids)
+    passed = not missing_selected_packet_ids and not missing_selected_row_ids
+    reason_codes: list[str] = []
+    if missing_selected_packet_ids:
+        reason_codes.append("selected_packet_missing_from_prose")
+    if missing_selected_row_ids:
+        reason_codes.append("selected_packet_row_missing")
     return {
         "passed": passed,
         "checked_packet_count": checked_packet_count,
-        "missing_selected_packet_ids": _dedupe_preserve_order(missing_selected_packet_ids),
-        "reason_codes": [] if passed else ["selected_packet_missing_from_prose"],
+        "missing_selected_packet_ids": missing_selected_packet_ids,
+        "missing_selected_row_ids": missing_selected_row_ids,
+        "reason_codes": reason_codes,
     }
 
 
@@ -4282,22 +4306,27 @@ def _verification_payload(
         final_report=final_report,
     )
     if "conflict" in set(verifier.get("reason_codes", []) or []):
-        conflicted_claims = [
+        derived_conflicted_claims = [
             claim_payload
             for claim_payload in [*supported_claims, *single_source_claims]
             if str(claim_payload.get("claim_id", "")).strip() in flagged_claim_ids
         ]
-        if not conflicted_claims:
-            conflicted_claims = [
-                {
-                    "claim_id": str(claim.get("claim_id", "")).strip(),
-                    "section_id": str(claim.get("section_id", "") or ""),
-                    "text": str(claim.get("text", "") or ""),
-                    "confidence": str(claim.get("confidence", "") or ""),
-                }
-                for claim in verifier.get("conflicted_claims", []) or []
-                if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
-            ]
+        verifier_conflicted_claims = [
+            {
+                "claim_id": str(claim.get("claim_id", "")).strip(),
+                "section_id": str(claim.get("section_id", "") or ""),
+                "text": str(claim.get("text", "") or ""),
+                "confidence": str(claim.get("confidence", "") or ""),
+            }
+            for claim in verifier.get("conflicted_claims", []) or []
+            if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
+        ]
+        conflicted_by_id: dict[str, dict[str, Any]] = {}
+        for claim in [*derived_conflicted_claims, *verifier_conflicted_claims]:
+            claim_id = str(claim.get("claim_id", "")).strip()
+            if claim_id and claim_id not in conflicted_by_id:
+                conflicted_by_id[claim_id] = claim
+        conflicted_claims = list(conflicted_by_id.values())
     unresolved_sections = [
         str(title)
         for title in [
@@ -8936,6 +8965,34 @@ def _coverage_for_report(
             str(entry.get("ledger_id", "")).strip() or str(index): entry
             for index, entry in enumerate(question_entries)
         }.values())
+        bank_candidate_evidence_ids = [
+            str(item).strip()
+            for item in bank.get("candidate_evidence_ids", []) or []
+            if str(item).strip()
+        ]
+        bank_has_selected_evidence_ids = "selected_evidence_ids" in bank
+        bank_selected_evidence_ids = [
+            str(item).strip()
+            for item in bank.get("selected_evidence_ids", []) or []
+            if str(item).strip()
+        ]
+        ledger_evidence_ids = {
+            str(entry.get("evidence_id", "")).strip()
+            for entry in question_entries
+            if str(entry.get("evidence_id", "")).strip()
+        }
+        ledger_selected_evidence_ids = {
+            str(entry.get("evidence_id", "")).strip()
+            for entry in question_entries
+            if str(entry.get("evidence_id", "")).strip()
+            and (
+                str(entry.get("selected_section_id", "")).strip() == section_id
+                or any(
+                    str(selected_section_id).strip() == section_id
+                    for selected_section_id in entry.get("selected_section_ids", []) or []
+                )
+            )
+        }
         section_coverage.append(
             {
                 "section_id": section_id,
@@ -8943,23 +9000,11 @@ def _coverage_for_report(
                 "answered": bool(grounded_claims),
                 "grounded_claim_count": len(grounded_claims),
                 "citation_count": len(grounded_citations),
-                "candidate_evidence_count": len(
-                    [item for item in bank.get("candidate_evidence_ids", []) if str(item).strip()]
-                ) or len(
-                    {
-                        str(entry.get("evidence_id", "")).strip()
-                        for entry in question_entries
-                        if str(entry.get("evidence_id", "")).strip()
-                    }
-                ),
-                "selected_evidence_count": len(
-                    [item for item in bank.get("selected_evidence_ids", []) if str(item).strip()]
-                ) or len(
-                    {
-                        str(entry.get("evidence_id", "")).strip()
-                        for entry in question_entries
-                        if str(entry.get("evidence_id", "")).strip()
-                    }
+                "candidate_evidence_count": len(bank_candidate_evidence_ids) or len(ledger_evidence_ids),
+                "selected_evidence_count": (
+                    len(bank_selected_evidence_ids)
+                    if bank_has_selected_evidence_ids
+                    else len(ledger_selected_evidence_ids)
                 ),
                 "rejected_evidence_count": len(
                     [item for item in bank.get("rejected_evidence_ids", []) if str(item).strip()]
