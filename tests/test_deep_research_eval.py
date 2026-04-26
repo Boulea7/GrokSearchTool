@@ -101,6 +101,8 @@ def evaluate_case_metric(case: dict, metric: str) -> dict:
         return evaluate_coverage_gap_scope_consistency(case)
     if metric == "surface_consistency":
         return evaluate_surface_consistency(case)
+    if metric == "official_doc_family_granularity":
+        return evaluate_official_doc_family_granularity(case)
     raise ValueError(f"Unsupported metric: {metric}")
 
 
@@ -502,6 +504,8 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
 def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
     selected_bank = case.get("selected_bank") or case.get("evidence_bank") or []
     surface_claim_ids = _surface_claim_ids(case)
+    claim_text_by_id = _surface_claim_text_by_id(case)
+    surface_text = _stable_surface_text(case)
     reason_tags: list[str] = []
     checked_packets = 0
     for bank in selected_bank:
@@ -521,12 +525,18 @@ def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
                 continue
             selected_row_ids.append(evidence_id)
             checked_packets += 1
+            if selected_evidence_ids and evidence_id not in selected_evidence_ids:
+                reason_tags.append("selected_row_outside_selected_evidence")
             claim_ids = [str(claim_id).strip() for claim_id in row.get("claim_ids", []) or [] if str(claim_id).strip()]
             if not claim_ids:
                 reason_tags.append("selected_packet_missing_from_prose")
                 continue
             if any(claim_id not in surface_claim_ids for claim_id in claim_ids):
                 reason_tags.append("selected_packet_claim_missing_from_surface")
+            for claim_id in claim_ids:
+                claim_text = claim_text_by_id.get(claim_id, "")
+                if claim_text and not _claim_text_reflected(claim_text, surface_text):
+                    reason_tags.append("selected_packet_claim_text_missing_from_prose")
         selected_row_id_set = set(selected_row_ids)
         if any(evidence_id not in selected_row_id_set for evidence_id in selected_evidence_ids):
             reason_tags.append("selected_packet_row_missing")
@@ -632,6 +642,33 @@ def evaluate_surface_consistency(case: dict) -> dict:
     }
 
 
+def evaluate_official_doc_family_granularity(case: dict) -> dict:
+    sources = list(case.get("sources") or [])
+    registry = _source_registry(case)
+    sources.extend(source for source in registry.values() if isinstance(source, dict))
+    actual_families = {
+        _official_doc_family_key(source)
+        for source in sources
+        if isinstance(source, dict) and str(source.get("domain", "") or "").lower() == "docs.aws.amazon.com"
+    }
+    expected_families = {
+        str(item).strip()
+        for item in (case.get("expected_official_doc_families") or [])
+        if str(item).strip()
+    }
+    reason_tags: list[str] = []
+    if expected_families and not expected_families.issubset(actual_families):
+        reason_tags.append("missing_expected_official_doc_family")
+    if len(actual_families) < int(case.get("min_official_doc_family_count", 0) or 0):
+        reason_tags.append("insufficient_official_doc_family_count")
+    return {
+        "metric": "official_doc_family_granularity",
+        "verdict": "pass" if not reason_tags else "fail",
+        "score": 1.0 if not reason_tags else 0.0,
+        "reason_tags": sorted(set(reason_tags)),
+    }
+
+
 def _surface_claim_ids(case: dict) -> set[str]:
     claim_ids: set[str] = set()
     for surface in (case.get("report"), case.get("citations")):
@@ -647,6 +684,61 @@ def _surface_claim_ids(case: dict) -> set[str]:
                 if claim_id:
                     claim_ids.add(claim_id)
     return claim_ids
+
+
+def _surface_claim_text_by_id(case: dict) -> dict[str, str]:
+    claim_texts: dict[str, str] = {}
+    for claim in _iter_claims(case):
+        claim_id = str(claim.get("claim_id", "")).strip()
+        text = _stable_text(str(claim.get("text", "") or ""))
+        if claim_id and text:
+            claim_texts[claim_id] = text
+    return claim_texts
+
+
+def _stable_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _stable_surface_text(case: dict) -> str:
+    texts: list[str] = []
+    report = case.get("report") if isinstance(case.get("report"), dict) else {}
+    for section in report.get("sections", []) or []:
+        if not isinstance(section, dict):
+            continue
+        texts.append(str(section.get("prose", "") or ""))
+    texts.append(str(report.get("final_report", "") or case.get("final_report", "") or ""))
+    return _stable_text(" ".join(texts))
+
+
+def _claim_text_reflected(claim_text: str, surface_text: str) -> bool:
+    if not claim_text:
+        return True
+    if claim_text in surface_text:
+        return True
+    claim_terms = _keywords(claim_text)
+    if len(claim_terms) < 3:
+        return False
+    surface_terms = _keywords(surface_text)
+    overlap = claim_terms & surface_terms
+    return len(overlap) >= 3 and (len(overlap) / len(claim_terms)) >= 0.6
+
+
+def _official_doc_family_key(source: dict) -> str:
+    url = str(source.get("url", "") or "").lower()
+    domain = str(source.get("domain", "") or "").lower()
+    if domain == "docs.aws.amazon.com":
+        if "/dms/latest/apireference/" in url:
+            return "aws:dms:api_reference"
+        if "/cli/latest/reference/dms/" in url:
+            return "aws:dms:cli_reference"
+        if "/dms/latest/userguide/" in url:
+            if "cdc" in url:
+                return "aws:dms:cdc_guide"
+            if "tasksettings" in url or "task-settings" in url or "task_settings" in url:
+                return "aws:dms:task_settings"
+            return "aws:dms:user_guide"
+    return f"{domain}:official_docs" if domain else "official_docs"
 
 
 def _iter_claims(case: dict):
@@ -1300,6 +1392,7 @@ def test_packet_to_prose_fidelity_rejects_claim_id_missing_from_report_surface()
         "eval_probe_round40_aws_dms_packet_fidelity_negative.json",
         "eval_probe_round40_aws_dms_packet_fidelity_missing_claim_ids.json",
         "eval_probe_round40_aws_dms_packet_fidelity_claim_surface_mismatch.json",
+        "eval_probe_round42_selected_bank_extra_row_drift.json",
     ],
 )
 def test_packet_to_prose_fidelity_aws_dms_probe_goldens(fixture_name):
@@ -1338,6 +1431,31 @@ def test_coverage_gap_scope_consistency_aws_dms_probe_golden():
     golden = case["golden"]["coverage_gap_scope_consistency"]
 
     result = evaluate_case_metric(case, "coverage_gap_scope_consistency")
+
+    assert_metric_matches_golden(result, golden)
+
+
+def test_official_doc_family_granularity_round42_golden():
+    case = load_eval_case("eval_probe_round42_aws_dms_official_doc_family_granularity.json")
+    golden = case["golden"]["official_doc_family_granularity"]
+
+    result = evaluate_case_metric(case, "official_doc_family_granularity")
+
+    assert_metric_matches_golden(result, golden)
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        "eval_probe_round42_lifecycle_surface_mirror.json",
+        "eval_probe_round42_lifecycle_malformed_sidecars.json",
+    ],
+)
+def test_surface_consistency_round42_probe_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+    golden = case["golden"]["surface_consistency"]
+
+    result = evaluate_case_metric(case, "surface_consistency")
 
     assert_metric_matches_golden(result, golden)
 

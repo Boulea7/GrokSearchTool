@@ -18985,6 +18985,56 @@ def test_coverage_gaps_payload_distinguishes_soft_gaps_and_follow_up_hints():
     assert payload["suggested_research_units"][0]["source_policy"]["include_domains"] == ["docs.aws.amazon.com"]
 
 
+@pytest.mark.asyncio
+async def test_continuation_carries_structured_coverage_gap_units(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(runtime, query="AWS DMS continuation source")
+    runtime.write_artifact(
+        source.job_id,
+        "coverage_gaps.json",
+        json.dumps(
+            {
+                "query": "AWS DMS continuation source",
+                "gaps": [
+                    {
+                        "gap_type": "hard_uncovered_target",
+                        "target": "CDC guide checkpoint restart behavior",
+                        "blocking": True,
+                        "blocking_scope": "hard",
+                    }
+                ],
+                "follow_up_hints": [
+                    {
+                        "target": "CDC guide checkpoint restart behavior",
+                        "gap_type": "hard_uncovered_target",
+                        "blocking_scope": "hard",
+                        "search_query": "AWS DMS CDC checkpoint restart official docs",
+                        "source_policy": {"include_domains": ["docs.aws.amazon.com"], "exclude_domains": []},
+                    }
+                ],
+                "suggested_research_units": [
+                    {
+                        "title": "CDC checkpoint restart behavior",
+                        "goal": "Resolve CDC guide coverage gap.",
+                        "query": "AWS DMS CDC checkpoint restart official docs",
+                        "source_policy": {"include_domains": ["docs.aws.amazon.com"], "exclude_domains": []},
+                        "reason": "hard_uncovered_target",
+                        "blocking_scope": "hard",
+                    }
+                ],
+            }
+        ),
+        "application/json",
+    )
+
+    continuation = runtime._build_continuation_context(source.job_id)
+
+    assert continuation.coverage_gap_scopes == {"CDC guide checkpoint restart behavior": "hard"}
+    assert continuation.follow_up_hints[0]["blocking_scope"] == "hard"
+    assert continuation.suggested_research_units[0]["query"] == "AWS DMS CDC checkpoint restart official docs"
+    assert continuation.focused_snapshot["suggested_research_units"][0]["blocking_scope"] == "hard"
+
+
 def test_verifier_flags_conflicting_claims_with_negation_mismatch():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
@@ -19323,6 +19373,99 @@ def test_packet_to_prose_fidelity_fails_when_selected_claim_missing_from_surface
     assert payload["passed"] is False
     assert payload["missing_selected_claim_ids"] == ["claim-missing"]
     assert "selected_packet_claim_missing_from_surface" in payload["reason_codes"]
+
+
+def test_packet_to_prose_fidelity_fails_when_claim_text_missing_from_report_text():
+    payload = deep_research_runtime_module._packet_to_prose_fidelity_payload(
+        selected_bank=[
+            {
+                "section_id": "task-visibility",
+                "selected_evidence_ids": ["e1"],
+                "selected_rows": [{"evidence_id": "e1", "claim_ids": ["claim-1"]}],
+            }
+        ],
+        sections=[
+            {
+                "section_id": "task-visibility",
+                "title": "Task Visibility",
+                "summary": "DescribeReplicationTasks has task state fields.",
+                "prose": "DescribeReplicationTasks has task state fields.",
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "RecoveryCheckpoint is returned by DescribeReplicationTasks for CDC progress.",
+                        "evidence_ids": ["e1"],
+                    }
+                ],
+            }
+        ],
+        final_report="# Task Visibility\n\nDescribeReplicationTasks has task state fields.",
+    )
+
+    assert payload["passed"] is False
+    assert payload["missing_selected_claim_text_ids"] == ["claim-1"]
+    assert "selected_packet_claim_text_missing_from_prose" in payload["reason_codes"]
+
+
+def test_packet_to_prose_fidelity_flags_selected_row_outside_selected_evidence_ids():
+    payload = deep_research_runtime_module._packet_to_prose_fidelity_payload(
+        selected_bank=[
+            {
+                "section_id": "task-visibility",
+                "selected_evidence_ids": ["e1"],
+                "selected_rows": [{"evidence_id": "e2", "claim_ids": ["claim-1"]}],
+            }
+        ],
+        sections=[
+            {
+                "section_id": "task-visibility",
+                "claims": [
+                    {
+                        "claim_id": "claim-1",
+                        "text": "RecoveryCheckpoint is returned by DescribeReplicationTasks.",
+                        "evidence_ids": ["e2"],
+                    }
+                ],
+            }
+        ],
+        final_report="RecoveryCheckpoint is returned by DescribeReplicationTasks.",
+    )
+
+    assert payload["passed"] is False
+    assert payload["selected_row_outside_selected_evidence_ids"] == ["e2"]
+    assert "selected_row_outside_selected_evidence" in payload["reason_codes"]
+
+
+def test_official_doc_family_key_distinguishes_aws_dms_user_guide_families():
+    families = {
+        deep_research_runtime_module._official_doc_family_key(
+            {
+                "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                "domain": "docs.aws.amazon.com",
+                "source_type": "official_docs",
+            }
+        ),
+        deep_research_runtime_module._official_doc_family_key(
+            {
+                "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.html",
+                "domain": "docs.aws.amazon.com",
+                "source_type": "official_docs",
+            }
+        ),
+        deep_research_runtime_module._official_doc_family_key(
+            {
+                "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Introduction.html",
+                "domain": "docs.aws.amazon.com",
+                "source_type": "official_docs",
+            }
+        ),
+    }
+
+    assert families == {
+        "aws:dms:cdc_guide",
+        "aws:dms:task_settings",
+        "aws:dms:user_guide",
+    }
 
 
 def test_rebuild_verified_rollup_sections_uses_non_generic_inventory_when_supported_ids_absent():

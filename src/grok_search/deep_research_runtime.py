@@ -850,6 +850,11 @@ def _compact_continuation(continuation: DeepResearchContinuationState) -> DeepRe
         state_version=continuation.state_version,
         confirmed_claims=list(continuation.confirmed_claims),
         open_questions=list(continuation.open_questions),
+        follow_up_hints=[dict(item) for item in continuation.follow_up_hints if isinstance(item, dict)],
+        suggested_research_units=[
+            dict(item) for item in continuation.suggested_research_units if isinstance(item, dict)
+        ],
+        coverage_gap_scopes=dict(continuation.coverage_gap_scopes),
         trusted_source_headers=list(continuation.trusted_source_headers),
         carry_forward_constraints=dict(continuation.carry_forward_constraints),
         skipped_unit_ids=list(continuation.skipped_unit_ids),
@@ -870,6 +875,9 @@ def _focused_continuation_snapshot(
     prior_plan_summary: str,
     confirmed_claims: list[str],
     open_questions: list[str],
+    follow_up_hints: list[dict[str, Any]],
+    suggested_research_units: list[dict[str, Any]],
+    coverage_gap_scopes: dict[str, str],
     trusted_source_headers: list[str],
     carry_forward_constraints: dict[str, Any],
     skipped_unit_ids: list[str],
@@ -891,6 +899,11 @@ def _focused_continuation_snapshot(
         "prior_plan_summary": _trim_text(prior_plan_summary, limit=400),
         "confirmed_claims": _dedupe_preserve_order(confirmed_claims),
         "open_questions": _dedupe_preserve_order(open_questions),
+        "follow_up_hints": [dict(item) for item in follow_up_hints if isinstance(item, dict)],
+        "suggested_research_units": [
+            dict(item) for item in suggested_research_units if isinstance(item, dict)
+        ],
+        "coverage_gap_scopes": dict(coverage_gap_scopes or {}),
         "trusted_source_headers": _dedupe_preserve_order(trusted_source_headers),
         "carry_forward_constraints": dict(carry_forward_constraints or {}),
         "skipped_unit_ids": _dedupe_preserve_order(skipped_unit_ids),
@@ -1135,6 +1148,11 @@ def _hydrate_continuation_snapshot(continuation: DeepResearchContinuationState) 
             prior_plan_summary=continuation.prior_plan_summary,
             confirmed_claims=list(continuation.confirmed_claims),
             open_questions=list(continuation.open_questions),
+            follow_up_hints=[dict(item) for item in continuation.follow_up_hints if isinstance(item, dict)],
+            suggested_research_units=[
+                dict(item) for item in continuation.suggested_research_units if isinstance(item, dict)
+            ],
+            coverage_gap_scopes=dict(continuation.coverage_gap_scopes),
             trusted_source_headers=list(continuation.trusted_source_headers),
             carry_forward_constraints=dict(continuation.carry_forward_constraints),
             skipped_unit_ids=list(continuation.skipped_unit_ids),
@@ -4061,7 +4079,7 @@ def _build_section_prose(section: dict[str, Any]) -> str:
         claim_texts.append(text)
     unique_sentences: list[str] = []
     seen_sentence_keys: set[str] = set()
-    for candidate in [summary, *claim_texts]:
+    for candidate in [*claim_texts, summary]:
         if not candidate or _is_noisy_text(candidate):
             continue
         normalized_candidate = candidate.rstrip(".")
@@ -4262,10 +4280,27 @@ def _packet_to_prose_fidelity_payload(
     sections: list[dict[str, Any]],
     final_report: str = "",
 ) -> dict[str, Any]:
+    def _claim_text_reflected(claim_text: str, surface_text_key: str) -> bool:
+        claim_text_key = _stable_text_key(claim_text)
+        if not claim_text_key:
+            return True
+        if claim_text_key in surface_text_key:
+            return True
+        claim_terms = set(_tokenize_keywords(claim_text))
+        if len(claim_terms) < 3:
+            return False
+        surface_terms = set(_tokenize_keywords(surface_text_key))
+        overlap = claim_terms & surface_terms
+        return len(overlap) >= 3 and (len(overlap) / len(claim_terms)) >= 0.6
+
     missing_selected_packet_ids: list[str] = []
     missing_selected_row_ids: list[str] = []
+    selected_row_outside_selected_evidence_ids: list[str] = []
     missing_selected_claim_ids: list[str] = []
+    missing_selected_claim_text_ids: list[str] = []
     checked_packet_count = 0
+    claim_text_by_id: dict[str, str] = {}
+    section_surface_by_claim_id: dict[str, str] = {}
     report_claim_ids = {
         str(claim.get("claim_id", "")).strip()
         for section in sections
@@ -4273,6 +4308,26 @@ def _packet_to_prose_fidelity_payload(
         for claim in section.get("claims", []) or []
         if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
     }
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        section_surface = _stable_text_key(
+            " ".join(
+                [
+                    str(section.get("prose", "") or ""),
+                    str(final_report or ""),
+                ]
+            )
+        )
+        for claim in section.get("claims", []) or []:
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get("claim_id", "")).strip()
+            claim_text = _strip_summary_scaffolding(_normalize_whitespace(str(claim.get("text", "") or "")))
+            if not claim_id or not claim_text:
+                continue
+            claim_text_by_id[claim_id] = claim_text
+            section_surface_by_claim_id[claim_id] = section_surface
     for bank in selected_bank:
         if not isinstance(bank, dict):
             continue
@@ -4291,6 +4346,8 @@ def _packet_to_prose_fidelity_payload(
             if not evidence_id:
                 continue
             selected_row_ids.append(evidence_id)
+            if selected_evidence_ids and evidence_id not in selected_evidence_ids:
+                selected_row_outside_selected_evidence_ids.append(evidence_id)
             checked_packet_count += 1
             claim_ids = [
                 str(claim_id).strip()
@@ -4303,27 +4360,50 @@ def _packet_to_prose_fidelity_payload(
             missing_selected_claim_ids.extend(
                 claim_id for claim_id in claim_ids if claim_id not in report_claim_ids
             )
+            for claim_id in claim_ids:
+                claim_text = claim_text_by_id.get(claim_id, "")
+                if not claim_text:
+                    continue
+                section_surface = section_surface_by_claim_id.get(claim_id, "")
+                if not _claim_text_reflected(claim_text, section_surface):
+                    missing_selected_claim_text_ids.append(claim_id)
         selected_row_id_set = set(selected_row_ids)
         missing_selected_row_ids.extend(
             evidence_id for evidence_id in selected_evidence_ids if evidence_id not in selected_row_id_set
         )
     missing_selected_packet_ids = _dedupe_preserve_order(missing_selected_packet_ids)
     missing_selected_row_ids = _dedupe_preserve_order(missing_selected_row_ids)
+    selected_row_outside_selected_evidence_ids = _dedupe_preserve_order(selected_row_outside_selected_evidence_ids)
     missing_selected_claim_ids = _dedupe_preserve_order(missing_selected_claim_ids)
-    passed = not missing_selected_packet_ids and not missing_selected_row_ids and not missing_selected_claim_ids
+    missing_selected_claim_text_ids = _dedupe_preserve_order(missing_selected_claim_text_ids)
+    passed = not any(
+        [
+            missing_selected_packet_ids,
+            missing_selected_row_ids,
+            selected_row_outside_selected_evidence_ids,
+            missing_selected_claim_ids,
+            missing_selected_claim_text_ids,
+        ]
+    )
     reason_codes: list[str] = []
     if missing_selected_packet_ids:
         reason_codes.append("selected_packet_missing_from_prose")
     if missing_selected_row_ids:
         reason_codes.append("selected_packet_row_missing")
+    if selected_row_outside_selected_evidence_ids:
+        reason_codes.append("selected_row_outside_selected_evidence")
     if missing_selected_claim_ids:
         reason_codes.append("selected_packet_claim_missing_from_surface")
+    if missing_selected_claim_text_ids:
+        reason_codes.append("selected_packet_claim_text_missing_from_prose")
     return {
         "passed": passed,
         "checked_packet_count": checked_packet_count,
         "missing_selected_packet_ids": missing_selected_packet_ids,
         "missing_selected_row_ids": missing_selected_row_ids,
+        "selected_row_outside_selected_evidence_ids": selected_row_outside_selected_evidence_ids,
         "missing_selected_claim_ids": missing_selected_claim_ids,
+        "missing_selected_claim_text_ids": missing_selected_claim_text_ids,
         "reason_codes": reason_codes,
     }
 
@@ -4502,6 +4582,68 @@ def _coverage_gaps_payload(
         "follow_up_hints": follow_up_hints,
         "suggested_research_units": suggested_research_units,
     }
+
+
+def _structured_follow_up_hints(coverage_gaps: dict[str, Any], *, limit: int = 8) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+    for raw_hint in coverage_gaps.get("follow_up_hints", []) or []:
+        if not isinstance(raw_hint, dict):
+            continue
+        target = _normalize_whitespace(str(raw_hint.get("target", "") or ""))
+        if not target:
+            continue
+        hint = {
+            "target": _trim_text(target, limit=180),
+            "gap_type": _normalize_whitespace(str(raw_hint.get("gap_type") or raw_hint.get("reason") or "")),
+            "blocking_scope": _normalize_whitespace(str(raw_hint.get("blocking_scope") or "soft")),
+            "search_query": _trim_text(str(raw_hint.get("search_query") or target), limit=220),
+            "source_policy": dict(raw_hint.get("source_policy") or {}),
+        }
+        hints.append(hint)
+        if len(hints) >= limit:
+            break
+    return hints
+
+
+def _structured_suggested_research_units(coverage_gaps: dict[str, Any], *, limit: int = 8) -> list[dict[str, Any]]:
+    units: list[dict[str, Any]] = []
+    for raw_unit in coverage_gaps.get("suggested_research_units", []) or []:
+        if not isinstance(raw_unit, dict):
+            continue
+        query = _normalize_whitespace(str(raw_unit.get("query", "") or ""))
+        title = _normalize_whitespace(str(raw_unit.get("title", "") or raw_unit.get("target", "") or query))
+        if not query and not title:
+            continue
+        units.append(
+            {
+                "title": _trim_text(title or query, limit=96),
+                "goal": _trim_text(str(raw_unit.get("goal") or title or query), limit=180),
+                "query": _trim_text(query or title, limit=220),
+                "source_policy": dict(raw_unit.get("source_policy") or {}),
+                "reason": _normalize_whitespace(str(raw_unit.get("reason", "") or "")),
+                "blocking_scope": _normalize_whitespace(str(raw_unit.get("blocking_scope") or "soft")),
+            }
+        )
+        if len(units) >= limit:
+            break
+    return units
+
+
+def _coverage_gap_scopes(coverage_gaps: dict[str, Any]) -> dict[str, str]:
+    scopes: dict[str, str] = {}
+    for gap in coverage_gaps.get("gaps", []) or []:
+        if not isinstance(gap, dict):
+            continue
+        target = _normalize_whitespace(str(gap.get("target", "") or ""))
+        if not target:
+            continue
+        scope = _normalize_whitespace(str(gap.get("blocking_scope") or "soft"))
+        scopes[_trim_text(target, limit=180)] = scope
+    for hint in _structured_follow_up_hints(coverage_gaps):
+        target = str(hint.get("target", "") or "")
+        if target and target not in scopes:
+            scopes[target] = str(hint.get("blocking_scope") or "soft")
+    return scopes
 
 
 def _claim_conflict_reason(left_text: str, right_text: str) -> str:
@@ -4954,10 +5096,14 @@ def _official_doc_family_key(source: dict[str, Any]) -> str:
     if domain == "docs.aws.amazon.com":
         if "/dms/latest/apireference/" in path:
             return "aws:dms:api_reference"
-        if "/dms/latest/userguide/" in path:
-            return "aws:dms:user_guide"
         if "/cli/latest/reference/dms/" in path:
             return "aws:dms:cli_reference"
+        if "/dms/latest/userguide/" in path:
+            if "cdc" in path:
+                return "aws:dms:cdc_guide"
+            if "tasksettings" in path or "task-settings" in path or "task_settings" in path:
+                return "aws:dms:task_settings"
+            return "aws:dms:user_guide"
     if "api_reference" in traits:
         return f"{domain}:api_reference"
     if "user_guide" in traits:
@@ -7294,6 +7440,14 @@ class DeepResearchRuntime:
                 if isinstance(hint, dict) and str(hint.get("target", "")).strip()
             ],
         ]
+        follow_up_hints = _structured_follow_up_hints(coverage_gaps_payload)
+        suggested_research_units = _structured_suggested_research_units(coverage_gaps_payload)
+        coverage_gap_scopes = _coverage_gap_scopes(coverage_gaps_payload)
+        open_question_candidates.extend(
+            str(unit.get("title") or unit.get("query") or "").strip()
+            for unit in suggested_research_units
+            if isinstance(unit, dict) and str(unit.get("title") or unit.get("query") or "").strip()
+        )
         open_questions = _sanitize_follow_up_surface_items(open_question_candidates, limit=8)
         trusted_source_headers = _trusted_source_headers(carry_forward_sources)
         confirmed_claims_filtered = bool(carry_forward_sections) and not bool(confirmed_claims)
@@ -7315,6 +7469,9 @@ class DeepResearchRuntime:
             prior_plan_summary=_trim_text(prior_plan_summary, limit=400),
             confirmed_claims=confirmed_claims,
             open_questions=open_questions,
+            follow_up_hints=follow_up_hints,
+            suggested_research_units=suggested_research_units,
+            coverage_gap_scopes=coverage_gap_scopes,
             trusted_source_headers=trusted_source_headers,
             carry_forward_constraints=carry_forward_constraints,
             skipped_unit_ids=skipped_unit_ids,
@@ -7368,6 +7525,9 @@ class DeepResearchRuntime:
             state_version=2,
             confirmed_claims=confirmed_claims,
             open_questions=open_questions,
+            follow_up_hints=follow_up_hints,
+            suggested_research_units=suggested_research_units,
+            coverage_gap_scopes=coverage_gap_scopes,
             trusted_source_headers=trusted_source_headers,
             carry_forward_constraints=carry_forward_constraints,
             skipped_unit_ids=skipped_unit_ids,

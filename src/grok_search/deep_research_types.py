@@ -153,6 +153,9 @@ class DeepResearchContinuation(BaseModel):
     state_version: int = 2
     confirmed_claims: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
+    follow_up_hints: list[dict[str, Any]] = Field(default_factory=list)
+    suggested_research_units: list[dict[str, Any]] = Field(default_factory=list)
+    coverage_gap_scopes: dict[str, str] = Field(default_factory=dict)
     trusted_source_headers: list[str] = Field(default_factory=list)
     carry_forward_constraints: dict[str, Any] = Field(default_factory=dict)
     skipped_unit_ids: list[str] = Field(default_factory=list)
