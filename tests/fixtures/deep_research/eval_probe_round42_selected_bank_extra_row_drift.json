@@ -1,0 +1,48 @@
+{
+  "sample": "eval-probe-round42-selected-bank-extra-row-drift",
+  "query": "AWS DMS official docs only: selected bank row drift",
+  "report": {
+    "sections": [
+      {
+        "section_id": "task-visibility",
+        "title": "Task Visibility",
+        "summary": "DescribeReplicationTasks exposes RecoveryCheckpoint for CDC progress.",
+        "prose": "DescribeReplicationTasks exposes RecoveryCheckpoint for CDC progress.",
+        "claims": [
+          {
+            "claim_id": "task-visibility-claim-1",
+            "text": "DescribeReplicationTasks exposes RecoveryCheckpoint for CDC progress.",
+            "citations": ["R1"],
+            "source_ids": ["R1"],
+            "evidence_ids": ["e2"]
+          }
+        ]
+      }
+    ],
+    "final_report": "DescribeReplicationTasks exposes RecoveryCheckpoint for CDC progress."
+  },
+  "selected_bank": [
+    {
+      "section_id": "task-visibility",
+      "selected_evidence_ids": ["e1"],
+      "selected_rows": [
+        {
+          "evidence_id": "e2",
+          "selected_section_id": "task-visibility",
+          "coverage_tags": ["sq1"],
+          "claim_ids": ["task-visibility-claim-1"],
+          "question_ids": ["sq1"]
+        }
+      ],
+      "candidate_evidence_ids": ["e1", "e2"],
+      "rejected_evidence_ids": []
+    }
+  ],
+  "golden": {
+    "packet_to_prose_fidelity": {
+      "verdict": "fail",
+      "score": 0.0,
+      "reason_tags": ["selected_packet_row_missing", "selected_row_outside_selected_evidence"]
+    }
+  }
+}

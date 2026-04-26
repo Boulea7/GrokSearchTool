@@ -1,0 +1,63 @@
+{
+  "sample": {
+    "status": "interrupted",
+    "phase": "researching",
+    "runtime_warnings": ["coverage_incomplete"]
+  },
+  "query": "Lifecycle public surface mirror for deep research partial payloads",
+  "public_surface": {
+    "status": {
+      "status": "interrupted",
+      "phase": "researching",
+      "watch_attach_after_seq": 42,
+      "attempt_window_start_seq": 37,
+      "partial_payload": {
+        "plan": {"brief": {"objective": "Lifecycle mirror"}},
+        "coverage_gaps": {"total_gap_count": 1}
+      },
+      "partial_payload_available": true,
+      "operator_summary": {
+        "status": "interrupted",
+        "phase": "researching",
+        "watch_attach_after_seq": 42,
+        "attempt_window_start_seq": 37,
+        "partial_payload_available": true
+      }
+    },
+    "result": {
+      "status": "interrupted",
+      "phase": "researching",
+      "watch_attach_after_seq": 42,
+      "attempt_window_start_seq": 37,
+      "partial_payload": {
+        "plan": {"brief": {"objective": "Lifecycle mirror"}},
+        "coverage_gaps": {"total_gap_count": 1}
+      },
+      "partial_payload_available": true,
+      "operator_summary": {
+        "status": "interrupted",
+        "phase": "researching",
+        "watch_attach_after_seq": 42,
+        "attempt_window_start_seq": 37,
+        "partial_payload_available": true
+      }
+    }
+  },
+  "golden": {
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "surface_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

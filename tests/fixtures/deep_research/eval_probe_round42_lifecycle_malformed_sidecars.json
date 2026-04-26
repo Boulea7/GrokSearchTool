@@ -1,0 +1,94 @@
+{
+  "sample": {
+    "status": "interrupted",
+    "phase": "finalizing",
+    "runtime_warnings": ["partial_artifact_errors"]
+  },
+  "query": "Lifecycle malformed sidecars keep operator summary mirrors consistent",
+  "resolved_artifact_batch_id": "batch-round42-sidecars",
+  "public_surface": {
+    "status": {
+      "status": "interrupted",
+      "phase": "finalizing",
+      "watch_attach_after_seq": 51,
+      "attempt_window_start_seq": 49,
+      "partial_payload": {
+        "partial_artifact_errors": {
+          "coverage_gaps.json": "invalid_shape",
+          "selected_bank.json": "invalid_shape"
+        }
+      },
+      "partial_payload_available": true,
+      "operator_summary": {
+        "status": "interrupted",
+        "phase": "finalizing",
+        "watch_attach_after_seq": 51,
+        "attempt_window_start_seq": 49,
+        "partial_payload_available": true
+      }
+    },
+    "result": {
+      "status": "interrupted",
+      "phase": "finalizing",
+      "watch_attach_after_seq": 51,
+      "attempt_window_start_seq": 49,
+      "partial_payload": {
+        "partial_artifact_errors": {
+          "coverage_gaps.json": "invalid_shape",
+          "selected_bank.json": "invalid_shape"
+        }
+      },
+      "partial_payload_available": true,
+      "operator_summary": {
+        "status": "interrupted",
+        "phase": "finalizing",
+        "watch_attach_after_seq": 51,
+        "attempt_window_start_seq": 49,
+        "partial_payload_available": true
+      }
+    }
+  },
+  "artifacts": [
+    {
+      "kind": "sources.json",
+      "metadata": {"batch_id": "batch-round42-sidecars"}
+    },
+    {
+      "kind": "citations.json",
+      "metadata": {"batch_id": "batch-round42-sidecars"}
+    },
+    {
+      "kind": "report.json",
+      "metadata": {"batch_id": "batch-round42-sidecars"}
+    },
+    {
+      "kind": "final_report.md",
+      "metadata": {"batch_id": "batch-round42-sidecars"}
+    },
+    {
+      "kind": "selected_bank.json",
+      "metadata": {"batch_id": "batch-round42-sidecars"}
+    },
+    {
+      "kind": "coverage_gaps.json",
+      "metadata": {"batch_id": "batch-round42-sidecars"}
+    }
+  ],
+  "golden": {
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "surface_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
