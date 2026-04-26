@@ -15,6 +15,7 @@ PROBE_PUBLIC_SURFACE_FIXTURES = RECENT_DEEP_RESEARCH_PUBLIC_SURFACE_EVAL_FIXTURE
 PROBE_PUBLIC_SURFACE_METRICS = (
     "release_gate_consistency",
     "resolved_batch_parity",
+    "surface_consistency",
 )
 RECENT_PROBE_EVAL_PARITY_FIXTURES = RECENT_DEEP_RESEARCH_EVAL_LIVE_PARITY_FIXTURES
 UNGROUNDED_ANALOGY_MARKERS = ("real-world analogy", "think of ")
@@ -96,6 +97,8 @@ def evaluate_case_metric(case: dict, metric: str) -> dict:
         return evaluate_resolved_batch_parity(case)
     if metric == "packet_to_prose_fidelity":
         return evaluate_packet_to_prose_fidelity(case)
+    if metric == "surface_consistency":
+        return evaluate_surface_consistency(case)
     raise ValueError(f"Unsupported metric: {metric}")
 
 
@@ -496,6 +499,7 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
 
 def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
     selected_bank = case.get("selected_bank") or case.get("evidence_bank") or []
+    surface_claim_ids = _surface_claim_ids(case)
     reason_tags: list[str] = []
     checked_packets = 0
     for bank in selected_bank:
@@ -508,9 +512,12 @@ def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
             if not evidence_id:
                 continue
             checked_packets += 1
-            packet_reflected = bool([claim_id for claim_id in row.get("claim_ids", []) or [] if str(claim_id).strip()])
-            if not packet_reflected:
+            claim_ids = [str(claim_id).strip() for claim_id in row.get("claim_ids", []) or [] if str(claim_id).strip()]
+            if not claim_ids:
                 reason_tags.append("selected_packet_missing_from_prose")
+                continue
+            if any(claim_id not in surface_claim_ids for claim_id in claim_ids):
+                reason_tags.append("selected_packet_claim_missing_from_surface")
     verdict = "pass" if not reason_tags else "fail"
     return {
         "metric": "packet_to_prose_fidelity",
@@ -519,6 +526,75 @@ def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
         "reason_tags": sorted(set(reason_tags)),
         "checked_packets": checked_packets,
     }
+
+
+def evaluate_surface_consistency(case: dict) -> dict:
+    public_surface = case.get("public_surface") if isinstance(case.get("public_surface"), dict) else {}
+    surfaces = {
+        name: public_surface.get(name)
+        for name in ("status", "result")
+        if isinstance(public_surface.get(name), dict)
+    }
+    reason_tags: list[str] = []
+    if not surfaces:
+        return {
+            "metric": "surface_consistency",
+            "verdict": "pass",
+            "score": 1.0,
+            "reason_tags": [],
+        }
+
+    sample = case.get("sample") if isinstance(case.get("sample"), dict) else {}
+    for name, surface in surfaces.items():
+        operator_summary = surface.get("operator_summary") if isinstance(surface.get("operator_summary"), dict) else {}
+        if not operator_summary:
+            reason_tags.append(f"{name}_missing_operator_summary")
+            continue
+        for field in ("status", "phase"):
+            expected = sample.get(field, surface.get(field))
+            if expected is not None and operator_summary.get(field) != expected:
+                reason_tags.append(f"{name}_operator_{field}_mismatch")
+        for field in ("watch_attach_after_seq", "attempt_window_start_seq"):
+            if field in surface and operator_summary.get(field) != surface.get(field):
+                reason_tags.append(f"{name}_operator_{field}_mismatch")
+        partial_payload_available = surface.get("partial_payload") is not None
+        if operator_summary.get("partial_payload_available") != partial_payload_available:
+            reason_tags.append(f"{name}_operator_partial_payload_available_mismatch")
+
+    if "status" in surfaces and "result" in surfaces:
+        for field in ("watch_attach_after_seq", "attempt_window_start_seq"):
+            if surfaces["status"].get(field) != surfaces["result"].get(field):
+                reason_tags.append(f"status_result_{field}_mismatch")
+        status_partial = surfaces["status"].get("partial_payload") is not None
+        result_partial = surfaces["result"].get("partial_payload") is not None
+        if status_partial != result_partial:
+            reason_tags.append("status_result_partial_payload_available_mismatch")
+
+    reason_tags = sorted(set(reason_tags))
+    score = max(0.0, 1.0 - (0.25 * len(reason_tags)))
+    return {
+        "metric": "surface_consistency",
+        "verdict": "pass" if not reason_tags else "fail",
+        "score": round(score, 3),
+        "reason_tags": reason_tags,
+    }
+
+
+def _surface_claim_ids(case: dict) -> set[str]:
+    claim_ids: set[str] = set()
+    for surface in (case.get("report"), case.get("citations")):
+        if not isinstance(surface, dict):
+            continue
+        for section in surface.get("sections", []) or []:
+            if not isinstance(section, dict):
+                continue
+            for claim in section.get("claims", []) or []:
+                if not isinstance(claim, dict):
+                    continue
+                claim_id = str(claim.get("claim_id", "")).strip()
+                if claim_id:
+                    claim_ids.add(claim_id)
+    return claim_ids
 
 
 def _iter_claims(case: dict):
@@ -1098,6 +1174,80 @@ def test_packet_to_prose_fidelity_rejects_generic_coverage_tag_without_claim_bin
 
     assert result["verdict"] == "fail"
     assert result["reason_tags"] == ["selected_packet_missing_from_prose"]
+
+
+def test_packet_to_prose_fidelity_rejects_claim_id_missing_from_report_surface():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "RecoveryTimeout governs recovery wait behavior.",
+                        }
+                    ],
+                }
+            ],
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_rows": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": ["missing-claim-id"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["selected_packet_claim_missing_from_surface"]
+
+
+def test_surface_consistency_detects_operator_summary_mirror_gap():
+    case = {
+        "sample": {"status": "interrupted", "phase": "researching"},
+        "public_surface": {
+            "status": {
+                "watch_attach_after_seq": 9,
+                "attempt_window_start_seq": 10,
+                "partial_payload": {"plan": {"brief": {"objective": "Surface mirror"}}},
+                "operator_summary": {
+                    "status": "interrupted",
+                    "phase": "researching",
+                    "watch_attach_after_seq": 9,
+                    "attempt_window_start_seq": 99,
+                    "partial_payload_available": False,
+                },
+            },
+            "result": {
+                "watch_attach_after_seq": 9,
+                "attempt_window_start_seq": 10,
+                "partial_payload": {"plan": {"brief": {"objective": "Surface mirror"}}},
+                "operator_summary": {
+                    "status": "interrupted",
+                    "phase": "researching",
+                    "watch_attach_after_seq": 9,
+                    "attempt_window_start_seq": 10,
+                    "partial_payload_available": True,
+                },
+            },
+        },
+    }
+
+    result = evaluate_case_metric(case, "surface_consistency")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == [
+        "status_operator_attempt_window_start_seq_mismatch",
+        "status_operator_partial_payload_available_mismatch",
+    ]
 
 
 @pytest.mark.parametrize(

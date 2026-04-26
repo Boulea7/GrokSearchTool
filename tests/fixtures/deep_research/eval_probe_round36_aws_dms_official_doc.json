@@ -11,14 +11,54 @@
   "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
   "resolved_artifact_batch_id": "20260421T201852-2c429105",
   "artifacts": [
-    {"kind": "sources.json", "metadata": {"batch_id": "20260421T201852-2c429105"}},
-    {"kind": "citations.json", "metadata": {"batch_id": "20260421T201852-2c429105"}},
-    {"kind": "report.json", "metadata": {"batch_id": "20260421T201852-2c429105"}},
-    {"kind": "final_report.md", "metadata": {"batch_id": "20260421T201852-2c429105"}},
-    {"kind": "evidence_items.json", "metadata": {"batch_id": "20260421T201852-2c429105"}},
-    {"kind": "coverage.json", "metadata": {"batch_id": "20260421T201852-2c429105"}},
-    {"kind": "grounding.json", "metadata": {"batch_id": "20260421T201852-2c429105"}},
-    {"kind": "verifier.json", "metadata": {"batch_id": "20260421T201852-2c429105"}}
+    {
+      "kind": "sources.json",
+      "metadata": {
+        "batch_id": "20260421T201852-2c429105"
+      }
+    },
+    {
+      "kind": "citations.json",
+      "metadata": {
+        "batch_id": "20260421T201852-2c429105"
+      }
+    },
+    {
+      "kind": "report.json",
+      "metadata": {
+        "batch_id": "20260421T201852-2c429105"
+      }
+    },
+    {
+      "kind": "final_report.md",
+      "metadata": {
+        "batch_id": "20260421T201852-2c429105"
+      }
+    },
+    {
+      "kind": "evidence_items.json",
+      "metadata": {
+        "batch_id": "20260421T201852-2c429105"
+      }
+    },
+    {
+      "kind": "coverage.json",
+      "metadata": {
+        "batch_id": "20260421T201852-2c429105"
+      }
+    },
+    {
+      "kind": "grounding.json",
+      "metadata": {
+        "batch_id": "20260421T201852-2c429105"
+      }
+    },
+    {
+      "kind": "verifier.json",
+      "metadata": {
+        "batch_id": "20260421T201852-2c429105"
+      }
+    }
   ],
   "report": {
     "status": "degraded",
@@ -49,12 +89,17 @@
   "golden": {
     "release_gate_consistency": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
       "reason_tags": []
     },
     "resolved_batch_parity": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
+      "reason_tags": []
+    },
+    "surface_consistency": {
+      "verdict": "pass",
+      "score": 1,
       "reason_tags": []
     }
   }

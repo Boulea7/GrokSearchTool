@@ -8394,18 +8394,25 @@ async def test_status_and_result_mirror_attempt_window_and_partial_payload_field
 
     status = await runtime.status(job.job_id)
     result = await runtime.result(job.job_id)
+    start_payload = runtime._job_payload(runtime.store.get_job(job.job_id), reused=False)
 
     assert status["watch_attach_after_seq"] == 1
     assert result["watch_attach_after_seq"] == 1
+    assert start_payload["watch_attach_after_seq"] == 1
     assert status["attempt_window_start_seq"] == 2
     assert result["attempt_window_start_seq"] == 2
+    assert start_payload["attempt_window_start_seq"] == 2
     assert status["operator_summary"]["watch_attach_after_seq"] == status["watch_attach_after_seq"]
     assert result["operator_summary"]["watch_attach_after_seq"] == result["watch_attach_after_seq"]
+    assert start_payload["operator_summary"]["watch_attach_after_seq"] == start_payload["watch_attach_after_seq"]
     assert status["operator_summary"]["attempt_window_start_seq"] == status["attempt_window_start_seq"]
     assert result["operator_summary"]["attempt_window_start_seq"] == result["attempt_window_start_seq"]
+    assert start_payload["operator_summary"]["attempt_window_start_seq"] == start_payload["attempt_window_start_seq"]
     assert status["operator_summary"]["partial_payload_available"] is True
     assert result["operator_summary"]["partial_payload_available"] is True
+    assert start_payload["operator_summary"]["partial_payload_available"] is True
     assert status["partial_payload"]["plan"]["brief"]["objective"] == "Mirror attempt window surface"
+    assert start_payload["partial_payload"]["plan"]["brief"]["objective"] == "Mirror attempt window surface"
     assert result["partial_payload"]["source_policy"]["web_mode"] == "restrict"
     assert result["partial_payload"]["lineage"]["continued_from_job_id"] == "job-prev"
     assert result["partial_payload"]["outline_state"]["current_version"] == 2

@@ -1,5 +1,9 @@
 {
-  "sample": "probe-round39-aws-dms-operation-ranking",
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing",
+    "runtime_warnings": []
+  },
   "query": "Follow up AWS DMS ModifyReplicationTask and DescribeReplicationTasks checkpoint semantics with official docs only; focus on CdcStartPosition, RecoveryCheckpoint, and operation-specific API visibility",
   "plan": {
     "brief": {
@@ -60,7 +64,22 @@
   "golden": {
     "ranking_noise_suppression": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
+      "reason_tags": []
+    },
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1,
+      "reason_tags": []
+    },
+    "surface_consistency": {
+      "verdict": "pass",
+      "score": 1,
       "reason_tags": []
     }
   }

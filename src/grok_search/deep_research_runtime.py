@@ -604,17 +604,7 @@ def _docs_aws_namespace_priority(source: dict[str, Any], reference_texts: list[s
         return 0
     reference_text_values = [str(value or "") for value in reference_texts or []]
     reference = " ".join(reference_text_values).lower()
-    dms_signals = (
-        "aws dms",
-        " describereplicationtasks",
-        " startreplicationtask",
-        " modifyreplicationtask",
-        " cdcstartposition",
-        " awsdms_txn_state",
-        " recoverytimeout",
-        " replication task",
-    )
-    if not any(signal in f" {reference} " for signal in dms_signals):
+    if not _aws_dms_intent_signals(reference):
         return 0
     traits = _source_doc_traits(source)
     if "/dms/latest/" in url:
@@ -640,6 +630,26 @@ def _docs_aws_namespace_priority(source: dict[str, Any], reference_texts: list[s
     ):
         return 3
     return -2
+
+
+def _aws_dms_intent_signals(text: str) -> tuple[str, ...]:
+    normalized = f" {str(text or '').lower()} "
+    signals = (
+        ("aws dms", "aws_dms"),
+        ("databasemigrationservice", "databasemigrationservice"),
+        (" describereplicationtasks", "describe_replication_tasks"),
+        (" startreplicationtask", "start_replication_task"),
+        (" modifyreplicationtask", "modify_replication_task"),
+        (" cdcstartposition", "cdc_start_position"),
+        (" recoverycheckpoint", "recovery_checkpoint"),
+        (" awsdms_txn_state", "awsdms_txn_state"),
+        (" recoverytimeout", "recovery_timeout"),
+        (" replication task", "replication_task"),
+        (" postgres", "postgres"),
+        (" resume", "resume"),
+        (" restart", "restart"),
+    )
+    return tuple(label for marker, label in signals if marker in normalized)
 
 
 def _continuation_anchor_terms(continuation: DeepResearchContinuationState) -> list[str]:
@@ -2474,6 +2484,37 @@ def _partial_payload(
     return payload
 
 
+def _attach_operator_surface_fields(
+    payload: dict[str, Any],
+    *,
+    store: DeepResearchStore,
+    job: DeepResearchJob,
+    diagnostics: dict[str, Any],
+    final_bundle: dict[str, Any] | None,
+    include_partial_report: bool,
+) -> dict[str, Any]:
+    watch_attach_after_seq = _attempt_window_anchor_seq(store, job)
+    payload["watch_attach_after_seq"] = watch_attach_after_seq
+    payload["attempt_window_start_seq"] = watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0
+    partial_payload = _partial_payload(store, job, include_partial_report=include_partial_report)
+    payload["partial_payload"] = partial_payload
+    payload["operator_summary"] = {
+        **_operator_summary_payload(
+            job,
+            diagnostics=diagnostics,
+            final_bundle=final_bundle,
+        ),
+        "current_checkpoint_kind": payload["current_checkpoint_kind"],
+        "current_checkpoint_seq": payload["current_checkpoint_seq"],
+        "artifact_fallback_used": payload["artifact_fallback_used"],
+        "artifact_visibility_reason": payload["artifact_visibility_reason"],
+        "partial_payload_available": partial_payload is not None,
+        "watch_attach_after_seq": watch_attach_after_seq,
+        "attempt_window_start_seq": payload["attempt_window_start_seq"],
+    }
+    return payload
+
+
 def _job_prefers_resolved_final_bundle(job: DeepResearchJob) -> bool:
     if job.status == "completed":
         return True
@@ -3753,7 +3794,7 @@ def _source_policy_payload(
 ) -> dict[str, Any]:
     include_domains = list(job.include_domains)
     exclude_domains = list(job.exclude_domains)
-    official_doc_mode = any(domain.startswith("docs.") or domain == "docs.aws.amazon.com" for domain in include_domains)
+    official_doc_mode = any(_is_official_doc_domain(domain) for domain in include_domains)
     return {
         "mode": "official_docs_only" if official_doc_mode else "mixed_web",
         "allowed_domains": include_domains,
@@ -4725,7 +4766,7 @@ def _hydrate_evidence_source_ids(
     return hydrated
 
 
-def _domain_looks_like_official_docs(domain: str) -> bool:
+def _is_official_doc_domain(domain: str) -> bool:
     normalized = (domain or "").strip().lower()
     if not normalized:
         return False
@@ -4734,7 +4775,11 @@ def _domain_looks_like_official_docs(domain: str) -> bool:
     return normalized.startswith(_OFFICIAL_DOC_HOST_PREFIXES)
 
 
-def _source_looks_like_official_docs(source: dict[str, Any]) -> bool:
+def _domain_looks_like_official_docs(domain: str) -> bool:
+    return _is_official_doc_domain(domain)
+
+
+def _is_official_doc_source(source: dict[str, Any]) -> bool:
     if not isinstance(source, dict):
         return False
     source_type = str(source.get("source_type", "") or "").strip().lower()
@@ -4756,7 +4801,11 @@ def _source_looks_like_official_docs(source: dict[str, Any]) -> bool:
             domain = urlsplit(str(source["url"])).netloc.lower()
         except Exception:
             domain = ""
-    return _domain_looks_like_official_docs(domain)
+    return _is_official_doc_domain(domain)
+
+
+def _source_looks_like_official_docs(source: dict[str, Any]) -> bool:
+    return _is_official_doc_source(source)
 
 
 def _bootstrap_internal_state(
@@ -4869,7 +4918,7 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
             domain = ""
 
     traits = _source_doc_traits(source)
-    if url.startswith("https://docs.") or url.startswith("http://docs.") or domain.startswith("docs.") or "/docs/" in url or "/documentation/" in url:
+    if _is_official_doc_domain(domain) or "/docs/" in url or "/documentation/" in url:
         bias = 3
         if "api_reference" in traits or "reference" in traits:
             bias += 2
@@ -4900,7 +4949,7 @@ def _source_type(source: dict[str, Any]) -> str:
             domain = urlsplit(url).netloc.lower()
         except Exception:
             domain = ""
-    if url.startswith("https://docs.") or url.startswith("http://docs.") or domain.startswith("docs.") or "/docs/" in url:
+    if _is_official_doc_domain(domain) or "/docs/" in url:
         return "official_docs"
     if domain.startswith("standards.") or "standards." in domain or "/rfc" in url or "/spec" in url or "/standard" in url:
         return "standard"
@@ -5278,25 +5327,14 @@ class DeepResearchRuntime:
         payload["runtime_warnings"] = diagnostics["runtime_warnings"]
         payload["constraint_violations"] = diagnostics["constraint_violations"]
         payload["artifact_visibility_reason"] = visibility_reason
-        watch_attach_after_seq = _attempt_window_anchor_seq(self.store, job)
-        payload["watch_attach_after_seq"] = watch_attach_after_seq
-        payload["attempt_window_start_seq"] = watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0
-        partial_payload = _partial_payload(self.store, job, include_partial_report=True)
-        payload["partial_payload"] = partial_payload
-        operator_summary = _operator_summary_payload(
-            job,
+        return _attach_operator_surface_fields(
+            payload,
+            store=self.store,
+            job=job,
             diagnostics=diagnostics,
             final_bundle=final_bundle,
+            include_partial_report=True,
         )
-        operator_summary["current_checkpoint_kind"] = payload["current_checkpoint_kind"]
-        operator_summary["current_checkpoint_seq"] = payload["current_checkpoint_seq"]
-        operator_summary["artifact_fallback_used"] = payload["artifact_fallback_used"]
-        operator_summary["artifact_visibility_reason"] = payload["artifact_visibility_reason"]
-        operator_summary["partial_payload_available"] = partial_payload is not None
-        operator_summary["watch_attach_after_seq"] = watch_attach_after_seq
-        operator_summary["attempt_window_start_seq"] = payload["attempt_window_start_seq"]
-        payload["operator_summary"] = operator_summary
-        return payload
 
     async def events(self, job_id: str, *, after_seq: int = 0, limit: int = 100) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
@@ -5502,26 +5540,14 @@ class DeepResearchRuntime:
                 if not (unresolved_batch_backed and artifact.get("kind") in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS)
             ],
         }
-        watch_attach_after_seq = _attempt_window_anchor_seq(self.store, job)
-        payload["watch_attach_after_seq"] = watch_attach_after_seq
-        payload["attempt_window_start_seq"] = watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0
-        partial_payload = _partial_payload(self.store, job, include_partial_report=include_partial)
-        payload["partial_payload"] = partial_payload
-        payload["operator_summary"] = {
-            **_operator_summary_payload(
-                job,
-                diagnostics=diagnostics,
-                final_bundle=final_bundle,
-            ),
-            "current_checkpoint_kind": payload["current_checkpoint_kind"],
-            "current_checkpoint_seq": payload["current_checkpoint_seq"],
-            "artifact_fallback_used": payload["artifact_fallback_used"],
-            "artifact_visibility_reason": payload["artifact_visibility_reason"],
-            "partial_payload_available": partial_payload is not None,
-            "watch_attach_after_seq": watch_attach_after_seq,
-            "attempt_window_start_seq": payload["attempt_window_start_seq"],
-        }
-        return payload
+        return _attach_operator_surface_fields(
+            payload,
+            store=self.store,
+            job=job,
+            diagnostics=diagnostics,
+            final_bundle=final_bundle,
+            include_partial_report=include_partial,
+        )
 
     def read_artifact(self, job_id: str, kind: str) -> dict[str, Any]:
         job = self.store.get_job(job_id)
@@ -7156,26 +7182,14 @@ class DeepResearchRuntime:
         payload["runtime_warnings"] = diagnostics["runtime_warnings"]
         payload["constraint_violations"] = diagnostics["constraint_violations"]
         payload["artifact_visibility_reason"] = visibility_reason
-        watch_attach_after_seq = _attempt_window_anchor_seq(self.store, job)
-        payload["watch_attach_after_seq"] = watch_attach_after_seq
-        payload["attempt_window_start_seq"] = watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0
-        partial_payload = _partial_payload(self.store, job, include_partial_report=True)
-        payload["partial_payload"] = partial_payload
-        payload["operator_summary"] = {
-            **_operator_summary_payload(
-                job,
-                diagnostics=diagnostics,
-                final_bundle=final_bundle,
-            ),
-            "current_checkpoint_kind": payload["current_checkpoint_kind"],
-            "current_checkpoint_seq": payload["current_checkpoint_seq"],
-            "artifact_fallback_used": payload["artifact_fallback_used"],
-            "artifact_visibility_reason": payload["artifact_visibility_reason"],
-            "partial_payload_available": partial_payload is not None,
-            "watch_attach_after_seq": watch_attach_after_seq,
-            "attempt_window_start_seq": watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0,
-        }
-        return payload
+        return _attach_operator_surface_fields(
+            payload,
+            store=self.store,
+            job=job,
+            diagnostics=diagnostics,
+            final_bundle=final_bundle,
+            include_partial_report=True,
+        )
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
         payload = job.model_dump()
