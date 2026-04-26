@@ -670,6 +670,10 @@ def update_section_banks(
         selected_section_id = str(entry.get("selected_section_id", "")).strip()
         if selected_section_id:
             selected_section_ids.append(selected_section_id)
+        for raw_section_id in entry.get("selected_section_ids", []) or []:
+            normalized_section_id = str(raw_section_id).strip()
+            if normalized_section_id and normalized_section_id not in selected_section_ids:
+                selected_section_ids.append(normalized_section_id)
         for section_id in materialized_section_ids:
             if section_id not in selected_section_ids:
                 selected_section_ids.append(section_id)

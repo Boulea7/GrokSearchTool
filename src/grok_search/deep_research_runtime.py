@@ -225,6 +225,7 @@ _STRUCTURAL_SAFE_QUERY_REPAIR_SOURCES = {
 }
 _NON_BLOCKING_VERIFIER_REASON_CODES = {
     "medium_single_source_search_only",
+    "official_doc_family_single_page_only",
     "selected_evidence_unused",
 }
 _EVIDENCE_ITEMS_ARTIFACT_KIND = "evidence_items.json"
@@ -608,6 +609,8 @@ def _docs_aws_namespace_priority(source: dict[str, Any], reference_texts: list[s
         return 0
     traits = _source_doc_traits(source)
     if "/dms/latest/" in url:
+        return 2
+    if "/cli/latest/reference/dms/" in url:
         return 2
     if "prescriptive_guidance" in traits or "troubleshooting" in traits:
         return -2
@@ -1476,6 +1479,9 @@ def _strip_summary_scaffolding(value: str) -> str:
         "low confidence:",
         "key point:",
         "key finding:",
+        "excerpt:",
+        "selected packet:",
+        "source excerpt:",
         "overall,",
     )
     changed = True
@@ -2020,7 +2026,26 @@ def _coverage_gaps_matches_report(
         query=str(coverage_gaps_value.get("query", "") or report_value.get("query", "") or ""),
         coverage=report_coverage,
     )
-    return coverage_gaps_value == expected_payload
+    gaps_value = coverage_gaps_value.get("gaps")
+    legacy_gap_shape = isinstance(gaps_value, list) and not any(
+        isinstance(gap, dict) and "blocking_scope" in gap for gap in gaps_value
+    )
+    if legacy_gap_shape:
+        legacy_keys = {
+            "query",
+            "unanswered_sections",
+            "uncovered_sub_questions",
+            "hard_uncovered_targets",
+            "coverage_gate_passed",
+            "hard_coverage_gate_passed",
+            "hard_gap_count",
+            "total_gap_count",
+        }
+        return all(coverage_gaps_value.get(key) == expected_payload.get(key) for key in legacy_keys)
+    for key, value in coverage_gaps_value.items():
+        if expected_payload.get(key) != value:
+            return False
+    return True
 
 
 def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
@@ -2771,7 +2796,12 @@ def _finalize_brief_payload(
     coverage_checklist = _normalize_string_list(normalized.get("coverage_checklist"))
     if not coverage_checklist:
         coverage_checklist = list(normalized["must_cover"])
+    full_coverage_checklist = list(coverage_checklist)
     normalized["coverage_checklist"] = _sanitize_follow_up_surface_items(coverage_checklist, limit=6)
+    if len(full_coverage_checklist) > len(normalized["coverage_checklist"]):
+        normalized_scope = dict(normalized.get("scope") or {})
+        normalized_scope["full_coverage_checklist"] = full_coverage_checklist
+        normalized["scope"] = normalized_scope
     return normalized
 
 
@@ -3707,6 +3737,11 @@ def _result_text_covers_item(result: dict[str, Any], item: str) -> bool:
 
 
 def _stop_policy_targets(plan: DeepResearchPlan) -> list[str]:
+    full_checklist = plan.brief.scope.get("full_coverage_checklist") if isinstance(plan.brief.scope, dict) else None
+    if isinstance(full_checklist, list):
+        targets = _normalize_string_list(full_checklist)
+        if targets:
+            return targets
     targets = _normalize_string_list(plan.brief.coverage_checklist)
     if targets:
         return targets
@@ -3866,10 +3901,23 @@ def _selected_bank_payload(
         evidence_id = str(entry.get("evidence_id", "")).strip()
         if not evidence_id:
             continue
+        selected_section_ids = []
         selected_section_id = str(entry.get("selected_section_id", "")).strip()
         if selected_section_id:
+            selected_section_ids.append(selected_section_id)
+        for raw_section_id in entry.get("selected_section_ids", []) or []:
+            normalized_section_id = str(raw_section_id).strip()
+            if normalized_section_id and normalized_section_id not in selected_section_ids:
+                selected_section_ids.append(normalized_section_id)
+        selection_reason = (
+            str(entry.get("disposition_reason", "")).strip()
+            or str(entry.get("selection_reason", "")).strip()
+            or str(entry.get("disposition", "")).strip()
+            or str(entry.get("decision_state", "")).strip()
+        )
+        for selected_section_id in selected_section_ids:
             decisions_by_section_evidence[(selected_section_id, evidence_id)] = {
-                "selection_reason": str(entry.get("disposition_reason", "")).strip(),
+                "selection_reason": selection_reason,
                 "coverage_tags": list(entry.get("question_ids", []) or []),
                 "rejected_reason": "",
             }
@@ -3877,10 +3925,16 @@ def _selected_bank_payload(
             normalized_section_id = str(rejected_section_id).strip()
             if not normalized_section_id:
                 continue
+            rejected_reason = (
+                str(entry.get("rejected_reason", "")).strip()
+                or str(entry.get("disposition_reason", "")).strip()
+                or str(entry.get("decision_state", "")).strip()
+                or "not_selected_for_section"
+            )
             decisions_by_section_evidence[(normalized_section_id, evidence_id)] = {
                 "selection_reason": "",
                 "coverage_tags": list(entry.get("question_ids", []) or []),
-                "rejected_reason": str(entry.get("disposition_reason", "")).strip() or "not_selected_for_section",
+                "rejected_reason": rejected_reason,
             }
     payload: list[dict[str, Any]] = []
     for bank in section_banks:
@@ -3997,14 +4051,17 @@ def _evidence_bank_payload(
 
 def _build_section_prose(section: dict[str, Any]) -> str:
     summary = _strip_summary_scaffolding(_normalize_whitespace(str(section.get("summary", "") or "")))
-    raw_claim_texts = [
-        _strip_summary_scaffolding(_normalize_whitespace(str(claim.get("text", "") or "")))
-        for claim in section.get("claims", []) or []
-        if isinstance(claim, dict) and _normalize_whitespace(str(claim.get("text", "") or ""))
-    ]
+    claim_texts: list[str] = []
+    for claim in section.get("claims", []) or []:
+        if not isinstance(claim, dict):
+            continue
+        text = _strip_summary_scaffolding(_normalize_whitespace(str(claim.get("text", "") or "")))
+        if not text:
+            continue
+        claim_texts.append(text)
     unique_sentences: list[str] = []
     seen_sentence_keys: set[str] = set()
-    for candidate in [summary, *raw_claim_texts]:
+    for candidate in [summary, *claim_texts]:
         if not candidate or _is_noisy_text(candidate):
             continue
         normalized_candidate = candidate.rstrip(".")
@@ -4207,7 +4264,15 @@ def _packet_to_prose_fidelity_payload(
 ) -> dict[str, Any]:
     missing_selected_packet_ids: list[str] = []
     missing_selected_row_ids: list[str] = []
+    missing_selected_claim_ids: list[str] = []
     checked_packet_count = 0
+    report_claim_ids = {
+        str(claim.get("claim_id", "")).strip()
+        for section in sections
+        if isinstance(section, dict)
+        for claim in section.get("claims", []) or []
+        if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
+    }
     for bank in selected_bank:
         if not isinstance(bank, dict):
             continue
@@ -4235,23 +4300,30 @@ def _packet_to_prose_fidelity_payload(
             packet_reflected = bool(claim_ids)
             if not packet_reflected:
                 missing_selected_packet_ids.append(evidence_id)
+            missing_selected_claim_ids.extend(
+                claim_id for claim_id in claim_ids if claim_id not in report_claim_ids
+            )
         selected_row_id_set = set(selected_row_ids)
         missing_selected_row_ids.extend(
             evidence_id for evidence_id in selected_evidence_ids if evidence_id not in selected_row_id_set
         )
     missing_selected_packet_ids = _dedupe_preserve_order(missing_selected_packet_ids)
     missing_selected_row_ids = _dedupe_preserve_order(missing_selected_row_ids)
-    passed = not missing_selected_packet_ids and not missing_selected_row_ids
+    missing_selected_claim_ids = _dedupe_preserve_order(missing_selected_claim_ids)
+    passed = not missing_selected_packet_ids and not missing_selected_row_ids and not missing_selected_claim_ids
     reason_codes: list[str] = []
     if missing_selected_packet_ids:
         reason_codes.append("selected_packet_missing_from_prose")
     if missing_selected_row_ids:
         reason_codes.append("selected_packet_row_missing")
+    if missing_selected_claim_ids:
+        reason_codes.append("selected_packet_claim_missing_from_surface")
     return {
         "passed": passed,
         "checked_packet_count": checked_packet_count,
         "missing_selected_packet_ids": missing_selected_packet_ids,
         "missing_selected_row_ids": missing_selected_row_ids,
+        "missing_selected_claim_ids": missing_selected_claim_ids,
         "reason_codes": reason_codes,
     }
 
@@ -4272,6 +4344,7 @@ def _verification_payload(
     supported_claims: list[dict[str, Any]] = []
     single_source_claims: list[dict[str, Any]] = []
     conflicted_claims: list[dict[str, Any]] = []
+    all_claims: list[dict[str, Any]] = []
     confidence_by_section: dict[str, str] = {}
     for section in sections:
         if not isinstance(section, dict):
@@ -4289,6 +4362,7 @@ def _verification_payload(
                 "text": str(claim.get("text", "") or ""),
                 "confidence": str(claim.get("confidence", "") or ""),
             }
+            all_claims.append(claim_payload)
             if claim_id and claim_id not in flagged_claim_ids:
                 supported_claims.append(claim_payload)
             supporting_source_count = len(
@@ -4308,7 +4382,7 @@ def _verification_payload(
     if "conflict" in set(verifier.get("reason_codes", []) or []):
         derived_conflicted_claims = [
             claim_payload
-            for claim_payload in [*supported_claims, *single_source_claims]
+            for claim_payload in all_claims
             if str(claim_payload.get("claim_id", "")).strip() in flagged_claim_ids
         ]
         verifier_conflicted_claims = [
@@ -4376,15 +4450,43 @@ def _coverage_gaps_payload(
     hard_uncovered_targets = _dedupe_preserve_order(
         [str(item) for item in coverage.get("hard_uncovered_targets", []) or [] if str(item).strip()]
     )
+    def _gap_hint(target: str, gap_type: str, scope: str) -> dict[str, Any]:
+        query_terms = _normalize_whitespace(f"{query} {target}")
+        include_domains = ["docs.aws.amazon.com"] if _aws_dms_intent_signals(query_terms.lower()) else []
+        return {
+            "target": target,
+            "gap_type": gap_type,
+            "blocking_scope": scope,
+            "search_query": _trim_text(query_terms, limit=180),
+            "reason": gap_type,
+            "source_policy": {"include_domains": include_domains, "exclude_domains": []},
+        }
+
     gaps = [
-        {"gap_type": "unanswered_section", "target": item, "blocking": True}
+        {"gap_type": "unanswered_section", "target": item, "blocking": False, "blocking_scope": "soft"}
         for item in unanswered_sections
     ] + [
-        {"gap_type": "uncovered_sub_question", "target": item, "blocking": True}
+        {"gap_type": "uncovered_sub_question", "target": item, "blocking": False, "blocking_scope": "soft"}
         for item in uncovered_sub_questions
     ] + [
-        {"gap_type": "hard_uncovered_target", "target": item, "blocking": True}
+        {"gap_type": "hard_uncovered_target", "target": item, "blocking": True, "blocking_scope": "hard"}
         for item in hard_uncovered_targets
+    ]
+    follow_up_hints = [
+        _gap_hint(str(gap["target"]), str(gap["gap_type"]), str(gap["blocking_scope"]))
+        for gap in gaps
+        if str(gap.get("target", "")).strip()
+    ]
+    suggested_research_units = [
+        {
+            "title": _trim_text(hint["target"], limit=96),
+            "goal": _trim_text(f"Resolve coverage gap: {hint['target']}", limit=180),
+            "query": hint["search_query"],
+            "source_policy": hint["source_policy"],
+            "reason": hint["reason"],
+            "blocking_scope": hint["blocking_scope"],
+        }
+        for hint in follow_up_hints
     ]
     return {
         "query": query,
@@ -4393,10 +4495,12 @@ def _coverage_gaps_payload(
         "hard_uncovered_targets": hard_uncovered_targets,
         "coverage_gate_passed": bool(coverage.get("coverage_gate_passed", not gaps)),
         "hard_coverage_gate_passed": bool(coverage.get("hard_coverage_gate_passed", not hard_uncovered_targets)),
-        "blocking_gap_count": len(unanswered_sections) + len(uncovered_sub_questions) + len(hard_uncovered_targets),
+        "blocking_gap_count": len(hard_uncovered_targets),
         "hard_gap_count": len(hard_uncovered_targets),
         "total_gap_count": len(gaps),
         "gaps": gaps,
+        "follow_up_hints": follow_up_hints,
+        "suggested_research_units": suggested_research_units,
     }
 
 
@@ -4835,6 +4939,32 @@ def _is_official_doc_source(source: dict[str, Any]) -> bool:
 
 def _source_looks_like_official_docs(source: dict[str, Any]) -> bool:
     return _is_official_doc_source(source)
+
+
+def _official_doc_family_key(source: dict[str, Any]) -> str:
+    url = str(source.get("url", "") or "").strip()
+    domain = str(source.get("domain", "") or "").strip().lower()
+    try:
+        parsed = urlsplit(url)
+        domain = domain or parsed.netloc.lower()
+        path = parsed.path.lower()
+    except Exception:
+        path = ""
+    traits = _source_doc_traits(source)
+    if domain == "docs.aws.amazon.com":
+        if "/dms/latest/apireference/" in path:
+            return "aws:dms:api_reference"
+        if "/dms/latest/userguide/" in path:
+            return "aws:dms:user_guide"
+        if "/cli/latest/reference/dms/" in path:
+            return "aws:dms:cli_reference"
+    if "api_reference" in traits:
+        return f"{domain}:api_reference"
+    if "user_guide" in traits:
+        return f"{domain}:user_guide"
+    if "reference" in traits:
+        return f"{domain}:reference"
+    return f"{domain}:official_docs" if domain else "official_docs"
 
 
 def _bootstrap_internal_state(
@@ -6838,9 +6968,11 @@ class DeepResearchRuntime:
 
         def _continuation_artifact_text(kind: str, current_text: str) -> str:
             if use_final_bundle:
-                text = _read_text_if_exists(final_bundle["paths"][kind])
-                artifact_origin_map[kind] = "resolved_final_bundle"
-                return text or ""
+                path = (final_bundle.get("paths") or {}).get(kind)
+                text = _read_text_if_exists(path) if path else ""
+                if text:
+                    artifact_origin_map[kind] = "resolved_final_bundle"
+                    return text
             if bundle_candidate is not None:
                 batch_text = _read_batch_artifact_text(bundle_candidate, kind)
                 if batch_text:
@@ -6857,9 +6989,30 @@ class DeepResearchRuntime:
         current_evidence_items_text = self.store.read_artifact_text(
             continue_from_job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND
         ) or ""
+        current_selected_bank_text = self.store.read_artifact_text(
+            continue_from_job_id, _SELECTED_BANK_ARTIFACT_KIND
+        ) or ""
+        current_verification_text = self.store.read_artifact_text(
+            continue_from_job_id, _VERIFICATION_ARTIFACT_KIND
+        ) or ""
+        current_coverage_gaps_text = self.store.read_artifact_text(
+            continue_from_job_id, _COVERAGE_GAPS_ARTIFACT_KIND
+        ) or ""
         evidence_items_text = _continuation_artifact_text(
             _EVIDENCE_ITEMS_ARTIFACT_KIND,
             current_evidence_items_text,
+        ) or ""
+        selected_bank_text = _continuation_artifact_text(
+            _SELECTED_BANK_ARTIFACT_KIND,
+            current_selected_bank_text,
+        ) or ""
+        verification_text = _continuation_artifact_text(
+            _VERIFICATION_ARTIFACT_KIND,
+            current_verification_text,
+        ) or ""
+        coverage_gaps_text = _continuation_artifact_text(
+            _COVERAGE_GAPS_ARTIFACT_KIND,
+            current_coverage_gaps_text,
         ) or ""
         outline_versions_text = current_outline_versions_text
         if use_final_bundle and not evidence_items_text:
@@ -6873,6 +7026,21 @@ class DeepResearchRuntime:
             report_value, _ = _safe_load_json_artifact(report_text)
             if _validate_json_artifact_shape("report.json", report_value) is None and isinstance(report_value, dict):
                 report = report_value
+        selected_bank_payload: list[dict[str, Any]] = []
+        if selected_bank_text:
+            selected_bank_value, selected_bank_error = _safe_load_json_artifact(selected_bank_text)
+            if selected_bank_error is None and isinstance(selected_bank_value, list):
+                selected_bank_payload = [item for item in selected_bank_value if isinstance(item, dict)]
+        verification_payload: dict[str, Any] = {}
+        if verification_text:
+            verification_value, verification_error = _safe_load_json_artifact(verification_text)
+            if verification_error is None and isinstance(verification_value, dict):
+                verification_payload = verification_value
+        coverage_gaps_payload: dict[str, Any] = {}
+        if coverage_gaps_text:
+            coverage_gaps_value, coverage_gaps_error = _safe_load_json_artifact(coverage_gaps_text)
+            if coverage_gaps_error is None and isinstance(coverage_gaps_value, dict):
+                coverage_gaps_payload = coverage_gaps_value
 
         prior_plan_summary = ""
         plan_payload: dict[str, Any] = {}
@@ -7005,6 +7173,25 @@ class DeepResearchRuntime:
         carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
         carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
+        trusted_selected_evidence_ids = {
+            str(evidence_id).strip()
+            for bank in selected_bank_payload
+            for evidence_id in bank.get("selected_evidence_ids", []) or []
+            if str(evidence_id).strip()
+        }
+        trusted_selected_evidence_ids.update(
+            str(row.get("evidence_id", "")).strip()
+            for bank in selected_bank_payload
+            for row in bank.get("selected_rows", []) or []
+            if isinstance(row, dict) and str(row.get("evidence_id", "")).strip()
+        )
+        if trusted_selected_evidence_ids:
+            carry_forward_evidence = [
+                item
+                for item in carry_forward_evidence
+                if str(item.get("evidence_id", "")).strip() in trusted_selected_evidence_ids
+            ]
+            artifact_origin_map["carry_forward_evidence_filter"] = _SELECTED_BANK_ARTIFACT_KIND
         carry_forward_outline_versions = _append_outline_version_if_changed(
             carry_forward_outline_versions,
             sections=carry_forward_sections,
@@ -7072,8 +7259,42 @@ class DeepResearchRuntime:
         continuation_goal = plan_payload.get("query") or job.query
         source_count = len(carry_forward_sources)
         carry_forward_constraints = _carry_forward_constraints(job=job, plan_payload=plan_payload)
-        confirmed_claims = _collect_confirmed_claims(carry_forward_sections)
-        open_questions = _collect_continuation_open_questions(report)
+        supported_claims_from_verification = [
+            _summarize_evidence_text(str(claim.get("text", "") or ""), limit=180)
+            for claim in verification_payload.get("supported_claims", []) or []
+            if isinstance(claim, dict)
+        ]
+        confirmed_claims = _dedupe_preserve_order(
+            [
+                claim
+                for claim in supported_claims_from_verification
+                if claim and not _is_noisy_text(claim)
+            ]
+        ) or _collect_confirmed_claims(carry_forward_sections)
+        open_question_candidates = [
+            *_collect_continuation_open_questions(report),
+            *[
+                str(item).strip()
+                for item in verification_payload.get("unresolved_sections", []) or []
+                if str(item).strip()
+            ],
+            *[
+                str(item).strip()
+                for item in coverage_gaps_payload.get("uncovered_sub_questions", []) or []
+                if str(item).strip()
+            ],
+            *[
+                str(item).strip()
+                for item in coverage_gaps_payload.get("hard_uncovered_targets", []) or []
+                if str(item).strip()
+            ],
+            *[
+                str(hint.get("target", "")).strip()
+                for hint in coverage_gaps_payload.get("follow_up_hints", []) or []
+                if isinstance(hint, dict) and str(hint.get("target", "")).strip()
+            ],
+        ]
+        open_questions = _sanitize_follow_up_surface_items(open_question_candidates, limit=8)
         trusted_source_headers = _trusted_source_headers(carry_forward_sources)
         confirmed_claims_filtered = bool(carry_forward_sections) and not bool(confirmed_claims)
         open_questions_filtered = bool(
@@ -8073,7 +8294,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             *runtime_warnings,
             *_coverage_warning_codes(report_coverage),
             *release_gate["reason_codes"],
-            *release_gate.get("soft_reason_codes", []),
+            *[
+                code
+                for code in release_gate.get("soft_reason_codes", [])
+                if code != "official_doc_family_single_page_only"
+            ],
         }
     )
     if plan.planner_metadata.get("used_fallback"):
@@ -9450,7 +9675,7 @@ def _build_release_gate(
             if (
                 official_docs_only
                 and coverage_incomplete
-                and code == "medium_single_source_search_only"
+                and code in {"medium_single_source_search_only", "official_doc_family_single_page_only"}
             ):
                 blocking_reason_codes.append(code)
                 continue
@@ -9615,6 +9840,7 @@ def _build_verifier_diagnostics(
         "conflicted_claims": 0,
         "low_value_claims": 0,
         "medium_single_source_search_only": 0,
+        "official_doc_family_single_page_only": 0,
         "same_domain_off_topic_dominance": 0,
         "unbound_citation_sources": 0,
         "unbound_evidence_ids": 0,
@@ -9674,6 +9900,11 @@ def _build_verifier_diagnostics(
             source_id in source_registry and _source_looks_like_official_docs(source_registry[source_id])
             for source_id in selected_evidence_source_ids
         )
+        selected_official_family_keys = {
+            _official_doc_family_key(source_registry[source_id])
+            for source_id in selected_evidence_source_ids
+            if source_id in source_registry and _source_looks_like_official_docs(source_registry[source_id])
+        }
         used_selected_evidence_ids: set[str] = set()
         section_claim_snapshots: list[dict[str, Any]] = []
         for claim in section.get("claims", []):
@@ -9856,6 +10087,9 @@ def _build_verifier_diagnostics(
                         flagged_claim_ids.append(claim_id)
                     integrity_counts["medium_single_source_search_only"] += 1
                     reason_codes.append("medium_single_source_search_only")
+                elif len(selected_official_family_keys) <= 1:
+                    integrity_counts["official_doc_family_single_page_only"] += 1
+                    reason_codes.append("official_doc_family_single_page_only")
             if (
                 confidence == "low"
                 and supporting_source_count <= 1
