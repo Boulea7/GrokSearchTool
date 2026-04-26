@@ -36,6 +36,8 @@ RECENT_DEEP_RESEARCH_PUBLIC_SURFACE_EVAL_FIXTURES = (
     "eval_probe_round37_aws_dms_official_doc.json",
     "eval_probe_round37_lifecycle_public_surface.json",
     "eval_probe_round38_aws_dms_partial_failure.json",
+    "eval_probe_round39_aws_dms_binding_consistency.json",
+    "eval_probe_round39_aws_dms_operation_ranking.json",
 )
 RECENT_DEEP_RESEARCH_EVAL_LIVE_PARITY_FIXTURES = tuple(
     (

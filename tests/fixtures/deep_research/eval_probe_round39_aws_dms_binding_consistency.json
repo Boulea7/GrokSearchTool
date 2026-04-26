@@ -1,5 +1,9 @@
 {
-  "sample": "probe-round39-aws-dms-binding-consistency",
+  "sample": {
+    "status": "failed",
+    "phase": "finalizing",
+    "runtime_warnings": []
+  },
   "query": "Follow up AWS DMS console CDC checkpoint and Postgres restart nuance with official docs only",
   "resolved_artifact_batch_id": "batch-round39-binding",
   "sources": [
@@ -176,7 +180,19 @@
     },
     "resolved_batch_parity": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
+      "reason_tags": []
+    },
+    "release_gate_consistency": {
+      "verdict": "fail",
+      "score": 0.7,
+      "reason_tags": [
+        "release_gate_warning_gap"
+      ]
+    },
+    "surface_consistency": {
+      "verdict": "pass",
+      "score": 1,
       "reason_tags": []
     }
   }

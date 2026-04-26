@@ -286,27 +286,32 @@
     },
     "planner_boundary": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
       "reason_tags": []
     },
     "ranking_noise_suppression": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
       "reason_tags": []
     },
     "diagnostics_consistency": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
       "reason_tags": []
     },
     "release_gate_consistency": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
       "reason_tags": []
     },
     "resolved_batch_parity": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
+      "reason_tags": []
+    },
+    "surface_consistency": {
+      "verdict": "pass",
+      "score": 1,
       "reason_tags": []
     }
   }
