@@ -12525,7 +12525,7 @@ def test_verifier_flags_cross_section_conflict():
     assert {"claim-1", "claim-2"} <= set(verifier["flagged_claim_ids"])
 
 
-def test_verifier_allows_medium_single_source_search_only_for_selected_official_docs_section():
+def test_verifier_allows_medium_single_source_search_only_but_marks_single_page_official_doc_risk():
     verifier = _build_verifier_diagnostics(
         coverage={"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
         grounding={
@@ -12582,8 +12582,54 @@ def test_verifier_allows_medium_single_source_search_only_for_selected_official_
         ],
     )
 
+    release_gate = _build_release_gate(
+        {"coverage_gate_passed": True, "hard_coverage_gate_passed": True},
+        {
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+        },
+        verifier,
+        source_policy={"mode": "official_docs_only"},
+    )
+
     assert "medium_single_source_search_only" not in verifier["reason_codes"]
+    assert "official_doc_family_single_page_only" in verifier["reason_codes"]
     assert verifier["summary"]["medium_single_source_search_only"] == 0
+    assert verifier["summary"]["official_doc_family_single_page_only"] == 1
+    assert release_gate["passed"] is True
+    assert release_gate["soft_reason_codes"] == ["official_doc_family_single_page_only"]
+
+
+def test_release_gate_blocks_single_page_official_doc_risk_when_coverage_incomplete():
+    coverage = {
+        "coverage_gate_passed": False,
+        "hard_coverage_gate_passed": True,
+        "uncovered_sub_questions": ["DescribeReplicationTasks RecoveryCheckpoint visibility"],
+    }
+    grounding = {
+        "total_claims": 1,
+        "ungrounded_claims": 0,
+        "single_source_claims": 1,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0,
+    }
+    release_gate = _build_release_gate(
+        coverage,
+        grounding,
+        {
+            "passed": False,
+            "reason_codes": ["official_doc_family_single_page_only"],
+            "summary": {"official_doc_family_single_page_only": 1},
+        },
+        source_policy={"mode": "official_docs_only"},
+    )
+
+    assert release_gate["passed"] is False
+    assert release_gate["reason_codes"] == ["official_doc_family_single_page_only"]
+    assert release_gate["soft_reason_codes"] == []
 
 
 def test_verifier_flags_claim_outside_selected_bank_as_soft_packet_reason():
@@ -15060,6 +15106,92 @@ async def test_continuation_confirmed_claims_require_grounded_claims(tmp_path):
     continuation = runtime._build_continuation_context(source.job_id)
 
     assert continuation.confirmed_claims == ["Checkpoint resume continues from the last durable checkpoint."]
+
+
+@pytest.mark.asyncio
+async def test_continuation_uses_verification_and_coverage_gap_artifacts_for_focus(tmp_path):
+    runtime = build_runtime(tmp_path)
+    sections = [
+        {
+            "section_id": "task-visibility",
+            "title": "Task Visibility",
+            "summary": "DescribeReplicationTasks exposes task status.",
+            "claims": [
+                {
+                    "claim_id": "claim-supported",
+                    "text": "DescribeReplicationTasks exposes RecoveryCheckpoint for replication task visibility.",
+                    "citations": ["R1"],
+                    "source_ids": ["R1"],
+                    "evidence_ids": ["e1"],
+                    "confidence": "medium",
+                },
+                {
+                    "claim_id": "claim-flagged",
+                    "text": "StartReplicationTask always restarts every task from the beginning.",
+                    "citations": ["R1"],
+                    "source_ids": ["R1"],
+                    "evidence_ids": ["e-stale"],
+                    "confidence": "medium",
+                },
+            ],
+            "citations": ["R1"],
+            "confidence": "medium",
+        }
+    ]
+    source = create_completed_source_job(
+        runtime,
+        query="AWS DMS continuation source",
+        checkpoint_sections=sections,
+    )
+    runtime.write_artifact(
+        source.job_id,
+        "verification.json",
+        json.dumps(
+            {
+                "supported_claims": [
+                    {
+                        "claim_id": "claim-supported",
+                        "section_id": "task-visibility",
+                        "text": "DescribeReplicationTasks exposes RecoveryCheckpoint for replication task visibility.",
+                        "confidence": "medium",
+                    }
+                ],
+                "single_source_claims": [],
+                "conflicted_claims": [],
+                "unmapped_evidence_ids": [],
+                "confidence_by_section": {"task-visibility": "medium"},
+                "unresolved_sections": ["StartReplicationTask resume semantics"],
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        source.job_id,
+        "coverage_gaps.json",
+        json.dumps(
+            {
+                "query": "AWS DMS continuation source",
+                "uncovered_sub_questions": ["StartReplicationTask resume-processing semantics"],
+                "hard_uncovered_targets": [],
+                "follow_up_hints": [
+                    {
+                        "target": "StartReplicationTask resume-processing semantics",
+                        "search_query": "AWS DMS StartReplicationTask resume-processing",
+                        "reason": "uncovered_sub_question",
+                    }
+                ],
+            }
+        ),
+        "application/json",
+    )
+
+    continuation = runtime._build_continuation_context(source.job_id)
+
+    assert continuation.confirmed_claims == [
+        "DescribeReplicationTasks exposes RecoveryCheckpoint for replication task visibility."
+    ]
+    assert "StartReplicationTask resume-processing semantics" in continuation.open_questions
+    assert all("always restarts every task" not in claim for claim in continuation.confirmed_claims)
 
 
 @pytest.mark.asyncio
@@ -17677,6 +17809,68 @@ async def test_selective_fetch_prefers_exact_operation_identifier_for_replicatio
     assert "resume-processing" not in result["final_report"]
 
 
+@pytest.mark.asyncio
+async def test_selective_fetch_recognizes_aws_dms_cli_namespace_without_camelcase_identifier(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fetched_urls = []
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "cli-task-start",
+                "title": "AWS DMS CLI task start",
+                "goal": "Explain the AWS CLI start-replication-task command for AWS DMS.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "AWS CLI start-replication-task supports AWS DMS start types.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/aws-dms-start-replication-task.html",
+                    "title": "AWS DMS start replication task pattern",
+                    "description": "A broader migration pattern shell.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/cli/latest/reference/dms/start-replication-task.html",
+                    "title": "start-replication-task",
+                    "description": "AWS CLI reference for the AWS DMS start-replication-task command.",
+                    "provider": "grok",
+                },
+            ],
+        )
+
+    async def fetch(url):
+        fetched_urls.append(url)
+        if "/cli/latest/reference/dms/" in url:
+            return "# start-replication-task\n\nThe AWS CLI command exposes start types for AWS DMS replication tasks."
+        return "# Pattern\n\nThis broader migration pattern shell omits the command reference details."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(
+        query="AWS DMS CLI start replication task official docs",
+        include_domains=["docs.aws.amazon.com"],
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+
+    assert fetched_urls == ["https://docs.aws.amazon.com/cli/latest/reference/dms/start-replication-task.html"]
+    assert "The AWS CLI command exposes start types" in result["final_report"]
+    assert "migration pattern shell" not in result["final_report"]
+
+
 def test_extract_markdown_title_ignores_numeric_headings():
     title = deep_research_runtime_module._extract_markdown_title(
         "# 4\n\nValidate checkpoint information.\n\nResume-processing continues from the last checkpoint."
@@ -18506,6 +18700,43 @@ def test_build_section_prose_dedupes_summary_and_claim_repetition():
     assert "recovery metadata is still available" in prose
 
 
+def test_build_section_prose_turns_selected_claims_into_compact_paragraph():
+    prose = deep_research_runtime_module._build_section_prose(
+        {
+            "section_id": "task-recovery",
+            "title": "Task Recovery",
+            "summary": "Medium confidence: Key point: AWS DMS recovery depends on checkpoint metadata.",
+            "claims": [
+                {
+                    "claim_id": "claim-1",
+                    "text": "Excerpt: AWS DMS recovery depends on checkpoint metadata.",
+                    "evidence_ids": ["e1"],
+                    "citations": ["R1"],
+                },
+                {
+                    "claim_id": "claim-2",
+                    "text": "The task settings documentation adds that RecoveryTimeout controls how long recovery waits.",
+                    "evidence_ids": ["e2"],
+                    "citations": ["R2"],
+                },
+                {
+                    "claim_id": "claim-3",
+                    "text": "Selected packet: AWS DMS recovery depends on checkpoint metadata.",
+                    "evidence_ids": ["e1"],
+                    "citations": ["R1"],
+                },
+            ],
+        }
+    )
+
+    assert prose.count("AWS DMS recovery depends on checkpoint metadata") == 1
+    assert "Medium confidence:" not in prose
+    assert "Key point:" not in prose
+    assert "Excerpt:" not in prose
+    assert "Selected packet:" not in prose
+    assert "RecoveryTimeout controls how long recovery waits" in prose
+
+
 def test_build_final_report_omits_duplicate_section_summary_when_prose_is_equivalent():
     report = deep_research_runtime_module._build_final_report(
         DeepResearchPlan.model_validate(
@@ -18728,8 +18959,30 @@ def test_coverage_gaps_payload_marks_hard_uncovered_targets_as_blocking():
             "gap_type": "hard_uncovered_target",
             "target": "Explain RecoveryTimeout behavior.",
             "blocking": True,
+            "blocking_scope": "hard",
         }
     ]
+
+
+def test_coverage_gaps_payload_distinguishes_soft_gaps_and_follow_up_hints():
+    payload = deep_research_runtime_module._coverage_gaps_payload(
+        query="AWS DMS DescribeReplicationTasks RecoveryCheckpoint official docs",
+        coverage={
+            "coverage_gate_passed": False,
+            "hard_coverage_gate_passed": True,
+            "unanswered_sections": ["Task settings"],
+            "uncovered_sub_questions": ["DescribeReplicationTasks RecoveryCheckpoint visibility"],
+            "hard_uncovered_targets": [],
+        },
+    )
+
+    assert payload["blocking_gap_count"] == 0
+    assert payload["total_gap_count"] == 2
+    assert {gap["blocking_scope"] for gap in payload["gaps"]} == {"soft"}
+    assert all(gap["blocking"] is False for gap in payload["gaps"])
+    hint_targets = " ".join(hint["target"] for hint in payload["follow_up_hints"])
+    assert "DescribeReplicationTasks" in hint_targets
+    assert payload["suggested_research_units"][0]["source_policy"]["include_domains"] == ["docs.aws.amazon.com"]
 
 
 def test_verifier_flags_conflicting_claims_with_negation_mismatch():
@@ -19036,6 +19289,40 @@ def test_packet_to_prose_fidelity_fails_when_selected_row_is_missing():
     assert payload["checked_packet_count"] == 0
     assert payload["missing_selected_row_ids"] == ["e1"]
     assert payload["reason_codes"] == ["selected_packet_row_missing"]
+
+
+def test_packet_to_prose_fidelity_fails_when_selected_claim_missing_from_surface():
+    payload = deep_research_runtime_module._packet_to_prose_fidelity_payload(
+        selected_bank=[
+            {
+                "section_id": "resume-semantics",
+                "selected_evidence_ids": ["e1"],
+                "selected_rows": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": ["claim-missing"],
+                    }
+                ],
+            }
+        ],
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "claims": [
+                    {
+                        "claim_id": "claim-present",
+                        "text": "AWS DMS resumes CDC from a checkpoint.",
+                        "evidence_ids": ["e1"],
+                    }
+                ],
+            }
+        ],
+        final_report="AWS DMS resumes CDC from a checkpoint.",
+    )
+
+    assert payload["passed"] is False
+    assert payload["missing_selected_claim_ids"] == ["claim-missing"]
+    assert "selected_packet_claim_missing_from_surface" in payload["reason_codes"]
 
 
 def test_rebuild_verified_rollup_sections_uses_non_generic_inventory_when_supported_ids_absent():

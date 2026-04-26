@@ -1,0 +1,57 @@
+{
+  "sample": "eval-probe-round40-aws-dms-packet-fidelity-missing-claim-ids",
+  "query": "AWS DMS official docs only: checkpoint and resume behavior for CDC replication tasks",
+  "sources": [
+    {
+      "source_id": "R4",
+      "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+      "title": "Creating tasks for ongoing replication using AWS DMS",
+      "domain": "docs.aws.amazon.com",
+      "source_type": "official_docs",
+      "quality_tier": "official"
+    }
+  ],
+  "report": {
+    "sections": [
+      {
+        "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+        "title": "Overview of DMS CDC Checkpoint Mechanics",
+        "summary": "AWS DMS CDC tasks can use a native CDC start point such as a checkpoint value.",
+        "claims": [
+          {
+            "claim_id": "overview-of-dms-cdc-checkpoint-mechanics-claim-1",
+            "text": "AWS DMS CDC tasks can use a native CDC start point such as a checkpoint value.",
+            "citations": ["R4"],
+            "source_ids": ["R4"],
+            "evidence_ids": ["evidence-u3-fetch-1"]
+          }
+        ]
+      }
+    ],
+    "final_report": "AWS DMS CDC tasks can use a native CDC start point such as a checkpoint value."
+  },
+  "selected_bank": [
+    {
+      "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+      "selected_evidence_ids": ["evidence-u3-fetch-1"],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u3-fetch-1",
+          "selected_section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+          "coverage_tags": ["sq1"],
+          "claim_ids": [],
+          "question_ids": ["sq1"]
+        }
+      ],
+      "candidate_evidence_ids": ["evidence-u3-fetch-1"],
+      "rejected_evidence_ids": []
+    }
+  ],
+  "golden": {
+    "packet_to_prose_fidelity": {
+      "verdict": "fail",
+      "score": 0.0,
+      "reason_tags": ["selected_packet_missing_from_prose"]
+    }
+  }
+}

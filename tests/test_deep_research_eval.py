@@ -97,6 +97,8 @@ def evaluate_case_metric(case: dict, metric: str) -> dict:
         return evaluate_resolved_batch_parity(case)
     if metric == "packet_to_prose_fidelity":
         return evaluate_packet_to_prose_fidelity(case)
+    if metric == "coverage_gap_scope_consistency":
+        return evaluate_coverage_gap_scope_consistency(case)
     if metric == "surface_consistency":
         return evaluate_surface_consistency(case)
     raise ValueError(f"Unsupported metric: {metric}")
@@ -535,6 +537,46 @@ def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
         "score": 1.0 if verdict == "pass" else 0.0,
         "reason_tags": sorted(set(reason_tags)),
         "checked_packets": checked_packets,
+    }
+
+
+def evaluate_coverage_gap_scope_consistency(case: dict) -> dict:
+    coverage_gaps = case.get("coverage_gaps") or {}
+    if not isinstance(coverage_gaps, dict):
+        coverage_gaps = {}
+    gaps = coverage_gaps.get("gaps") or []
+    reason_tags: list[str] = []
+    blocking_count = 0
+    hard_count = 0
+    for gap in gaps:
+        if not isinstance(gap, dict):
+            reason_tags.append("malformed_gap")
+            continue
+        scope = str(gap.get("blocking_scope", "") or "").strip()
+        blocking = bool(gap.get("blocking"))
+        gap_type = str(gap.get("gap_type", "") or "").strip()
+        if scope not in {"hard", "soft"}:
+            reason_tags.append("missing_blocking_scope")
+        if scope == "hard":
+            hard_count += 1
+            if not blocking:
+                reason_tags.append("hard_gap_not_blocking")
+        if scope == "soft" and blocking:
+            reason_tags.append("soft_gap_marked_blocking")
+        if gap_type == "hard_uncovered_target" and scope != "hard":
+            reason_tags.append("hard_target_scope_mismatch")
+        if blocking:
+            blocking_count += 1
+    if int(coverage_gaps.get("blocking_gap_count", 0) or 0) != blocking_count:
+        reason_tags.append("blocking_gap_count_mismatch")
+    if int(coverage_gaps.get("hard_gap_count", 0) or 0) != hard_count:
+        reason_tags.append("hard_gap_count_mismatch")
+    verdict = "pass" if not reason_tags else "fail"
+    return {
+        "metric": "coverage_gap_scope_consistency",
+        "verdict": verdict,
+        "score": 1.0 if verdict == "pass" else 0.0,
+        "reason_tags": sorted(set(reason_tags)),
     }
 
 
@@ -1256,6 +1298,8 @@ def test_packet_to_prose_fidelity_rejects_claim_id_missing_from_report_surface()
     [
         "eval_probe_round40_aws_dms_packet_fidelity.json",
         "eval_probe_round40_aws_dms_packet_fidelity_negative.json",
+        "eval_probe_round40_aws_dms_packet_fidelity_missing_claim_ids.json",
+        "eval_probe_round40_aws_dms_packet_fidelity_claim_surface_mismatch.json",
     ],
 )
 def test_packet_to_prose_fidelity_aws_dms_probe_goldens(fixture_name):
@@ -1263,6 +1307,37 @@ def test_packet_to_prose_fidelity_aws_dms_probe_goldens(fixture_name):
     golden = case["golden"]["packet_to_prose_fidelity"]
 
     result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert_metric_matches_golden(result, golden)
+
+
+def test_coverage_gap_scope_consistency_detects_soft_gap_marked_blocking():
+    case = {
+        "coverage_gaps": {
+            "blocking_gap_count": 1,
+            "hard_gap_count": 0,
+            "gaps": [
+                {
+                    "gap_type": "uncovered_sub_question",
+                    "target": "DescribeReplicationTasks RecoveryCheckpoint visibility",
+                    "blocking": True,
+                    "blocking_scope": "soft",
+                }
+            ],
+        }
+    }
+
+    result = evaluate_case_metric(case, "coverage_gap_scope_consistency")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["soft_gap_marked_blocking"]
+
+
+def test_coverage_gap_scope_consistency_aws_dms_probe_golden():
+    case = load_eval_case("eval_probe_round41_aws_dms_coverage_gate_scope.json")
+    golden = case["golden"]["coverage_gap_scope_consistency"]
+
+    result = evaluate_case_metric(case, "coverage_gap_scope_consistency")
 
     assert_metric_matches_golden(result, golden)
 

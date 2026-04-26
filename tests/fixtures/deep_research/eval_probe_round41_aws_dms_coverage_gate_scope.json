@@ -1,0 +1,62 @@
+{
+  "sample": "eval-probe-round41-aws-dms-coverage-gate-scope",
+  "query": "AWS DMS official docs only: DescribeReplicationTasks and StartReplicationTask checkpoint behavior",
+  "coverage_gaps": {
+    "query": "AWS DMS official docs only: DescribeReplicationTasks and StartReplicationTask checkpoint behavior",
+    "unanswered_sections": ["Task settings"],
+    "uncovered_sub_questions": ["DescribeReplicationTasks RecoveryCheckpoint visibility"],
+    "hard_uncovered_targets": ["StartReplicationTask resume-processing semantics"],
+    "coverage_gate_passed": false,
+    "hard_coverage_gate_passed": false,
+    "blocking_gap_count": 1,
+    "hard_gap_count": 1,
+    "total_gap_count": 3,
+    "gaps": [
+      {
+        "gap_type": "unanswered_section",
+        "target": "Task settings",
+        "blocking": false,
+        "blocking_scope": "soft"
+      },
+      {
+        "gap_type": "uncovered_sub_question",
+        "target": "DescribeReplicationTasks RecoveryCheckpoint visibility",
+        "blocking": false,
+        "blocking_scope": "soft"
+      },
+      {
+        "gap_type": "hard_uncovered_target",
+        "target": "StartReplicationTask resume-processing semantics",
+        "blocking": true,
+        "blocking_scope": "hard"
+      }
+    ],
+    "follow_up_hints": [
+      {
+        "target": "DescribeReplicationTasks RecoveryCheckpoint visibility",
+        "gap_type": "uncovered_sub_question",
+        "blocking_scope": "soft",
+        "search_query": "AWS DMS DescribeReplicationTasks RecoveryCheckpoint official docs",
+        "reason": "uncovered_sub_question",
+        "source_policy": {"include_domains": ["docs.aws.amazon.com"], "exclude_domains": []}
+      }
+    ],
+    "suggested_research_units": [
+      {
+        "title": "DescribeReplicationTasks RecoveryCheckpoint visibility",
+        "goal": "Resolve coverage gap: DescribeReplicationTasks RecoveryCheckpoint visibility",
+        "query": "AWS DMS DescribeReplicationTasks RecoveryCheckpoint official docs",
+        "source_policy": {"include_domains": ["docs.aws.amazon.com"], "exclude_domains": []},
+        "reason": "uncovered_sub_question",
+        "blocking_scope": "soft"
+      }
+    ]
+  },
+  "golden": {
+    "coverage_gap_scope_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
