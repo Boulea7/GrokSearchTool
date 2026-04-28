@@ -1785,6 +1785,29 @@ async def test_deep_research_result_forwards_include_partial_flag(monkeypatch, t
 
 
 @pytest.mark.asyncio
+async def test_deep_research_artifact_uses_runtime_visibility_state(monkeypatch, tmp_path):
+    class FakeRuntime:
+        def read_artifact(self, job_id, kind):
+            return {
+                "content": "# Final Report\n\nArtifact body.",
+                "state": "available",
+                "artifact_visibility_reason": "",
+            }
+
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", FakeRuntime())
+
+    result = await server.deep_research_artifact("job-artifact", "final_report.md")
+
+    assert result == {
+        "job_id": "job-artifact",
+        "artifact": "final_report.md",
+        "content": "# Final Report\n\nArtifact body.",
+        "state": "available",
+        "artifact_visibility_reason": "",
+    }
+
+
+@pytest.mark.asyncio
 async def test_deep_research_result_include_partial_false_hides_real_partial_payload(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path, complete_runner)
     monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)

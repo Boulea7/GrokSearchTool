@@ -754,6 +754,21 @@ class Config:
         return self._get_env_value("TAVILY_API_KEY")
 
     @property
+    def tavily_fallback_enabled(self) -> bool:
+        return (self._get_env_value("TAVILY_FALLBACK_ENABLED", "true") or "true").lower() in ("true", "1", "yes")
+
+    @property
+    def tavily_fallback_api_url(self) -> str:
+        return (
+            self._get_env_value("TAVILY_FALLBACK_API_URL", "https://tavily-fallback.example.com/api/tavily")
+            or "https://tavily-fallback.example.com/api/tavily"
+        )
+
+    @property
+    def tavily_fallback_api_key(self) -> str | None:
+        return self._get_env_value("TAVILY_FALLBACK_API_KEY") or self.tavily_api_key
+
+    @property
     def firecrawl_api_url(self) -> str:
         return self._get_env_value("FIRECRAWL_API_URL", "https://api.firecrawl.dev/v2") or "https://api.firecrawl.dev/v2"
 
@@ -1033,6 +1048,9 @@ class Config:
             "TAVILY_API_URL": self._mask_url(self.tavily_api_url),
             "TAVILY_ENABLED": self.tavily_enabled,
             "TAVILY_API_KEY": self._mask_api_key(self.tavily_api_key) if self.tavily_api_key else "未配置",
+            "TAVILY_FALLBACK_ENABLED": self.tavily_fallback_enabled,
+            "TAVILY_FALLBACK_API_URL": self._mask_url(self.tavily_fallback_api_url),
+            "TAVILY_FALLBACK_API_KEY": self._mask_api_key(self.tavily_fallback_api_key) if self.tavily_fallback_api_key else "未配置",
             "FIRECRAWL_API_URL": self._mask_url(self.firecrawl_api_url),
             "FIRECRAWL_API_KEY": self._mask_api_key(self.firecrawl_api_key) if self.firecrawl_api_key else "未配置",
             "config_status": config_status

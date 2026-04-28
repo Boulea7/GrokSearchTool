@@ -238,6 +238,9 @@ claude mcp add-json grok-search --scope user '{
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
 | `TAVILY_ENABLED` | 否 | `true` | 是否启用 Tavily |
+| `TAVILY_FALLBACK_API_URL` | 否 | `https://tavily-fallback.example.com/api/tavily` | 当主 Tavily 地址是本机 loopback 且不可用时使用的远端 HTTP API fallback 地址 |
+| `TAVILY_FALLBACK_API_KEY` | 否 | 复用 `TAVILY_API_KEY` | Tavily fallback Bearer token；不要写入公开仓库 |
+| `TAVILY_FALLBACK_ENABLED` | 否 | `true` | 是否允许本机 Tavily 端口失败后尝试 fallback |
 | `FIRECRAWL_API_KEY` | 否 | - | Firecrawl API 密钥（用于 `web_fetch` 托底，也可用于 supplemental `web_search`） |
 | `FIRECRAWL_API_URL` | 否 | `https://api.firecrawl.dev/v2` | Firecrawl API 地址 |
 | `GROK_DEBUG` | 否 | `false` | 调试模式；同时控制 debug-only 进度日志与 `ctx.info()` 中间进度转发 |
@@ -505,7 +508,7 @@ claude mcp list
 - 首次建立 `search_strategy` 时必须提供 `approach`；只有在 strategy 已建立后，后续非 `is_revision` 调用才允许只追加 `search_terms`。
 - 当 session 缺失、阶段顺序错误，或 revision 会破坏下游阶段时，当前会返回结构化错误，并明确要求从新 session 重新开始相应 planning 流程。
 
-### `deep_research_start` / `deep_research_status` / `deep_research_events` / `deep_research_result` / `deep_research_resume` / `deep_research_cancel` / `deep_research_list`
+### `deep_research_start` / `deep_research_status` / `deep_research_events` / `deep_research_result` / `deep_research_artifact` / `deep_research_resume` / `deep_research_cancel` / `deep_research_list`
 
 高级深度研究 job 层，适合多分钟、可恢复、可查询中间进度与 artifacts 的报告型任务。
 
@@ -519,6 +522,7 @@ claude mcp list
 - `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要；对 `completed` job，还会额外返回当前是否正在读取 resolved final batch 的 additive 诊断字段，如 `artifact_fallback_used`、`resolved_artifact_batch_id`、`artifact_visibility_reason`。对 `interrupted` / `failed` / `canceled` 且 `current_checkpoint/phase` 已到 `finalizing` 的 job，只要存在一致且可读的 final provenance bundle，当前也应暴露同一批 resolved final artifacts。`evidence_items.json` 现在也会跟着 resolved final batch 一起出现在 `artifact_kinds` / `artifacts` 中；`evidence_bank.json` 与 `verification.json` 目前仍是 additive artifact，不参与 resolved batch 的硬门槛。`status` 现在还会暴露 additive attempt-window / operator 诊断字段，如 `watch_attach_after_seq`、`attempt_window_start_seq`、`partial_payload`，以及镜像这些字段的 `operator_summary`。CLI `grok-search-research result --artifact <kind>` 当前也应优先读取同一批 resolved final artifacts，而不是盲读当前指针。
 - `deep_research_events` 返回有序事件流，支持 `after_seq` 增量读取；空 fetch/map 等显式 unit 失败当前会通过 `research_unit_failed` 暴露，而不应再静默计作 completed。
 - `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化；`evidence_items` 也会作为独立字段一起返回。`report.json.sections` 现在还可能带 additive `prose`，`report.runtime` 还可能带 additive `verification`。若某个 JSON artifact 不可读，结果会在 `artifact_errors` 里返回稳定错误码，而不是直接让整次读取失败。对 `completed` job，若最终 provenance bundle 缺失核心 sidecar，当前会通过 `artifact_errors` 暴露缺失项；对 `failed` / `canceled` / `interrupted` job，则优先读取当前可解析的 resolved final batch，再退到 checkpoint 与 partial artifacts。`result` 现在也会返回 `watch_attach_after_seq`、`attempt_window_start_seq`、`partial_payload`，并在 `operator_summary` 中镜像 attempt-window / partial-availability 状态，便于 CLI `watch` 与宿主做断点续看。continuation context 在 artifact 可解析但 shape 非法时，也会继续按 `sources.json -> citations.json.source_registry -> checkpoint -> partial/runtime carry-forward` 的顺序回退；当 resolved final batch 缺少 `evidence_items.json` 时，当前会优先回退到当前 job 上的 `evidence_items.json`，而不是直接退到 checkpoint reconstruction。
+- `deep_research_artifact(job_id, artifact)` 提供 MCP 单 artifact 读取入口，并沿用 CLI `grok-search-research result --artifact <kind>` 的可见性规则；返回会带 `state` 与 `artifact_visibility_reason`，便于宿主区分当前指针、resolved final batch、checkpoint 或 partial artifact。
 - continuation context 当前对 `sources.json`、`citations.json`、`report.json` 逐项判断是否仍可读；某个当前 artifact shape 非法时，不应把仍然可读的其他当前 artifacts 一起降级到 checkpoint。
 - `deep_research_resume` 目前支持从 `draft`、`failed`、`interrupted` job 继续，并优先从最新的 completed research-unit checkpoint 续跑，而不是整 job 从头执行。恢复后的新 attempt 会清理上一轮的终态时间戳，并重新使用新的 attempt 时间窗口。
 - `deep_research_cancel` 只负责发起取消请求；运行中的 job 会在阶段边界或下一次检查点更新时收口。

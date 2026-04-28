@@ -22,7 +22,7 @@ Public `stdio` installation snippets currently use the maintained release repo `
 - `switch_model`: change the default Grok model
 - `toggle_builtin_tools`: toggle Claude Code built-in WebSearch / WebFetch
 
-The public MCP surface currently includes `20` tools:
+The public MCP surface currently includes `21` tools:
 
 - `web_search`
 - `get_sources`
@@ -41,6 +41,7 @@ The public MCP surface currently includes `20` tools:
 - `deep_research_status`
 - `deep_research_events`
 - `deep_research_result`
+- `deep_research_artifact`
 - `deep_research_resume`
 - `deep_research_cancel`
 - `deep_research_list`
@@ -164,6 +165,9 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
 | `TAVILY_ENABLED` | No | Enable or disable Tavily-backed fetch/map paths |
+| `TAVILY_FALLBACK_API_URL` | No | Remote HTTP API fallback used when the primary Tavily URL is a local loopback endpoint and is unavailable |
+| `TAVILY_FALLBACK_API_KEY` | No | Tavily fallback Bearer token; defaults to `TAVILY_API_KEY` and must not be committed |
+| `TAVILY_FALLBACK_ENABLED` | No | Enable or disable the local-loopback Tavily fallback path |
 | `FIRECRAWL_API_KEY` | No | Firecrawl key for fetch fallback and optional supplemental `web_search` |
 | `FIRECRAWL_API_URL` | No | Firecrawl endpoint |
 | `GROK_DEBUG` | No | Enable debug logging |
@@ -332,7 +336,7 @@ When `force_new=false`, `deep_research_start` may reuse a matching in-flight job
 
 `sources.json` now carries additive source-quality metadata such as `source_key`, `quality_score`, `quality_tier`, `source_type`, and `ranking_reasons` alongside `source_id`. Source rows may also expose additive `winner_provider`, `citation_count`, and `section_count` fields. Sections inside `citations.json` and `report.json` may also include additive `summary`, `prose`, `confidence`, `claim_cluster_count`, `supporting_source_count`, and `supporting_domain_count` fields, and claims may include additive `unit_id`, `evidence_ids`, `cluster_type`, `supporting_source_count`, `supporting_domain_count`, and `confidence` provenance/quality fields. `status` / `result` may also surface additive operator diagnostics such as `artifact_fallback_used`, `resolved_artifact_batch_id`, `artifact_visibility_reason`, `watch_attach_after_seq`, `attempt_window_start_seq`, and `partial_payload`; those attempt-window and partial-availability fields are also mirrored inside `operator_summary`. Continuation rebuilds now prefer `sources.json`, but can fall back to `citations.json.source_registry` when the sources artifact is missing or unreadable. When the current artifact pointers for a completed job are mixed or incomplete, continuation first falls back to the latest complete final artifact batch before falling back again to checkpoints or partial artifacts. Jobs recovered from in-flight `queued` or `running` state are now reconciled into `interrupted` with an explicit recovery reason. `resume` now starts a new attempt time window instead of replaying the previous terminal timestamps.
 
-When reading a single artifact through the CLI, `grok-search-research result --artifact <kind>` now follows the same resolved-final-batch preference as `deep_research_result`, instead of blindly reading the current artifact pointer for completed jobs.
+When reading a single artifact through the CLI, `grok-search-research result --artifact <kind>` now follows the same resolved-final-batch preference as `deep_research_result`, instead of blindly reading the current artifact pointer for completed jobs. MCP callers can use `deep_research_artifact(job_id, artifact)` for the same single-artifact visibility behavior, including `state` and `artifact_visibility_reason`.
 
 ```bash
 grok-search-research start "Compare open-source deep research frameworks" --watch

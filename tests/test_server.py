@@ -6405,6 +6405,47 @@ async def test_call_tavily_extract_uses_expected_transport_contract(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_call_tavily_extract_uses_remote_fallback_when_local_endpoint_is_unavailable(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "local-key")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    monkeypatch.setenv("TAVILY_API_URL", "http://127.0.0.1:18080")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://tavily-fallback.example.com/api/tavily")
+    requests = []
+
+    class CapturingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            requests.append({"url": url, "headers": headers, "json": json})
+            if url.startswith("http://127.0.0.1:18080"):
+                raise httpx.ConnectError("connection refused", request=httpx.Request("POST", url))
+            response = httpx.Response(200, json={"results": [{"raw_content": "# remote ok"}]})
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", CapturingAsyncClient)
+
+    content, error = await server._call_tavily_extract("https://example.com")
+
+    assert error is None
+    assert content == "# remote ok"
+    assert [request["url"] for request in requests] == [
+        "http://127.0.0.1:18080/extract",
+        "https://tavily-fallback.example.com/api/tavily/extract",
+    ]
+    assert requests[0]["headers"]["Authorization"] == "Bearer local-key"
+    assert requests[1]["headers"]["Authorization"] == "Bearer fallback-key"
+
+
+@pytest.mark.asyncio
 async def test_call_tavily_map_returns_config_error_when_disabled(monkeypatch):
     monkeypatch.setenv("TAVILY_ENABLED", "false")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")

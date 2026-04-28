@@ -1600,7 +1600,7 @@ def test_cli_status_summary_surfaces_planner_fallback_and_warning_counts(monkeyp
 
     assert exit_code == 0
     assert summary_lines(captured.err) == [
-        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false planner_fallback=true warnings=2 warning_codes=planner_fallback_used,domain_constraints_applied constraint_violations=1 constraint_codes=unit-search-1"
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false planner_fallback=true partial_payload_available=true warnings=2 warning_codes=planner_fallback_used,domain_constraints_applied constraint_violations=1 constraint_codes=unit-search-1"
     ]
 
 
@@ -2216,6 +2216,43 @@ def test_cli_resume_watch_attaches_even_when_resume_returns_terminal_status(monk
     }
 
 
+def test_cli_resume_watch_does_not_attach_to_plan_only_draft(monkeypatch, capsys):
+    response = {
+        "job_id": "job-plan-only",
+        "status": "draft",
+        "phase": "planning",
+        "progress_pct": 0.0,
+        "attempt_count": 0,
+        "current_checkpoint": "planning",
+        "cancel_requested": False,
+        "continued_from_job_id": "",
+        "resolved_artifact_batch_id": "",
+        "artifact_fallback_used": False,
+        "planner_fallback_used": False,
+        "runtime_warnings": [],
+        "constraint_violations": [],
+        "plan_only": True,
+    }
+
+    class FakeRuntime:
+        async def resume(self, job_id, schedule=False):
+            assert schedule is False
+            return dict(response)
+
+    async def unexpected_watch(*args, **kwargs):
+        raise AssertionError("plan-only draft resume must not attach watch")
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
+    monkeypatch.setattr(deep_research_cli, "_watch_job", unexpected_watch)
+
+    exit_code = deep_research_cli.main(["resume", "job-plan-only", "--watch"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert json.loads(captured.out)["status"] == "draft"
+    assert "plan_only_resume_blocked" in captured.err
+
+
 def test_cli_result_includes_partial_report_by_default(monkeypatch, tmp_path, capsys):
     runtime = build_runtime(tmp_path)
     monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
@@ -2468,7 +2505,7 @@ def test_cli_round21_stale_worker_status_and_result_match_fixture(monkeypatch, t
     assert status_payload["attempt_count"] == snapshot["resume_run"]["attempt_count"]
     assert status_payload["last_error"] == snapshot["resume_run"]["last_error"]
     assert summary_lines(status_captured.err) == [
-        f"summary: job={job.job_id} status={snapshot['resume_run']['status']} phase={snapshot['resume_run']['phase']} progress=0.0% checkpoint={snapshot['resume_run']['current_checkpoint']} attempts={snapshot['resume_run']['attempt_count']} cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false last_error={snapshot['resume_run']['last_error']}"
+        f"summary: job={job.job_id} status={snapshot['resume_run']['status']} phase={snapshot['resume_run']['phase']} progress=0.0% checkpoint={snapshot['resume_run']['current_checkpoint']} attempts={snapshot['resume_run']['attempt_count']} cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false last_error={snapshot['resume_run']['last_error']} watch_attach_after_seq=7 attempt_window_start_seq=8"
     ]
 
     exit_code = deep_research_cli.main(["result", job.job_id, "--include-partial"])
@@ -3010,7 +3047,7 @@ def test_cli_round12_continue_resume_status_and_events_match_fixture(monkeypatch
     assert status_payload["continued_from_job_id"] == snapshot["source_job_id"]
     assert status_payload["planner_fallback_used"] is True
     assert summary_lines(status_captured.err) == [
-        f"summary: job={job.job_id} status={snapshot['continue_status']['status']} phase={snapshot['continue_status']['phase']} progress=0.0% checkpoint={snapshot['continue_status']['checkpoint']} attempts={snapshot['continue_status']['attempt_count']} cancel_requested=false continued_from={snapshot['source_job_id']} resolved_batch=- artifact_fallback=false last_error=worker_restarted planner_fallback=true"
+        f"summary: job={job.job_id} status={snapshot['continue_status']['status']} phase={snapshot['continue_status']['phase']} progress=0.0% checkpoint={snapshot['continue_status']['checkpoint']} attempts={snapshot['continue_status']['attempt_count']} cancel_requested=false continued_from={snapshot['source_job_id']} resolved_batch=- artifact_fallback=false last_error=worker_restarted planner_fallback=true partial_payload_available=true"
     ]
 
     exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "0", "--limit", "20"])

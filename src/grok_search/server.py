@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import sys
 import time
@@ -578,7 +579,7 @@ def _mask_sensitive_text(value: str) -> str:
     except ValueError:
         configured_grok_key = None
 
-    for configured in (configured_grok_key, config.tavily_api_key, config.firecrawl_api_key):
+    for configured in (configured_grok_key, config.tavily_api_key, config.tavily_fallback_api_key, config.firecrawl_api_key):
         if configured:
             text = text.replace(configured, "***")
 
@@ -1444,7 +1445,7 @@ async def web_search(
         effective_params["model"] = effective_model
 
     # 计算额外信源配额
-    has_tavily = config.tavily_enabled and bool(config.tavily_api_key)
+    has_tavily = _has_tavily_api_credentials()
     has_firecrawl = bool(config.firecrawl_api_key)
     needs_tavily_controls = (
         effective_params["topic"] != "general"
@@ -1681,30 +1682,85 @@ async def get_sources(
     }
 
 
+def _is_local_tavily_base_url(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    hostname = (urlsplit(url).hostname or "").lower()
+    return hostname in {"localhost", "0.0.0.0", "::1"} or hostname.startswith("127.")
+
+
+def _tavily_fallback_forced() -> bool:
+    value = os.getenv("TAVILY_FALLBACK_FORCE", "").strip().lower()
+    return value in {"true", "1", "yes"}
+
+
+def _tavily_api_candidates() -> list[dict[str, str]]:
+    if not config.tavily_enabled:
+        return []
+    candidates: list[dict[str, str]] = []
+    primary_url = config.tavily_api_url.rstrip("/")
+    primary_key = config.tavily_api_key
+    if primary_key:
+        candidates.append({"label": "Tavily", "api_url": primary_url, "api_key": primary_key})
+
+    should_use_fallback = config.tavily_fallback_enabled and (
+        _is_local_tavily_base_url(primary_url) or _tavily_fallback_forced()
+    )
+    fallback_url = config.tavily_fallback_api_url.rstrip("/")
+    fallback_key = config.tavily_fallback_api_key
+    if should_use_fallback and fallback_url and fallback_key:
+        already_primary = any(
+            candidate["api_url"] == fallback_url and candidate["api_key"] == fallback_key
+            for candidate in candidates
+        )
+        if not already_primary:
+            candidates.append({"label": "Tavily fallback", "api_url": fallback_url, "api_key": fallback_key})
+    return candidates
+
+
+def _has_tavily_api_credentials() -> bool:
+    return bool(_tavily_api_candidates())
+
+
 async def _call_tavily_extract(url: str) -> tuple[str | None, str | None]:
+    result = await _call_tavily_extract_with_details(url)
+    return result.get("content"), result.get("error")
+
+
+async def _call_tavily_extract_with_details(url: str) -> dict[str, str | None]:
     import httpx
-    api_url = config.tavily_api_url
-    api_key = config.tavily_api_key
-    if not config.tavily_enabled or not api_key:
-        return None, None
-    endpoint = f"{api_url.rstrip('/')}/extract"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    candidates = _tavily_api_candidates()
+    if not candidates:
+        return {"content": None, "error": None, "provider_api_url": None}
     body = {"urls": [url], "format": "markdown"}
-    try:
-        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=60.0)) as client:
-            response = await client.post(endpoint, headers=headers, json=body)
-            response.raise_for_status()
-            if _looks_like_login_page(response.text):
-                return None, "Tavily 返回登录页或认证页面，请检查代理认证状态"
-            data = response.json()
-            content, payload_error = _validate_tavily_extract_payload(data)
-            if payload_error:
-                return None, payload_error
-            if content and _is_probably_truncated_content(content):
-                return None, "Tavily 提取结果疑似被截断"
-            return content, None
-    except Exception as exc:
-        return None, _format_fetch_error("Tavily", exc)
+    last_error: str | None = None
+    last_endpoint: str | None = None
+    for candidate in candidates:
+        endpoint = f"{candidate['api_url']}/extract"
+        last_endpoint = endpoint
+        headers = {"Authorization": f"Bearer {candidate['api_key']}", "Content-Type": "application/json"}
+        try:
+            async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=60.0)) as client:
+                response = await client.post(endpoint, headers=headers, json=body)
+                response.raise_for_status()
+                if _looks_like_login_page(response.text):
+                    last_error = f"{candidate['label']} 返回登录页或认证页面，请检查代理认证状态"
+                    continue
+                data = response.json()
+                content, payload_error = _validate_tavily_extract_payload(data)
+                if payload_error:
+                    last_error = payload_error
+                    continue
+                if content and _is_probably_truncated_content(content):
+                    last_error = f"{candidate['label']} 提取结果疑似被截断"
+                    continue
+                return {"content": content, "error": None, "provider_api_url": endpoint}
+        except Exception as exc:
+            last_error = _format_fetch_error(candidate["label"], exc)
+    return {"content": None, "error": last_error, "provider_api_url": last_endpoint}
+
+
+_DEFAULT_TAVILY_EXTRACT_FN = _call_tavily_extract
 
 
 async def _call_tavily_search(
@@ -1717,11 +1773,9 @@ async def _call_tavily_search(
     exclude_domains: Optional[list[str]] = None,
 ) -> list[dict] | None:
     import httpx
-    api_key = config.tavily_api_key
-    if not config.tavily_enabled or not api_key:
+    candidates = _tavily_api_candidates()
+    if not candidates:
         return None
-    endpoint = f"{config.tavily_api_url.rstrip('/')}/search"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     body = {
         "query": query,
         "max_results": min(max(int(max_results), 1), 20),
@@ -1736,18 +1790,22 @@ async def _call_tavily_search(
         body["include_domains"] = include_domains
     if exclude_domains:
         body["exclude_domains"] = exclude_domains
-    try:
-        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=90.0)) as client:
-            response = await client.post(endpoint, headers=headers, json=body)
-            response.raise_for_status()
-            data = response.json()
-            results = data.get("results", [])
-            return [
-                {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", ""), "score": r.get("score")}
-                for r in results
-            ] if results else []
-    except Exception:
-        return None
+    for candidate in candidates:
+        endpoint = f"{candidate['api_url']}/search"
+        headers = {"Authorization": f"Bearer {candidate['api_key']}", "Content-Type": "application/json"}
+        try:
+            async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=90.0)) as client:
+                response = await client.post(endpoint, headers=headers, json=body)
+                response.raise_for_status()
+                data = response.json()
+                results = data.get("results", [])
+                return [
+                    {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", ""), "score": r.get("score")}
+                    for r in results
+                ] if results else []
+        except Exception:
+            continue
+    return None
 
 
 async def _call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | None:
@@ -1851,19 +1909,46 @@ async def _call_firecrawl_scrape(
 )
 async def web_fetch(
     url: Annotated[str, "Valid HTTP/HTTPS web address pointing to the target page. Must be complete and accessible."],
+    response_format: Annotated[Literal["markdown", "object"], "Response format. Use 'object' for provider metadata; default 'markdown' preserves the legacy contract."] = "markdown",
     ctx: Context = None
-) -> str:
+) -> str | dict[str, Any]:
     preflight = await _preflight_public_target_url(url)
     if preflight.status != "allow":
-        return f"提取失败: {preflight.message}"
+        message = f"提取失败: {preflight.message}"
+        if _normalize_response_format(response_format) == "object":
+            return _build_object_envelope(ok=False, error="target_preflight_failed", message=message, data=None)
+        return message
 
     await log_info(ctx, "Begin Fetch request", config.debug_enabled)
 
     tavily_error: str | None = None
     if config.tavily_enabled:
-        result, tavily_error = await _call_tavily_extract(url)
+        if _call_tavily_extract is not _DEFAULT_TAVILY_EXTRACT_FN:
+            result, tavily_error = await _call_tavily_extract(url)
+            tavily_result = {
+                "content": result,
+                "error": tavily_error,
+                "provider_api_url": f"{config.tavily_api_url.rstrip('/')}/extract",
+            }
+        else:
+            tavily_result = await _call_tavily_extract_with_details(url)
+        result = tavily_result.get("content")
+        tavily_error = tavily_result.get("error")
         if result:
             await log_info(ctx, "Fetch Finished (Tavily)!", config.debug_enabled)
+            if _normalize_response_format(response_format) == "object":
+                return _build_object_envelope(
+                    ok=True,
+                    error=None,
+                    message="提取成功",
+                    data={
+                        "content": result,
+                        "provider_name": "tavily",
+                        "provider_model": "",
+                        "effective_model": "",
+                        "provider_api_url": tavily_result.get("provider_api_url") or f"{config.tavily_api_url.rstrip('/')}/extract",
+                    },
+                )
             return result
         if tavily_error:
             await log_info(ctx, f"Tavily extract failed: {tavily_error}", config.debug_enabled)
@@ -1874,32 +1959,51 @@ async def web_fetch(
     result, firecrawl_error = await _call_firecrawl_scrape(url, ctx)
     if result:
         await log_info(ctx, "Fetch Finished (Firecrawl)!", config.debug_enabled)
+        if _normalize_response_format(response_format) == "object":
+            return _build_object_envelope(
+                ok=True,
+                error=None,
+                message="提取成功",
+                data={
+                    "content": result,
+                    "provider_name": "firecrawl",
+                    "provider_model": "",
+                    "effective_model": "",
+                    "provider_api_url": f"{config.firecrawl_api_url.rstrip('/')}/scrape",
+                },
+            )
         return result
     if firecrawl_error:
         await log_info(ctx, f"Firecrawl scrape failed: {firecrawl_error}", config.debug_enabled)
 
     await log_info(ctx, "Fetch Failed!", config.debug_enabled)
-    if not config.tavily_api_key and not config.firecrawl_api_key:
-        return "配置错误: TAVILY_API_KEY 和 FIRECRAWL_API_KEY 均未配置"
+    if not _has_tavily_api_credentials() and not config.firecrawl_api_key:
+        message = "配置错误: TAVILY_API_KEY 和 FIRECRAWL_API_KEY 均未配置"
+        if _normalize_response_format(response_format) == "object":
+            return _build_object_envelope(ok=False, error="config_error", message=message, data=None)
+        return message
 
     errors = [error for error in (tavily_error, firecrawl_error) if error]
     if errors:
-        return f"提取失败: {'；'.join(errors)}"
-    return "提取失败: 所有提取服务均未能获取内容"
+        message = f"提取失败: {'；'.join(errors)}"
+        if _normalize_response_format(response_format) == "object":
+            return _build_object_envelope(ok=False, error="fetch_failed", message=message, data=None)
+        return message
+    message = "提取失败: 所有提取服务均未能获取内容"
+    if _normalize_response_format(response_format) == "object":
+        return _build_object_envelope(ok=False, error="fetch_failed", message=message, data=None)
+    return message
 
 
 async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 1,
                            max_breadth: int = 20, limit: int = 50, timeout: int = 150) -> str:
     import httpx
     import json
-    api_url = config.tavily_api_url
-    api_key = config.tavily_api_key
+    candidates = _tavily_api_candidates()
     if not config.tavily_enabled:
         return "配置错误: TAVILY_ENABLED=false，Tavily map 已禁用"
-    if not api_key:
-        return "配置错误: TAVILY_API_KEY 未配置，请设置环境变量 TAVILY_API_KEY"
-    endpoint = f"{api_url.rstrip('/')}/map"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if not candidates:
+        return "配置错误: TAVILY_API_KEY 未配置，请设置环境变量 TAVILY_API_KEY 或 TAVILY_FALLBACK_API_KEY"
     body = {
         "url": url,
         "max_depth": max_depth,
@@ -1909,34 +2013,44 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
     }
     if instructions:
         body["instructions"] = instructions
-    try:
-        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=float(timeout + 10))) as client:
-            response = await client.post(endpoint, headers=headers, json=body)
-            response.raise_for_status()
-            if _looks_like_login_page(response.text):
-                return "映射失败: Tavily 返回登录页或认证页面，请检查代理认证状态"
-            try:
-                data = response.json()
-            except Exception:
-                if _looks_like_html_response(response.text):
-                    return "映射失败: Tavily 返回 HTML 页面，不是合法 JSON"
-                return "映射失败: Tavily 返回非法 JSON"
-            if not isinstance(data, dict):
-                return "映射失败: Tavily map 响应结构异常：缺少顶层对象"
-            payload_error = _validate_tavily_map_probe_payload(data)
-            if payload_error:
-                return f"映射失败: Tavily map {payload_error.rstrip('。')}"
-            return json.dumps({
-                "base_url": data.get("base_url", ""),
-                "results": data.get("results", []),
-                "response_time": data.get("response_time", 0)
-            }, ensure_ascii=False, indent=2)
-    except httpx.TimeoutException:
-        return f"映射超时: 请求超过{timeout}秒"
-    except httpx.HTTPStatusError as e:
-        return f"HTTP错误: {e.response.status_code} - {_mask_sensitive_text(e.response.text)[:200]}"
-    except Exception as e:
-        return f"映射错误: {_mask_sensitive_text(str(e))}"
+    last_error: str | None = None
+    for candidate in candidates:
+        endpoint = f"{candidate['api_url']}/map"
+        headers = {"Authorization": f"Bearer {candidate['api_key']}", "Content-Type": "application/json"}
+        try:
+            async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=float(timeout + 10))) as client:
+                response = await client.post(endpoint, headers=headers, json=body)
+                response.raise_for_status()
+                if _looks_like_login_page(response.text):
+                    last_error = f"映射失败: {candidate['label']} 返回登录页或认证页面，请检查代理认证状态"
+                    continue
+                try:
+                    data = response.json()
+                except Exception:
+                    if _looks_like_html_response(response.text):
+                        last_error = f"映射失败: {candidate['label']} 返回 HTML 页面，不是合法 JSON"
+                        continue
+                    last_error = f"映射失败: {candidate['label']} 返回非法 JSON"
+                    continue
+                if not isinstance(data, dict):
+                    last_error = f"映射失败: {candidate['label']} map 响应结构异常：缺少顶层对象"
+                    continue
+                payload_error = _validate_tavily_map_probe_payload(data)
+                if payload_error:
+                    last_error = f"映射失败: {candidate['label']} map {payload_error.rstrip('。')}"
+                    continue
+                return json.dumps({
+                    "base_url": data.get("base_url", ""),
+                    "results": data.get("results", []),
+                    "response_time": data.get("response_time", 0)
+                }, ensure_ascii=False, indent=2)
+        except httpx.TimeoutException:
+            last_error = f"映射超时: 请求超过{timeout}秒"
+        except httpx.HTTPStatusError as e:
+            last_error = f"HTTP错误: {e.response.status_code} - {_mask_sensitive_text(e.response.text)[:200]}"
+        except Exception as e:
+            last_error = f"映射错误: {_mask_sensitive_text(str(e))}"
+    return last_error or "映射错误: Tavily 未返回可用结果"
 
 
 @mcp.tool(
@@ -2442,7 +2556,7 @@ async def _probe_web_fetch() -> dict:
     start_time = time.perf_counter()
     errors: list[str] = []
 
-    if config.tavily_enabled and config.tavily_api_key:
+    if _has_tavily_api_credentials():
         content, error = await _call_tavily_extract(_FETCH_PROBE_URL)
         if content:
             return _build_doctor_check(
@@ -3426,13 +3540,15 @@ async def get_config_info(
             },
         )
 
-    if config.tavily_enabled and config.tavily_api_key:
+    tavily_candidates = _tavily_api_candidates()
+    if tavily_candidates:
+        tavily_candidate = tavily_candidates[0]
         tavily_extract = await _probe_json_endpoint(
             "tavily_extract",
             "POST",
-            f"{config.tavily_api_url.rstrip('/')}/extract",
+            f"{tavily_candidate['api_url']}/extract",
             {
-                "Authorization": f"Bearer {config.tavily_api_key}",
+                "Authorization": f"Bearer {tavily_candidate['api_key']}",
                 "Content-Type": "application/json",
             },
             json_body={"urls": ["https://example.com"], "format": "markdown"},
@@ -3459,7 +3575,7 @@ async def get_config_info(
         else:
             _append_recommendation(
                 recommendations,
-                "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily extract 端点可达。",
+                "检查 Tavily 主端点或 fallback 端点配置，确认 extract 端点可达。",
                 recommendation_details=recommendation_details,
                 check_id="tavily_extract",
                 feature="web_fetch",
@@ -3469,9 +3585,9 @@ async def get_config_info(
         tavily_map = await _probe_json_endpoint(
             "tavily_map",
             "POST",
-            f"{config.tavily_api_url.rstrip('/')}/map",
+            f"{tavily_candidate['api_url']}/map",
             {
-                "Authorization": f"Bearer {config.tavily_api_key}",
+                "Authorization": f"Bearer {tavily_candidate['api_key']}",
                 "Content-Type": "application/json",
             },
             json_body={"url": "https://example.com", "max_depth": 1, "max_breadth": 1, "limit": 1, "timeout": 10},
@@ -3498,7 +3614,7 @@ async def get_config_info(
         else:
             _append_recommendation(
                 recommendations,
-                "检查 TAVILY_API_KEY / TAVILY_API_URL，确认 Tavily map 端点可达。",
+                "检查 Tavily 主端点或 fallback 端点配置，确认 Tavily map 端点可达。",
                 recommendation_details=recommendation_details,
                 check_id="tavily_map",
                 feature="web_map",
@@ -4437,7 +4553,7 @@ async def plan_execution(
 async def deep_research_start(
     query: Annotated[str, "Primary research question."],
     context: Annotated[str, "Optional additional context or constraints."] = "",
-    effort: Annotated[str, "Research effort profile. Recommended values: standard | deep."] = "standard",
+    effort: Annotated[str, "Research effort profile. Recommended values: standard | deep | ultra."] = "standard",
     time_budget_seconds: Annotated[int, "Optional target time budget in seconds."] = 0,
     include_domains: Annotated[Optional[list[str]], "Optional domain allowlist."] = None,
     exclude_domains: Annotated[Optional[list[str]], "Optional domain denylist."] = None,
@@ -4494,6 +4610,25 @@ async def deep_research_result(
     include_partial: Annotated[bool, "Include partial artifacts when the job is incomplete."] = True,
 ) -> dict:
     return await _DEEP_RESEARCH_RUNTIME.result(job_id, include_partial=include_partial)
+
+
+@mcp.tool(
+    name="deep_research_artifact",
+    output_schema=None,
+    description="Read a single deep research artifact using the same visibility semantics as CLI result --artifact.",
+)
+async def deep_research_artifact(
+    job_id: Annotated[str, "Deep research job ID."],
+    artifact: Annotated[str, "Artifact kind, for example final_report.md, sources.json, citations.json, report.json, evidence_items.json."],
+) -> dict:
+    payload = _DEEP_RESEARCH_RUNTIME.read_artifact(job_id, artifact)
+    return {
+        "job_id": job_id,
+        "artifact": artifact,
+        "content": payload.get("content"),
+        "state": payload.get("state"),
+        "artifact_visibility_reason": payload.get("artifact_visibility_reason", ""),
+    }
 
 
 @mcp.tool(
