@@ -8726,7 +8726,8 @@ async def _execute_research_unit(
 ) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
     reference_texts = [plan.query, unit.title, unit.goal, unit.query, unit.instructions]
     if unit.unit_type == "fetch":
-        fetched = await _fetch_url(unit.url)
+        fetch_result = await _fetch_url_with_details(unit.url)
+        fetched = fetch_result.get("content", "")
         if not fetched:
             return (
                 {"summary": "", "detail": ""},
@@ -8751,7 +8752,14 @@ async def _execute_research_unit(
         line_end = detail_line_end or summary_line_end
         source = {"url": unit.url, "title": unit.title}
         return (
-            {"summary": summary, "detail": detail},
+            {
+                "summary": summary,
+                "detail": detail,
+                "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+            },
             [source],
             [
                 DeepResearchEvidenceItem(
@@ -8770,7 +8778,8 @@ async def _execute_research_unit(
         )
 
     if unit.unit_type == "map":
-        mapped = await _map_url(unit.url, unit.instructions)
+        map_result = await _map_url_with_details(unit.url, unit.instructions)
+        mapped = map_result.get("content", "")
         if not mapped:
             return (
                 {"summary": "", "detail": ""},
@@ -8813,11 +8822,17 @@ async def _execute_research_unit(
             for candidate in extract_unique_urls(mapped_raw)
             if candidate and candidate != unit.url
         ]
+        candidate_sources = _apply_domain_constraints(
+            candidate_sources,
+            include_domains=plan.include_domains,
+            exclude_domains=plan.exclude_domains,
+        )
         fetch_limit = max(0, plan.search_strategy.selective_fetch.max_urls_per_search)
         ranked_candidate_sources = _select_fetch_sources(candidate_sources, plan, unit)
         for candidate_source in ranked_candidate_sources[:fetch_limit]:
             candidate_url = candidate_source["url"]
-            fetched = await _fetch_url(candidate_url)
+            fetch_result = await _fetch_url_with_details(candidate_url)
+            fetched = fetch_result.get("content", "")
             if not fetched:
                 continue
             fetched_source = _enrich_source_from_fetched_text(
@@ -8861,13 +8876,27 @@ async def _execute_research_unit(
                     char_limit=180,
                 ),
                 "detail": detail,
+                "provider_name": str(map_result.get("provider_name", "") or ""),
+                "provider_model": str(map_result.get("provider_model", "") or ""),
+                "effective_model": str(map_result.get("effective_model", "") or ""),
+                "provider_api_url": str(map_result.get("provider_api_url", "") or ""),
             },
             sources,
             evidence_items,
         )
 
     if _search_query is _DEFAULT_SEARCH_QUERY_FN:
-        search_result = await _search_query_with_details(unit.query or unit.goal, effort=plan.effort)
+        try:
+            search_result = await _search_query_with_details(
+                unit.query or unit.goal,
+                effort=plan.effort,
+                include_domains=plan.include_domains,
+                exclude_domains=plan.exclude_domains,
+            )
+        except TypeError as exc:
+            if "include_domains" not in str(exc) and "exclude_domains" not in str(exc):
+                raise
+            search_result = await _search_query_with_details(unit.query or unit.goal, effort=plan.effort)
         answer = search_result["answer"]
         sources = search_result["sources"]
     else:
@@ -8929,7 +8958,8 @@ async def _execute_research_unit(
         )
     fetched_evidence_items: list[dict[str, Any]] = []
     for source in selected_sources_for_grounding[:fetch_limit]:
-        fetched = await _fetch_url(source["url"])
+        fetch_result = await _fetch_url_with_details(source["url"])
+        fetched = fetch_result.get("content", "")
         if not fetched:
             continue
         enriched_source = _enrich_source_from_fetched_text(source, fetched)
@@ -11375,7 +11405,13 @@ async def _search_query(query: str, *, effort: str = "standard") -> tuple[str, l
     return result["answer"], result["sources"]
 
 
-async def _search_query_with_details(query: str, *, effort: str = "standard") -> dict[str, Any]:
+async def _search_query_with_details(
+    query: str,
+    *,
+    effort: str = "standard",
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> dict[str, Any]:
     from . import server as server_module
 
     provider, provider_meta = await _build_runtime_grok_provider(effort=effort)
@@ -11385,6 +11421,16 @@ async def _search_query_with_details(query: str, *, effort: str = "standard") ->
     if not merged:
         merged = standardize_sources([{"url": url} for url in extract_unique_urls(answer or content)])
     warning_code = server_module._assess_search_body_quality(answer, merged)
+    supplemental_sources = await _supplemental_sources_for_deep_research(
+        query,
+        answer=answer,
+        existing_sources=merged,
+        warning_code=warning_code,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+    )
+    if supplemental_sources:
+        merged = standardize_sources(merge_sources(merged, supplemental_sources))
     return {
         "answer": answer.strip() or content.strip(),
         "sources": merged,
@@ -11419,6 +11465,41 @@ async def _provider_search_with_sources(
 _DEFAULT_SEARCH_QUERY_FN = _search_query
 
 
+async def _supplemental_sources_for_deep_research(
+    query: str,
+    *,
+    answer: str,
+    existing_sources: list[dict[str, Any]],
+    warning_code: str | None,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    if not warning_code and answer.strip() and existing_sources:
+        return []
+    from . import server as server_module
+
+    results = await server_module._call_tavily_search(
+        query,
+        4,
+        include_domains=include_domains or None,
+        exclude_domains=exclude_domains or None,
+    )
+    provider_name = "tavily"
+    if not results:
+        results = await server_module._call_firecrawl_search(query, 4)
+        provider_name = "firecrawl"
+    supplemental: list[dict[str, Any]] = []
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+        source = dict(item)
+        source.setdefault("provider", provider_name)
+        if provider_name == "tavily" and not source.get("description") and source.get("content"):
+            source["description"] = source.get("content")
+        supplemental.append(source)
+    return supplemental
+
+
 async def _fetch_url(url: str) -> str | None:
     from . import server
 
@@ -11428,6 +11509,32 @@ async def _fetch_url(url: str) -> str | None:
     return result
 
 
+_DEFAULT_FETCH_URL_FN = _fetch_url
+
+
+async def _fetch_url_with_details(url: str) -> dict[str, Any]:
+    if _fetch_url is not _DEFAULT_FETCH_URL_FN:
+        content = await _fetch_url(url)
+        return {"content": content or ""}
+
+    from . import server
+
+    result = await server.web_fetch(url, response_format="object")
+    if isinstance(result, dict):
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        content = str(data.get("content", "") or "") if result.get("ok") else ""
+        return {
+            "content": content,
+            "provider_name": str(data.get("provider_name", "") or ""),
+            "provider_model": str(data.get("provider_model", "") or ""),
+            "effective_model": str(data.get("effective_model", "") or ""),
+            "provider_api_url": str(data.get("provider_api_url", "") or ""),
+        }
+    if not result or result.startswith("提取失败:") or result.startswith("配置错误:"):
+        return {"content": ""}
+    return {"content": result}
+
+
 async def _map_url(url: str, instructions: str = "") -> str | None:
     from . import server
 
@@ -11435,3 +11542,28 @@ async def _map_url(url: str, instructions: str = "") -> str | None:
     if not result or result.startswith("映射失败:") or result.startswith("配置错误:"):
         return None
     return result
+
+
+_DEFAULT_MAP_URL_FN = _map_url
+
+
+async def _map_url_with_details(url: str, instructions: str = "") -> dict[str, Any]:
+    if _map_url is not _DEFAULT_MAP_URL_FN:
+        content = await _map_url(url, instructions)
+        return {"content": content or ""}
+
+    from . import server
+
+    result = await server.web_map(url, instructions=instructions, response_format="object")
+    if isinstance(result, dict):
+        content = json.dumps(result.get("data"), ensure_ascii=False, indent=2) if result.get("ok") else ""
+        return {
+            "content": content,
+            "provider_name": "tavily" if result.get("ok") else "",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": f"{config.tavily_api_url.rstrip('/')}/map" if result.get("ok") else "",
+        }
+    if not result or result.startswith("映射失败:") or result.startswith("配置错误:"):
+        return {"content": ""}
+    return {"content": result, "provider_name": "tavily", "provider_model": "", "effective_model": "", "provider_api_url": f"{config.tavily_api_url.rstrip('/')}/map"}

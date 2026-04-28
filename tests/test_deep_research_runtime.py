@@ -2374,11 +2374,22 @@ async def test_search_query_details_surfaces_body_quality_warning_and_runtime_me
             [{"url": "https://docs.example.com/a", "title": "Doc A"}],
         )
 
+    async def fake_tavily_search(query, max_results=6, **kwargs):
+        return [
+            {
+                "url": "https://docs.example.com/b",
+                "title": "Doc B",
+                "content": "Supplemental source from Tavily.",
+                "provider": "tavily",
+            }
+        ]
+
     monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
     monkeypatch.setenv("GROK_API_KEY", "primary-key")
     monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
     monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
     monkeypatch.setattr(GrokSearchProvider, "search_with_sources", fake_search_with_sources)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily_search)
 
     from grok_search.deep_research_runtime import _search_query_with_details
 
@@ -2390,7 +2401,10 @@ async def test_search_query_details_surfaces_body_quality_warning_and_runtime_me
     assert result["provider_name"] == "fallback_1"
     assert result["provider_model"] == "grok-4.20-0309-non-reasoning"
     assert result["provider_api_url"] == "https://secondary.example.com/v1"
-    assert result["sources"][0]["url"] == "https://docs.example.com/a"
+    assert {source["url"] for source in result["sources"]} == {
+        "https://docs.example.com/a",
+        "https://docs.example.com/b",
+    }
 
 
 @pytest.mark.asyncio
@@ -4235,10 +4249,13 @@ async def test_map_unit_fetches_discovered_urls_into_final_evidence(monkeypatch,
         return """
 - https://docs.example.com/runtime/resume
 - https://docs.example.com/runtime/restart
+- https://blog.example.com/runtime/summary
 """
 
     async def fake_fetch(url):
         fetched_urls.append(url)
+        if "blog.example.com" in url:
+            raise AssertionError("off-domain map candidates must not be fetched")
         if url.endswith("/resume"):
             return "# Resume docs\n\nResume-processing continues from the last checkpoint."
         return "# Restart docs\n\nRestart replays the task from a fresh starting point."
@@ -4248,6 +4265,7 @@ async def test_map_unit_fetches_discovered_urls_into_final_evidence(monkeypatch,
     monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fake_fetch)
 
     response = await runtime.start(query="Map then fetch docs", force_new=True, schedule=False)
+    runtime.store.update_job(response["job_id"], include_domains=["docs.example.com"])
     result = await runtime.run_job(response["job_id"])
 
     assert fetched_urls == [
@@ -14975,6 +14993,53 @@ async def test_runtime_report_exposes_provider_winners(monkeypatch, tmp_path):
             "effective_model": "grok-4.20-expert",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_unit_provider_path_is_exposed_in_runtime_winners(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-fetch-1",
+                "unit_type": "fetch",
+                "title": "Fetch provider docs",
+                "goal": "Fetch provider-backed runtime docs.",
+                "url": "https://docs.example.com/runtime/fetch",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        return payload
+
+    async def fetch_with_details(url):
+        return {
+            "content": "# Runtime docs\n\nFetch provider provenance is preserved.",
+            "provider_name": "firecrawl",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.firecrawl.dev",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr(
+        "grok_search.deep_research_runtime._fetch_url_with_details",
+        fetch_with_details,
+        raising=False,
+    )
+
+    response = await runtime.start(query="Fetch provider provenance", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert {
+        "unit_id": "unit-fetch-1",
+        "provider_name": "firecrawl",
+        "provider_model": "",
+        "effective_model": "",
+    } in result["report"]["runtime"]["provider_winners"]
 
 
 @pytest.mark.asyncio

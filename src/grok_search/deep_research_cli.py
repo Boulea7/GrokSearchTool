@@ -73,6 +73,17 @@ def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") ->
         parts.append(f"last_error={last_error}")
     if payload.get("planner_fallback_used"):
         parts.append("planner_fallback=true")
+    if payload.get("partial_payload_available"):
+        parts.append("partial_payload_available=true")
+    watch_attach_after_seq = payload.get("watch_attach_after_seq")
+    if isinstance(watch_attach_after_seq, int) and watch_attach_after_seq > 0:
+        parts.append(f"watch_attach_after_seq={watch_attach_after_seq}")
+    attempt_window_start_seq = payload.get("attempt_window_start_seq")
+    if isinstance(attempt_window_start_seq, int) and attempt_window_start_seq > 0:
+        parts.append(f"attempt_window_start_seq={attempt_window_start_seq}")
+    artifact_visibility_reason = _summary_value(payload.get("artifact_visibility_reason"))
+    if artifact_visibility_reason != "-":
+        parts.append(f"artifact_visibility_reason={artifact_visibility_reason}")
     runtime_warnings = payload.get("runtime_warnings")
     if isinstance(runtime_warnings, list) and runtime_warnings:
         parts.append(f"warnings={len(runtime_warnings)}")
@@ -482,6 +493,9 @@ async def _handle_resume(args: argparse.Namespace) -> int:
     _print_job_summary(response, fallback_job_id=args.job_id)
     _print_json(response)
     if args.watch:
+        if response.get("plan_only") and response.get("status") == "draft":
+            print("plan_only_resume_blocked: plan-only draft jobs cannot be watched for execution", file=sys.stderr)
+            return 0
         interrupted = await _run_observation(
             _watch_job(
                 runtime,
@@ -556,7 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_common_research_args(command: argparse.ArgumentParser) -> None:
         command.add_argument("--context", default="")
-        command.add_argument("--effort", default="standard")
+        command.add_argument("--effort", default="standard", help="Research effort profile: standard, deep, or ultra.")
         command.add_argument("--time-budget-seconds", type=int, default=0)
         command.add_argument("--include-domain", action="append", default=None)
         command.add_argument("--exclude-domain", action="append", default=None)
