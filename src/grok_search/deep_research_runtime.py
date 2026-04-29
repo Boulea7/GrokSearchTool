@@ -2177,6 +2177,24 @@ def _read_batch_artifact_text(bundle: dict[str, Any] | None, kind: str) -> str |
     return _read_text_if_exists(anchor_path.parent / kind)
 
 
+def _read_public_artifact_text(
+    store: DeepResearchStore,
+    job_id: str,
+    kind: str,
+    *,
+    final_bundle: dict[str, Any] | None,
+    unresolved_batch_backed: bool,
+) -> str | None:
+    if final_bundle is not None:
+        if kind in final_bundle.get("paths", {}):
+            return _read_text_if_exists(final_bundle["paths"][kind])
+        if kind in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS:
+            return _read_batch_artifact_text(final_bundle, kind)
+    if unresolved_batch_backed and kind in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS:
+        return None
+    return store.read_artifact_text(job_id, kind)
+
+
 def _complete_batch_bundles(store: DeepResearchStore, job_id: str) -> list[dict[str, Any]]:
     bundles: list[dict[str, Any]] = []
     for bundle in _batch_bundle_candidates(store, job_id):
@@ -3849,7 +3867,7 @@ def _source_policy_payload(
 ) -> dict[str, Any]:
     include_domains = list(job.include_domains)
     exclude_domains = list(job.exclude_domains)
-    official_doc_mode = any(_is_official_doc_domain(domain) for domain in include_domains)
+    official_doc_mode = bool(include_domains) and all(_is_official_doc_domain(domain) for domain in include_domains)
     return {
         "mode": "official_docs_only" if official_doc_mode else "mixed_web",
         "allowed_domains": include_domains,
@@ -5460,20 +5478,24 @@ class DeepResearchRuntime:
 
         reused_job = None
         if not force_new:
-            reused_job = self.store.find_reusable_job(
+            reusable_candidates = self.store.find_reusable_jobs(
                 request_fingerprint,
                 recent_reuse_seconds=config.deep_research_recent_reuse_seconds,
             )
-            if reused_job is not None and bool(reused_job.plan_only) != bool(plan_only):
-                reused_job = None
-            if reused_job is not None and reused_job.status in {"completed", "interrupted"}:
-                if not _final_artifact_bundle_is_usable(self.store, reused_job.job_id):
-                    reused_job = None
-            if reused_job is not None:
+            for candidate in reusable_candidates:
+                if bool(candidate.plan_only) != bool(plan_only):
+                    continue
+                if candidate.status in {"completed", "interrupted"} and not _final_artifact_bundle_is_usable(
+                    self.store,
+                    candidate.job_id,
+                ):
+                    continue
                 try:
-                    self._read_plan(reused_job.job_id, reused_job)
+                    self._read_plan(candidate.job_id, candidate)
                 except Exception:
-                    reused_job = None
+                    continue
+                reused_job = candidate
+                break
         if reused_job is not None:
             if reused_job.status == "interrupted" and _job_prefers_resolved_final_bundle(reused_job):
                 final_bundle = _resolve_final_artifact_bundle(self.store, reused_job.job_id)
@@ -5669,68 +5691,68 @@ class DeepResearchRuntime:
             job_id,
             job=job,
         )
-        final_text = (
-            _read_text_if_exists(final_bundle["paths"]["final_report.md"])
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, "final_report.md")
+        final_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            "final_report.md",
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        citations_text = (
-            _read_text_if_exists(final_bundle["paths"]["citations.json"])
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, "citations.json")
+        citations_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            "citations.json",
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        evidence_items_text = (
-            _read_batch_artifact_text(final_bundle, _EVIDENCE_ITEMS_ARTIFACT_KIND)
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
+        evidence_items_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            _EVIDENCE_ITEMS_ARTIFACT_KIND,
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        report_text = (
-            _read_text_if_exists(final_bundle["paths"]["report.json"])
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, "report.json")
+        report_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            "report.json",
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        sources_text = (
-            _read_text_if_exists(final_bundle["paths"]["sources.json"])
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, "sources.json")
+        sources_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            "sources.json",
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        selected_bank_text = (
-            _read_batch_artifact_text(final_bundle, _SELECTED_BANK_ARTIFACT_KIND)
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, _SELECTED_BANK_ARTIFACT_KIND)
+        selected_bank_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            _SELECTED_BANK_ARTIFACT_KIND,
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        evidence_bank_text = (
-            _read_batch_artifact_text(final_bundle, _EVIDENCE_BANK_ARTIFACT_KIND)
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, _EVIDENCE_BANK_ARTIFACT_KIND)
+        evidence_bank_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            _EVIDENCE_BANK_ARTIFACT_KIND,
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        verification_text = (
-            _read_batch_artifact_text(final_bundle, _VERIFICATION_ARTIFACT_KIND)
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, _VERIFICATION_ARTIFACT_KIND)
+        verification_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            _VERIFICATION_ARTIFACT_KIND,
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        coverage_gaps_text = (
-            _read_batch_artifact_text(final_bundle, _COVERAGE_GAPS_ARTIFACT_KIND)
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, _COVERAGE_GAPS_ARTIFACT_KIND)
+        coverage_gaps_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            _COVERAGE_GAPS_ARTIFACT_KIND,
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
         artifact_errors: dict[str, str] = {}
         plan_value, plan_error = _safe_load_json_artifact(plan_text)
@@ -5771,6 +5793,9 @@ class DeepResearchRuntime:
             (_VERIFICATION_ARTIFACT_KIND, verification_value),
             (_COVERAGE_GAPS_ARTIFACT_KIND, coverage_gaps_value),
         ):
+            if final_bundle is not None and value is None and kind in _ADDITIVE_FINAL_ARTIFACT_KINDS:
+                artifact_errors[kind] = "missing_required_artifact"
+                continue
             shape_error = _validate_json_artifact_shape(kind, value)
             if shape_error:
                 artifact_errors[kind] = shape_error
@@ -5802,12 +5827,12 @@ class DeepResearchRuntime:
             final_text = _fallback_final_report_text(report_value)
         required = _report_artifact_contract_error(job)
         for kind, error_code in required.items():
-            artifact_text = (
-                _read_text_if_exists(final_bundle["paths"][kind])
-                if final_bundle is not None and kind in final_bundle["paths"]
-                else None
-                if unresolved_batch_backed
-                else self.store.read_artifact_text(job_id, kind)
+            artifact_text = _read_public_artifact_text(
+                self.store,
+                job_id,
+                kind,
+                final_bundle=final_bundle,
+                unresolved_batch_backed=unresolved_batch_backed,
             )
             if artifact_text is None:
                 artifact_errors[kind] = _required_artifact_error_code(kind, visibility_reason)
@@ -5874,6 +5899,12 @@ class DeepResearchRuntime:
                 return {
                     "content": batch_text,
                     "state": "available",
+                    "artifact_visibility_reason": "",
+                }
+            if kind in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS:
+                return {
+                    "content": None,
+                    "state": "missing",
                     "artifact_visibility_reason": "",
                 }
         if unresolved_batch_backed and _artifact_hidden_by_visibility_reason(kind, visibility_reason):

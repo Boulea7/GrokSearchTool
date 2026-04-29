@@ -672,7 +672,9 @@ def evaluate_official_doc_family_granularity(case: dict) -> dict:
 
 
 def evaluate_provider_budget_surface(case: dict) -> dict:
-    runtime = ((case.get("report") or {}).get("runtime") or {})
+    report = case.get("report") or {}
+    runtime = (report.get("runtime") or {})
+    unit_results = report.get("unit_results") if isinstance(report.get("unit_results"), dict) else {}
     budget = runtime.get("budget") if isinstance(runtime.get("budget"), dict) else {}
     provider_winners = runtime.get("provider_winners") if isinstance(runtime.get("provider_winners"), list) else []
     feature_readiness = case.get("feature_readiness") if isinstance(case.get("feature_readiness"), dict) else {}
@@ -680,14 +682,24 @@ def evaluate_provider_budget_surface(case: dict) -> dict:
 
     if not provider_winners:
         reason_tags.append("missing_provider_winners")
+    winner_unit_ids: list[str] = []
     for winner in provider_winners:
         if not isinstance(winner, dict):
             reason_tags.append("malformed_provider_winner")
             continue
+        unit_id = str(winner.get("unit_id", "") or "").strip()
+        if not unit_id:
+            reason_tags.append("missing_provider_winner_unit_id")
+        else:
+            winner_unit_ids.append(unit_id)
+            if unit_results and unit_id not in unit_results:
+                reason_tags.append("provider_winner_unit_missing_from_unit_results")
         if not str(winner.get("provider_name", "") or "").strip():
             reason_tags.append("missing_provider_name")
         if not str(winner.get("provider_api_url", "") or "").strip():
             reason_tags.append("missing_provider_api_url")
+    if len(winner_unit_ids) != len(set(winner_unit_ids)):
+        reason_tags.append("duplicate_provider_winner_unit_id")
 
     if int(budget.get("resolved_budget_seconds", 0) or 0) <= 0:
         reason_tags.append("missing_resolved_budget_seconds")
@@ -1569,6 +1581,41 @@ def test_provider_budget_surface_detects_missing_provider_api_url():
 
     assert result["verdict"] == "fail"
     assert result["reason_tags"] == ["missing_provider_api_url"]
+
+
+def test_provider_budget_surface_requires_provider_winners_to_match_unit_results():
+    case = {
+        "report": {
+            "unit_results": {
+                "unit-search-1": {
+                    "summary": "Search unit result.",
+                }
+            },
+            "runtime": {
+                "budget": {"resolved_budget_seconds": 240, "max_concurrency": 2},
+                "provider_winners": [
+                    {
+                        "unit_id": "unit-search-2",
+                        "provider_name": "tavily",
+                        "provider_api_url": "https://api.tavily.com",
+                    },
+                    {
+                        "unit_id": "unit-search-2",
+                        "provider_name": "firecrawl",
+                        "provider_api_url": "https://api.firecrawl.dev",
+                    },
+                ],
+            },
+        }
+    }
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == [
+        "duplicate_provider_winner_unit_id",
+        "provider_winner_unit_missing_from_unit_results",
+    ]
 
 
 @pytest.mark.parametrize(
