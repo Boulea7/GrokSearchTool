@@ -18603,6 +18603,100 @@ async def test_start_does_not_reuse_completed_job_with_invalid_plan_json(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_start_reuses_older_usable_completed_job_when_latest_match_is_unusable(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(
+        0, result=structured_plan_payload(job, continuation)
+    )
+    fingerprint = runtime._request_fingerprint(
+        query="Reuse older valid job",
+        context="",
+        effort="standard",
+        include_domains=[],
+        exclude_domains=[],
+        continue_from_job_id="",
+        plan_only=False,
+    )
+    older = runtime.store.create_job(
+        query="Reuse older valid job",
+        request_fingerprint=fingerprint,
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(older.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(older.job_id, "plan.json", json.dumps(structured_plan_payload(older, {"mode": "fresh"})), "application/json")
+    runtime.write_artifact_batch(
+        older.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/reuse/older"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps(
+                        {
+                            "source_registry": {
+                                "R1": {"source_id": "R1", "url": "https://docs.example.com/reuse/older"}
+                            },
+                            "sections": [],
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Older usable job.", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nOlder usable job.",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Reuse older valid job",
+        ),
+    )
+    newer = runtime.store.create_job(
+        query="Reuse older valid job",
+        request_fingerprint=fingerprint,
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(newer.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(newer.job_id, "plan.json", "{bad-json", "application/json")
+    with runtime.store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET updated_at = ? WHERE job_id = ?",
+            ("2099-01-01T00:00:00Z", newer.job_id),
+        )
+
+    response = await runtime.start(query="Reuse older valid job", force_new=False, schedule=False)
+
+    assert response["reused"] is True
+    assert response["job_id"] == older.job_id
+
+
+@pytest.mark.asyncio
 async def test_fallback_plan_records_generation_failure_in_metadata_and_events(tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -19873,6 +19967,50 @@ async def test_runtime_persists_source_policy_lineage_and_selected_bank_artifact
 
 
 @pytest.mark.asyncio
+async def test_runtime_source_policy_treats_mixed_allowlist_as_mixed_web(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Provider docs and release notes should remain separated when the allowlist mixes official and non-official domains.",
+            [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Introduction.html",
+                    "title": "AWS DMS User Guide",
+                    "description": "Official AWS DMS docs.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+
+    response = await runtime.start(
+        query="Mixed source policy should not claim official docs only",
+        include_domains=["docs.aws.amazon.com", "aws.amazon.com"],
+        force_new=True,
+        schedule=False,
+    )
+    await runtime.run_job(response["job_id"])
+
+    source_policy = json.loads(runtime.store.read_artifact_text(response["job_id"], "source_policy.json") or "{}")
+    public_result = await runtime.result(response["job_id"])
+
+    assert source_policy["mode"] == "mixed_web"
+    assert source_policy["allowed_domains"] == ["docs.aws.amazon.com", "aws.amazon.com"]
+    assert public_result["report"]["runtime"]["source_policy"]["mode"] == "mixed_web"
+
+
+@pytest.mark.asyncio
 async def test_runtime_provider_winners_include_provider_api_url(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -20031,3 +20169,78 @@ async def test_runtime_generic_rollup_only_artifacts_remain_usable(monkeypatch, 
         for row in bank.get("selected_rows", [])
         for claim_id in row.get("claim_ids", [])
     )
+
+
+@pytest.mark.asyncio
+async def test_resolved_final_batch_missing_additive_sidecar_does_not_read_stale_current_artifact(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Resolved batch missing additive sidecar",
+        request_fingerprint="fp-resolved-batch-missing-additive-sidecar",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+    complete_artifacts = with_minimal_provenance_artifacts(
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/final"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {
+                            "R1": {"source_id": "R1", "url": "https://docs.example.com/final"}
+                        },
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Final batch.", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nFinal batch.",
+                "content_type": "text/markdown",
+            },
+        ],
+        query=job.query,
+    )
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [artifact for artifact in complete_artifacts if artifact.get("kind") != "coverage_gaps.json"],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "coverage_gaps.json",
+        json.dumps({"coverage_gate_passed": False, "gaps": [{"section_id": "stale"}]}),
+        "application/json",
+    )
+
+    result = await runtime.result(job.job_id)
+    artifact = runtime.read_artifact(job.job_id, "coverage_gaps.json")
+
+    assert result["resolved_artifact_batch_id"] == persisted[0]["metadata"]["batch_id"]
+    assert result["coverage_gaps"] is None
+    assert result["artifact_errors"]["coverage_gaps.json"] == "missing_required_artifact"
+    assert artifact == {
+        "content": None,
+        "state": "missing",
+        "artifact_visibility_reason": "",
+    }
