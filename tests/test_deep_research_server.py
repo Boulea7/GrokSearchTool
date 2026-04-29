@@ -1400,10 +1400,14 @@ async def test_deep_research_result_hidden_final_artifacts_use_visibility_reason
     )
 
     result = await server.deep_research_result(job.job_id)
+    artifact = await server.deep_research_artifact(job.job_id, "final_report.md")
 
     assert result["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
     assert result["artifact_errors"]["report.json"] == "unresolved_batch_backed_final_artifacts_hidden"
     assert result["artifact_errors"]["coverage.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert artifact["state"] == "hidden"
+    assert artifact["content"] is None
+    assert artifact["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
 
 
 @pytest.mark.asyncio
@@ -1755,6 +1759,7 @@ async def test_deep_research_canceled_finalizing_status_and_result_expose_resolv
 
     status = await server.deep_research_status(job.job_id)
     result = await server.deep_research_result(job.job_id)
+    artifact = await server.deep_research_artifact(job.job_id, "evidence_items.json")
 
     assert status["status"] == "canceled"
     assert status["phase"] == "finalizing"
@@ -1769,6 +1774,9 @@ async def test_deep_research_canceled_finalizing_status_and_result_expose_resolv
     assert result["report"]["summary"] == "Recovered final batch report"
     assert result["sources"][0]["url"] == "https://good.example.com/runtime/recovery"
     assert any(artifact["kind"] == "evidence_items.json" for artifact in result["artifacts"])
+    assert artifact["state"] == "available"
+    assert json.loads(artifact["content"]) == seeded["evidence_items"]
+    assert artifact["artifact_visibility_reason"] == ""
 
 
 @pytest.mark.asyncio

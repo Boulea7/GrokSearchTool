@@ -6079,7 +6079,12 @@ async def test_start_reuses_interrupted_finalizing_job_with_usable_final_batch(t
         resolved_budget_seconds=240,
         continued_from_job_id="",
     )
-    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="finalizing",
+        finished_at=utc_now_iso(),
+        cancel_requested=True,
+    )
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Reuse interrupted final batch"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
@@ -6115,6 +6120,8 @@ async def test_start_reuses_interrupted_finalizing_job_with_usable_final_batch(t
     assert response["reused"] is True
     assert response["job_id"] == job.job_id
     assert response["status"] == "completed"
+    assert response["cancel_requested"] is False
+    assert runtime.store.get_job(job.job_id).cancel_requested is False
 
 
 @pytest.mark.asyncio
@@ -14975,7 +14982,7 @@ async def test_runtime_report_exposes_provider_winners(monkeypatch, tmp_path):
             "effective_model": "grok-4.20-expert",
             "provider_name": "provider_2",
             "provider_model": "grok-4.20-expert",
-            "provider_api_url": "https://api.example.com/v1",
+            "provider_api_url": "https://provider.example.invalid/v1",
         }
 
     monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
@@ -14991,6 +14998,7 @@ async def test_runtime_report_exposes_provider_winners(monkeypatch, tmp_path):
             "provider_name": "provider_2",
             "provider_model": "grok-4.20-expert",
             "effective_model": "grok-4.20-expert",
+            "provider_api_url": "https://provider.example.invalid/v1",
         }
     ]
 
@@ -15039,6 +15047,7 @@ async def test_fetch_unit_provider_path_is_exposed_in_runtime_winners(monkeypatc
         "provider_name": "firecrawl",
         "provider_model": "",
         "effective_model": "",
+        "provider_api_url": "https://api.firecrawl.dev",
     } in result["report"]["runtime"]["provider_winners"]
 
 
@@ -19861,6 +19870,89 @@ async def test_runtime_persists_source_policy_lineage_and_selected_bank_artifact
     assert public_result["evidence_bank"] == evidence_bank
     assert public_result["verification"] == verification
     assert public_result["coverage_gaps"] == coverage_gaps
+
+
+@pytest.mark.asyncio
+async def test_runtime_provider_winners_include_provider_api_url(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search_with_details(query, *, effort="standard", include_domains=None, exclude_domains=None):
+        return {
+            "answer": "Provider routing can expose the API URL used for the winning research unit.",
+            "sources": [
+                {
+                    "url": "https://docs.example.com/provider-routing",
+                    "title": "Provider routing",
+                    "description": "Official provider routing docs.",
+                    "provider": "grok",
+                }
+            ],
+            "warning_code": None,
+            "requested_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+            "provider_name": "test-provider",
+            "provider_model": "grok-4.20-expert",
+            "provider_api_url": "https://provider.example.invalid/v1/chat/completions",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query_with_details", search_with_details)
+
+    response = await runtime.start(query="Provider winner API URL surface", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+    result = await runtime.result(response["job_id"])
+
+    provider_winner = result["report"]["runtime"]["provider_winners"][0]
+    assert provider_winner["unit_id"] == "unit-search-1"
+    assert provider_winner["provider_name"] == "test-provider"
+    assert provider_winner["provider_api_url"] == "https://provider.example.invalid/v1/chat/completions"
+    assert result["report"]["runtime"]["budget"]["effort"] == "standard"
+    assert result["report"]["runtime"]["budget"]["resolved_budget_seconds"] == 240
+
+
+@pytest.mark.asyncio
+async def test_search_query_with_details_passes_domain_constraints_to_supplemental_search(monkeypatch):
+    captured = {}
+
+    class EmptyProvider:
+        _last_success_provider_name = "grok"
+        _last_success_provider_model = "grok-4.20-expert"
+        _last_success_provider_api_url = "https://provider.example.invalid/v1/chat/completions"
+
+    async def fake_provider_builder(*, effort="standard"):
+        return EmptyProvider(), {"requested_model": "grok-4.20-expert", "effective_model": "grok-4.20-expert"}
+
+    async def fake_provider_search(provider, query, *, platform="", min_results=3, max_results=10):
+        return "Answer without usable body sources.", []
+
+    async def fake_supplemental(query, *, answer, existing_sources, warning_code, include_domains=None, exclude_domains=None):
+        captured["include_domains"] = include_domains
+        captured["exclude_domains"] = exclude_domains
+        return [{"url": "https://docs.example.com/provider-routing", "title": "Provider routing"}]
+
+    monkeypatch.setattr("grok_search.deep_research_runtime._build_runtime_grok_provider", fake_provider_builder)
+    monkeypatch.setattr("grok_search.deep_research_runtime._provider_search_with_sources", fake_provider_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._supplemental_sources_for_deep_research", fake_supplemental)
+
+    result = await deep_research_runtime_module._search_query_with_details(
+        "provider routing",
+        include_domains=["docs.example.com"],
+        exclude_domains=["blog.example.com"],
+    )
+
+    assert result["sources"][0]["url"] == "https://docs.example.com/provider-routing"
+    assert captured == {
+        "include_domains": ["docs.example.com"],
+        "exclude_domains": ["blog.example.com"],
+    }
 
 
 @pytest.mark.asyncio

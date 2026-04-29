@@ -103,6 +103,8 @@ def evaluate_case_metric(case: dict, metric: str) -> dict:
         return evaluate_surface_consistency(case)
     if metric == "official_doc_family_granularity":
         return evaluate_official_doc_family_granularity(case)
+    if metric == "provider_budget_surface":
+        return evaluate_provider_budget_surface(case)
     raise ValueError(f"Unsupported metric: {metric}")
 
 
@@ -666,6 +668,44 @@ def evaluate_official_doc_family_granularity(case: dict) -> dict:
         "verdict": "pass" if not reason_tags else "fail",
         "score": 1.0 if not reason_tags else 0.0,
         "reason_tags": sorted(set(reason_tags)),
+    }
+
+
+def evaluate_provider_budget_surface(case: dict) -> dict:
+    runtime = ((case.get("report") or {}).get("runtime") or {})
+    budget = runtime.get("budget") if isinstance(runtime.get("budget"), dict) else {}
+    provider_winners = runtime.get("provider_winners") if isinstance(runtime.get("provider_winners"), list) else []
+    feature_readiness = case.get("feature_readiness") if isinstance(case.get("feature_readiness"), dict) else {}
+    reason_tags: list[str] = []
+
+    if not provider_winners:
+        reason_tags.append("missing_provider_winners")
+    for winner in provider_winners:
+        if not isinstance(winner, dict):
+            reason_tags.append("malformed_provider_winner")
+            continue
+        if not str(winner.get("provider_name", "") or "").strip():
+            reason_tags.append("missing_provider_name")
+        if not str(winner.get("provider_api_url", "") or "").strip():
+            reason_tags.append("missing_provider_api_url")
+
+    if int(budget.get("resolved_budget_seconds", 0) or 0) <= 0:
+        reason_tags.append("missing_resolved_budget_seconds")
+    if int(budget.get("max_concurrency", 0) or 0) <= 0:
+        reason_tags.append("missing_max_concurrency")
+
+    deep_runtime = feature_readiness.get("deep_research_runtime")
+    if isinstance(deep_runtime, dict):
+        degraded_by = set(deep_runtime.get("degraded_by") or [])
+        if deep_runtime.get("status") == "degraded" and "advanced_optional" not in degraded_by:
+            reason_tags.append("advanced_degrade_not_marked_optional")
+
+    reason_tags = sorted(set(reason_tags))
+    return {
+        "metric": "provider_budget_surface",
+        "verdict": "pass" if not reason_tags else "fail",
+        "score": 1.0 if not reason_tags else 0.0,
+        "reason_tags": reason_tags,
     }
 
 
@@ -1498,6 +1538,37 @@ def test_surface_consistency_detects_operator_summary_mirror_gap():
         "status_operator_attempt_window_start_seq_mismatch",
         "status_operator_partial_payload_available_mismatch",
     ]
+
+
+def test_provider_budget_surface_round43_probe_golden():
+    case = load_eval_case("eval_probe_round43_provider_budget_surface.json")
+    golden = case["golden"]["provider_budget_surface"]
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert_metric_matches_golden(result, golden)
+
+
+def test_provider_budget_surface_detects_missing_provider_api_url():
+    case = {
+        "report": {
+            "runtime": {
+                "budget": {"resolved_budget_seconds": 240, "max_concurrency": 2},
+                "provider_winners": [
+                    {
+                        "unit_id": "u1",
+                        "provider_name": "tavily",
+                        "provider_api_url": "",
+                    }
+                ],
+            }
+        }
+    }
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["missing_provider_api_url"]
 
 
 @pytest.mark.parametrize(

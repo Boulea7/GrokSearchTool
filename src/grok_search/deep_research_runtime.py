@@ -5487,6 +5487,7 @@ class DeepResearchRuntime:
                         finished_at=completed_at,
                         heartbeat_at=utc_now_iso(),
                         last_error="",
+                        cancel_requested=False,
                     )
                     self.store.append_event(
                         reused_job.job_id,
@@ -8498,6 +8499,12 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "must_cover_count": len(plan.brief.must_cover),
                 "coverage_checklist_count": len(plan.brief.coverage_checklist),
             },
+            "budget": {
+                "effort": job.effort,
+                "resolved_budget_seconds": job.resolved_budget_seconds,
+                "hard_timeout_seconds": config.deep_research_hard_timeout_seconds,
+                "max_concurrency": config.deep_research_max_concurrency,
+            },
             "coverage": {
                 "must_cover_count": len(plan.brief.must_cover),
                 "uncovered_sub_question_count": len(report_coverage.get("uncovered_sub_questions", [])),
@@ -8521,6 +8528,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     "provider_name": result.get("provider_name", ""),
                     "provider_model": result.get("provider_model", ""),
                     "effective_model": result.get("effective_model", ""),
+                    "provider_api_url": result.get("provider_api_url", ""),
                 }
                 for result in unit_results.values()
                 if result.get("provider_name")
