@@ -4991,6 +4991,144 @@ def _runtime_coverage_state(
     }
 
 
+def _provider_attempt_payload(
+    *,
+    unit_id: str,
+    operation: str,
+    status: str,
+    provider_name: str = "",
+    provider_model: str = "",
+    effective_model: str = "",
+    provider_api_url: str = "",
+    source_count: int = 0,
+    evidence_count: int = 0,
+    error_code: str = "",
+) -> dict[str, Any]:
+    return {
+        "unit_id": unit_id,
+        "operation": operation,
+        "status": status,
+        "provider_name": provider_name,
+        "provider_model": provider_model,
+        "effective_model": effective_model,
+        "provider_api_url": provider_api_url,
+        "source_count": max(0, int(source_count or 0)),
+        "evidence_count": max(0, int(evidence_count or 0)),
+        "error_code": error_code,
+    }
+
+
+def _provider_attempts_payload(
+    *,
+    unit_results: dict[str, dict[str, Any]],
+    failed_units: list[dict[str, Any]],
+    evidence_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    evidence_count_by_unit: dict[str, int] = {}
+    for item in evidence_items:
+        if not isinstance(item, dict):
+            continue
+        unit_id = str(item.get("unit_id", "") or "").strip()
+        if unit_id:
+            evidence_count_by_unit[unit_id] = evidence_count_by_unit.get(unit_id, 0) + 1
+
+    attempts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for unit_id, result in unit_results.items():
+        if not isinstance(result, dict):
+            continue
+        operation = str(result.get("unit_type", "") or "").strip()
+        provider_name = str(result.get("provider_name", "") or "").strip()
+        if operation not in {"search", "fetch", "map"}:
+            continue
+        attempt = _provider_attempt_payload(
+            unit_id=str(unit_id),
+            operation=operation,
+            status="completed",
+            provider_name=provider_name,
+            provider_model=str(result.get("provider_model", "") or ""),
+            effective_model=str(result.get("effective_model", "") or ""),
+            provider_api_url=str(result.get("provider_api_url", "") or ""),
+            source_count=len(result.get("source_ids") or result.get("citations") or []),
+            evidence_count=evidence_count_by_unit.get(str(unit_id), 0),
+        )
+        attempts.append(attempt)
+        seen.add((attempt["unit_id"], attempt["operation"], attempt["status"]))
+
+    for failed in failed_units:
+        if not isinstance(failed, dict):
+            continue
+        unit_id = str(failed.get("unit_id", "") or "").strip()
+        operation = str(failed.get("unit_type", "") or "").strip()
+        if not unit_id or operation not in {"search", "fetch", "map"}:
+            continue
+        key = (unit_id, operation, "failed")
+        if key in seen:
+            continue
+        attempts.append(
+            _provider_attempt_payload(
+                unit_id=unit_id,
+                operation=operation,
+                status="failed",
+                provider_name=str(failed.get("provider_name", "") or ""),
+                provider_model=str(failed.get("provider_model", "") or ""),
+                effective_model=str(failed.get("effective_model", "") or ""),
+                provider_api_url=str(failed.get("provider_api_url", "") or ""),
+                error_code=str(failed.get("reason", "") or failed.get("error_code", "") or ""),
+            )
+        )
+        seen.add(key)
+    return attempts
+
+
+def _provider_capabilities_payload(provider_attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    capabilities: dict[str, Any] = {
+        operation: {"used": False, "providers": []}
+        for operation in ("search", "fetch", "map")
+    }
+    providers_by_operation: dict[str, set[str]] = {operation: set() for operation in capabilities}
+    for attempt in provider_attempts:
+        if not isinstance(attempt, dict):
+            continue
+        operation = str(attempt.get("operation", "") or "").strip()
+        if operation not in capabilities:
+            continue
+        capabilities[operation]["used"] = True
+        provider_name = str(attempt.get("provider_name", "") or "").strip()
+        if provider_name:
+            providers_by_operation[operation].add(provider_name)
+    for operation, providers in providers_by_operation.items():
+        capabilities[operation]["providers"] = sorted(providers)
+    return capabilities
+
+
+def _budget_usage_payload(
+    *,
+    completed_unit_ids: list[str],
+    failed_unit_ids: list[str],
+    skipped_unit_ids: list[str],
+    provider_attempts: list[dict[str, Any]],
+    source_registry: list[dict[str, Any]],
+    evidence_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    calls_by_operation = {"search": 0, "fetch": 0, "map": 0}
+    for attempt in provider_attempts:
+        operation = str(attempt.get("operation", "") or "").strip()
+        if operation in calls_by_operation:
+            calls_by_operation[operation] += 1
+    return {
+        "completed_units": len(completed_unit_ids),
+        "failed_units": len(failed_unit_ids),
+        "skipped_units": len(skipped_unit_ids),
+        "search_calls": calls_by_operation["search"],
+        "fetch_calls": calls_by_operation["fetch"],
+        "map_calls": calls_by_operation["map"],
+        "provider_attempts": len(provider_attempts),
+        "source_count": len(source_registry),
+        "evidence_count": len(evidence_items),
+    }
+
+
 def _build_carry_forward_evidence(
     unit_results: dict[str, dict[str, Any]],
     sections: list[dict[str, Any]],
@@ -8140,6 +8278,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                         "unit_id": unit.unit_id,
                         "unit_type": unit.unit_type,
                         "reason": error_code,
+                        "provider_name": unit_result.get("provider_name", ""),
+                        "provider_model": unit_result.get("provider_model", ""),
+                        "effective_model": unit_result.get("effective_model", ""),
+                        "provider_api_url": unit_result.get("provider_api_url", ""),
+                        "error_code": unit_result.get("error_code", "") or error_code,
                     }
                 )
                 runtime.store.append_event(
@@ -8147,7 +8290,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     type="research_unit_failed",
                     phase="researching",
                     message=f"Failed {unit.unit_id}.",
-                    data={"unit_type": unit.unit_type, "error": error_code},
+                    data={
+                        "unit_type": unit.unit_type,
+                        "error": error_code,
+                        "provider_name": unit_result.get("provider_name", ""),
+                        "provider_model": unit_result.get("provider_model", ""),
+                        "effective_model": unit_result.get("effective_model", ""),
+                        "provider_api_url": unit_result.get("provider_api_url", ""),
+                    },
                 )
                 progress = 20.0 + ((len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids)) / unit_total) * 50.0
                 runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
@@ -8512,6 +8662,20 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         evidence_items=evidence_items,
         sections=citations["sections"],
     )
+    provider_attempts = _provider_attempts_payload(
+        unit_results=unit_results,
+        failed_units=failed_units,
+        evidence_items=evidence_items,
+    )
+    provider_capabilities = _provider_capabilities_payload(provider_attempts)
+    budget_usage = _budget_usage_payload(
+        completed_unit_ids=completed_unit_ids,
+        failed_unit_ids=failed_unit_ids,
+        skipped_unit_ids=skipped_unit_ids,
+        provider_attempts=provider_attempts,
+        source_registry=source_registry,
+        evidence_items=evidence_items,
+    )
     report = {
         "query": plan.query,
         "summary": report_summary,
@@ -8535,6 +8699,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "resolved_budget_seconds": job.resolved_budget_seconds,
                 "hard_timeout_seconds": config.deep_research_hard_timeout_seconds,
                 "max_concurrency": config.deep_research_max_concurrency,
+                "usage": budget_usage,
             },
             "coverage": {
                 "must_cover_count": len(plan.brief.must_cover),
@@ -8553,6 +8718,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             "constraint_violations": constraint_violations,
             "failed_units": failed_units,
             "skipped_units": skipped_units,
+            "provider_capabilities": provider_capabilities,
+            "provider_attempts": provider_attempts,
             "provider_winners": [
                 {
                     "unit_id": result.get("unit_id", ""),
@@ -8769,7 +8936,15 @@ async def _execute_research_unit(
         fetched = fetch_result.get("content", "")
         if not fetched:
             return (
-                {"summary": "", "detail": ""},
+                {
+                    "summary": "",
+                    "detail": "",
+                    "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                    "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                    "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                    "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                    "error_code": str(fetch_result.get("error_code", "") or ""),
+                },
                 [],
                 [],
             )
@@ -8821,7 +8996,15 @@ async def _execute_research_unit(
         mapped = map_result.get("content", "")
         if not mapped:
             return (
-                {"summary": "", "detail": ""},
+                {
+                    "summary": "",
+                    "detail": "",
+                    "provider_name": str(map_result.get("provider_name", "") or ""),
+                    "provider_model": str(map_result.get("provider_model", "") or ""),
+                    "effective_model": str(map_result.get("effective_model", "") or ""),
+                    "provider_api_url": str(map_result.get("provider_api_url", "") or ""),
+                    "error_code": str(map_result.get("error_code", "") or ""),
+                },
                 [],
                 [],
             )
@@ -11568,10 +11751,11 @@ async def _fetch_url_with_details(url: str) -> dict[str, Any]:
             "provider_model": str(data.get("provider_model", "") or ""),
             "effective_model": str(data.get("effective_model", "") or ""),
             "provider_api_url": str(data.get("provider_api_url", "") or ""),
+            "error_code": str(result.get("error", "") or ""),
         }
     if not result or result.startswith("提取失败:") or result.startswith("配置错误:"):
-        return {"content": ""}
-    return {"content": result}
+        return {"content": "", "error_code": "fetch_failed"}
+    return {"content": result, "error_code": ""}
 
 
 async def _map_url(url: str, instructions: str = "") -> str | None:
@@ -11602,7 +11786,8 @@ async def _map_url_with_details(url: str, instructions: str = "") -> dict[str, A
             "provider_model": "",
             "effective_model": "",
             "provider_api_url": f"{config.tavily_api_url.rstrip('/')}/map" if result.get("ok") else "",
+            "error_code": str(result.get("error", "") or ""),
         }
     if not result or result.startswith("映射失败:") or result.startswith("配置错误:"):
-        return {"content": ""}
-    return {"content": result, "provider_name": "tavily", "provider_model": "", "effective_model": "", "provider_api_url": f"{config.tavily_api_url.rstrip('/')}/map"}
+        return {"content": "", "error_code": "map_failed"}
+    return {"content": result, "provider_name": "tavily", "provider_model": "", "effective_model": "", "provider_api_url": f"{config.tavily_api_url.rstrip('/')}/map", "error_code": ""}

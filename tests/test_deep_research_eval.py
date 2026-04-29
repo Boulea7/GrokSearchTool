@@ -677,11 +677,17 @@ def evaluate_provider_budget_surface(case: dict) -> dict:
     unit_results = report.get("unit_results") if isinstance(report.get("unit_results"), dict) else {}
     budget = runtime.get("budget") if isinstance(runtime.get("budget"), dict) else {}
     provider_winners = runtime.get("provider_winners") if isinstance(runtime.get("provider_winners"), list) else []
+    provider_attempts = runtime.get("provider_attempts") if isinstance(runtime.get("provider_attempts"), list) else []
+    provider_capabilities = runtime.get("provider_capabilities") if isinstance(runtime.get("provider_capabilities"), dict) else {}
     feature_readiness = case.get("feature_readiness") if isinstance(case.get("feature_readiness"), dict) else {}
     reason_tags: list[str] = []
 
     if not provider_winners:
         reason_tags.append("missing_provider_winners")
+    if not provider_attempts:
+        reason_tags.append("missing_provider_attempts")
+    if not provider_capabilities:
+        reason_tags.append("missing_provider_capabilities")
     winner_unit_ids: list[str] = []
     for winner in provider_winners:
         if not isinstance(winner, dict):
@@ -701,10 +707,52 @@ def evaluate_provider_budget_surface(case: dict) -> dict:
     if len(winner_unit_ids) != len(set(winner_unit_ids)):
         reason_tags.append("duplicate_provider_winner_unit_id")
 
+    attempt_unit_ids: list[str] = []
+    for attempt in provider_attempts:
+        if not isinstance(attempt, dict):
+            reason_tags.append("malformed_provider_attempt")
+            continue
+        unit_id = str(attempt.get("unit_id", "") or "").strip()
+        operation = str(attempt.get("operation", "") or "").strip()
+        status = str(attempt.get("status", "") or "").strip()
+        if not unit_id:
+            reason_tags.append("missing_provider_attempt_unit_id")
+        else:
+            attempt_unit_ids.append(unit_id)
+        if operation not in {"search", "fetch", "map"}:
+            reason_tags.append("invalid_provider_attempt_operation")
+        if status not in {"completed", "failed"}:
+            reason_tags.append("invalid_provider_attempt_status")
+        if status == "completed" and not str(attempt.get("provider_name", "") or "").strip():
+            reason_tags.append("completed_attempt_missing_provider_name")
+        if status == "completed" and not str(attempt.get("provider_api_url", "") or "").strip():
+            reason_tags.append("completed_attempt_missing_provider_api_url")
+        capability = provider_capabilities.get(operation)
+        if operation and isinstance(capability, dict):
+            capability_providers = {
+                str(provider).strip()
+                for provider in capability.get("providers", []) or []
+                if str(provider).strip()
+            }
+            provider_name = str(attempt.get("provider_name", "") or "").strip()
+            if provider_name and provider_name not in capability_providers:
+                reason_tags.append("provider_attempt_missing_from_capabilities")
+
+    if winner_unit_ids and attempt_unit_ids and not set(winner_unit_ids).issubset(set(attempt_unit_ids)):
+        reason_tags.append("provider_winner_missing_provider_attempt")
+
     if int(budget.get("resolved_budget_seconds", 0) or 0) <= 0:
         reason_tags.append("missing_resolved_budget_seconds")
     if int(budget.get("max_concurrency", 0) or 0) <= 0:
         reason_tags.append("missing_max_concurrency")
+    usage = budget.get("usage") if isinstance(budget.get("usage"), dict) else {}
+    if not usage:
+        reason_tags.append("missing_budget_usage")
+    else:
+        if int(usage.get("completed_units", 0) or 0) + int(usage.get("failed_units", 0) or 0) <= 0:
+            reason_tags.append("missing_budget_usage_terminal_units")
+        if int(usage.get("provider_attempts", 0) or 0) != len(provider_attempts):
+            reason_tags.append("budget_usage_provider_attempt_count_mismatch")
 
     deep_runtime = feature_readiness.get("deep_research_runtime")
     if isinstance(deep_runtime, dict):
@@ -1580,7 +1628,12 @@ def test_provider_budget_surface_detects_missing_provider_api_url():
     result = evaluate_case_metric(case, "provider_budget_surface")
 
     assert result["verdict"] == "fail"
-    assert result["reason_tags"] == ["missing_provider_api_url"]
+    assert result["reason_tags"] == [
+        "missing_budget_usage",
+        "missing_provider_api_url",
+        "missing_provider_attempts",
+        "missing_provider_capabilities",
+    ]
 
 
 def test_provider_budget_surface_requires_provider_winners_to_match_unit_results():
@@ -1614,6 +1667,9 @@ def test_provider_budget_surface_requires_provider_winners_to_match_unit_results
     assert result["verdict"] == "fail"
     assert result["reason_tags"] == [
         "duplicate_provider_winner_unit_id",
+        "missing_budget_usage",
+        "missing_provider_attempts",
+        "missing_provider_capabilities",
         "provider_winner_unit_missing_from_unit_results",
     ]
 

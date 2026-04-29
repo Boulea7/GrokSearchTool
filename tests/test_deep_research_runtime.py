@@ -20052,8 +20052,140 @@ async def test_runtime_provider_winners_include_provider_api_url(monkeypatch, tm
     assert provider_winner["unit_id"] == "unit-search-1"
     assert provider_winner["provider_name"] == "test-provider"
     assert provider_winner["provider_api_url"] == "https://provider.example.invalid/v1/chat/completions"
-    assert result["report"]["runtime"]["budget"]["effort"] == "standard"
-    assert result["report"]["runtime"]["budget"]["resolved_budget_seconds"] == 240
+    runtime_payload = result["report"]["runtime"]
+    assert runtime_payload["budget"]["effort"] == "standard"
+    assert runtime_payload["budget"]["resolved_budget_seconds"] == 240
+    assert runtime_payload["budget"]["usage"]["completed_units"] == 1
+    assert runtime_payload["budget"]["usage"]["search_calls"] == 1
+    assert runtime_payload["budget"]["usage"]["source_count"] == 1
+    assert runtime_payload["provider_capabilities"]["search"]["providers"] == ["test-provider"]
+    assert runtime_payload["provider_attempts"] == [
+        {
+            "unit_id": "unit-search-1",
+            "operation": "search",
+            "status": "completed",
+            "provider_name": "test-provider",
+            "provider_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+            "provider_api_url": "https://provider.example.invalid/v1/chat/completions",
+            "source_count": 1,
+            "evidence_count": 1,
+            "error_code": "",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_failed_fetch_unit_records_provider_attempt(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        payload["report_outline"] = [
+            {
+                "section_id": "provider-success",
+                "title": "Provider Success",
+                "goal": "Summarize provider success metadata.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-search-1",
+                "unit_type": "search",
+                "title": "Provider success",
+                "goal": "Produce one successful unit so final artifacts are available.",
+                "query": "provider success metadata",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            },
+            {
+                "unit_id": "unit-fetch-1",
+                "unit_type": "fetch",
+                "title": "Fetch missing page",
+                "goal": "Fetch provider failure metadata.",
+                "query": "",
+                "url": "https://docs.example.com/missing",
+                "depends_on": ["unit-search-1"],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        return payload
+
+    async def search_with_details(query, *, effort="standard", include_domains=None, exclude_domains=None):
+        return {
+            "answer": "Provider success metadata is available for final report synthesis.",
+            "sources": [
+                {
+                    "url": "https://docs.example.com/provider-success",
+                    "title": "Provider success",
+                    "description": "Provider success docs.",
+                    "provider": "grok",
+                }
+            ],
+            "warning_code": None,
+            "requested_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+            "provider_name": "test-provider",
+            "provider_model": "grok-4.20-expert",
+            "provider_api_url": "https://provider.example.invalid/v1/chat/completions",
+        }
+
+    async def fetch_with_details(url):
+        return {
+            "content": "",
+            "provider_name": "tavily",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.tavily.com/extract",
+            "error_code": "fetch_failed",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query_with_details", search_with_details)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url_with_details", fetch_with_details)
+
+    response = await runtime.start(query="Fetch provider failure visibility", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+    result = await runtime.result(response["job_id"])
+    runtime_payload = result["report"]["runtime"]
+
+    assert runtime_payload["failed_units"] == [
+        {
+            "unit_id": "unit-fetch-1",
+            "unit_type": "fetch",
+            "reason": "empty_fetch_result",
+            "provider_name": "tavily",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.tavily.com/extract",
+            "error_code": "fetch_failed",
+        }
+    ]
+    assert runtime_payload["provider_capabilities"]["fetch"]["providers"] == ["tavily"]
+    fetch_attempt = next(
+        attempt for attempt in runtime_payload["provider_attempts"] if attempt["unit_id"] == "unit-fetch-1"
+    )
+    assert fetch_attempt == {
+        "unit_id": "unit-fetch-1",
+        "operation": "fetch",
+        "status": "failed",
+        "provider_name": "tavily",
+        "provider_model": "",
+        "effective_model": "",
+        "provider_api_url": "https://api.tavily.com/extract",
+        "source_count": 0,
+        "evidence_count": 0,
+        "error_code": "empty_fetch_result",
+    }
+    assert runtime_payload["budget"]["usage"]["failed_units"] == 1
+    assert runtime_payload["budget"]["usage"]["completed_units"] == 1
+    assert runtime_payload["budget"]["usage"]["fetch_calls"] == 1
 
 
 @pytest.mark.asyncio
