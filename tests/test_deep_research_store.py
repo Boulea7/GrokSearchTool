@@ -1,3 +1,5 @@
+import json
+import sqlite3
 from pathlib import Path
 
 from grok_search import deep_research_store as deep_research_store_module
@@ -13,6 +15,63 @@ from grok_search.deep_research_types import (
 
 def make_store(tmp_path: Path) -> DeepResearchStore:
     return DeepResearchStore(tmp_path / "deep-research")
+
+
+def test_store_migrates_legacy_checkpoints_with_duplicate_and_empty_seq(tmp_path):
+    root_dir = tmp_path / "deep-research"
+    root_dir.mkdir()
+    db_path = root_dir / "deep_research.sqlite3"
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE job_checkpoints (
+                job_id TEXT NOT NULL,
+                checkpoint_key TEXT PRIMARY KEY,
+                checkpoint_seq INTEGER,
+                phase TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                state_json TEXT NOT NULL
+            );
+            """
+        )
+        rows = [
+            ("job-legacy", "planning", None, "planning", "2026-04-28T00:00:00+00:00", {"step": "planning"}),
+            ("job-legacy", "researching-a", 1, "researching", "2026-04-28T00:01:00+00:00", {"step": "a"}),
+            ("job-legacy", "researching-b", 1, "researching", "2026-04-28T00:02:00+00:00", {"step": "b"}),
+        ]
+        connection.executemany(
+            """
+            INSERT INTO job_checkpoints (
+                job_id, checkpoint_key, checkpoint_seq, phase, created_at, state_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (job_id, key, seq, phase, created_at, json.dumps(state))
+                for job_id, key, seq, phase, created_at, state in rows
+            ],
+        )
+
+    store = DeepResearchStore(root_dir)
+
+    checkpoints = store.list_checkpoints("job-legacy")
+    assert [checkpoint.checkpoint_seq for checkpoint in checkpoints] == [1, 2, 3]
+    assert [checkpoint.checkpoint_key for checkpoint in checkpoints] == [
+        "planning",
+        "researching-a",
+        "researching-b",
+    ]
+    assert store.get_checkpoint("job-legacy", "researching-b").state == {"step": "b"}
+    with sqlite3.connect(db_path) as connection:
+        legacy_table = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'job_checkpoints_legacy'"
+        ).fetchone()
+        primary_key_columns = [
+            row[1]
+            for row in sorted(connection.execute("PRAGMA table_info(job_checkpoints)").fetchall(), key=lambda row: row[5])
+            if row[5] > 0
+        ]
+    assert legacy_table is None
+    assert primary_key_columns == ["job_id", "checkpoint_seq"]
 
 
 def test_store_creates_and_reads_job(tmp_path):

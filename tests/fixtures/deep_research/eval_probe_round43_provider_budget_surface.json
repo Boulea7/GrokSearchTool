@@ -1,0 +1,46 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing"
+  },
+  "query": "Provider fallback and budget visibility for deep research public surfaces",
+  "report": {
+    "runtime": {
+      "budget": {
+        "effort": "standard",
+        "resolved_budget_seconds": 240,
+        "hard_timeout_seconds": 900,
+        "max_concurrency": 2
+      },
+      "provider_winners": [
+        {
+          "unit_id": "unit-search-1",
+          "provider_name": "grok",
+          "provider_model": "grok-4.20-expert",
+          "effective_model": "grok-4.20-expert",
+          "provider_api_url": "https://provider.example.invalid/v1/chat/completions"
+        },
+        {
+          "unit_id": "unit-fetch-1",
+          "provider_name": "tavily",
+          "provider_model": "",
+          "effective_model": "",
+          "provider_api_url": "https://tavily-fallback.example.invalid/api/extract"
+        }
+      ]
+    }
+  },
+  "feature_readiness": {
+    "deep_research_runtime": {
+      "status": "degraded",
+      "degraded_by": ["advanced_optional"]
+    }
+  },
+  "golden": {
+    "provider_budget_surface": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

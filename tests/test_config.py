@@ -659,6 +659,43 @@ def test_empty_process_env_still_blocks_project_env_fallback(monkeypatch, tmp_pa
     assert config.tavily_api_key == ""
 
 
+def test_tavily_fallback_config_defaults_to_primary_key_and_masks_snapshot(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-primary-secret")
+    monkeypatch.delenv("TAVILY_FALLBACK_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_FALLBACK_API_URL", raising=False)
+    monkeypatch.delenv("TAVILY_FALLBACK_ENABLED", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+    config.reset_runtime_state()
+
+    info = config.get_config_info()
+
+    assert config.tavily_fallback_enabled is True
+    assert config.tavily_fallback_api_url == "https://tavily-fallback.example.com/api/tavily"
+    assert config.tavily_fallback_api_key == "tvly-primary-secret"
+    assert info["TAVILY_FALLBACK_ENABLED"] is True
+    assert "example-user.cc" in info["TAVILY_FALLBACK_API_URL"]
+    assert "tvly-primary-secret" not in info["TAVILY_FALLBACK_API_KEY"]
+
+
+def test_tavily_fallback_config_honors_explicit_disable_and_key(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-primary-secret")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "tvly-fallback-secret")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://fallback.example.com/api")
+    monkeypatch.setenv("TAVILY_FALLBACK_ENABLED", "false")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+    config.reset_runtime_state()
+
+    assert config.tavily_fallback_enabled is False
+    assert config.tavily_fallback_api_url == "https://fallback.example.com/api"
+    assert config.tavily_fallback_api_key == "tvly-fallback-secret"
+
+
 def test_project_env_local_takes_precedence_over_project_env(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.delenv("TAVILY_API_URL", raising=False)

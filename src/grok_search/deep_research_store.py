@@ -205,9 +205,10 @@ class DeepResearchStore:
                 for row in legacy_rows:
                     job_id = str(row["job_id"])
                     checkpoint_seq = int(row["checkpoint_seq"] or 0) if "checkpoint_seq" in legacy_columns else 0
-                    if checkpoint_seq <= 0:
-                        checkpoint_seq = next_seq_by_job.get(job_id, 0) + 1
-                    next_seq_by_job[job_id] = max(next_seq_by_job.get(job_id, 0), checkpoint_seq)
+                    last_seq = next_seq_by_job.get(job_id, 0)
+                    if checkpoint_seq <= last_seq:
+                        checkpoint_seq = last_seq + 1
+                    next_seq_by_job[job_id] = checkpoint_seq
                     connection.execute(
                         """
                         INSERT INTO job_checkpoints (
