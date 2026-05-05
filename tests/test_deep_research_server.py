@@ -1409,6 +1409,67 @@ async def test_deep_research_result_hidden_final_artifacts_use_visibility_reason
     assert artifact["content"] is None
     assert artifact["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
 
+    resolved_job = runtime.store.create_job(
+        query="Server resolved artifact states",
+        request_fingerprint="fp-server-resolved-artifact-states",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(resolved_job.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(resolved_job.job_id, "plan.json", json.dumps({"query": resolved_job.query}), "application/json")
+    complete_artifacts = with_minimal_provenance_artifacts(
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}},
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Resolved final batch report.", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nResolved final batch report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+        query=resolved_job.query,
+    )
+    runtime.write_artifact_batch(
+        resolved_job.job_id,
+        [artifact for artifact in complete_artifacts if artifact.get("kind") != "coverage_gaps.json"],
+    )
+
+    missing_artifact = await server.deep_research_artifact(resolved_job.job_id, "coverage_gaps.json")
+    available_artifact = await server.deep_research_artifact(resolved_job.job_id, "coverage.json")
+
+    assert missing_artifact["state"] == "missing"
+    assert missing_artifact["content"] is None
+    assert missing_artifact["artifact_visibility_reason"] == ""
+    assert available_artifact["state"] == "available"
+    assert json.loads(available_artifact["content"])["query"] == resolved_job.query
+    assert available_artifact["artifact_visibility_reason"] == ""
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fixture_name", RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES)
