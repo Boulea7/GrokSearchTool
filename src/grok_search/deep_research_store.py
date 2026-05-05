@@ -601,7 +601,7 @@ class DeepResearchStore:
                 """
                 SELECT * FROM jobs
                 WHERE request_fingerprint = ?
-                ORDER BY updated_at DESC
+                ORDER BY updated_at DESC, finished_at DESC, created_at DESC, job_id DESC
                 """,
                 (request_fingerprint,),
             ).fetchall()

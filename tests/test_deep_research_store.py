@@ -353,6 +353,52 @@ def test_store_reuses_matching_draft_job(tmp_path):
     assert store.find_reusable_job("fp-draft-reuse", recent_reuse_seconds=1800) == draft
 
 
+def test_store_find_reusable_jobs_orders_stably_when_updated_at_ties(tmp_path):
+    store = make_store(tmp_path)
+    first = store.create_job(
+        query="Reusable first",
+        request_fingerprint="fp-stable-reuse",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    second = store.create_job(
+        query="Reusable second",
+        request_fingerprint="fp-stable-reuse",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ?, finished_at = ? WHERE job_id = ?",
+            ("2026-04-22T00:00:00Z", "2026-04-22T00:00:01Z", "2026-04-22T00:01:00Z", first.job_id),
+        )
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ?, finished_at = ? WHERE job_id = ?",
+            ("2026-04-22T00:00:00Z", "2026-04-22T00:00:02Z", "2026-04-22T00:01:00Z", second.job_id),
+        )
+
+    reusable = store.find_reusable_jobs("fp-stable-reuse", recent_reuse_seconds=3600 * 24 * 30)
+
+    assert [job.job_id for job in reusable] == [second.job_id, first.job_id]
+    assert store.find_reusable_job("fp-stable-reuse", recent_reuse_seconds=3600 * 24 * 30).job_id == second.job_id
+
+
 def test_store_list_jobs_orders_stably_when_updated_at_ties(tmp_path):
     store = make_store(tmp_path)
     first = store.create_job(

@@ -19153,6 +19153,134 @@ def test_coverage_gaps_payload_distinguishes_soft_gaps_and_follow_up_hints():
     assert payload["suggested_research_units"][0]["source_policy"]["include_domains"] == ["docs.aws.amazon.com"]
 
 
+def test_coverage_gaps_matches_report_rejects_partial_modern_sidecar():
+    report = {
+        "query": "Checkpoint resume semantics",
+        "coverage": {
+            "coverage_gate_passed": False,
+            "hard_coverage_gate_passed": True,
+            "unanswered_sections": ["Task settings"],
+            "uncovered_sub_questions": [],
+            "hard_uncovered_targets": [],
+        },
+    }
+    partial_sidecar = {
+        "query": "Checkpoint resume semantics",
+        "coverage_gate_passed": False,
+        "total_gap_count": 1,
+    }
+
+    assert (
+        deep_research_runtime_module._coverage_gaps_matches_report(
+            coverage_gaps_value=partial_sidecar,
+            report_value=report,
+        )
+        is False
+    )
+
+
+def test_coverage_gaps_artifact_shape_rejects_invalid_modern_gap_rows():
+    error = deep_research_runtime_module._validate_json_artifact_shape(
+        "coverage_gaps.json",
+        {
+            "query": "Checkpoint resume semantics",
+            "unanswered_sections": [],
+            "uncovered_sub_questions": [],
+            "hard_uncovered_targets": [],
+            "coverage_gate_passed": False,
+            "hard_coverage_gate_passed": True,
+            "blocking_gap_count": 1,
+            "hard_gap_count": 0,
+            "total_gap_count": 1,
+            "gaps": [
+                {
+                    "gap_type": "unanswered_section",
+                    "target": "",
+                    "blocking": "false",
+                    "blocking_scope": "soft",
+                }
+            ],
+            "follow_up_hints": [],
+            "suggested_research_units": [],
+        },
+    )
+
+    assert error == "invalid_shape"
+
+
+def test_provider_attempts_payload_preserves_distinct_attempt_roles_and_error_layers():
+    attempts = deep_research_runtime_module._provider_attempts_payload(
+        unit_results={
+            "unit-search-1": {
+                "unit_type": "search",
+                "provider_name": "primary-grok",
+                "provider_api_url": "https://provider.example.invalid/v1",
+                "source_ids": ["R1"],
+                "supporting_provider_attempts": [
+                    {
+                        "operation": "fetch",
+                        "status": "completed",
+                        "provider_name": "tavily",
+                        "provider_api_url": "https://api.tavily.com/extract",
+                        "source_count": 1,
+                        "evidence_count": 1,
+                        "attempt_role": "selective_fetch",
+                    },
+                    {
+                        "operation": "fetch",
+                        "status": "completed",
+                        "provider_name": "tavily",
+                        "provider_api_url": "https://api.tavily.com/extract",
+                        "source_count": 1,
+                        "evidence_count": 1,
+                        "attempt_role": "selective_fetch",
+                    },
+                    {
+                        "operation": "fetch",
+                        "status": "failed",
+                        "provider_name": "tavily",
+                        "provider_api_url": "https://api.tavily.com/extract",
+                        "source_count": 0,
+                        "evidence_count": 0,
+                        "error_code": "fetch_failed",
+                        "failure_reason": "empty_fetch_result",
+                        "attempt_role": "selective_fetch",
+                    },
+                ],
+                "supplemental_attempts": [
+                    {
+                        "operation": "search",
+                        "status": "completed",
+                        "provider_name": "tavily",
+                        "provider_api_url": "https://api.tavily.com/search",
+                        "source_count": 1,
+                        "evidence_count": 0,
+                    },
+                    {
+                        "operation": "search",
+                        "status": "completed",
+                        "provider_name": "tavily",
+                        "provider_api_url": "https://api.tavily.com/search",
+                        "source_count": 1,
+                        "evidence_count": 0,
+                    },
+                ],
+            }
+        },
+        failed_units=[],
+        evidence_items=[{"unit_id": "unit-search-1", "evidence_id": "e1"}],
+    )
+
+    fetch_attempts = [attempt for attempt in attempts if attempt["operation"] == "fetch"]
+    supplemental_attempts = [
+        attempt for attempt in attempts if attempt.get("attempt_role") == "supplemental"
+    ]
+    assert len(fetch_attempts) == 2
+    assert {attempt["status"] for attempt in fetch_attempts} == {"completed", "failed"}
+    assert next(attempt for attempt in fetch_attempts if attempt["status"] == "failed")["failure_reason"] == "empty_fetch_result"
+    assert len(supplemental_attempts) == 1
+
+
 @pytest.mark.asyncio
 async def test_continuation_carries_structured_coverage_gap_units(tmp_path):
     runtime = build_runtime(tmp_path)
@@ -19201,6 +19329,79 @@ async def test_continuation_carries_structured_coverage_gap_units(tmp_path):
     assert continuation.follow_up_hints[0]["blocking_scope"] == "hard"
     assert continuation.suggested_research_units[0]["query"] == "AWS DMS CDC checkpoint restart official docs"
     assert continuation.focused_snapshot["suggested_research_units"][0]["blocking_scope"] == "hard"
+
+
+@pytest.mark.asyncio
+async def test_continuation_ignores_incomplete_latest_batch_candidate_when_current_artifacts_exist(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Continuation incomplete batch candidate",
+        request_fingerprint="fp-continuation-incomplete-batch",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps(structured_plan_payload(job, {"mode": "fresh"})), "application/json")
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R1", "url": "https://docs.example.com/current"}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "citations.json",
+        json.dumps(
+            {
+                "source_registry": {"R1": {"source_id": "R1", "url": "https://docs.example.com/current"}},
+                "sections": [],
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "report.json",
+        json.dumps({"query": job.query, "summary": "Current report.", "sections": [], "unit_results": {}}),
+        "application/json",
+    )
+    runtime.write_artifact(job.job_id, "final_report.md", "# Final Report\n\nCurrent final report.", "text/markdown")
+    runtime.store.save_checkpoint(
+        job.job_id,
+        phase="finalizing",
+        checkpoint_key="finalizing",
+        state={"completed_unit_ids": [], "sources": [], "sections": [], "unit_results": {}},
+    )
+    batch_dir = runtime.store.artifacts_dir / job.job_id / "batches" / "20990101T000000-incomplete"
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "batch_id": "20990101T000000-incomplete",
+                "created_at": "2099-01-01T00:00:00+00:00",
+                "completeness_ok": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (batch_dir / "final_report.md").write_text(
+        "# Final Report\n\nIncomplete latest batch should not be mixed.",
+        encoding="utf-8",
+    )
+
+    continuation = runtime._build_continuation_context(job.job_id)
+
+    assert continuation.focused_snapshot["artifact_origin_map"]["final_report.md"] == "current_artifact"
+    assert "latest_batch_candidate" not in set(continuation.focused_snapshot["artifact_origin_map"].values())
+    assert "Incomplete latest batch" not in continuation.previous_summary
 
 
 def test_verifier_flags_conflicting_claims_with_negation_mismatch():
@@ -20164,6 +20365,80 @@ async def test_runtime_provider_attempts_include_supplemental_search_provider(mo
 
 
 @pytest.mark.asyncio
+async def test_runtime_selective_fetch_records_fetch_attempt_and_budget_usage(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search_with_details(query, *, effort="standard", include_domains=None, exclude_domains=None):
+        return {
+            "answer": "Selective fetch can ground provider accounting against the exact source page.",
+            "sources": [
+                {
+                    "url": "https://docs.example.com/provider-budget",
+                    "title": "Provider budget",
+                    "description": "Provider budget docs.",
+                    "provider": "grok",
+                }
+            ],
+            "warning_code": None,
+            "requested_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+            "provider_name": "primary-grok",
+            "provider_model": "grok-4.20-expert",
+            "provider_api_url": "https://provider.example.invalid/v1/chat/completions",
+            "provider_source_count": 1,
+        }
+
+    async def fetch_with_details(url):
+        return {
+            "content": "Provider budget docs explain fetch attempt accounting and exact source evidence.",
+            "provider_name": "tavily",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.tavily.com/extract",
+            "error_code": "",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query_with_details", search_with_details)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url_with_details", fetch_with_details)
+
+    response = await runtime.start(query="Selective fetch budget usage", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+    result = await runtime.result(response["job_id"])
+    runtime_payload = result["report"]["runtime"]
+
+    fetch_attempts = [
+        attempt for attempt in runtime_payload["provider_attempts"] if attempt["operation"] == "fetch"
+    ]
+    assert fetch_attempts == [
+        {
+            "unit_id": "unit-search-1",
+            "operation": "fetch",
+            "status": "completed",
+            "provider_name": "tavily",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.tavily.com/extract",
+            "source_count": 1,
+            "evidence_count": 1,
+            "error_code": "",
+            "attempt_role": "selective_fetch",
+        }
+    ]
+    assert runtime_payload["provider_capabilities"]["fetch"]["providers"] == ["tavily"]
+    assert runtime_payload["budget"]["usage"]["fetch_calls"] == 1
+    assert runtime_payload["budget"]["usage"]["provider_attempts"] == 2
+
+
+@pytest.mark.asyncio
 async def test_runtime_failed_fetch_unit_records_provider_attempt(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -20269,7 +20544,8 @@ async def test_runtime_failed_fetch_unit_records_provider_attempt(monkeypatch, t
         "provider_api_url": "https://api.tavily.com/extract",
         "source_count": 0,
         "evidence_count": 0,
-        "error_code": "empty_fetch_result",
+        "error_code": "fetch_failed",
+        "failure_reason": "empty_fetch_result",
     }
     assert runtime_payload["budget"]["usage"]["failed_units"] == 1
     assert runtime_payload["budget"]["usage"]["completed_units"] == 1

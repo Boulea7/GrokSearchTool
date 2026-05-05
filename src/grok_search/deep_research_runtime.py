@@ -1731,6 +1731,19 @@ def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
         for key in ("unanswered_sections", "uncovered_sub_questions", "hard_uncovered_targets", "gaps"):
             if not isinstance(value.get(key, []), list):
                 return "invalid_shape"
+        for gap in value.get("gaps", []) or []:
+            if not isinstance(gap, dict):
+                return "invalid_shape"
+            if "blocking_scope" not in gap:
+                continue
+            if str(gap.get("blocking_scope", "") or "") not in {"hard", "soft"}:
+                return "invalid_shape"
+            if not isinstance(gap.get("blocking"), bool):
+                return "invalid_shape"
+            if not str(gap.get("gap_type", "") or "").strip():
+                return "invalid_shape"
+            if not str(gap.get("target", "") or "").strip():
+                return "invalid_shape"
         return None
     return None
 
@@ -2060,6 +2073,9 @@ def _coverage_gaps_matches_report(
             "total_gap_count",
         }
         return all(coverage_gaps_value.get(key) == expected_payload.get(key) for key in legacy_keys)
+    required_keys = set(expected_payload)
+    if not required_keys.issubset(set(coverage_gaps_value)):
+        return False
     for key, value in coverage_gaps_value.items():
         if expected_payload.get(key) != value:
             return False
@@ -2078,7 +2094,10 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
     citations_value: dict[str, Any] | None = None
     evidence_items_value: list[dict[str, Any]] | None = None
     for kind in _FINAL_ARTIFACT_KINDS:
-        text = _read_text_if_exists(paths.get(kind))
+        path = paths.get(kind)
+        if path is None:
+            return False
+        text = _read_text_if_exists(path)
         if text is None:
             return False
         if kind.endswith(".json"):
@@ -2202,6 +2221,23 @@ def _complete_batch_bundles(store: DeepResearchStore, job_id: str) -> list[dict[
         if all(paths.get(kind) is not None and _read_text_if_exists(paths[kind]) is not None for kind in _FINAL_ARTIFACT_KINDS):
             bundles.append(bundle)
     return bundles
+
+
+def _core_complete_batch_bundles(store: DeepResearchStore, job_id: str) -> list[dict[str, Any]]:
+    bundles: list[dict[str, Any]] = []
+    for bundle in _batch_bundle_candidates(store, job_id):
+        paths = bundle.get("paths") or {}
+        if all(
+            paths.get(kind) is not None and _read_text_if_exists(paths[kind]) is not None
+            for kind in _CORE_FINAL_ARTIFACT_KINDS
+        ):
+            bundles.append(bundle)
+    return bundles
+
+
+def _latest_core_complete_batch_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
+    candidates = _core_complete_batch_bundles(store, job_id)
+    return candidates[0] if candidates else None
 
 
 def _latest_complete_batch_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
@@ -5003,8 +5039,11 @@ def _provider_attempt_payload(
     source_count: int = 0,
     evidence_count: int = 0,
     error_code: str = "",
+    attempt_role: str = "",
+    failure_reason: str = "",
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "unit_id": unit_id,
         "operation": operation,
         "status": status,
@@ -5016,6 +5055,28 @@ def _provider_attempt_payload(
         "evidence_count": max(0, int(evidence_count or 0)),
         "error_code": error_code,
     }
+    if attempt_role:
+        payload["attempt_role"] = attempt_role
+    if failure_reason:
+        payload["failure_reason"] = failure_reason
+    normalized_warnings = sorted({str(warning).strip() for warning in warnings or [] if str(warning).strip()})
+    if normalized_warnings:
+        payload["warnings"] = normalized_warnings
+    return payload
+
+
+def _provider_attempt_key(attempt: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        attempt.get("unit_id", ""),
+        attempt.get("operation", ""),
+        attempt.get("status", ""),
+        attempt.get("provider_name", ""),
+        attempt.get("provider_api_url", ""),
+        attempt.get("attempt_role", ""),
+        attempt.get("error_code", ""),
+        attempt.get("source_count", 0),
+        attempt.get("evidence_count", 0),
+    )
 
 
 def _provider_attempts_payload(
@@ -5033,7 +5094,7 @@ def _provider_attempts_payload(
             evidence_count_by_unit[unit_id] = evidence_count_by_unit.get(unit_id, 0) + 1
 
     attempts: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str, str, str]] = set()
+    seen: set[tuple[Any, ...]] = set()
     for unit_id, result in unit_results.items():
         if not isinstance(result, dict):
             continue
@@ -5055,17 +5116,12 @@ def _provider_attempts_payload(
                 else len(result.get("source_ids") or result.get("citations") or [])
             ),
             evidence_count=evidence_count_by_unit.get(str(unit_id), 0),
+            warnings=list(result.get("warnings") or []),
         )
+        if "provider_evidence_count" in result:
+            attempt["evidence_count"] = max(0, int(result.get("provider_evidence_count") or 0))
         attempts.append(attempt)
-        seen.add(
-            (
-                attempt["unit_id"],
-                attempt["operation"],
-                attempt["status"],
-                attempt["provider_name"],
-                attempt["provider_api_url"],
-            )
-        )
+        seen.add(_provider_attempt_key(attempt))
         for supplemental in result.get("supplemental_attempts") or []:
             if not isinstance(supplemental, dict):
                 continue
@@ -5084,19 +5140,42 @@ def _provider_attempts_payload(
                 source_count=int(supplemental.get("source_count", 0) or 0),
                 evidence_count=int(supplemental.get("evidence_count", 0) or 0),
                 error_code=str(supplemental.get("error_code", "") or ""),
+                attempt_role=str(supplemental.get("attempt_role") or "supplemental"),
+                failure_reason=str(supplemental.get("failure_reason", "") or ""),
+                warnings=list(supplemental.get("warnings") or []),
             )
-            supplemental_attempt["attempt_role"] = str(supplemental.get("attempt_role") or "supplemental")
-            supplemental_key = (
-                supplemental_attempt["unit_id"],
-                supplemental_attempt["operation"],
-                supplemental_attempt["status"],
-                supplemental_attempt["provider_name"],
-                supplemental_attempt["provider_api_url"],
-            )
+            supplemental_key = _provider_attempt_key(supplemental_attempt)
             if supplemental_key in seen:
                 continue
             attempts.append(supplemental_attempt)
             seen.add(supplemental_key)
+        for supporting in result.get("supporting_provider_attempts") or []:
+            if not isinstance(supporting, dict):
+                continue
+            supporting_operation = str(supporting.get("operation", "") or "").strip()
+            if supporting_operation not in {"search", "fetch", "map"}:
+                continue
+            supporting_status = str(supporting.get("status", "") or "completed").strip()
+            supporting_attempt = _provider_attempt_payload(
+                unit_id=str(supporting.get("unit_id", "") or unit_id),
+                operation=supporting_operation,
+                status=supporting_status if supporting_status in {"completed", "failed"} else "completed",
+                provider_name=str(supporting.get("provider_name", "") or ""),
+                provider_model=str(supporting.get("provider_model", "") or ""),
+                effective_model=str(supporting.get("effective_model", "") or ""),
+                provider_api_url=str(supporting.get("provider_api_url", "") or ""),
+                source_count=int(supporting.get("source_count", 0) or 0),
+                evidence_count=int(supporting.get("evidence_count", 0) or 0),
+                error_code=str(supporting.get("error_code", "") or ""),
+                attempt_role=str(supporting.get("attempt_role", "") or ""),
+                failure_reason=str(supporting.get("failure_reason", "") or ""),
+                warnings=list(supporting.get("warnings") or []),
+            )
+            supporting_key = _provider_attempt_key(supporting_attempt)
+            if supporting_key in seen:
+                continue
+            attempts.append(supporting_attempt)
+            seen.add(supporting_key)
 
     for failed in failed_units:
         if not isinstance(failed, dict):
@@ -5105,15 +5184,8 @@ def _provider_attempts_payload(
         operation = str(failed.get("unit_type", "") or "").strip()
         if not unit_id or operation not in {"search", "fetch", "map"}:
             continue
-        key = (
-            unit_id,
-            operation,
-            "failed",
-            str(failed.get("provider_name", "") or ""),
-            str(failed.get("provider_api_url", "") or ""),
-        )
-        if key in seen:
-            continue
+        error_code = str(failed.get("error_code", "") or failed.get("reason", "") or "")
+        failure_reason = str(failed.get("reason", "") or "")
         attempt = _provider_attempt_payload(
             unit_id=unit_id,
             operation=operation,
@@ -5122,8 +5194,13 @@ def _provider_attempts_payload(
             provider_model=str(failed.get("provider_model", "") or ""),
             effective_model=str(failed.get("effective_model", "") or ""),
             provider_api_url=str(failed.get("provider_api_url", "") or ""),
-            error_code=str(failed.get("reason", "") or failed.get("error_code", "") or ""),
+            error_code=error_code,
+            failure_reason=failure_reason if failure_reason and failure_reason != error_code else "",
+            warnings=list(failed.get("warnings") or []),
         )
+        key = _provider_attempt_key(attempt)
+        if key in seen:
+            continue
         attempts.append(attempt)
         seen.add(key)
     return attempts
@@ -7315,11 +7392,9 @@ class DeepResearchRuntime:
 
         final_bundle = _resolve_final_artifact_bundle(self.store, continue_from_job_id)
         use_final_bundle = _artifact_bundle_is_usable(final_bundle)
-        bundle_candidate = (
-            _latest_batch_bundle_candidate(self.store, continue_from_job_id)
-            if final_bundle is None
-            else final_bundle
-        )
+        bundle_candidate = None
+        if final_bundle is None:
+            bundle_candidate = _latest_core_complete_batch_bundle(self.store, continue_from_job_id)
         bundle_candidate_used = bool(bundle_candidate is not None and not use_final_bundle)
         current_report_text = self.store.read_artifact_text(continue_from_job_id, "report.json") or ""
         current_final_report = self.store.read_artifact_text(continue_from_job_id, "final_report.md") or ""
@@ -8376,6 +8451,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "provider_api_url": unit_result.get("provider_api_url", ""),
                 "provider_source_count": int(unit_result.get("provider_source_count", 0) or 0),
                 "supplemental_attempts": list(unit_result.get("supplemental_attempts") or []),
+                "supporting_provider_attempts": list(unit_result.get("supporting_provider_attempts") or []),
             }
             evidence_items.extend(new_evidence)
             ledger_entries = build_evidence_ledger_entries(
@@ -9103,11 +9179,28 @@ async def _execute_research_unit(
         )
         fetch_limit = max(0, plan.search_strategy.selective_fetch.max_urls_per_search)
         ranked_candidate_sources = _select_fetch_sources(candidate_sources, plan, unit)
+        supporting_provider_attempts: list[dict[str, Any]] = []
         for candidate_source in ranked_candidate_sources[:fetch_limit]:
             candidate_url = candidate_source["url"]
             fetch_result = await _fetch_url_with_details(candidate_url)
             fetched = fetch_result.get("content", "")
             if not fetched:
+                supporting_provider_attempts.append(
+                    {
+                        "unit_id": unit.unit_id,
+                        "operation": "fetch",
+                        "status": "failed",
+                        "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                        "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                        "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                        "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                        "source_count": 0,
+                        "evidence_count": 0,
+                        "error_code": str(fetch_result.get("error_code", "") or "empty_fetch_result"),
+                        "failure_reason": "empty_fetch_result",
+                        "attempt_role": "selective_fetch",
+                    }
+                )
                 continue
             fetched_source = _enrich_source_from_fetched_text(
                 candidate_source,
@@ -9141,6 +9234,21 @@ async def _execute_research_unit(
                     line_end=candidate_detail_end or candidate_line_end,
                 ).model_dump()
             )
+            supporting_provider_attempts.append(
+                {
+                    "unit_id": unit.unit_id,
+                    "operation": "fetch",
+                    "status": "completed",
+                    "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                    "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                    "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                    "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                    "source_count": 1,
+                    "evidence_count": 1,
+                    "error_code": str(fetch_result.get("error_code", "") or ""),
+                    "attempt_role": "selective_fetch",
+                }
+            )
         return (
             {
                 "summary": _extract_relevant_excerpt(
@@ -9154,6 +9262,7 @@ async def _execute_research_unit(
                 "provider_model": str(map_result.get("provider_model", "") or ""),
                 "effective_model": str(map_result.get("effective_model", "") or ""),
                 "provider_api_url": str(map_result.get("provider_api_url", "") or ""),
+                "supporting_provider_attempts": supporting_provider_attempts,
             },
             sources,
             evidence_items,
@@ -9231,10 +9340,27 @@ async def _execute_research_unit(
             ).model_dump()
         )
     fetched_evidence_items: list[dict[str, Any]] = []
+    supporting_provider_attempts: list[dict[str, Any]] = []
     for source in selected_sources_for_grounding[:fetch_limit]:
         fetch_result = await _fetch_url_with_details(source["url"])
         fetched = fetch_result.get("content", "")
         if not fetched:
+            supporting_provider_attempts.append(
+                {
+                    "unit_id": unit.unit_id,
+                    "operation": "fetch",
+                    "status": "failed",
+                    "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                    "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                    "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                    "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                    "source_count": 0,
+                    "evidence_count": 0,
+                    "error_code": str(fetch_result.get("error_code", "") or "empty_fetch_result"),
+                    "failure_reason": "empty_fetch_result",
+                    "attempt_role": "selective_fetch",
+                }
+            )
             continue
         enriched_source = _enrich_source_from_fetched_text(source, fetched)
         for index, original_source in enumerate(sources):
@@ -9268,6 +9394,21 @@ async def _execute_research_unit(
                 line_end=fetched_detail_end or fetched_line_end,
             ).model_dump()
         )
+        supporting_provider_attempts.append(
+            {
+                "unit_id": unit.unit_id,
+                "operation": "fetch",
+                "status": "completed",
+                "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                "source_count": 1,
+                "evidence_count": 1,
+                "error_code": str(fetch_result.get("error_code", "") or ""),
+                "attempt_role": "selective_fetch",
+            }
+        )
     evidence_items.extend(fetched_evidence_items)
     return (
         {
@@ -9281,6 +9422,7 @@ async def _execute_research_unit(
             "provider_api_url": search_result.get("provider_api_url", ""),
             "provider_source_count": int(search_result.get("provider_source_count", len(sources)) or 0),
             "supplemental_attempts": list(search_result.get("supplemental_attempts") or []),
+            "supporting_provider_attempts": supporting_provider_attempts,
         },
         sources,
         evidence_items,

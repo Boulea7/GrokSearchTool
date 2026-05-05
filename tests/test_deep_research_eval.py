@@ -797,6 +797,18 @@ def evaluate_provider_budget_surface(case: dict) -> dict:
                 )
                 if supplemental_key not in attempt_keys:
                     reason_tags.append("missing_supplemental_provider_attempt")
+            for supporting in result.get("supporting_provider_attempts") or []:
+                if not isinstance(supporting, dict):
+                    continue
+                supporting_key = (
+                    str(unit_id),
+                    str(supporting.get("operation", "") or "").strip(),
+                    str(supporting.get("status", "") or "").strip(),
+                    str(supporting.get("provider_name", "") or "").strip(),
+                    str(supporting.get("provider_api_url", "") or "").strip(),
+                )
+                if supporting_key not in attempt_keys:
+                    reason_tags.append("missing_supporting_provider_attempt")
     for winner in winner_records:
         unit_attempts = completed_attempts_by_unit.get(winner["unit_id"], [])
         if not unit_attempts:
@@ -1757,6 +1769,15 @@ def test_provider_budget_surface_round43_probe_golden():
     assert_metric_matches_golden(result, golden)
 
 
+def test_provider_budget_surface_round44_selective_fetch_attempt_golden():
+    case = load_eval_case("eval_probe_round44_provider_budget_selective_fetch_accounting.json")
+    golden = case["golden"]["provider_budget_surface"]
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert_metric_matches_golden(result, golden)
+
+
 def test_provider_budget_surface_detects_missing_provider_api_url():
     case = {
         "report": {
@@ -1933,6 +1954,67 @@ def test_provider_budget_surface_detects_missing_supplemental_provider_attempt()
 
     assert result["verdict"] == "fail"
     assert result["reason_tags"] == ["missing_supplemental_provider_attempt"]
+
+
+def test_provider_budget_surface_detects_missing_supporting_provider_attempt():
+    case = {
+        "report": {
+            "unit_results": {
+                "unit-search-1": {
+                    "summary": "Search unit result.",
+                    "supporting_provider_attempts": [
+                        {
+                            "operation": "fetch",
+                            "status": "completed",
+                            "provider_name": "tavily",
+                            "provider_api_url": "https://api.tavily.com/extract",
+                            "source_count": 1,
+                        }
+                    ],
+                }
+            },
+            "runtime": {
+                "budget": {
+                    "resolved_budget_seconds": 240,
+                    "max_concurrency": 2,
+                    "usage": {
+                        "completed_units": 1,
+                        "failed_units": 0,
+                        "provider_attempts": 1,
+                    },
+                },
+                "provider_capabilities": {
+                    "search": {"used": True, "providers": ["primary-grok"]},
+                    "fetch": {"used": False, "providers": []},
+                    "map": {"used": False, "providers": []},
+                },
+                "provider_winners": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "provider_name": "primary-grok",
+                        "provider_api_url": "https://provider.example.invalid/v1",
+                    },
+                ],
+                "provider_attempts": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "operation": "search",
+                        "status": "completed",
+                        "provider_name": "primary-grok",
+                        "provider_api_url": "https://provider.example.invalid/v1",
+                        "source_count": 1,
+                        "evidence_count": 1,
+                        "error_code": "",
+                    },
+                ],
+            },
+        }
+    }
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["missing_supporting_provider_attempt"]
 
 
 def test_provenance_bundle_consistency_requires_source_id_for_source_backed_binding():
