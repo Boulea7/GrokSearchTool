@@ -119,6 +119,16 @@ _NOISY_EVIDENCE_MARKERS = (
     "follow the migration pattern shell",
     "starts the replication task",
 )
+_PROVIDER_RESPONSE_WARNING_PATTERNS = (
+    (
+        re.compile(r"\bmodel\s+is\s+overloaded\b", re.IGNORECASE),
+        "provider_response_model_overloaded",
+    ),
+    (
+        re.compile(r"\btry\s+again\s+shortly\b", re.IGNORECASE),
+        "provider_response_temporarily_unavailable",
+    ),
+)
 _PREFERRED_TECHNICAL_TERMS = (
     "checkpoint",
     "recovery",
@@ -377,6 +387,16 @@ def _is_noisy_text(value: str) -> bool:
     return False
 
 
+def _provider_response_warning_code(value: str) -> str:
+    text = _normalize_whitespace(value)
+    if not text:
+        return ""
+    for pattern, warning_code in _PROVIDER_RESPONSE_WARNING_PATTERNS:
+        if pattern.search(text):
+            return warning_code
+    return ""
+
+
 def _extract_meaningful_lines(value: str) -> list[str]:
     meaningful: list[str] = []
     for raw_line in (value or "").splitlines():
@@ -608,6 +628,8 @@ def _docs_aws_namespace_priority(source: dict[str, Any], reference_texts: list[s
     if not _aws_dms_intent_signals(reference):
         return 0
     traits = _source_doc_traits(source)
+    if "/goto/boto3/" in url or "/boto3/" in url:
+        return 1
     if "/dms/latest/" in url:
         return 2
     if "/cli/latest/reference/dms/" in url:
@@ -653,6 +675,95 @@ def _aws_dms_intent_signals(text: str) -> tuple[str, ...]:
         (" restart", "restart"),
     )
     return tuple(label for marker, label in signals if marker in normalized)
+
+
+_AWS_DMS_API_REFERENCE_HINTS = (
+    (
+        ("describereplicationtasks", "describe replication tasks"),
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        "DescribeReplicationTasks",
+        "AWS DMS API reference for DescribeReplicationTasks response syntax and replication task fields.",
+    ),
+    (
+        ("recoverycheckpoint", "replicationtask", "replication task"),
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_ReplicationTask.html",
+        "ReplicationTask",
+        "AWS DMS API reference for ReplicationTask fields including RecoveryCheckpoint.",
+    ),
+    (
+        ("startreplicationtask", "start replication task", "resume-processing", "reload-target"),
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+        "StartReplicationTask",
+        "AWS DMS API reference for starting, resuming, and reloading replication tasks.",
+    ),
+    (
+        ("modifyreplicationtask", "modify replication task"),
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_ModifyReplicationTask.html",
+        "ModifyReplicationTask",
+        "AWS DMS API reference for modifying replication task settings.",
+    ),
+)
+
+
+def _known_aws_dms_api_reference_sources(reference_text: str) -> list[dict[str, Any]]:
+    lowered = f" {_normalize_whitespace(reference_text).lower()} "
+    if not _aws_dms_intent_signals(lowered):
+        return []
+    sources: list[dict[str, Any]] = []
+    for markers, url, title, description in _AWS_DMS_API_REFERENCE_HINTS:
+        if any(marker in lowered for marker in markers):
+            sources.append(
+                {
+                    "url": url,
+                    "title": title,
+                    "description": description,
+                    "domain": "docs.aws.amazon.com",
+                    "provider": "official_doc_hint",
+                    "origin_type": "official_doc_hint",
+                    "source_type": "official_docs",
+                    "ranking_reasons": ["official_docs", "api_reference", "known_official_doc_hint"],
+                }
+            )
+    return sources
+
+
+def _augment_search_sources_with_official_doc_hints(
+    sources: list[dict[str, Any]],
+    plan: DeepResearchPlan,
+    unit: DeepResearchResearchUnit,
+) -> list[dict[str, Any]]:
+    source_policy = plan.source_policy
+    if isinstance(source_policy, dict):
+        policy_domains = _normalize_string_list(source_policy.get("allowed_domains"))
+    else:
+        policy_domains = list(source_policy.allowed_domains)
+    allowed_domains = [*list(plan.include_domains), *policy_domains]
+    if not any(domain == "docs.aws.amazon.com" for domain in allowed_domains):
+        return sources
+    reference_text = " ".join(
+        [
+            plan.query,
+            unit.title,
+            unit.goal,
+            unit.query,
+            unit.instructions,
+        ]
+    )
+    hints = _known_aws_dms_api_reference_sources(reference_text)
+    if not hints:
+        return sources
+    existing_keys = {
+        _source_registry_key(str(source.get("url", "") or ""))
+        for source in sources
+        if str(source.get("url", "") or "").strip()
+    }
+    augmented = list(sources)
+    for hint in hints:
+        key = _source_registry_key(str(hint.get("url", "") or ""))
+        if key and key not in existing_keys:
+            augmented.append(hint)
+            existing_keys.add(key)
+    return augmented
 
 
 def _continuation_anchor_terms(continuation: DeepResearchContinuationState) -> list[str]:
@@ -1201,6 +1312,46 @@ def _rewrite_research_query(query: str, continuation: DeepResearchContinuationSt
     return _normalize_whitespace(text)
 
 
+def _domain_search_constraint(domain: str) -> str:
+    text = _normalize_whitespace(domain).lower()
+    if not text:
+        return ""
+    if text.startswith(("http://", "https://")):
+        text = urlsplit(text).netloc.lower()
+    text = text.split("/", 1)[0].strip()
+    text = text.lstrip(".")
+    if not text or " " in text or "." not in text:
+        return ""
+    return f"site:{text}"
+
+
+def _contextualized_sub_question_query(
+    question: str,
+    *,
+    job_query: str,
+    include_domains: list[str] | None,
+    continuation: DeepResearchContinuationState,
+) -> str:
+    query = _rewrite_research_query(question, continuation)
+    if continuation.mode == "continue":
+        return query
+    query_parts = [query] if query else []
+    normalized_job_query = _rewrite_research_query(job_query, continuation)
+    if normalized_job_query and _stable_text_key(normalized_job_query) not in _stable_text_key(query):
+        query_parts.append(normalized_job_query)
+    domain_constraints = _dedupe_preserve_order(
+        [
+            constraint
+            for domain in include_domains or []
+            if (constraint := _domain_search_constraint(domain))
+        ]
+    )
+    for constraint in domain_constraints[:3]:
+        if constraint not in query_parts:
+            query_parts.append(constraint)
+    return _normalize_whitespace(" ".join(query_parts))
+
+
 def _best_text_claim(lines: list[str], fallback: str) -> str:
     for line in lines:
         if not _is_noisy_text(line):
@@ -1231,6 +1382,23 @@ def _is_gap_section(section: DeepResearchReportSection | dict[str, Any]) -> bool
     goal = section.goal if isinstance(section, DeepResearchReportSection) else str(section.get("goal", ""))
     lowered = f"{title} {goal}".lower()
     return any(marker in lowered for marker in _GAP_SECTION_MARKERS)
+
+
+def _is_report_scaffold_section(title: str, section_id: str = "") -> bool:
+    normalized_title = _normalize_whitespace(title).lower()
+    normalized_id = _normalize_whitespace(section_id).lower()
+    if is_summary_section_title(normalized_title) or is_key_findings_section_title(normalized_title):
+        return True
+    scaffold_markers = (
+        "summary finding",
+        "provider accounting",
+        "citations",
+        "citation",
+        "references",
+    )
+    return normalized_title in scaffold_markers or normalized_id in {
+        marker.replace(" ", "-") for marker in scaffold_markers
+    }
 
 
 def _has_gap_signal(text: str) -> bool:
@@ -1936,6 +2104,11 @@ def _selected_bank_matches_bundle(
         section_id = str(bank.get("section_id", "")).strip()
         if not section_id or section_id not in section_ids:
             return False
+        selected_evidence_ids = {
+            str(item).strip()
+            for item in bank.get("selected_evidence_ids", []) or []
+            if str(item).strip()
+        }
         for field in ("selected_evidence_ids", "candidate_evidence_ids", "rejected_evidence_ids"):
             values = [
                 str(item).strip()
@@ -1949,6 +2122,8 @@ def _selected_bank_matches_bundle(
                 return False
             evidence_id = str(row.get("evidence_id", "")).strip()
             if evidence_id and evidence_id not in evidence_ids:
+                return False
+            if evidence_id and evidence_id not in selected_evidence_ids:
                 return False
             selected_section_id = str(row.get("selected_section_id", "")).strip()
             if selected_section_id and selected_section_id != section_id:
@@ -3246,6 +3421,8 @@ def _ensure_sub_question_unit_coverage(
     units: list[dict[str, Any]],
     *,
     sub_questions: list[dict[str, Any]],
+    job_query: str,
+    include_domains: list[str] | None,
     continuation: DeepResearchContinuationState,
     normalize_actions: list[str],
     validation_issues: list[str],
@@ -3262,13 +3439,19 @@ def _ensure_sub_question_unit_coverage(
             auto_index += 1
         unit_id = f"unit-search-auto-{auto_index}"
         used_ids.add(unit_id)
-        query = _rewrite_research_query(str(sub_question.get("question", "")), continuation)
+        question = _rewrite_research_query(str(sub_question.get("question", "")), continuation)
+        query = _contextualized_sub_question_query(
+            question,
+            job_query=job_query,
+            include_domains=include_domains,
+            continuation=continuation,
+        )
         covered_units.append(
             {
                 "unit_id": unit_id,
                 "unit_type": "search",
                 "title": _trim_text(query, limit=96),
-                "goal": query,
+                "goal": question or query,
                 "query": query,
                 "depends_on": [],
                 "status": "pending",
@@ -3284,6 +3467,8 @@ def _ensure_sub_question_search_query_coverage(
     search_queries: list[str],
     *,
     sub_questions: list[dict[str, Any]],
+    job_query: str,
+    include_domains: list[str] | None,
     continuation: DeepResearchContinuationState,
     normalize_actions: list[str],
 ) -> list[str]:
@@ -3312,7 +3497,12 @@ def _ensure_sub_question_search_query_coverage(
             for query in covered_queries
         ):
             continue
-        query = _rewrite_research_query(question, continuation)
+        query = _contextualized_sub_question_query(
+            question,
+            job_query=job_query,
+            include_domains=include_domains,
+            continuation=continuation,
+        )
         if not query:
             continue
         covered_queries.append(query)
@@ -5074,6 +5264,8 @@ def _provider_attempt_key(attempt: dict[str, Any]) -> tuple[Any, ...]:
         attempt.get("provider_api_url", ""),
         attempt.get("attempt_role", ""),
         attempt.get("error_code", ""),
+        attempt.get("failure_reason", ""),
+        tuple(attempt.get("warnings", []) or []),
         attempt.get("source_count", 0),
         attempt.get("evidence_count", 0),
     )
@@ -7241,6 +7433,8 @@ class DeepResearchRuntime:
         normalized_units = _ensure_sub_question_unit_coverage(
             normalized_units,
             sub_questions=sub_questions,
+            job_query=job.query,
+            include_domains=job.include_domains,
             continuation=continuation,
             normalize_actions=normalize_actions,
             validation_issues=validation_issues,
@@ -7292,6 +7486,8 @@ class DeepResearchRuntime:
                 ]
             ),
             sub_questions=sub_questions,
+            job_query=job.query,
+            include_domains=job.include_domains,
             continuation=continuation,
             normalize_actions=normalize_actions,
         )
@@ -7611,6 +7807,13 @@ class DeepResearchRuntime:
             artifact_origin_map[_EVIDENCE_ITEMS_ARTIFACT_KIND] = "latest_checkpoint_snapshot"
         elif reconstructed_evidence_used:
             artifact_origin_map[_EVIDENCE_ITEMS_ARTIFACT_KIND] = "reconstructed"
+        if selected_bank_payload and not _selected_bank_matches_bundle(
+            selected_bank_value=selected_bank_payload,
+            report_value=report,
+            evidence_items_value=carry_forward_evidence,
+        ):
+            selected_bank_payload = []
+            artifact_origin_map[_SELECTED_BANK_ARTIFACT_KIND] = "current_artifact_invalid_for_continuation_context"
         carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
         carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
@@ -8450,6 +8653,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "provider_model": unit_result.get("provider_model", ""),
                 "provider_api_url": unit_result.get("provider_api_url", ""),
                 "provider_source_count": int(unit_result.get("provider_source_count", 0) or 0),
+                "provider_evidence_count": int(
+                    unit_result.get("provider_evidence_count", len(new_evidence)) or 0
+                ),
                 "supplemental_attempts": list(unit_result.get("supplemental_attempts") or []),
                 "supporting_provider_attempts": list(unit_result.get("supporting_provider_attempts") or []),
             }
@@ -9294,14 +9500,20 @@ async def _execute_research_unit(
             "provider_model": "",
             "provider_api_url": "",
         }
+    provider_warning_code = _provider_response_warning_code(str(search_result.get("answer", "") or ""))
+    answer_for_extraction = str(search_result.get("answer", "") or "")
+    if provider_warning_code and not search_result.get("warning_code"):
+        search_result = {**search_result, "warning_code": provider_warning_code}
+        answer_for_extraction = ""
+    sources = _augment_search_sources_with_official_doc_hints(sources, plan, unit)
     answer_summary, search_line_start, search_line_end = _extract_relevant_excerpt_with_span(
-        search_result["answer"],
+        answer_for_extraction,
         reference_texts=reference_texts,
         line_limit=4,
         char_limit=_MAX_CLAIM_LENGTH,
     )
     answer_detail, search_detail_start, search_detail_end = _extract_relevant_excerpt_with_span(
-        search_result["answer"],
+        answer_for_extraction,
         reference_texts=reference_texts,
         line_limit=8,
         char_limit=1200,
@@ -9409,6 +9621,7 @@ async def _execute_research_unit(
                 "attempt_role": "selective_fetch",
             }
         )
+    provider_evidence_count = len(evidence_items)
     evidence_items.extend(fetched_evidence_items)
     return (
         {
@@ -9421,6 +9634,7 @@ async def _execute_research_unit(
             "provider_model": search_result.get("provider_model", ""),
             "provider_api_url": search_result.get("provider_api_url", ""),
             "provider_source_count": int(search_result.get("provider_source_count", len(sources)) or 0),
+            "provider_evidence_count": provider_evidence_count,
             "supplemental_attempts": list(search_result.get("supplemental_attempts") or []),
             "supporting_provider_attempts": supporting_provider_attempts,
         },
@@ -9523,12 +9737,20 @@ def _annotate_source_usage(
     for item in annotated:
         domain = str(item.get("domain", "") or "").strip().lower()
         topic_match_score = int(item.get("topic_match_score", 0) or 0)
+        strongest_topic_score = strongest_used_topic_by_domain.get(domain, 0)
+        is_used = item.get("citation_count", 0) > 0 or item.get("section_count", 0) > 0
         if (
             domain
             and domain in strongest_used_topic_by_domain
-            and item.get("citation_count", 0) <= 0
-            and item.get("section_count", 0) <= 0
-            and strongest_used_topic_by_domain.get(domain, 0) >= topic_match_score
+            and is_used
+            and strongest_topic_score - topic_match_score >= 2
+        ):
+            item["ranking_penalties"].append("same_domain_off_topic")
+        if (
+            domain
+            and domain in strongest_used_topic_by_domain
+            and not is_used
+            and strongest_topic_score >= topic_match_score
         ):
             item["ranking_penalties"].append("same_domain_off_topic")
             continue
@@ -9965,6 +10187,7 @@ def _coverage_for_report(
         section["title"]
         for section in normalized_outline
         if section["section_id"] not in answered_section_ids
+        and not _is_report_scaffold_section(section["title"], section["section_id"])
     ]
     coverage_items_by_target = {
         _normalize_whitespace(str(item.get("target", ""))): item
