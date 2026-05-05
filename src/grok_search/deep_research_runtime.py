@@ -5033,7 +5033,7 @@ def _provider_attempts_payload(
             evidence_count_by_unit[unit_id] = evidence_count_by_unit.get(unit_id, 0) + 1
 
     attempts: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, str]] = set()
     for unit_id, result in unit_results.items():
         if not isinstance(result, dict):
             continue
@@ -5049,11 +5049,54 @@ def _provider_attempts_payload(
             provider_model=str(result.get("provider_model", "") or ""),
             effective_model=str(result.get("effective_model", "") or ""),
             provider_api_url=str(result.get("provider_api_url", "") or ""),
-            source_count=len(result.get("source_ids") or result.get("citations") or []),
+            source_count=(
+                int(result.get("provider_source_count", 0) or 0)
+                if "provider_source_count" in result
+                else len(result.get("source_ids") or result.get("citations") or [])
+            ),
             evidence_count=evidence_count_by_unit.get(str(unit_id), 0),
         )
         attempts.append(attempt)
-        seen.add((attempt["unit_id"], attempt["operation"], attempt["status"]))
+        seen.add(
+            (
+                attempt["unit_id"],
+                attempt["operation"],
+                attempt["status"],
+                attempt["provider_name"],
+                attempt["provider_api_url"],
+            )
+        )
+        for supplemental in result.get("supplemental_attempts") or []:
+            if not isinstance(supplemental, dict):
+                continue
+            supplemental_operation = str(supplemental.get("operation", "") or operation).strip()
+            supplemental_status = str(supplemental.get("status", "") or "completed").strip()
+            if supplemental_operation not in {"search", "fetch", "map"}:
+                continue
+            supplemental_attempt = _provider_attempt_payload(
+                unit_id=str(unit_id),
+                operation=supplemental_operation,
+                status=supplemental_status if supplemental_status in {"completed", "failed"} else "completed",
+                provider_name=str(supplemental.get("provider_name", "") or ""),
+                provider_model=str(supplemental.get("provider_model", "") or ""),
+                effective_model=str(supplemental.get("effective_model", "") or ""),
+                provider_api_url=str(supplemental.get("provider_api_url", "") or ""),
+                source_count=int(supplemental.get("source_count", 0) or 0),
+                evidence_count=int(supplemental.get("evidence_count", 0) or 0),
+                error_code=str(supplemental.get("error_code", "") or ""),
+            )
+            supplemental_attempt["attempt_role"] = str(supplemental.get("attempt_role") or "supplemental")
+            supplemental_key = (
+                supplemental_attempt["unit_id"],
+                supplemental_attempt["operation"],
+                supplemental_attempt["status"],
+                supplemental_attempt["provider_name"],
+                supplemental_attempt["provider_api_url"],
+            )
+            if supplemental_key in seen:
+                continue
+            attempts.append(supplemental_attempt)
+            seen.add(supplemental_key)
 
     for failed in failed_units:
         if not isinstance(failed, dict):
@@ -5062,21 +5105,26 @@ def _provider_attempts_payload(
         operation = str(failed.get("unit_type", "") or "").strip()
         if not unit_id or operation not in {"search", "fetch", "map"}:
             continue
-        key = (unit_id, operation, "failed")
+        key = (
+            unit_id,
+            operation,
+            "failed",
+            str(failed.get("provider_name", "") or ""),
+            str(failed.get("provider_api_url", "") or ""),
+        )
         if key in seen:
             continue
-        attempts.append(
-            _provider_attempt_payload(
-                unit_id=unit_id,
-                operation=operation,
-                status="failed",
-                provider_name=str(failed.get("provider_name", "") or ""),
-                provider_model=str(failed.get("provider_model", "") or ""),
-                effective_model=str(failed.get("effective_model", "") or ""),
-                provider_api_url=str(failed.get("provider_api_url", "") or ""),
-                error_code=str(failed.get("reason", "") or failed.get("error_code", "") or ""),
-            )
+        attempt = _provider_attempt_payload(
+            unit_id=unit_id,
+            operation=operation,
+            status="failed",
+            provider_name=str(failed.get("provider_name", "") or ""),
+            provider_model=str(failed.get("provider_model", "") or ""),
+            effective_model=str(failed.get("effective_model", "") or ""),
+            provider_api_url=str(failed.get("provider_api_url", "") or ""),
+            error_code=str(failed.get("reason", "") or failed.get("error_code", "") or ""),
         )
+        attempts.append(attempt)
         seen.add(key)
     return attempts
 
@@ -5089,6 +5137,8 @@ def _provider_capabilities_payload(provider_attempts: list[dict[str, Any]]) -> d
     providers_by_operation: dict[str, set[str]] = {operation: set() for operation in capabilities}
     for attempt in provider_attempts:
         if not isinstance(attempt, dict):
+            continue
+        if str(attempt.get("attempt_role", "") or "") == "supplemental":
             continue
         operation = str(attempt.get("operation", "") or "").strip()
         if operation not in capabilities:
@@ -8324,6 +8374,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "provider_name": unit_result.get("provider_name", ""),
                 "provider_model": unit_result.get("provider_model", ""),
                 "provider_api_url": unit_result.get("provider_api_url", ""),
+                "provider_source_count": int(unit_result.get("provider_source_count", 0) or 0),
+                "supplemental_attempts": list(unit_result.get("supplemental_attempts") or []),
             }
             evidence_items.extend(new_evidence)
             ledger_entries = build_evidence_ledger_entries(
@@ -9227,6 +9279,8 @@ async def _execute_research_unit(
             "provider_name": search_result.get("provider_name", ""),
             "provider_model": search_result.get("provider_model", ""),
             "provider_api_url": search_result.get("provider_api_url", ""),
+            "provider_source_count": int(search_result.get("provider_source_count", len(sources)) or 0),
+            "supplemental_attempts": list(search_result.get("supplemental_attempts") or []),
         },
         sources,
         evidence_items,
@@ -11642,8 +11696,9 @@ async def _search_query_with_details(
     merged = standardize_sources(merge_sources(sources, extracted_sources))
     if not merged:
         merged = standardize_sources([{"url": url} for url in extract_unique_urls(answer or content)])
+    primary_source_count = len(merged)
     warning_code = server_module._assess_search_body_quality(answer, merged)
-    supplemental_sources = await _supplemental_sources_for_deep_research(
+    supplemental_result = await _supplemental_sources_for_deep_research(
         query,
         answer=answer,
         existing_sources=merged,
@@ -11651,11 +11706,27 @@ async def _search_query_with_details(
         include_domains=include_domains,
         exclude_domains=exclude_domains,
     )
+    if isinstance(supplemental_result, dict):
+        supplemental_sources = (
+            supplemental_result.get("sources")
+            if isinstance(supplemental_result.get("sources"), list)
+            else []
+        )
+        supplemental_attempts = (
+            supplemental_result.get("provider_attempts")
+            if isinstance(supplemental_result.get("provider_attempts"), list)
+            else []
+        )
+    else:
+        supplemental_sources = supplemental_result if isinstance(supplemental_result, list) else []
+        supplemental_attempts = []
     if supplemental_sources:
         merged = standardize_sources(merge_sources(merged, supplemental_sources))
     return {
         "answer": answer.strip() or content.strip(),
         "sources": merged,
+        "provider_source_count": primary_source_count,
+        "supplemental_attempts": supplemental_attempts,
         "warning_code": warning_code,
         "requested_model": provider_meta.get("requested_model"),
         "effective_model": provider_meta.get("effective_model"),
@@ -11695,9 +11766,9 @@ async def _supplemental_sources_for_deep_research(
     warning_code: str | None,
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     if not warning_code and answer.strip() and existing_sources:
-        return []
+        return {"sources": [], "provider_attempts": []}
     from . import server as server_module
 
     results = await server_module._call_tavily_search(
@@ -11707,9 +11778,58 @@ async def _supplemental_sources_for_deep_research(
         exclude_domains=exclude_domains or None,
     )
     provider_name = "tavily"
+    attempts: list[dict[str, Any]] = []
+    if isinstance(results, list):
+        tavily_source_count = len(results)
+        attempt = _provider_attempt_payload(
+            unit_id="",
+            operation="search",
+            status="completed" if tavily_source_count else "failed",
+            provider_name="tavily",
+            provider_api_url=f"{config.tavily_api_url.rstrip('/')}/search",
+            source_count=tavily_source_count,
+            error_code="" if tavily_source_count else "empty_search_result",
+        )
+        attempt["attempt_role"] = "supplemental"
+        attempts.append(attempt)
+    else:
+        attempt = _provider_attempt_payload(
+            unit_id="",
+            operation="search",
+            status="failed",
+            provider_name="tavily",
+            provider_api_url=f"{config.tavily_api_url.rstrip('/')}/search",
+            error_code="search_unavailable",
+        )
+        attempt["attempt_role"] = "supplemental"
+        attempts.append(attempt)
     if not results:
         results = await server_module._call_firecrawl_search(query, 4)
         provider_name = "firecrawl"
+        if isinstance(results, list):
+            firecrawl_source_count = len(results)
+            attempt = _provider_attempt_payload(
+                unit_id="",
+                operation="search",
+                status="completed" if firecrawl_source_count else "failed",
+                provider_name="firecrawl",
+                provider_api_url=f"{config.firecrawl_api_url.rstrip('/')}/search",
+                source_count=firecrawl_source_count,
+                error_code="" if firecrawl_source_count else "empty_search_result",
+            )
+            attempt["attempt_role"] = "supplemental"
+            attempts.append(attempt)
+        else:
+            attempt = _provider_attempt_payload(
+                unit_id="",
+                operation="search",
+                status="failed",
+                provider_name="firecrawl",
+                provider_api_url=f"{config.firecrawl_api_url.rstrip('/')}/search",
+                error_code="search_unavailable",
+            )
+            attempt["attempt_role"] = "supplemental"
+            attempts.append(attempt)
     supplemental: list[dict[str, Any]] = []
     for item in results or []:
         if not isinstance(item, dict):
@@ -11719,7 +11839,7 @@ async def _supplemental_sources_for_deep_research(
         if provider_name == "tavily" and not source.get("description") and source.get("content"):
             source["description"] = source.get("content")
         supplemental.append(source)
-    return supplemental
+    return {"sources": supplemental, "provider_attempts": attempts}
 
 
 async def _fetch_url(url: str) -> str | None:

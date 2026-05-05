@@ -220,6 +220,16 @@ def evaluate_resume_continue_semantics(case: dict) -> dict:
     if continuation.get("source_job_status") == "completed" and not continuation_focus:
         reason_tags.append("missing_continuation_focus")
         score -= 0.2
+    source_store_id = str(continuation.get("source_store_id", "") or "").strip()
+    runtime_store_id = str(
+        continuation.get("runtime_store_id", "")
+        or continuation.get("active_store_id", "")
+        or continuation.get("store_id", "")
+        or ""
+    ).strip()
+    if source_store_id and runtime_store_id and source_store_id != runtime_store_id:
+        reason_tags.append("continuation_store_mismatch")
+        score -= 0.8
 
     score = max(score, 0.0)
     verdict = "pass" if score >= 0.6 and "generic_previous_summary" not in reason_tags else "fail"
@@ -396,6 +406,9 @@ def evaluate_provenance_bundle_consistency(case: dict) -> dict:
             if bool(binding.get("source_backed")):
                 line_start = binding.get("line_start")
                 line_end = binding.get("line_end")
+                if not binding_source_id:
+                    reason_tags.append("source_backed_missing_source_id")
+                    score -= 0.3
                 if not isinstance(line_start, int) or not isinstance(line_end, int) or line_end < line_start:
                     reason_tags.append("invalid_source_backed_span")
                     score -= 0.3
@@ -583,6 +596,8 @@ def evaluate_coverage_gap_scope_consistency(case: dict) -> dict:
         reason_tags.append("blocking_gap_count_mismatch")
     if int(coverage_gaps.get("hard_gap_count", 0) or 0) != hard_count:
         reason_tags.append("hard_gap_count_mismatch")
+    if "total_gap_count" in coverage_gaps and int(coverage_gaps.get("total_gap_count", 0) or 0) != len(gaps):
+        reason_tags.append("total_gap_count_mismatch")
     verdict = "pass" if not reason_tags else "fail"
     return {
         "metric": "coverage_gap_scope_consistency",
@@ -624,9 +639,12 @@ def evaluate_surface_consistency(case: dict) -> dict:
         partial_payload_available = surface.get("partial_payload") is not None
         if operator_summary.get("partial_payload_available") != partial_payload_available:
             reason_tags.append(f"{name}_operator_partial_payload_available_mismatch")
+        if "artifact_visibility_reason" in surface:
+            if operator_summary.get("artifact_visibility_reason") != surface.get("artifact_visibility_reason"):
+                reason_tags.append(f"{name}_operator_artifact_visibility_reason_mismatch")
 
     if "status" in surfaces and "result" in surfaces:
-        for field in ("watch_attach_after_seq", "attempt_window_start_seq"):
+        for field in ("watch_attach_after_seq", "attempt_window_start_seq", "artifact_visibility_reason"):
             if surfaces["status"].get(field) != surfaces["result"].get(field):
                 reason_tags.append(f"status_result_{field}_mismatch")
         status_partial = surfaces["status"].get("partial_payload") is not None
@@ -689,6 +707,7 @@ def evaluate_provider_budget_surface(case: dict) -> dict:
     if not provider_capabilities:
         reason_tags.append("missing_provider_capabilities")
     winner_unit_ids: list[str] = []
+    winner_records: list[dict[str, str]] = []
     for winner in provider_winners:
         if not isinstance(winner, dict):
             reason_tags.append("malformed_provider_winner")
@@ -704,10 +723,19 @@ def evaluate_provider_budget_surface(case: dict) -> dict:
             reason_tags.append("missing_provider_name")
         if not str(winner.get("provider_api_url", "") or "").strip():
             reason_tags.append("missing_provider_api_url")
+        winner_records.append(
+            {
+                "unit_id": unit_id,
+                "provider_name": str(winner.get("provider_name", "") or "").strip(),
+                "provider_api_url": str(winner.get("provider_api_url", "") or "").strip(),
+            }
+        )
     if len(winner_unit_ids) != len(set(winner_unit_ids)):
         reason_tags.append("duplicate_provider_winner_unit_id")
 
     attempt_unit_ids: list[str] = []
+    completed_attempts_by_unit: dict[str, list[dict[str, str]]] = {}
+    attempt_keys: set[tuple[str, str, str, str, str]] = set()
     for attempt in provider_attempts:
         if not isinstance(attempt, dict):
             reason_tags.append("malformed_provider_attempt")
@@ -715,18 +743,28 @@ def evaluate_provider_budget_surface(case: dict) -> dict:
         unit_id = str(attempt.get("unit_id", "") or "").strip()
         operation = str(attempt.get("operation", "") or "").strip()
         status = str(attempt.get("status", "") or "").strip()
+        provider_name = str(attempt.get("provider_name", "") or "").strip()
+        provider_api_url = str(attempt.get("provider_api_url", "") or "").strip()
         if not unit_id:
             reason_tags.append("missing_provider_attempt_unit_id")
         else:
             attempt_unit_ids.append(unit_id)
+            attempt_keys.add((unit_id, operation, status, provider_name, provider_api_url))
         if operation not in {"search", "fetch", "map"}:
             reason_tags.append("invalid_provider_attempt_operation")
         if status not in {"completed", "failed"}:
             reason_tags.append("invalid_provider_attempt_status")
-        if status == "completed" and not str(attempt.get("provider_name", "") or "").strip():
+        if status == "completed" and not provider_name:
             reason_tags.append("completed_attempt_missing_provider_name")
-        if status == "completed" and not str(attempt.get("provider_api_url", "") or "").strip():
+        if status == "completed" and not provider_api_url:
             reason_tags.append("completed_attempt_missing_provider_api_url")
+        if unit_id and status == "completed":
+            completed_attempts_by_unit.setdefault(unit_id, []).append(
+                {
+                    "provider_name": provider_name,
+                    "provider_api_url": provider_api_url,
+                }
+            )
         capability = provider_capabilities.get(operation)
         if operation and isinstance(capability, dict):
             capability_providers = {
@@ -734,12 +772,41 @@ def evaluate_provider_budget_surface(case: dict) -> dict:
                 for provider in capability.get("providers", []) or []
                 if str(provider).strip()
             }
-            provider_name = str(attempt.get("provider_name", "") or "").strip()
-            if provider_name and provider_name not in capability_providers:
+            if (
+                provider_name
+                and provider_name not in capability_providers
+                and str(attempt.get("attempt_role", "") or "") != "supplemental"
+            ):
                 reason_tags.append("provider_attempt_missing_from_capabilities")
 
     if winner_unit_ids and attempt_unit_ids and not set(winner_unit_ids).issubset(set(attempt_unit_ids)):
         reason_tags.append("provider_winner_missing_provider_attempt")
+    if unit_results:
+        for unit_id, result in unit_results.items():
+            if not isinstance(result, dict):
+                continue
+            for supplemental in result.get("supplemental_attempts") or []:
+                if not isinstance(supplemental, dict):
+                    continue
+                supplemental_key = (
+                    str(unit_id),
+                    str(supplemental.get("operation", "") or "").strip(),
+                    str(supplemental.get("status", "") or "").strip(),
+                    str(supplemental.get("provider_name", "") or "").strip(),
+                    str(supplemental.get("provider_api_url", "") or "").strip(),
+                )
+                if supplemental_key not in attempt_keys:
+                    reason_tags.append("missing_supplemental_provider_attempt")
+    for winner in winner_records:
+        unit_attempts = completed_attempts_by_unit.get(winner["unit_id"], [])
+        if not unit_attempts:
+            continue
+        if not any(
+            attempt["provider_name"] == winner["provider_name"]
+            and attempt["provider_api_url"] == winner["provider_api_url"]
+            for attempt in unit_attempts
+        ):
+            reason_tags.append("provider_winner_attempt_metadata_mismatch")
 
     if int(budget.get("resolved_budget_seconds", 0) or 0) <= 0:
         reason_tags.append("missing_resolved_budget_seconds")
@@ -992,6 +1059,33 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
     result = evaluate_case_metric(case, "resume_continue_semantics")
 
     assert_metric_matches_golden(result, golden)
+
+
+def test_resume_continue_semantics_detects_store_identity_mismatch():
+    case = {
+        "continuation": {
+            "mode": "continue",
+            "source_job_id": "job-source",
+            "source_job_status": "completed",
+            "checkpoint_key": "checkpoint-3",
+            "source_count": 1,
+            "carry_forward_sources": [{"source_id": "source-1"}],
+            "previous_summary": "Previous completed report with reusable evidence.",
+            "continuation_identity": {"source_job_id": "job-source"},
+            "source_store_id": "store-a",
+            "runtime_store_id": "store-b",
+        },
+        "plan": {
+            "brief": {
+                "continuation_focus": ["Extend the prior report."],
+            }
+        },
+    }
+
+    result = evaluate_case_metric(case, "resume_continue_semantics")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["continuation_store_mismatch"]
 
 
 @pytest.mark.parametrize(
@@ -1526,6 +1620,29 @@ def test_coverage_gap_scope_consistency_detects_soft_gap_marked_blocking():
     assert result["reason_tags"] == ["soft_gap_marked_blocking"]
 
 
+def test_coverage_gap_scope_consistency_detects_total_gap_count_mismatch():
+    case = {
+        "coverage_gaps": {
+            "total_gap_count": 2,
+            "blocking_gap_count": 1,
+            "hard_gap_count": 1,
+            "gaps": [
+                {
+                    "gap_type": "hard_uncovered_target",
+                    "target": "DescribeReplicationTasks RecoveryCheckpoint visibility",
+                    "blocking": True,
+                    "blocking_scope": "hard",
+                }
+            ],
+        }
+    }
+
+    result = evaluate_case_metric(case, "coverage_gap_scope_consistency")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["total_gap_count_mismatch"]
+
+
 def test_coverage_gap_scope_consistency_aws_dms_probe_golden():
     case = load_eval_case("eval_probe_round41_aws_dms_coverage_gate_scope.json")
     golden = case["golden"]["coverage_gap_scope_consistency"]
@@ -1600,6 +1717,37 @@ def test_surface_consistency_detects_operator_summary_mirror_gap():
     ]
 
 
+def test_surface_consistency_detects_artifact_visibility_reason_drift():
+    case = {
+        "sample": {"status": "completed", "phase": "finalizing"},
+        "public_surface": {
+            "status": {
+                "artifact_visibility_reason": "resolved_final_batch",
+                "operator_summary": {
+                    "status": "completed",
+                    "phase": "finalizing",
+                    "artifact_visibility_reason": "resolved_final_batch",
+                    "partial_payload_available": False,
+                },
+            },
+            "result": {
+                "artifact_visibility_reason": "unresolved_batch_backed_final_artifacts_hidden",
+                "operator_summary": {
+                    "status": "completed",
+                    "phase": "finalizing",
+                    "artifact_visibility_reason": "unresolved_batch_backed_final_artifacts_hidden",
+                    "partial_payload_available": False,
+                },
+            },
+        },
+    }
+
+    result = evaluate_case_metric(case, "surface_consistency")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["status_result_artifact_visibility_reason_mismatch"]
+
+
 def test_provider_budget_surface_round43_probe_golden():
     case = load_eval_case("eval_probe_round43_provider_budget_surface.json")
     golden = case["golden"]["provider_budget_surface"]
@@ -1672,6 +1820,166 @@ def test_provider_budget_surface_requires_provider_winners_to_match_unit_results
         "missing_provider_capabilities",
         "provider_winner_unit_missing_from_unit_results",
     ]
+
+
+def test_provider_budget_surface_detects_provider_winner_attempt_metadata_mismatch():
+    case = {
+        "report": {
+            "unit_results": {
+                "unit-search-1": {
+                    "summary": "Search unit result.",
+                }
+            },
+            "runtime": {
+                "budget": {
+                    "resolved_budget_seconds": 240,
+                    "max_concurrency": 2,
+                    "usage": {
+                        "completed_units": 1,
+                        "failed_units": 0,
+                        "provider_attempts": 1,
+                    },
+                },
+                "provider_capabilities": {
+                    "search": {"used": True, "providers": ["wrong-provider"]},
+                    "fetch": {"used": False, "providers": []},
+                    "map": {"used": False, "providers": []},
+                },
+                "provider_winners": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "provider_name": "expected-provider",
+                        "provider_api_url": "https://expected.example.invalid/v1",
+                    },
+                ],
+                "provider_attempts": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "operation": "search",
+                        "status": "completed",
+                        "provider_name": "wrong-provider",
+                        "provider_api_url": "https://wrong.example.invalid/v1",
+                        "source_count": 1,
+                        "evidence_count": 1,
+                        "error_code": "",
+                    },
+                ],
+            },
+        }
+    }
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["provider_winner_attempt_metadata_mismatch"]
+
+
+def test_provider_budget_surface_detects_missing_supplemental_provider_attempt():
+    case = {
+        "report": {
+            "unit_results": {
+                "unit-search-1": {
+                    "summary": "Search unit result.",
+                    "supplemental_attempts": [
+                        {
+                            "operation": "search",
+                            "status": "completed",
+                            "provider_name": "tavily",
+                            "provider_api_url": "https://api.tavily.com/search",
+                            "source_count": 1,
+                        }
+                    ],
+                }
+            },
+            "runtime": {
+                "budget": {
+                    "resolved_budget_seconds": 240,
+                    "max_concurrency": 2,
+                    "usage": {
+                        "completed_units": 1,
+                        "failed_units": 0,
+                        "provider_attempts": 1,
+                    },
+                },
+                "provider_capabilities": {
+                    "search": {"used": True, "providers": ["primary-grok"]},
+                    "fetch": {"used": False, "providers": []},
+                    "map": {"used": False, "providers": []},
+                },
+                "provider_winners": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "provider_name": "primary-grok",
+                        "provider_api_url": "https://provider.example.invalid/v1",
+                    },
+                ],
+                "provider_attempts": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "operation": "search",
+                        "status": "completed",
+                        "provider_name": "primary-grok",
+                        "provider_api_url": "https://provider.example.invalid/v1",
+                        "source_count": 1,
+                        "evidence_count": 1,
+                        "error_code": "",
+                    },
+                ],
+            },
+        }
+    }
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["missing_supplemental_provider_attempt"]
+
+
+def test_provenance_bundle_consistency_requires_source_id_for_source_backed_binding():
+    case = {
+        "sources": [
+            {
+                "source_id": "source-1",
+                "url": "https://docs.example.com/source-backed",
+                "title": "Source backed docs",
+            }
+        ],
+        "evidence_items": [
+            {
+                "evidence_id": "evidence-1",
+                "source_ids": ["source-1"],
+                "summary": "Source-backed evidence.",
+            }
+        ],
+        "report": {
+            "sections": [
+                {
+                    "section_id": "section-1",
+                    "claims": [
+                        {
+                            "claim_id": "claim-1",
+                            "text": "Source-backed claims need a concrete source id.",
+                            "citations": ["source-1"],
+                            "evidence_ids": ["evidence-1"],
+                            "evidence_bindings": [
+                                {
+                                    "evidence_id": "evidence-1",
+                                    "source_backed": True,
+                                    "line_start": 1,
+                                    "line_end": 1,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+
+    result = evaluate_case_metric(case, "provenance_bundle_consistency")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["source_backed_missing_source_id"]
 
 
 @pytest.mark.parametrize(

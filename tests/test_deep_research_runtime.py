@@ -20076,6 +20076,94 @@ async def test_runtime_provider_winners_include_provider_api_url(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_runtime_provider_attempts_include_supplemental_search_provider(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search_with_details(query, *, effort="standard", include_domains=None, exclude_domains=None):
+        return {
+            "answer": "Supplemental search sources can repair a weak primary search body.",
+            "sources": [
+                {
+                    "url": "https://docs.example.com/supplemental-provider",
+                    "title": "Supplemental provider",
+                    "description": "Supplemental provider docs.",
+                    "provider": "tavily",
+                }
+            ],
+            "supplemental_attempts": [
+                {
+                    "operation": "search",
+                    "status": "completed",
+                    "provider_name": "tavily",
+                    "provider_model": "",
+                    "effective_model": "",
+                    "provider_api_url": "https://api.tavily.com/search",
+                    "source_count": 1,
+                    "evidence_count": 0,
+                    "error_code": "",
+                }
+            ],
+            "warning_code": None,
+            "requested_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+            "provider_name": "primary-grok",
+            "provider_model": "grok-4.20-expert",
+            "provider_api_url": "https://provider.example.invalid/v1/chat/completions",
+            "provider_source_count": 0,
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query_with_details", search_with_details)
+
+    response = await runtime.start(query="Supplemental provider budget surface", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+    result = await runtime.result(response["job_id"])
+    runtime_payload = result["report"]["runtime"]
+
+    search_attempts = [
+        attempt for attempt in runtime_payload["provider_attempts"] if attempt["operation"] == "search"
+    ]
+    assert search_attempts == [
+        {
+            "unit_id": "unit-search-1",
+            "operation": "search",
+            "status": "completed",
+            "provider_name": "primary-grok",
+            "provider_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+            "provider_api_url": "https://provider.example.invalid/v1/chat/completions",
+            "source_count": 0,
+            "evidence_count": 1,
+            "error_code": "",
+        },
+        {
+            "unit_id": "unit-search-1",
+            "operation": "search",
+            "status": "completed",
+            "provider_name": "tavily",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.tavily.com/search",
+            "source_count": 1,
+            "evidence_count": 0,
+            "error_code": "",
+            "attempt_role": "supplemental",
+        },
+    ]
+    assert runtime_payload["provider_capabilities"]["search"]["providers"] == ["primary-grok"]
+    assert runtime_payload["budget"]["usage"]["search_calls"] == 2
+    assert runtime_payload["budget"]["usage"]["provider_attempts"] == 2
+
+
+@pytest.mark.asyncio
 async def test_runtime_failed_fetch_unit_records_provider_attempt(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
@@ -20223,6 +20311,103 @@ async def test_search_query_with_details_passes_domain_constraints_to_supplement
         "include_domains": ["docs.example.com"],
         "exclude_domains": ["blog.example.com"],
     }
+
+
+@pytest.mark.asyncio
+async def test_supplemental_sources_records_empty_tavily_before_firecrawl_success(monkeypatch):
+    async def tavily_search(query, max_results, *, include_domains=None, exclude_domains=None):
+        return []
+
+    async def firecrawl_search(query, limit):
+        return [
+            {
+                "url": "https://docs.example.com/firecrawl-result",
+                "title": "Firecrawl result",
+                "description": "Firecrawl supplemental result.",
+            }
+        ]
+
+    monkeypatch.setattr(server, "_call_tavily_search", tavily_search)
+    monkeypatch.setattr(server, "_call_firecrawl_search", firecrawl_search)
+
+    result = await deep_research_runtime_module._supplemental_sources_for_deep_research(
+        "supplemental provider fallback",
+        answer="",
+        existing_sources=[],
+        warning_code="body_missing_sources_only",
+    )
+
+    assert result["sources"] == [
+        {
+            "url": "https://docs.example.com/firecrawl-result",
+            "title": "Firecrawl result",
+            "description": "Firecrawl supplemental result.",
+            "provider": "firecrawl",
+        }
+    ]
+    tavily_search_url = f"{deep_research_runtime_module.config.tavily_api_url.rstrip('/')}/search"
+    firecrawl_search_url = f"{deep_research_runtime_module.config.firecrawl_api_url.rstrip('/')}/search"
+    assert result["provider_attempts"] == [
+        {
+            "unit_id": "",
+            "operation": "search",
+            "status": "failed",
+            "provider_name": "tavily",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": tavily_search_url,
+            "source_count": 0,
+            "evidence_count": 0,
+            "error_code": "empty_search_result",
+            "attempt_role": "supplemental",
+        },
+        {
+            "unit_id": "",
+            "operation": "search",
+            "status": "completed",
+            "provider_name": "firecrawl",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": firecrawl_search_url,
+            "source_count": 1,
+            "evidence_count": 0,
+            "error_code": "",
+            "attempt_role": "supplemental",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_supplemental_sources_records_unavailable_tavily_before_firecrawl_success(monkeypatch):
+    async def tavily_search(query, max_results, *, include_domains=None, exclude_domains=None):
+        return None
+
+    async def firecrawl_search(query, limit):
+        return [
+            {
+                "url": "https://docs.example.com/firecrawl-result",
+                "title": "Firecrawl result",
+                "description": "Firecrawl supplemental result.",
+            }
+        ]
+
+    monkeypatch.setattr(server, "_call_tavily_search", tavily_search)
+    monkeypatch.setattr(server, "_call_firecrawl_search", firecrawl_search)
+
+    result = await deep_research_runtime_module._supplemental_sources_for_deep_research(
+        "supplemental provider fallback",
+        answer="",
+        existing_sources=[],
+        warning_code="body_missing_sources_only",
+    )
+
+    assert [attempt["provider_name"] for attempt in result["provider_attempts"]] == ["tavily", "firecrawl"]
+    assert result["provider_attempts"][0]["status"] == "failed"
+    assert result["provider_attempts"][0]["error_code"] == "search_unavailable"
+    assert result["provider_attempts"][0]["attempt_role"] == "supplemental"
+    assert result["provider_attempts"][1]["status"] == "completed"
+    assert result["provider_attempts"][1]["source_count"] == 1
+    assert result["provider_attempts"][1]["attempt_role"] == "supplemental"
 
 
 @pytest.mark.asyncio
