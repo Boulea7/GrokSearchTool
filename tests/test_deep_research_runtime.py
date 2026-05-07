@@ -1700,6 +1700,65 @@ def test_parse_json_object_with_trace_prefers_plan_like_embedded_object_over_deb
     assert "Recovered embedded plan" in trace["embedded_json_preview"]
 
 
+def test_parse_json_object_with_trace_salvages_json_after_reasoning_tags():
+    parsed, trace = deep_research_runtime_module._parse_json_object_with_trace(
+        "\ufeff<think>I will outline the plan before returning the object.</think>\n"
+        "PLAN_JSON:\n"
+        "{\n"
+        '  "brief": {"objective": "AWS DMS checkpoint visibility"},\n'
+        '  "sub_questions": [{"id": "sq1", "question": "What exposes RecoveryCheckpoint?", "reason": "Field visibility."}],\n'
+        '  "search_strategy": {"approach": "targeted", "search_queries": ["DescribeReplicationTasks RecoveryCheckpoint site:docs.aws.amazon.com"]},\n'
+        '  "report_outline": [{"section_id": "visibility", "title": "Visibility", "goal": "Explain the source."}],\n'
+        '  "planner_metadata": {"planner": "model"}\n'
+        "}\n"
+        "Do not include this footer in the JSON."
+    )
+
+    assert parsed["brief"]["objective"] == "AWS DMS checkpoint visibility"
+    assert parsed["sub_questions"][0]["id"] == "sq1"
+    assert trace["parse_path"] == "embedded_json"
+    assert trace["raw_preview"].startswith("<think>")
+
+
+def test_parse_json_object_with_trace_unwraps_single_item_array_plan():
+    parsed, trace = deep_research_runtime_module._parse_json_object_with_trace(
+        json.dumps(
+            [
+                {
+                    "brief": {"objective": "Array wrapped plan"},
+                    "sub_questions": [{"id": "sq1", "question": "Array wrapped plan", "reason": "Primary axis."}],
+                    "search_strategy": {"approach": "targeted", "search_queries": ["Array wrapped plan"]},
+                    "report_outline": [{"section_id": "summary", "title": "Summary", "goal": "Summarize."}],
+                }
+            ]
+        )
+    )
+
+    assert parsed["brief"]["objective"] == "Array wrapped plan"
+    assert trace["parse_path"] == "array_wrapped_json"
+    assert trace["parsed_type"] == "dict"
+
+
+def test_parse_json_object_with_trace_unwraps_plan_envelope_when_inner_scores_higher():
+    parsed, trace = deep_research_runtime_module._parse_json_object_with_trace(
+        json.dumps(
+            {
+                "status": "ok",
+                "plan": {
+                    "brief": {"objective": "Envelope wrapped plan"},
+                    "sub_questions": [{"id": "sq1", "question": "Envelope wrapped plan", "reason": "Primary axis."}],
+                    "search_strategy": {"approach": "targeted", "search_queries": ["Envelope wrapped plan"]},
+                    "report_outline": [{"section_id": "summary", "title": "Summary", "goal": "Summarize."}],
+                },
+            }
+        )
+    )
+
+    assert parsed["brief"]["objective"] == "Envelope wrapped plan"
+    assert trace["parse_path"] == "envelope_wrapped_json"
+    assert trace["envelope_key"] == "plan"
+
+
 def test_attempt_window_anchor_seq_paginates_past_first_ten_thousand_events(tmp_path):
     runtime = build_runtime(tmp_path)
     job = runtime.store.create_job(
@@ -13385,6 +13444,56 @@ def test_extract_relevant_excerpt_with_span_tracks_original_line_range():
     assert line_end == 6
 
 
+def test_extract_relevant_excerpt_prefers_field_definition_over_aws_request_example():
+    excerpt, line_start, line_end = _extract_relevant_excerpt_with_span(
+        "# DescribeReplicationTasks\n\n"
+        "X-Amz-Target: AmazonDMSv20160101.DescribeReplicationTasks\n"
+        "`aws dms describe-replication-tasks --filters \"Name=replication-task-arn,Values=arn:aws:dms:us-west-2:012345678912:task:AAABBBCCC\"`\n"
+        "Did you find this page useful? Give us feedback.\n"
+        "RecoveryCheckpoint -> (string) Indicates the last checkpoint for a task that was stopped during a change data capture operation.\n"
+        "ReplicationTask includes RecoveryCheckpoint in the DescribeReplicationTasks response structure.\n",
+        reference_texts=[
+            "Verify AWS DMS DescribeReplicationTasks ReplicationTask RecoveryCheckpoint visibility",
+            "RecoveryCheckpoint field definition",
+        ],
+        line_limit=2,
+        char_limit=500,
+        multiline=False,
+    )
+
+    assert "RecoveryCheckpoint -> (string)" in excerpt
+    assert "ReplicationTask includes RecoveryCheckpoint" in excerpt
+    assert "X-Amz-Target" not in excerpt
+    assert "arn:aws" not in excerpt
+    assert "Give us feedback" not in excerpt
+    assert line_start == 6
+    assert line_end == 7
+
+
+def test_extract_relevant_excerpt_keeps_target_identifier_ahead_of_many_generic_aws_lines():
+    excerpt, line_start, line_end = _extract_relevant_excerpt_with_span(
+        "Valid filter names: replication-task-arn | replication-task-id | migration-type\n"
+        "Type: Array of [ReplicationTask](./API_ReplicationTask.html) objects\n"
+        "This example illustrates one usage of DescribeReplicationTasks.\n"
+        "X-Amz-Target: AmazonDMSv20160101.DescribeReplicationTasks\n"
+        '"RecoveryCheckpoint": "string"\n'
+        '"RecoveryCheckpoint": "checkpoint:V1#156#00000032:00000a55:000c#0#217"\n',
+        reference_texts=[
+            "Verify DescribeReplicationTasks ReplicationTask RecoveryCheckpoint official AWS DMS docs",
+            "RecoveryCheckpoint field exposure",
+        ],
+        line_limit=2,
+        char_limit=400,
+        multiline=False,
+    )
+
+    assert '"RecoveryCheckpoint": "string"' in excerpt
+    assert '"RecoveryCheckpoint": "checkpoint:V1' in excerpt
+    assert "Valid filter names" not in excerpt
+    assert line_start == 5
+    assert line_end == 6
+
+
 def test_section_citations_prefer_source_backed_cluster_over_search_only_cluster():
     plan = DeepResearchPlan.model_validate(
         {
@@ -13904,6 +14013,299 @@ def test_best_cluster_claim_text_prefers_grounded_detail_over_generic_fetch_head
     assert "restored from the last durable checkpoint" in claim_text
     assert "CLI snippet" not in claim_text
     assert claim_text != "Runtime checkpoints"
+
+
+def test_best_cluster_claim_text_prefers_detail_when_summary_omits_api_field_identifier():
+    items = [
+        DeepResearchEvidenceItem(
+            evidence_id="e1",
+            unit_id="unit-search-1",
+            source_ids=["R1"],
+            source_urls=["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+            summary=(
+                "Type: Array of [ReplicationTask](./API_ReplicationTask.html) objects "
+                "This example illustrates one usage of DescribeReplicationTasks."
+            ),
+            detail=(
+                '"RecoveryCheckpoint": "string", Type: Array of '
+                "[ReplicationTask](./API_ReplicationTask.html) objects. "
+                "RecoveryCheckpoint indicates the last checkpoint during change data capture."
+            ),
+            evidence_kind="fetch",
+            weight=1.0,
+            derived_from_source_url="https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        )
+    ]
+
+    claim_text = deep_research_runtime_module._best_cluster_claim_text(items)
+
+    assert "RecoveryCheckpoint" in claim_text
+    assert "last checkpoint during change data capture" in claim_text
+
+
+def test_build_section_citations_uses_query_terms_for_generic_verification_sections():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 120,
+            "include_domains": ["docs.aws.amazon.com"],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "Does DescribeReplicationTasks expose RecoveryCheckpoint?", "reason": "Primary field."}
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["DescribeReplicationTasks RecoveryCheckpoint site:docs.aws.amazon.com"],
+            },
+            "report_outline": [
+                {
+                    "section_id": "verification-result",
+                    "title": "Verification Result: Yes/No with direct evidence",
+                    "goal": "Verify the answer directly.",
+                }
+            ],
+            "research_units": [],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+            "title": "DescribeReplicationTasks",
+            "source_type": "official_docs",
+        }
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-fetch",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+            "summary": "Type: Array of [ReplicationTask](./API_ReplicationTask.html) objects.",
+            "detail": '"RecoveryCheckpoint": "string". RecoveryCheckpoint is returned on the ReplicationTask object.',
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        }
+    ]
+
+    sections = _build_section_citations(plan, evidence_items, source_registry)
+
+    assert len(sections) == 1
+    assert "RecoveryCheckpoint" in sections[0]["claims"][0]["text"]
+    assert sections[0]["claims"][0]["evidence_bindings"][0]["source_backed"] is True
+
+
+def test_build_section_citations_expands_selected_search_with_source_backed_api_peer():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 120,
+            "include_domains": ["docs.aws.amazon.com"],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "Does DescribeReplicationTasks expose RecoveryCheckpoint?", "reason": "Primary field."}
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["DescribeReplicationTasks RecoveryCheckpoint site:docs.aws.amazon.com"],
+            },
+            "report_outline": [
+                {
+                    "section_id": "verification-result",
+                    "title": "Verification Result: Yes/No with direct evidence",
+                    "goal": "Verify the answer directly.",
+                }
+            ],
+            "research_units": [],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+            "title": "DescribeReplicationTasks",
+            "source_type": "official_docs",
+        }
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-search",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+            "summary": "Yes, DescribeReplicationTasks exposes ReplicationTask.RecoveryCheckpoint.",
+            "detail": "Yes, DescribeReplicationTasks exposes ReplicationTask.RecoveryCheckpoint.",
+            "evidence_kind": "search",
+            "weight": 0.9,
+        },
+        {
+            "evidence_id": "evidence-fetch",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+            "summary": '"RecoveryCheckpoint": "string".',
+            "detail": '"RecoveryCheckpoint": "string". RecoveryCheckpoint appears on the ReplicationTask object.',
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+    ]
+    section_banks = [
+        {
+            "section_id": "verification-result",
+            "candidate_evidence_ids": ["evidence-search"],
+            "selected_evidence_ids": ["evidence-search"],
+            "rejected_evidence_ids": [],
+        }
+    ]
+
+    sections = _build_section_citations(plan, evidence_items, source_registry, section_banks=section_banks)
+    claim = sections[0]["claims"][0]
+
+    assert "evidence-fetch" in claim["evidence_ids"]
+    assert claim["evidence_bindings"][0]["source_backed"] is True
+
+
+def test_build_section_citations_skips_provider_accounting_scaffold_sections():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility and provider accounting",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 120,
+            "include_domains": ["docs.aws.amazon.com"],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility and provider accounting",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {"id": "sq1", "question": "Does DescribeReplicationTasks expose RecoveryCheckpoint?", "reason": "Primary field."}
+            ],
+            "search_strategy": {"approach": "targeted", "search_queries": ["RecoveryCheckpoint docs"]},
+            "report_outline": [
+                {
+                    "section_id": "usage-and-provider-accounting-summary",
+                    "title": "Usage and Provider Accounting Summary",
+                    "goal": "Summarize provider usage.",
+                },
+                {
+                    "section_id": "evidence-from-api-structures-and-responses",
+                    "title": "Evidence from API Structures and Responses",
+                    "goal": "Show API structure evidence.",
+                },
+                {
+                    "section_id": "conclusion",
+                    "title": "Conclusion",
+                    "goal": "Conclude the answer.",
+                }
+            ],
+            "research_units": [],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+            "title": "DescribeReplicationTasks",
+            "source_type": "official_docs",
+        }
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-fetch",
+            "unit_id": "unit-search-1",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+            "summary": "RecoveryCheckpoint is returned on the ReplicationTask object.",
+            "detail": "RecoveryCheckpoint is returned on the ReplicationTask object.",
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        }
+    ]
+
+    assert _build_section_citations(plan, evidence_items, source_registry) == []
+
+
+def test_coverage_for_report_ignores_runtime_provider_accounting_phrase_for_evidence_targets():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility and summarize provider accounting",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 120,
+            "include_domains": ["docs.aws.amazon.com"],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility and summarize provider accounting",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+                "must_cover": [
+                    "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility and summarize provider accounting"
+                ],
+                "coverage_checklist": [
+                    "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility and summarize provider accounting"
+                ],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint visibility and summarize provider accounting",
+                    "reason": "Primary field.",
+                }
+            ],
+            "search_strategy": {"approach": "targeted", "search_queries": ["RecoveryCheckpoint docs"]},
+            "report_outline": [
+                {
+                    "section_id": "verification-result",
+                    "title": "Verification Result",
+                    "goal": "Verify RecoveryCheckpoint.",
+                },
+                {"section_id": "conclusion", "title": "Conclusion", "goal": "Conclude."},
+            ],
+            "research_units": [],
+        }
+    )
+    sections = [
+        {
+            "section_id": "verification-result",
+            "title": "Verification Result",
+            "summary": "DescribeReplicationTasks exposes RecoveryCheckpoint.",
+            "claims": [
+                {
+                    "claim_id": "c1",
+                    "text": "DescribeReplicationTasks exposes RecoveryCheckpoint on ReplicationTask.",
+                    "citations": ["R1"],
+                    "source_ids": ["R1"],
+                    "evidence_ids": ["e1"],
+                }
+            ],
+            "citations": ["R1"],
+            "source_ids": ["R1"],
+            "evidence_ids": ["e1"],
+        }
+    ]
+
+    coverage = _coverage_for_report(plan, sections)
+
+    assert coverage["coverage_gate_passed"] is True
+    assert coverage["hard_coverage_gate_passed"] is True
+    assert coverage["unanswered_sections"] == []
+    assert coverage["uncovered_sub_questions"] == []
 
 
 def test_build_section_citations_does_not_let_executive_summary_steal_specific_section_claims():
@@ -20835,6 +21237,8 @@ async def test_runtime_provider_attempts_include_supplemental_search_provider(mo
     assert runtime_payload["provider_capabilities"]["search"]["providers"] == ["primary-grok"]
     assert runtime_payload["budget"]["usage"]["search_calls"] == 2
     assert runtime_payload["budget"]["usage"]["provider_attempts"] == 2
+    assert "## Provider Accounting" in result["final_report"]
+    assert "search via primary-grok, tavily" in result["final_report"]
 
 
 @pytest.mark.asyncio
@@ -20915,6 +21319,192 @@ async def test_runtime_selective_fetch_records_fetch_attempt_and_budget_usage(mo
     assert runtime_payload["provider_capabilities"]["fetch"]["providers"] == ["tavily"]
     assert runtime_payload["budget"]["usage"]["fetch_calls"] == 1
     assert runtime_payload["budget"]["usage"]["provider_attempts"] == 2
+    assert "## Provider Accounting" in result["final_report"]
+    assert "Search calls: 1" in result["final_report"]
+    assert "Fetch calls: 1" in result["final_report"]
+    assert "Provider attempts: 2" in result["final_report"]
+    assert "tavily" in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_selective_fetch_tries_next_source_after_preflight_failure(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fetched_urls = []
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search_with_details(query, *, effort="standard", include_domains=None, exclude_domains=None):
+        return {
+            "answer": "The search result identifies two candidate source pages for fetch-backed grounding.",
+            "sources": [
+                {
+                    "url": "https://docs.example.com/preflight-fails",
+                    "title": "First candidate",
+                    "description": "First candidate source.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.example.com/fetch-succeeds",
+                    "title": "Second candidate",
+                    "description": "Second candidate source.",
+                    "provider": "grok",
+                },
+            ],
+            "warning_code": None,
+            "requested_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+            "provider_name": "primary-grok",
+            "provider_model": "grok-4.20-expert",
+            "provider_api_url": "https://provider.example.invalid/v1/chat/completions",
+            "provider_source_count": 2,
+        }
+
+    async def fetch_with_details(url):
+        fetched_urls.append(url)
+        if url.endswith("/preflight-fails"):
+            return {
+                "content": "",
+                "provider_name": "",
+                "provider_model": "",
+                "effective_model": "",
+                "provider_api_url": "",
+                "error_code": "target_preflight_failed",
+                "warnings": ["redirect_preflight_failed"],
+            }
+        return {
+            "content": "Fetch-backed grounding confirms the second source content.",
+            "provider_name": "tavily",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.tavily.com/extract",
+            "error_code": "",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query_with_details", search_with_details)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url_with_details", fetch_with_details)
+
+    response = await runtime.start(query="Selective fetch should recover from first failure", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+    result = await runtime.result(response["job_id"])
+    runtime_payload = result["report"]["runtime"]
+    fetch_attempts = [
+        attempt for attempt in runtime_payload["provider_attempts"] if attempt["operation"] == "fetch"
+    ]
+
+    assert fetched_urls == [
+        "https://docs.example.com/preflight-fails",
+        "https://docs.example.com/fetch-succeeds",
+    ]
+    assert [attempt["status"] for attempt in fetch_attempts] == ["failed", "completed"]
+    assert fetch_attempts[0]["error_code"] == "target_preflight_failed"
+    assert fetch_attempts[0]["failure_reason"] == "target_preflight_failed"
+    assert fetch_attempts[0]["warnings"] == ["redirect_preflight_failed"]
+    assert fetch_attempts[1]["provider_name"] == "tavily"
+    assert runtime_payload["budget"]["usage"]["fetch_calls"] == 2
+    assert "Fetch calls: 2" in result["final_report"]
+    assert "failed attempts: 1" in result["final_report"]
+    assert "redirect_preflight_failed" in result["final_report"]
+    assert "Fetch-backed grounding confirms the second source content" in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_selective_fetch_tries_next_source_after_low_topic_fetch(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fetched_urls = []
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        payload["research_units"][0]["query"] = "DescribeReplicationTasks ReplicationTask RecoveryCheckpoint site:docs.aws.amazon.com"
+        payload["research_units"][0]["goal"] = "Verify the RecoveryCheckpoint field from official AWS DMS docs."
+        return payload
+
+    async def search_with_details(query, *, effort="standard", include_domains=None, exclude_domains=None):
+        return {
+            "answer": "Search results include the operation page and the ReplicationTask field page.",
+            "sources": [
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+                    "title": "DescribeReplicationTasks",
+                    "description": "AWS DMS operation response page.",
+                    "provider": "grok",
+                },
+                {
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_ReplicationTask.html",
+                    "title": "ReplicationTask",
+                    "description": "AWS DMS replication task field page.",
+                    "provider": "grok",
+                },
+            ],
+            "warning_code": None,
+            "requested_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+            "provider_name": "primary-grok",
+            "provider_model": "grok-4.20-expert",
+            "provider_api_url": "https://provider.example.invalid/v1/chat/completions",
+            "provider_source_count": 2,
+        }
+
+    async def fetch_with_details(url):
+        fetched_urls.append(url)
+        if url.endswith("API_DescribeReplicationTasks.html"):
+            return {
+                "content": (
+                    "Type: Array of [ReplicationTask](./API_ReplicationTask.html) objects\n"
+                    "This example illustrates one usage of DescribeReplicationTasks.\n"
+                ),
+                "provider_name": "tavily",
+                "provider_model": "",
+                "effective_model": "",
+                "provider_api_url": "https://api.tavily.com/extract",
+                "error_code": "",
+            }
+        return {
+            "content": (
+                "RecoveryCheckpoint -> (string) Indicates the last checkpoint for a task that was stopped "
+                "during a change data capture operation.\n"
+                "ReplicationTask includes RecoveryCheckpoint in the AWS DMS API reference.\n"
+            ),
+            "provider_name": "tavily",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.tavily.com/extract",
+            "error_code": "",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query_with_details", search_with_details)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url_with_details", fetch_with_details)
+
+    response = await runtime.start(query="AWS DMS RecoveryCheckpoint field visibility", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+    result = await runtime.result(response["job_id"])
+    runtime_payload = result["report"]["runtime"]
+    fetch_attempts = [
+        attempt for attempt in runtime_payload["provider_attempts"] if attempt["operation"] == "fetch"
+    ]
+
+    assert fetched_urls[:2] == [
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_ReplicationTask.html",
+    ]
+    assert [attempt["status"] for attempt in fetch_attempts[:2]] == ["failed", "completed"]
+    assert fetch_attempts[0]["error_code"] == "low_topic_match_fetch_result"
+    assert fetch_attempts[0]["source_count"] == 1
+    assert fetch_attempts[0]["evidence_count"] == 0
+    assert runtime_payload["budget"]["usage"]["fetch_calls"] == 2
+    assert "RecoveryCheckpoint -> (string)" in result["final_report"]
+    assert "This example illustrates one usage of DescribeReplicationTasks" not in result["final_report"]
 
 
 @pytest.mark.asyncio

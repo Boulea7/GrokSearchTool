@@ -5,6 +5,7 @@
   },
   "query": "Selective fetch provider budget visibility for deep research runtime",
   "report": {
+    "final_report": "# Selective fetch provider budget visibility for deep research runtime\n\n## Provider Accounting\n\n- Search calls: 1; Fetch calls: 1; Map calls: 0; Provider attempts: 2.\n- Provider paths used: search via primary-grok; fetch via tavily.\n- Completed attempts: 2; failed attempts: 0.\n",
     "unit_results": {
       "unit-search-1": {
         "summary": "Selective fetch grounded the search answer.",
