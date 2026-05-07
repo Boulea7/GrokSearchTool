@@ -6087,6 +6087,45 @@ async def test_web_fetch_rejects_when_redirect_preflight_times_out(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_allows_aws_docs_when_redirect_preflight_request_errors(monkeypatch):
+    calls = {"tavily": 0}
+
+    async def fake_tavily(url):
+        calls["tavily"] += 1
+        return "# AWS DMS APIReference content", None
+
+    class FailingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            request = httpx.Request("GET", url, headers=headers)
+            raise httpx.RequestError("preflight blocked", request=request)
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", FailingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_fetch(
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        response_format="object",
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["content"] == "# AWS DMS APIReference content"
+    assert result["data"]["provider_name"] == "tavily"
+    assert result["data"]["preflight_warnings"] == ["redirect_preflight_failed"]
+    assert calls == {"tavily": 1}
+
+
+@pytest.mark.asyncio
 async def test_web_map_rejects_when_redirect_preflight_request_errors(monkeypatch):
     calls = {"map": 0}
 

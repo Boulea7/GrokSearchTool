@@ -698,6 +698,7 @@ def evaluate_provider_budget_surface(case: dict) -> dict:
     provider_attempts = runtime.get("provider_attempts") if isinstance(runtime.get("provider_attempts"), list) else []
     provider_capabilities = runtime.get("provider_capabilities") if isinstance(runtime.get("provider_capabilities"), dict) else {}
     feature_readiness = case.get("feature_readiness") if isinstance(case.get("feature_readiness"), dict) else {}
+    final_report_text = str(report.get("final_report") or case.get("final_report") or "")
     reason_tags: list[str] = []
     allowed_operations = {"search", "fetch", "map"}
     allowed_attempt_roles = {"", "supplemental", "selective_fetch"}
@@ -866,6 +867,32 @@ def evaluate_provider_budget_surface(case: dict) -> dict:
                 operation_count_mismatch = True
         if operation_count_mismatch:
             reason_tags.append("budget_usage_operation_count_mismatch")
+        if final_report_text.strip():
+            final_report_lower = final_report_text.lower()
+            if "provider accounting" not in final_report_lower:
+                reason_tags.append("missing_provider_accounting_final_report_section")
+            expected_usage_fragments = [
+                f"search calls: {int(usage.get('search_calls', 0) or 0)}",
+                f"fetch calls: {int(usage.get('fetch_calls', 0) or 0)}",
+                f"provider attempts: {int(usage.get('provider_attempts', 0) or 0)}",
+            ]
+            if not all(fragment in final_report_lower for fragment in expected_usage_fragments):
+                reason_tags.append("provider_accounting_final_report_usage_mismatch")
+            attempted_provider_names = {
+                str(attempt.get("provider_name", "") or "").strip()
+                for attempt in provider_attempts
+                if isinstance(attempt, dict) and str(attempt.get("provider_name", "") or "").strip()
+            }
+            missing_provider_names = [
+                provider_name
+                for provider_name in sorted(attempted_provider_names)
+                if provider_name.lower() not in final_report_lower
+            ]
+            if missing_provider_names:
+                reason_tags.append("provider_accounting_final_report_missing_provider")
+            if any(isinstance(attempt, dict) and attempt.get("status") == "failed" for attempt in provider_attempts):
+                if "failed attempts:" not in final_report_lower:
+                    reason_tags.append("provider_accounting_final_report_missing_failed_attempts")
 
     deep_runtime = feature_readiness.get("deep_research_runtime")
     if isinstance(deep_runtime, dict):
@@ -1837,6 +1864,74 @@ def test_provider_budget_surface_detects_missing_provider_api_url():
         "missing_provider_attempts",
         "missing_provider_capabilities",
     ]
+
+
+def test_provider_budget_surface_detects_final_report_missing_attempt_provider():
+    case = {
+        "report": {
+            "final_report": (
+                "# Provider Budget\n\n"
+                "## Provider Accounting\n\n"
+                "- Search calls: 2; Fetch calls: 0; Map calls: 0; Provider attempts: 2.\n"
+                "- Provider paths used: search via primary-grok.\n"
+                "- Completed attempts: 2; failed attempts: 0.\n"
+            ),
+            "runtime": {
+                "budget": {
+                    "resolved_budget_seconds": 240,
+                    "max_concurrency": 2,
+                    "usage": {
+                        "completed_units": 1,
+                        "failed_units": 0,
+                        "search_calls": 2,
+                        "fetch_calls": 0,
+                        "map_calls": 0,
+                        "provider_attempts": 2,
+                    },
+                },
+                "provider_capabilities": {
+                    "search": {"used": True, "providers": ["primary-grok"]},
+                    "fetch": {"used": False, "providers": []},
+                    "map": {"used": False, "providers": []},
+                },
+                "provider_winners": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "provider_name": "primary-grok",
+                        "provider_api_url": "https://provider.example.invalid/v1",
+                    }
+                ],
+                "provider_attempts": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "operation": "search",
+                        "status": "completed",
+                        "provider_name": "primary-grok",
+                        "provider_api_url": "https://provider.example.invalid/v1",
+                        "source_count": 0,
+                        "evidence_count": 1,
+                        "error_code": "",
+                    },
+                    {
+                        "unit_id": "unit-search-1",
+                        "operation": "search",
+                        "status": "completed",
+                        "provider_name": "tavily",
+                        "provider_api_url": "https://api.tavily.com/search",
+                        "source_count": 1,
+                        "evidence_count": 0,
+                        "error_code": "",
+                        "attempt_role": "supplemental",
+                    },
+                ],
+            },
+        }
+    }
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["provider_accounting_final_report_missing_provider"]
 
 
 def test_provider_budget_surface_requires_provider_winners_to_match_unit_results():
