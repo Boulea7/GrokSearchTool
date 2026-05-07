@@ -1839,6 +1839,24 @@ def test_provider_budget_surface_round44_selective_fetch_attempt_golden():
     assert_metric_matches_golden(result, golden)
 
 
+def test_round45_aws_dms_recoverycheckpoint_live_surface_golden():
+    case = load_eval_case("eval_probe_round45_aws_dms_recoverycheckpoint_live_surface.json")
+
+    provider_result = evaluate_case_metric(case, "provider_budget_surface")
+    surface_result = evaluate_case_metric(case, "surface_consistency")
+
+    assert_metric_matches_golden(provider_result, case["golden"]["provider_budget_surface"])
+    assert_metric_matches_golden(surface_result, case["golden"]["surface_consistency"])
+    final_report = case["report"]["final_report"]
+    assert '"RecoveryCheckpoint": "string"' in final_report
+    assert "CdcStartPosition" in final_report
+    assert "Provider Accounting" in final_report
+    verifier = case["report"]["runtime"]["verifier"]
+    assert verifier["reason_codes"] == []
+    assert verifier["summary"]["duplicate_claims"] == 0
+    assert verifier["summary"]["medium_single_source_search_only"] == 0
+
+
 def test_provider_budget_surface_detects_missing_provider_api_url():
     case = {
         "report": {

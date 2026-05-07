@@ -1,0 +1,218 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing"
+  },
+  "query": "Using only official AWS documentation, verify whether AWS DMS DescribeReplicationTasks returns the ReplicationTask RecoveryCheckpoint field, quote the exact response field evidence, and briefly explain how this affects resume or restart decisions.",
+  "report": {
+    "final_report": "# AWS DMS DescribeReplicationTasks RecoveryCheckpoint\n\n## Summary\n\nYes, `DescribeReplicationTasks` returns the `RecoveryCheckpoint` field.\n\n## Key Findings\n\n\"RecoveryCheckpoint\": \"string\". Restart with recovery: Supply the `RecoveryCheckpoint` value as `CdcStartPosition` when starting the task.\n\n## Provider Accounting\n\n- Search calls: 1; Fetch calls: 1; Map calls: 0; Provider attempts: 2.\n- Provider paths used: search via primary; fetch via tavily.\n- Completed attempts: 2; failed attempts: 0.\n",
+    "unit_results": {
+      "unit-search-1": {
+        "summary": "Yes, `DescribeReplicationTasks` returns the `RecoveryCheckpoint` field.",
+        "detail": "The response syntax includes \"RecoveryCheckpoint\": \"string\". The search detail also states that restart with recovery can supply the `RecoveryCheckpoint` value as `CdcStartPosition` when starting the task.",
+        "supporting_provider_attempts": [
+          {
+            "operation": "fetch",
+            "status": "completed",
+            "provider_name": "tavily",
+            "provider_api_url": "https://api.tavily.example.invalid/extract",
+            "source_count": 1,
+            "evidence_count": 1,
+            "attempt_role": "selective_fetch",
+            "warnings": []
+          }
+        ]
+      }
+    },
+    "sections": [
+      {
+        "section_id": "key-findings",
+        "title": "Key Findings",
+        "prose": "\"RecoveryCheckpoint\": \"string\". Restart with recovery: Supply the `RecoveryCheckpoint` value as `CdcStartPosition` when starting the task.",
+        "claims": [
+          {
+            "claim_id": "key-findings-claim-1",
+            "text": "\"RecoveryCheckpoint\": \"string\". Restart with recovery: Supply the `RecoveryCheckpoint` value as `CdcStartPosition` when starting the task.",
+            "citations": ["R1"],
+            "source_ids": ["R1"],
+            "evidence_ids": ["evidence-unit-search-1-fetch-1", "evidence-unit-search-1-search"]
+          }
+        ]
+      },
+      {
+        "section_id": "provider-accounting",
+        "title": "Provider Accounting",
+        "prose": "- Search calls: 1; Fetch calls: 1; Map calls: 0; Provider attempts: 2.\n- Provider paths used: search via primary; fetch via tavily.\n- Completed attempts: 2; failed attempts: 0.",
+        "claims": []
+      }
+    ],
+    "runtime": {
+      "warnings": [],
+      "coverage_gaps": {
+        "total_gap_count": 0,
+        "blocking_gap_count": 0,
+        "hard_gap_count": 0,
+        "unanswered_sections": [],
+        "uncovered_sub_questions": [],
+        "coverage_gate_passed": true,
+        "hard_coverage_gate_passed": true
+      },
+      "verifier": {
+        "passed": true,
+        "reason_codes": [],
+        "flagged_claim_ids": [],
+        "conflicted_claims": [],
+        "summary": {
+          "duplicate_claims": 0,
+          "conflicted_claims": 0,
+          "medium_single_source_search_only": 0,
+          "same_domain_off_topic_dominance": 0
+        }
+      },
+      "release_gate": {
+        "passed": true,
+        "reason_codes": [],
+        "all_reason_codes": [],
+        "soft_reason_codes": []
+      },
+      "budget": {
+        "effort": "standard",
+        "resolved_budget_seconds": 240,
+        "hard_timeout_seconds": 600,
+        "max_concurrency": 3,
+        "usage": {
+          "completed_units": 1,
+          "failed_units": 0,
+          "skipped_units": 0,
+          "search_calls": 1,
+          "fetch_calls": 1,
+          "map_calls": 0,
+          "provider_attempts": 2,
+          "source_count": 1,
+          "evidence_count": 2
+        }
+      },
+      "provider_capabilities": {
+        "search": {
+          "used": true,
+          "providers": ["primary"]
+        },
+        "fetch": {
+          "used": true,
+          "providers": ["tavily"]
+        },
+        "map": {
+          "used": false,
+          "providers": []
+        }
+      },
+      "provider_attempts": [
+        {
+          "unit_id": "unit-search-1",
+          "operation": "search",
+          "status": "completed",
+          "provider_name": "primary",
+          "provider_model": "grok-4.20-fast",
+          "effective_model": "grok-4.20-expert",
+          "provider_api_url": "https://provider.example.invalid/v1",
+          "source_count": 2,
+          "evidence_count": 1,
+          "error_code": ""
+        },
+        {
+          "unit_id": "unit-search-1",
+          "operation": "fetch",
+          "status": "completed",
+          "provider_name": "tavily",
+          "provider_model": "",
+          "effective_model": "",
+          "provider_api_url": "https://api.tavily.example.invalid/extract",
+          "source_count": 1,
+          "evidence_count": 1,
+          "error_code": "",
+          "attempt_role": "selective_fetch",
+          "warnings": []
+        }
+      ],
+      "provider_winners": [
+        {
+          "unit_id": "unit-search-1",
+          "provider_name": "primary",
+          "provider_model": "grok-4.20-fast",
+          "effective_model": "grok-4.20-expert",
+          "provider_api_url": "https://provider.example.invalid/v1"
+        }
+      ]
+    }
+  },
+  "public_surface": {
+    "status": {
+      "status": "completed",
+      "phase": "finalizing",
+      "resolved_artifact_batch_id": "batch-round45",
+      "artifact_visibility_reason": "",
+      "artifact_fallback_used": false,
+      "watch_attach_after_seq": 0,
+      "attempt_window_start_seq": 0,
+      "partial_payload": null,
+      "artifact_errors": {},
+      "operator_summary": {
+        "status": "completed",
+        "phase": "finalizing",
+        "resolved_artifact_batch_id": "batch-round45",
+        "artifact_visibility_reason": "",
+        "artifact_fallback_used": false,
+        "partial_payload_available": false,
+        "watch_attach_after_seq": 0,
+        "attempt_window_start_seq": 0
+      }
+    },
+    "result": {
+      "status": "completed",
+      "phase": "finalizing",
+      "resolved_artifact_batch_id": "batch-round45",
+      "artifact_visibility_reason": "",
+      "artifact_fallback_used": false,
+      "watch_attach_after_seq": 0,
+      "attempt_window_start_seq": 0,
+      "partial_payload": null,
+      "artifact_errors": {},
+      "operator_summary": {
+        "status": "completed",
+        "phase": "finalizing",
+        "resolved_artifact_batch_id": "batch-round45",
+        "artifact_visibility_reason": "",
+        "artifact_fallback_used": false,
+        "partial_payload_available": false,
+        "watch_attach_after_seq": 0,
+        "attempt_window_start_seq": 0
+      }
+    }
+  },
+  "artifacts": [
+    {"kind": "sources.json", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "citations.json", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "report.json", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "final_report.md", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "evidence_items.json", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "coverage.json", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "grounding.json", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "verifier.json", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "selected_bank.json", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "evidence_bank.json", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "verification.json", "metadata": {"batch_id": "batch-round45"}},
+    {"kind": "coverage_gaps.json", "metadata": {"batch_id": "batch-round45"}}
+  ],
+  "golden": {
+    "provider_budget_surface": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "surface_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

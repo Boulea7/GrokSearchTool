@@ -1759,6 +1759,30 @@ def test_parse_json_object_with_trace_unwraps_plan_envelope_when_inner_scores_hi
     assert trace["envelope_key"] == "plan"
 
 
+def test_parse_json_object_with_trace_unwraps_array_envelope_plan():
+    parsed, trace = deep_research_runtime_module._parse_json_object_with_trace(
+        json.dumps(
+            [
+                {
+                    "status": "ok",
+                    "plan": {
+                        "brief": {"objective": "Array envelope plan"},
+                        "sub_questions": [
+                            {"id": "sq1", "question": "Array envelope plan", "reason": "Primary axis."}
+                        ],
+                        "search_strategy": {"approach": "targeted", "search_queries": ["Array envelope plan"]},
+                        "report_outline": [{"section_id": "summary", "title": "Summary", "goal": "Summarize."}],
+                    },
+                }
+            ]
+        )
+    )
+
+    assert parsed["brief"]["objective"] == "Array envelope plan"
+    assert trace["parse_path"] == "array_wrapped_json+envelope_wrapped_json"
+    assert trace["envelope_key"] == "plan"
+
+
 def test_attempt_window_anchor_seq_paginates_past_first_ten_thousand_events(tmp_path):
     runtime = build_runtime(tmp_path)
     job = runtime.store.create_job(
@@ -2879,7 +2903,12 @@ async def test_run_job_outputs_consistent_sources_citations_and_report(monkeypat
     assert citations["sections"][0]["claims"]
     assert citations["sections"][0]["claims"][0]["citations"] == ["R1"]
     assert report["sections"][0]["claims"][0]["citations"] == ["R1"]
+    assert citations["sections"] == report["sections"]
+    provider_sections = [section for section in report["sections"] if section["section_id"] == "provider-accounting"]
+    assert len(provider_sections) == 1
+    assert "Search calls:" in provider_sections[0]["prose"]
     assert "[R1]" in result["final_report"]
+    assert result["final_report"].count("## Provider Accounting") == 1
 
 
 @pytest.mark.asyncio
@@ -3399,7 +3428,7 @@ async def test_resume_migrates_legacy_plan_and_checkpoint(monkeypatch, tmp_path)
     result = await runtime.run_job(job.job_id)
 
     assert resumed["status"] == "queued"
-    assert result["status"] == "failed"
+    assert result["status"] == "completed"
     assert result["plan"]["brief"]["objective"] == "Legacy resume"
 
 
@@ -13494,6 +13523,159 @@ def test_extract_relevant_excerpt_keeps_target_identifier_ahead_of_many_generic_
     assert line_end == 6
 
 
+def test_extract_relevant_excerpt_prefers_field_line_over_sdk_breadcrumbs():
+    excerpt, line_start, line_end = _extract_relevant_excerpt_with_span(
+        "- [AWSDatabaseMigrationService](https://docs.aws.amazon.com/sdk-for-swift/latest/api/awsdatabasemigrationservice/documentation/awsdatabasemigrationservice)\n"
+        "- [DatabaseMigrationClientTypes](https://docs.aws.amazon.com/sdk-for-swift/latest/api/awsdatabasemigrationservice/documentation/awsdatabasemigrationservice/databasemigrationclienttypes)\n"
+        "- recoveryCheckpoint Indicates the last checkpoint that occurred during a change data capture (CDC) operation.\n"
+        "You can provide this value to the CdcStartPosition parameter to start a CDC operation that begins at that checkpoint.\n"
+        "Current page is recoveryCheckpoint\n",
+        reference_texts=[
+            "RecoveryCheckpoint CdcStartPosition field definition",
+            "RecoveryCheckpoint indicates last checkpoint CDC operation",
+        ],
+        line_limit=2,
+        char_limit=420,
+        multiline=False,
+    )
+
+    assert "recoveryCheckpoint Indicates the last checkpoint" in excerpt
+    assert "CdcStartPosition" in excerpt
+    assert "AWSDatabaseMigrationService" not in excerpt
+    assert line_start == 3
+    assert line_end == 4
+
+
+def test_best_cluster_claim_text_prefers_clean_summary_over_aws_request_metadata_detail():
+    claim_text = deep_research_runtime_module._best_cluster_claim_text(
+        [
+            DeepResearchEvidenceItem(
+                evidence_id="evidence-u2-fetch-1",
+                unit_id="u2",
+                source_ids=["R2"],
+                source_urls=["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+                summary='"RecoveryCheckpoint": "string", "RecoveryCheckpoint": "checkpoint:V1#156#00000032"',
+                detail='"RecoveryCheckpoint": "string", Type: Array of [ReplicationTask](./API_ReplicationTask.html) objects X-Amz-Target: AmazonDMSv20160101.DescribeReplicationTasks This example illustrates one usage of DescribeReplicationTasks.',
+                evidence_kind="fetch",
+                weight=1.0,
+            )
+        ]
+    )
+
+    assert claim_text == '"RecoveryCheckpoint": "string", "RecoveryCheckpoint": "checkpoint:V1#156#00000032"'
+    assert "X-Amz-Target" not in claim_text
+    assert "Type: Array" not in claim_text
+
+
+def test_best_cluster_claim_text_keeps_resume_semantics_when_fetch_only_has_response_shape():
+    claim_text = deep_research_runtime_module._best_cluster_claim_text(
+        [
+            DeepResearchEvidenceItem(
+                evidence_id="evidence-fetch",
+                unit_id="u1",
+                source_ids=["R1"],
+                source_urls=["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+                summary='"RecoveryCheckpoint": "string", "RecoveryCheckpoint": "checkpoint:V1#156#00000032"',
+                detail='"RecoveryCheckpoint": "string", Type: Array of [ReplicationTask](./API_ReplicationTask.html) objects',
+                evidence_kind="fetch",
+                weight=1.0,
+            ),
+            DeepResearchEvidenceItem(
+                evidence_id="evidence-search",
+                unit_id="u1",
+                source_ids=["R1"],
+                source_urls=["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+                summary="RecoveryCheckpoint indicates the last CDC checkpoint and can be used as CdcStartPosition when restarting.",
+                detail="RecoveryCheckpoint indicates the last CDC checkpoint and can be used as CdcStartPosition when restarting a CDC task.",
+                evidence_kind="search",
+                weight=0.9,
+            ),
+        ]
+    )
+
+    assert "CdcStartPosition" in claim_text
+    assert "restarting" in claim_text
+
+
+def test_best_cluster_claim_text_uses_late_impact_sentence_for_resume_sections():
+    claim_text = deep_research_runtime_module._best_cluster_claim_text(
+        [
+            DeepResearchEvidenceItem(
+                evidence_id="evidence-search",
+                unit_id="u1",
+                source_ids=["R1"],
+                source_urls=["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+                summary="Yes, the DescribeReplicationTasks API returns the RecoveryCheckpoint field.",
+                detail=(
+                    "Yes, the DescribeReplicationTasks API returns the RecoveryCheckpoint field. "
+                    "Exact evidence from official AWS documentation includes the response syntax. "
+                    '"RecoveryCheckpoint": "string". '
+                    "RecoveryCheckpoint provides a precise recovery point for CDC operations. "
+                    "When restarting or resuming a task, you can supply RecoveryCheckpoint as "
+                    "CdcStartPosition to continue replication from the last recorded checkpoint."
+                ),
+                evidence_kind="search",
+                weight=1.0,
+            )
+        ],
+        section_title=(
+            "Using only official AWS documentation, verify whether AWS DMS DescribeReplicationTasks "
+            "returns RecoveryCheckpoint and explain resume restart decisions"
+        ),
+        section_goal="Explain the resume/restart impact.",
+    )
+
+    assert "CdcStartPosition" in claim_text
+    assert "last recorded checkpoint" in claim_text
+    assert '"RecoveryCheckpoint": "string"' in claim_text
+    assert "Exact evidence" not in claim_text
+
+
+def test_best_cluster_claim_text_prefers_field_quote_for_exact_field_section():
+    claim_text = deep_research_runtime_module._best_cluster_claim_text(
+        [
+            DeepResearchEvidenceItem(
+                evidence_id="evidence-fetch",
+                unit_id="u1",
+                source_ids=["R1"],
+                source_urls=["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+                summary='"RecoveryCheckpoint": "string", "RecoveryCheckpoint": "checkpoint:V1#156#00000032"',
+                detail='"RecoveryCheckpoint": "string", Type: Array of [ReplicationTask](./API_ReplicationTask.html) objects',
+                evidence_kind="fetch",
+                weight=1.0,
+            ),
+            DeepResearchEvidenceItem(
+                evidence_id="evidence-search",
+                unit_id="u1",
+                source_ids=["R1"],
+                source_urls=["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+                summary=(
+                    "**To resume or restart an AWS DMS task, retrieve RecoveryCheckpoint and "
+                    "pass it as CdcStartPosition.** [[1]](https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html)"
+                ),
+                detail="RecoveryCheckpoint can be used as CdcStartPosition when restarting a CDC task.",
+                evidence_kind="search",
+                weight=0.9,
+            ),
+        ],
+        section_title="Exact Field Evidence (API Reference)",
+        section_goal="Quote the exact field evidence.",
+    )
+
+    assert claim_text.startswith('"RecoveryCheckpoint": "string"')
+    assert "[[1]]" not in claim_text
+    assert "https://docs.aws.amazon.com" not in claim_text
+
+
+def test_claim_conflict_reason_ignores_markdown_citations_and_checkpoint_examples():
+    reason = deep_research_runtime_module._claim_conflict_reason(
+        "RecoveryCheckpoint can be reused as CdcStartPosition. [[1]](https://docs.aws.amazon.com/example)",
+        '"RecoveryCheckpoint": "checkpoint:V1#156#00000032:00000a55:000c#0#217"',
+    )
+
+    assert reason == ""
+
+
 def test_section_citations_prefer_source_backed_cluster_over_search_only_cluster():
     plan = DeepResearchPlan.model_validate(
         {
@@ -14098,6 +14280,7 @@ def test_build_section_citations_uses_query_terms_for_generic_verification_secti
     sections = _build_section_citations(plan, evidence_items, source_registry)
 
     assert len(sections) == 1
+    assert sections[0]["claims"][0]["text"] == "Yes, DescribeReplicationTasks returns RecoveryCheckpoint."
     assert "RecoveryCheckpoint" in sections[0]["claims"][0]["text"]
     assert sections[0]["claims"][0]["evidence_bindings"][0]["source_backed"] is True
 
@@ -14177,6 +14360,92 @@ def test_build_section_citations_expands_selected_search_with_source_backed_api_
 
     assert "evidence-fetch" in claim["evidence_ids"]
     assert claim["evidence_bindings"][0]["source_backed"] is True
+
+
+def test_build_section_citations_expands_impact_search_with_source_backed_peer():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": (
+                "Verify AWS DMS DescribeReplicationTasks RecoveryCheckpoint field and explain "
+                "CdcStartPosition resume restart impact"
+            ),
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 120,
+            "include_domains": ["docs.aws.amazon.com"],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Verify RecoveryCheckpoint resume impact.",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "How does RecoveryCheckpoint affect CdcStartPosition resume or restart decisions?",
+                    "reason": "Primary impact.",
+                }
+            ],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["RecoveryCheckpoint CdcStartPosition resume docs.aws.amazon.com"],
+            },
+            "report_outline": [
+                {
+                    "section_id": "impact-on-resume-restart-decisions",
+                    "title": "Impact on Resume/Restart Decisions",
+                    "goal": "Explain CdcStartPosition and RecoveryCheckpoint impact.",
+                    "question_ids": ["sq1"],
+                }
+            ],
+            "research_units": [],
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+            "title": "DescribeReplicationTasks",
+            "source_type": "official_docs",
+        }
+    ]
+    evidence_items = [
+        {
+            "evidence_id": "evidence-search",
+            "unit_id": "u3",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+            "summary": "RecoveryCheckpoint can be passed as CdcStartPosition when restarting a CDC task.",
+            "detail": "RecoveryCheckpoint can be passed as CdcStartPosition when restarting a CDC task.",
+            "evidence_kind": "search",
+            "weight": 0.9,
+        },
+        {
+            "evidence_id": "evidence-fetch",
+            "unit_id": "u3",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"],
+            "summary": '"CdcStartPosition": "string", "RecoveryCheckpoint": "string"',
+            "detail": '"CdcStartPosition": "string", "RecoveryCheckpoint": "string"',
+            "evidence_kind": "fetch",
+            "weight": 1.0,
+        },
+    ]
+    section_banks = [
+        {
+            "section_id": "impact-on-resume-restart-decisions",
+            "candidate_evidence_ids": ["evidence-search"],
+            "selected_evidence_ids": ["evidence-search"],
+            "rejected_evidence_ids": [],
+        }
+    ]
+
+    sections = _build_section_citations(plan, evidence_items, source_registry, section_banks=section_banks)
+    claim = sections[0]["claims"][0]
+
+    assert "CdcStartPosition" in claim["text"]
+    assert {"evidence-search", "evidence-fetch"} <= set(claim["evidence_ids"])
+    assert any(binding["source_backed"] for binding in claim["evidence_bindings"])
 
 
 def test_build_section_citations_skips_provider_accounting_scaffold_sections():
@@ -14306,6 +14575,136 @@ def test_coverage_for_report_ignores_runtime_provider_accounting_phrase_for_evid
     assert coverage["hard_coverage_gate_passed"] is True
     assert coverage["unanswered_sections"] == []
     assert coverage["uncovered_sub_questions"] == []
+
+
+def test_coverage_for_report_preserves_provider_accounting_when_it_is_the_target():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Summarize provider accounting",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 120,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Summarize provider accounting",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+                "must_cover": ["Summarize provider accounting"],
+                "coverage_checklist": ["Summarize provider accounting"],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq1",
+                    "question": "Summarize provider accounting",
+                    "reason": "Provider accounting is the requested subject.",
+                }
+            ],
+            "search_strategy": {"approach": "targeted", "search_queries": ["provider accounting"]},
+            "report_outline": [{"section_id": "provider-accounting", "title": "Provider Accounting", "goal": "Summarize provider usage."}],
+            "research_units": [],
+        }
+    )
+
+    coverage = _coverage_for_report(plan, [])
+
+    assert coverage["coverage_gate_passed"] is False
+    assert coverage["hard_coverage_gate_passed"] is False
+    assert coverage["uncovered_sub_questions"] == ["Summarize provider accounting"]
+
+
+def test_coverage_for_report_treats_sources_outline_as_report_scaffold():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Verify RecoveryCheckpoint.",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 120,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Verify RecoveryCheckpoint.",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [],
+            "search_strategy": {"approach": "targeted", "search_queries": ["RecoveryCheckpoint"]},
+            "report_outline": [{"section_id": "sources", "title": "Sources", "goal": "Sources"}],
+            "research_units": [],
+        }
+    )
+
+    coverage = _coverage_for_report(plan, [])
+
+    assert coverage["unanswered_sections"] == []
+
+
+def test_coverage_for_report_uses_materialized_ledger_claims_for_sub_question_coverage():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Verify RecoveryCheckpoint details.",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 120,
+            "include_domains": [],
+            "exclude_domains": [],
+            "brief": {
+                "objective": "Verify RecoveryCheckpoint details.",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [
+                {
+                    "id": "sq2",
+                    "question": "What is the exact description and purpose of RecoveryCheckpoint field?",
+                    "reason": "Field details.",
+                }
+            ],
+            "search_strategy": {"approach": "targeted", "search_queries": ["RecoveryCheckpoint"]},
+            "report_outline": [
+                {
+                    "section_id": "exact-field-evidence-with-quotes",
+                    "title": "Exact Field Evidence (with quotes)",
+                    "goal": "Quote exact field evidence.",
+                }
+            ],
+            "research_units": [],
+        }
+    )
+    sections = [
+        {
+            "section_id": "exact-field-evidence-with-quotes",
+            "title": "Exact Field Evidence (with quotes)",
+            "summary": "Medium confidence.",
+            "claims": [
+                {
+                    "claim_id": "exact-field-evidence-with-quotes-claim-3",
+                    "text": "RecoveryCheckpoint is the last recorded CDC checkpoint.",
+                    "citations": ["R6"],
+                    "source_ids": ["R6"],
+                    "evidence_ids": ["evidence-u3-search"],
+                }
+            ],
+            "citations": ["R6"],
+        }
+    ]
+    coverage = _coverage_for_report(
+        plan,
+        sections,
+        evidence_ledger=[
+            {
+                "evidence_id": "evidence-u3-search",
+                "question_ids": ["sq2"],
+                "selected_section_id": "exact-field-evidence-with-quotes",
+                "source_ids": ["R6"],
+                "materialized_claim_ids": ["exact-field-evidence-with-quotes-claim-3"],
+            }
+        ],
+    )
+
+    assert coverage["uncovered_sub_questions"] == []
+    assert coverage["sub_questions"][0]["covered"] is True
+    assert coverage["sub_questions"][0]["claim_ids"] == ["exact-field-evidence-with-quotes-claim-3"]
 
 
 def test_build_section_citations_does_not_let_executive_summary_steal_specific_section_claims():
@@ -15440,18 +15839,19 @@ async def test_runtime_uses_active_outline_for_coverage_and_key_findings(monkeyp
         coverage = result["report"]["coverage"]
         key_findings = next(section for section in result["report"]["sections"] if section["section_id"] == "key-findings")
         coverage_by_id = {item["section_id"]: item for item in coverage["section_coverage"]}
-        assert section_ids == [
+        assert section_ids[:4] == [
             "executive-summary",
             "key-findings",
             "checkpoint-resume-semantics",
             "restart-trade-offs",
         ]
-        assert coverage["planned_section_ids"] == section_ids
+        assert section_ids[4:] == ["provider-accounting"]
+        assert coverage["planned_section_ids"] == section_ids[:4]
         assert coverage["unanswered_sections"] == []
         assert key_findings["claims"]
         assert coverage_by_id["checkpoint-resume-semantics"]["selected_evidence_count"] >= 1
         assert coverage_by_id["restart-trade-offs"]["selected_evidence_count"] >= 1
-        assert outline_state["root_section_ids"] == section_ids
+        assert outline_state["root_section_ids"] == section_ids[:4]
     else:
         assert result["artifact_errors"]
 
@@ -17969,6 +18369,40 @@ async def test_completed_claims_include_provenance_fields_and_final_sources_foll
     assert "official_docs" in source_lines[0]
     assert "reasons:" in source_lines[0]
     assert all("stackoverflow.com" not in line for line in source_lines)
+
+
+def test_source_usage_does_not_mark_exact_identifier_official_doc_as_off_topic():
+    annotated = deep_research_runtime_module._annotate_source_usage(
+        [
+            {
+                "source_id": "R2",
+                "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+                "title": "API DescribeReplicationTasks",
+                "domain": "docs.aws.amazon.com",
+                "source_type": "official_docs",
+                "summary": '"RecoveryCheckpoint": "string"',
+            },
+            {
+                "source_id": "R6",
+                "url": "https://docs.aws.amazon.com/sdk-for-swift/latest/api/awsdatabasemigrationservice/documentation/awsdatabasemigrationservice/databasemigrationclienttypes/replicationtask/recoverycheckpoint/",
+                "title": "RecoveryCheckpoint",
+                "domain": "docs.aws.amazon.com",
+                "source_type": "official_docs",
+                "summary": "recoveryCheckpoint indicates the last checkpoint that occurred during CDC.",
+            },
+        ],
+        [
+            {"section_id": "verification", "citations": ["R2", "R6"], "claims": [{"citations": ["R2", "R6"]}]}
+        ],
+        reference_texts=[
+            "Verify AWS DMS DescribeReplicationTasks ReplicationTask RecoveryCheckpoint field evidence"
+        ],
+        include_domains=["docs.aws.amazon.com"],
+    )
+
+    by_id = {item["source_id"]: item for item in annotated}
+
+    assert "same_domain_off_topic" not in set(by_id["R6"].get("ranking_penalties") or [])
 
 
 @pytest.mark.asyncio
