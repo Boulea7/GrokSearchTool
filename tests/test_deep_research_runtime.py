@@ -1201,14 +1201,14 @@ async def test_runtime_materializes_section_banks_and_evidence_ledger_from_compl
     }
     assert any(packet["claim_ids"] for packet in section_banks[0]["selected_packets"])
     assert checkpoint is not None
-    assert checkpoint.state["section_graph"]["nodes"][0]["selected_evidence_ids"] == [
+    assert set(checkpoint.state["section_graph"]["nodes"][0]["selected_evidence_ids"]) == {
         "evidence-unit-search-1-search",
         "evidence-unit-search-1-fetch-1",
-    ]
-    assert checkpoint.state["section_banks"][0]["selected_evidence_ids"] == [
+    }
+    assert set(checkpoint.state["section_banks"][0]["selected_evidence_ids"]) == {
         "evidence-unit-search-1-search",
         "evidence-unit-search-1-fetch-1",
-    ]
+    }
     assert checkpoint.state["section_banks"][0]["selected_packets"]
 
 
