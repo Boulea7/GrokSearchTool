@@ -6465,6 +6465,69 @@ async def test_resume_interrupted_finalizing_job_with_usable_final_batch_short_c
 
 
 @pytest.mark.asyncio
+async def test_resume_resolved_final_batch_updates_stale_research_checkpoint_identity(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Resolved final batch stale checkpoint",
+        request_fingerprint="fp-resolved-final-batch-stale-checkpoint",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="researching-unit-1",
+        finished_at=utc_now_iso(),
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Resolved final batch stale checkpoint"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Recovered final report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered final report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Resolved final batch stale checkpoint",
+        ),
+    )
+
+    resumed = await runtime.resume(job.job_id, schedule=False)
+    result = await runtime.result(job.job_id)
+
+    assert resumed["status"] == "completed"
+    assert resumed["current_checkpoint"] == "finalizing"
+    assert resumed["current_checkpoint_kind"] == "finalizing"
+    assert result["operator_summary"]["current_checkpoint"] == "finalizing"
+    assert result["operator_summary"]["current_checkpoint_kind"] == "finalizing"
+    assert runtime.store.get_job(job.job_id).current_checkpoint == "finalizing"
+
+
+@pytest.mark.asyncio
 async def test_events_window_treats_resolved_final_batch_as_terminal_window(tmp_path):
     runtime = build_runtime(tmp_path)
     job = runtime.store.create_job(
@@ -16012,6 +16075,8 @@ async def test_runtime_report_exposes_provider_winners(monkeypatch, tmp_path):
             "provider_model": "grok-4.20-expert",
             "effective_model": "grok-4.20-expert",
             "provider_api_url": "https://provider.example.invalid/v1",
+            "source_count": 1,
+            "evidence_count": 1,
         }
     ]
 
@@ -16061,6 +16126,8 @@ async def test_fetch_unit_provider_path_is_exposed_in_runtime_winners(monkeypatc
         "provider_model": "",
         "effective_model": "",
         "provider_api_url": "https://api.firecrawl.dev",
+        "source_count": 1,
+        "evidence_count": 1,
     } in result["report"]["runtime"]["provider_winners"]
 
 
@@ -18271,12 +18338,12 @@ async def test_key_findings_claims_do_not_clone_concrete_claim_text(monkeypatch,
             "Resume continues from the last durable checkpoint without replaying completed work. Restart replays the task from a fresh starting point and increases recovery time.",
             [
                 {
-                    "url": "https://docs.example.com/runtime/resume",
+                    "url": "https://docs.aws.amazon.com/dms/latest/APIReference/api_resumeprocessing.html",
                     "title": "Resume docs",
                     "description": "Resume semantics.",
                 },
                 {
-                    "url": "https://docs.example.com/runtime/restart",
+                    "url": "https://docs.aws.amazon.com/dms/latest/userguide/chap_task.cdc.restart.html",
                     "title": "Restart docs",
                     "description": "Restart trade-offs.",
                 },
@@ -20030,7 +20097,7 @@ def test_selected_bank_payload_drops_claim_ids_missing_from_final_sections():
     assert payload[0]["selected_rows"][0]["claim_ids"] == ["executive-summary-claim-1"]
 
 
-def test_selected_bank_payload_clears_claim_ids_for_non_materialized_section():
+def test_selected_bank_payload_drops_non_materialized_selected_rows():
     payload = deep_research_runtime_module._selected_bank_payload(
         section_banks=[
             {
@@ -20071,7 +20138,7 @@ def test_selected_bank_payload_clears_claim_ids_for_non_materialized_section():
         ],
     )
 
-    assert payload[0]["selected_rows"][0]["claim_ids"] == []
+    assert payload[0]["selected_rows"] == []
 
 
 def test_rebuild_verified_rollup_sections_filters_rollups_to_supported_claim_inventory():
@@ -20408,6 +20475,52 @@ def test_selected_bank_bundle_gate_rejects_selected_row_outside_selected_evidenc
     )
 
     assert matches is False
+
+
+def test_selected_bank_bundle_gate_rejects_selected_row_without_claim_ids():
+    matches = deep_research_runtime_module._selected_bank_matches_bundle(
+        selected_bank_value=[
+            {
+                "section_id": "task-visibility",
+                "selected_evidence_ids": ["e1"],
+                "candidate_evidence_ids": ["e1"],
+                "rejected_evidence_ids": [],
+                "selected_rows": [{"evidence_id": "e1", "claim_ids": []}],
+            }
+        ],
+        report_value={
+            "sections": [
+                {
+                    "section_id": "task-visibility",
+                    "claims": [{"claim_id": "claim-1"}],
+                }
+            ]
+        },
+        evidence_items_value=[
+            {"evidence_id": "e1"},
+        ],
+    )
+
+    assert matches is False
+
+
+def test_third_party_docs_path_is_not_labeled_official_docs():
+    source_registry, [source_id] = deep_research_runtime_module._merge_source_registry(
+        [],
+        [
+            {
+                "url": "https://example.com/docs/install",
+                "title": "Install docs",
+                "description": "Third-party project documentation.",
+                "provider": "grok",
+            }
+        ],
+    )
+    source = next(item for item in source_registry if item["source_id"] == source_id)
+
+    assert source["source_type"] == "third_party"
+    assert source["quality_tier"] == "high_signal"
+    assert "official_docs" not in source["ranking_reasons"]
 
 
 @pytest.mark.asyncio
@@ -21758,6 +21871,156 @@ async def test_runtime_selective_fetch_records_fetch_attempt_and_budget_usage(mo
     assert "Fetch calls: 1" in result["final_report"]
     assert "Provider attempts: 2" in result["final_report"]
     assert "tavily" in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_successful_fetch_unit_records_primary_provider_counts(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        payload["report_outline"] = [
+            {
+                "section_id": "provider-fetch",
+                "title": "Provider Fetch",
+                "goal": "Summarize provider fetch accounting metadata.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-fetch-1",
+                "unit_type": "fetch",
+                "title": "Provider fetch",
+                "goal": "Fetch provider accounting metadata.",
+                "query": "",
+                "url": "https://docs.example.com/provider-fetch",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        return payload
+
+    async def fetch_with_details(url):
+        return {
+            "content": "Provider fetch accounting metadata explains successful source and evidence counts.",
+            "provider_name": "tavily",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.tavily.com/extract",
+            "error_code": "",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url_with_details", fetch_with_details)
+
+    response = await runtime.start(query="Fetch provider accounting counts", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+    result = await runtime.result(response["job_id"])
+    runtime_payload = result["report"]["runtime"]
+
+    fetch_attempt = next(
+        attempt for attempt in runtime_payload["provider_attempts"] if attempt["unit_id"] == "unit-fetch-1"
+    )
+    assert fetch_attempt == {
+        "unit_id": "unit-fetch-1",
+        "operation": "fetch",
+        "status": "completed",
+        "provider_name": "tavily",
+        "provider_model": "",
+        "effective_model": "",
+        "provider_api_url": "https://api.tavily.com/extract",
+        "source_count": 1,
+        "evidence_count": 1,
+        "error_code": "",
+    }
+    assert runtime_payload["provider_winners"][0]["source_count"] == 1
+    assert runtime_payload["budget"]["usage"]["fetch_calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_map_primary_counts_exclude_selective_fetch_evidence(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        payload["report_outline"] = [
+            {
+                "section_id": "provider-map",
+                "title": "Provider Map",
+                "goal": "Summarize provider map accounting metadata.",
+            }
+        ]
+        payload["research_units"] = [
+            {
+                "unit_id": "unit-map-1",
+                "unit_type": "map",
+                "title": "Provider map",
+                "goal": "Map provider accounting metadata.",
+                "query": "",
+                "url": "https://docs.example.com/provider-map",
+                "instructions": "Find provider accounting metadata pages.",
+                "depends_on": [],
+                "status": "pending",
+                "notes": "",
+            }
+        ]
+        return payload
+
+    async def map_with_details(url, instructions=""):
+        return {
+            "content": "- https://docs.example.com/provider-map/detail",
+            "provider_name": "tavily",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.tavily.com/map",
+            "error_code": "",
+        }
+
+    async def fetch_with_details(url):
+        return {
+            "content": "Provider map accounting metadata includes selective fetch evidence.",
+            "provider_name": "firecrawl",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": "https://api.firecrawl.dev/v1/scrape",
+            "error_code": "",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._map_url_with_details", map_with_details)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url_with_details", fetch_with_details)
+
+    response = await runtime.start(query="Map provider accounting counts", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+    result = await runtime.result(response["job_id"])
+    runtime_payload = result["report"]["runtime"]
+
+    map_attempt = next(
+        attempt
+        for attempt in runtime_payload["provider_attempts"]
+        if attempt["unit_id"] == "unit-map-1" and attempt["operation"] == "map"
+    )
+    fetch_attempt = next(
+        attempt
+        for attempt in runtime_payload["provider_attempts"]
+        if attempt["unit_id"] == "unit-map-1" and attempt["operation"] == "fetch"
+    )
+    assert map_attempt["source_count"] == 1
+    assert map_attempt["evidence_count"] == 1
+    assert fetch_attempt["source_count"] == 1
+    assert fetch_attempt["evidence_count"] == 1
+    assert fetch_attempt["attempt_role"] == "selective_fetch"
+    assert runtime_payload["budget"]["usage"]["fetch_calls"] == 1
+    assert runtime_payload["budget"]["usage"]["provider_attempts"] == 2
 
 
 @pytest.mark.asyncio

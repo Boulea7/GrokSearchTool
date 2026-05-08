@@ -2359,6 +2359,8 @@ def _selected_bank_matches_bundle(
                 for claim_id in row.get("claim_ids", []) or []
                 if str(claim_id).strip()
             ]
+            if not claim_ids:
+                return False
             if any(claim_id not in claim_ids_by_section.get(section_id, set()) for claim_id in claim_ids):
                 return False
     return True
@@ -4452,6 +4454,8 @@ def _selected_bank_payload(
                     and claim_id in valid_claim_ids
                 )
             ]
+            if sections is not None and not claim_ids:
+                continue
             selection_details = decisions_by_section_evidence.get((section_id, evidence_id), {})
             selected_rows.append(
                 {
@@ -6018,7 +6022,7 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
             domain = ""
 
     traits = _source_doc_traits(source)
-    if _is_official_doc_domain(domain) or "/docs/" in url or "/documentation/" in url:
+    if _is_official_doc_domain(domain):
         bias = 3
         if "api_reference" in traits or "reference" in traits:
             bias += 2
@@ -6029,6 +6033,8 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
         if "troubleshooting" in traits:
             bias -= 1
         return bias
+    if "/docs/" in url or "/documentation/" in url:
+        return 1
     if domain.startswith("standards.") or "standards." in domain or "/rfc" in url or "/spec" in url or "/standard" in url:
         return 3
     if domain == "arxiv.org" or domain.endswith(".arxiv.org") or domain.endswith(".acm.org") or domain.endswith(".ieee.org") or url.endswith(".pdf"):
@@ -6049,7 +6055,7 @@ def _source_type(source: dict[str, Any]) -> str:
             domain = urlsplit(url).netloc.lower()
         except Exception:
             domain = ""
-    if _is_official_doc_domain(domain) or "/docs/" in url:
+    if _is_official_doc_domain(domain):
         return "official_docs"
     if domain.startswith("standards.") or "standards." in domain or "/rfc" in url or "/spec" in url or "/standard" in url:
         return "standard"
@@ -6283,6 +6289,7 @@ class DeepResearchRuntime:
                         status="completed",
                         phase="finalizing",
                         progress_pct=100.0,
+                        current_checkpoint="finalizing",
                         finished_at=completed_at,
                         heartbeat_at=utc_now_iso(),
                         last_error="",
@@ -6731,6 +6738,7 @@ class DeepResearchRuntime:
                     status="completed",
                     phase="finalizing",
                     progress_pct=100.0,
+                    current_checkpoint="finalizing",
                     finished_at=completed_at,
                     heartbeat_at=utc_now_iso(),
                     last_error="",
@@ -9396,6 +9404,8 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     "provider_model": result.get("provider_model", ""),
                     "effective_model": result.get("effective_model", ""),
                     "provider_api_url": result.get("provider_api_url", ""),
+                    "source_count": int(result.get("provider_source_count", 0) or 0),
+                    "evidence_count": int(result.get("provider_evidence_count", 0) or 0),
                 }
                 for result in unit_results.values()
                 if result.get("provider_name")
@@ -9648,6 +9658,8 @@ async def _execute_research_unit(
                 "provider_model": str(fetch_result.get("provider_model", "") or ""),
                 "effective_model": str(fetch_result.get("effective_model", "") or ""),
                 "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                "provider_source_count": 1,
+                "provider_evidence_count": 1,
             },
             [source],
             [
@@ -9840,6 +9852,8 @@ async def _execute_research_unit(
                 "provider_model": str(map_result.get("provider_model", "") or ""),
                 "effective_model": str(map_result.get("effective_model", "") or ""),
                 "provider_api_url": str(map_result.get("provider_api_url", "") or ""),
+                "provider_source_count": 1,
+                "provider_evidence_count": 1,
                 "supporting_provider_attempts": supporting_provider_attempts,
             },
             sources,

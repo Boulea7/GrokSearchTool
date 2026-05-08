@@ -519,6 +519,7 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
 def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
     selected_bank = case.get("selected_bank") or case.get("evidence_bank") or []
     surface_claim_ids = _surface_claim_ids(case)
+    surface_claim_ids_by_section = _surface_claim_ids_by_section(case)
     claim_text_by_id = _surface_claim_text_by_id(case)
     surface_text = _stable_surface_text(case)
     reason_tags: list[str] = []
@@ -546,6 +547,11 @@ def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
             if not claim_ids:
                 reason_tags.append("selected_packet_missing_from_prose")
                 continue
+            section_id = str(bank.get("section_id", "")).strip()
+            if section_id:
+                valid_section_claim_ids = surface_claim_ids_by_section.get(section_id, set())
+                if any(claim_id in surface_claim_ids and claim_id not in valid_section_claim_ids for claim_id in claim_ids):
+                    reason_tags.append("selected_packet_claim_section_mismatch")
             if any(claim_id not in surface_claim_ids for claim_id in claim_ids):
                 reason_tags.append("selected_packet_claim_missing_from_surface")
             for claim_id in claim_ids:
@@ -924,6 +930,27 @@ def _surface_claim_ids(case: dict) -> set[str]:
                 if claim_id:
                     claim_ids.add(claim_id)
     return claim_ids
+
+
+def _surface_claim_ids_by_section(case: dict) -> dict[str, set[str]]:
+    claim_ids_by_section: dict[str, set[str]] = {}
+    for surface in (case.get("report"), case.get("citations")):
+        if not isinstance(surface, dict):
+            continue
+        for section in surface.get("sections", []) or []:
+            if not isinstance(section, dict):
+                continue
+            section_id = str(section.get("section_id", "")).strip()
+            if not section_id:
+                continue
+            section_claim_ids = claim_ids_by_section.setdefault(section_id, set())
+            for claim in section.get("claims", []) or []:
+                if not isinstance(claim, dict):
+                    continue
+                claim_id = str(claim.get("claim_id", "")).strip()
+                if claim_id:
+                    section_claim_ids.add(claim_id)
+    return claim_ids_by_section
 
 
 def _surface_claim_text_by_id(case: dict) -> dict[str, str]:
@@ -1650,6 +1677,53 @@ def test_packet_to_prose_fidelity_rejects_claim_id_missing_from_report_surface()
 
     assert result["verdict"] == "fail"
     assert result["reason_tags"] == ["selected_packet_claim_missing_from_surface"]
+
+
+def test_packet_to_prose_fidelity_rejects_cross_section_claim_drift():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "claims": [
+                        {
+                            "claim_id": "resume-claim-1",
+                            "text": "Resume-processing continues from the last checkpoint.",
+                        }
+                    ],
+                },
+                {
+                    "section_id": "restart-semantics",
+                    "claims": [
+                        {
+                            "claim_id": "restart-claim-1",
+                            "text": "Restart replays the task from a fresh starting point.",
+                        }
+                    ],
+                },
+            ],
+            "final_report": (
+                "Resume-processing continues from the last checkpoint. "
+                "Restart replays the task from a fresh starting point."
+            ),
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_rows": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": ["restart-claim-1"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["selected_packet_claim_section_mismatch"]
 
 
 @pytest.mark.parametrize(

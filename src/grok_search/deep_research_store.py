@@ -422,21 +422,20 @@ class DeepResearchStore:
     ) -> DeepResearchCheckpoint:
         created_at = utc_now_iso()
         with self._connect() as connection:
-            next_seq = int(
-                connection.execute(
-                    "SELECT COALESCE(MAX(checkpoint_seq), 0) + 1 FROM job_checkpoints WHERE job_id = ?",
-                    (job_id,),
-                ).fetchone()[0]
-            )
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 INSERT INTO job_checkpoints (
                     job_id, checkpoint_key, checkpoint_seq, phase, created_at, state_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                SELECT ?, ?, COALESCE(MAX(checkpoint_seq), 0) + 1, ?, ?, ?
+                FROM job_checkpoints
+                WHERE job_id = ?
                 """,
-                (job_id, checkpoint_key, next_seq, phase, created_at, _json_dumps(state)),
+                (job_id, checkpoint_key, phase, created_at, _json_dumps(state), job_id),
             )
+            row = connection.execute("SELECT checkpoint_seq FROM job_checkpoints WHERE rowid = last_insert_rowid()").fetchone()
+            next_seq = int(row["checkpoint_seq"])
         self.update_job(job_id, current_checkpoint=checkpoint_key)
         return DeepResearchCheckpoint(
             job_id=job_id,
