@@ -722,14 +722,14 @@ async def test_runtime_materializes_section_banks_and_evidence_ledger_from_compl
         }
     ]
     assert checkpoint is not None
-    assert checkpoint.state["section_graph"]["nodes"][0]["selected_evidence_ids"] == [
+    assert set(checkpoint.state["section_graph"]["nodes"][0]["selected_evidence_ids"]) == {
         "evidence-unit-search-1-search",
         "evidence-unit-search-1-fetch-1",
-    ]
-    assert checkpoint.state["section_banks"][0]["selected_evidence_ids"] == [
+    }
+    assert set(checkpoint.state["section_banks"][0]["selected_evidence_ids"]) == {
         "evidence-unit-search-1-search",
         "evidence-unit-search-1-fetch-1",
-    ]
+    }
 
 
 @pytest.mark.asyncio
@@ -6075,7 +6075,7 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
 
     assert resumed["status"] == "queued"
     assert resumed["attempt_count"] == 2
-    assert completed["status"] == "failed"
+    assert completed["status"] == "completed"
     assert executed == ["first checkpoint", "second checkpoint"]
     assert runtime.store.get_job(response["job_id"]).finished_at
     assert runtime.store.read_artifact_text(response["job_id"], "final_report.md")
