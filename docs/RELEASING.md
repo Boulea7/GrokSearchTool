@@ -24,19 +24,21 @@ uv build --wheel --sdist
 
 ```bash
 python3 -m venv .venv-wheel-smoke
+mkdir -p .release-smoke/wheel
 . .venv-wheel-smoke/bin/activate
 python -m pip install dist/*.whl
-python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"
+GROK_DEEP_RESEARCH_DIR=.release-smoke/wheel python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"
 python -c "import importlib.metadata; print(importlib.metadata.distribution('grok-search').entry_points)"
 deactivate
 
 python3 -m venv .venv-sdist-smoke
+mkdir -p .release-smoke/sdist
 . .venv-sdist-smoke/bin/activate
 python -m pip install dist/*.tar.gz
-python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"
+GROK_DEEP_RESEARCH_DIR=.release-smoke/sdist python -c "import grok_search.planning; import grok_search.server; from grok_search.server import main; print(callable(main))"
 deactivate
 
-rm -rf .venv-wheel-smoke .venv-sdist-smoke
+rm -rf .venv-wheel-smoke .venv-sdist-smoke .release-smoke
 ```
 
 The smoke check must confirm:
