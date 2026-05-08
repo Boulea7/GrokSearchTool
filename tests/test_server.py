@@ -6452,7 +6452,8 @@ async def test_call_tavily_extract_uses_remote_fallback_when_local_endpoint_is_u
     monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "fallback-key")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
     monkeypatch.setenv("TAVILY_API_URL", "http://127.0.0.1:18080")
-    monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://tavily-fallback.example.com/api/tavily")
+    monkeypatch.setenv("TAVILY_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://fallback.example.com/api")
     requests = []
 
     class CapturingAsyncClient:
@@ -6481,7 +6482,7 @@ async def test_call_tavily_extract_uses_remote_fallback_when_local_endpoint_is_u
     assert content == "# remote ok"
     assert [request["url"] for request in requests] == [
         "http://127.0.0.1:18080/extract",
-        "https://tavily-fallback.example.com/api/tavily/extract",
+        "https://fallback.example.com/api/extract",
     ]
     assert requests[0]["headers"]["Authorization"] == "Bearer local-key"
     assert requests[1]["headers"]["Authorization"] == "Bearer fallback-key"
@@ -6492,6 +6493,7 @@ def test_tavily_api_candidates_respect_fallback_switch_force_and_dedupe(monkeypa
     monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "fallback-key")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
     monkeypatch.setenv("TAVILY_API_URL", "http://127.0.0.1:18080")
+    monkeypatch.setenv("TAVILY_FALLBACK_ENABLED", "true")
     monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://fallback.example.com/api")
     monkeypatch.setenv("TAVILY_FALLBACK_ENABLED", "false")
 
@@ -6523,6 +6525,7 @@ async def test_call_tavily_search_uses_remote_fallback_when_local_endpoint_is_un
     monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "fallback-key")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
     monkeypatch.setenv("TAVILY_API_URL", "http://127.0.0.1:18080")
+    monkeypatch.setenv("TAVILY_FALLBACK_ENABLED", "true")
     monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://fallback.example.com/api")
     requests = []
 
@@ -6563,6 +6566,7 @@ async def test_call_tavily_map_uses_remote_fallback_when_local_endpoint_is_unava
     monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "fallback-key")
     monkeypatch.setenv("TAVILY_ENABLED", "true")
     monkeypatch.setenv("TAVILY_API_URL", "http://127.0.0.1:18080")
+    monkeypatch.setenv("TAVILY_FALLBACK_ENABLED", "true")
     monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://fallback.example.com/api")
     requests = []
 

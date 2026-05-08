@@ -20,7 +20,7 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `switch_model`: смена модели Grok по умолчанию
 - `toggle_builtin_tools`: переключение встроенных WebSearch / WebFetch в Claude Code
 
-Сейчас опубликовано `20` MCP-инструментов.
+Сейчас опубликовано `21` MCP-инструмент.
 
 - `web_search`
 - `get_sources`
@@ -39,6 +39,7 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `deep_research_status`
 - `deep_research_events`
 - `deep_research_result`
+- `deep_research_artifact`
 - `deep_research_resume`
 - `deep_research_cancel`
 - `deep_research_list`

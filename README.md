@@ -238,9 +238,9 @@ claude mcp add-json grok-search --scope user '{
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
 | `TAVILY_ENABLED` | 否 | `true` | 是否启用 Tavily |
-| `TAVILY_FALLBACK_API_URL` | 否 | `https://tavily-fallback.example.com/api/tavily` | 当主 Tavily 地址是本机 loopback 且不可用时使用的远端 HTTP API fallback 地址 |
+| `TAVILY_FALLBACK_API_URL` | 否 | - | 当主 Tavily 地址是本机 loopback 且不可用时使用的远端 HTTP API fallback 地址；需要显式配置 |
 | `TAVILY_FALLBACK_API_KEY` | 否 | 复用 `TAVILY_API_KEY` | Tavily fallback Bearer token；不要写入公开仓库 |
-| `TAVILY_FALLBACK_ENABLED` | 否 | `true` | 是否允许本机 Tavily 端口失败后尝试 fallback |
+| `TAVILY_FALLBACK_ENABLED` | 否 | `false` | 是否允许本机 Tavily 端口失败后尝试 fallback |
 | `FIRECRAWL_API_KEY` | 否 | - | Firecrawl API 密钥（用于 `web_fetch` 托底，也可用于 supplemental `web_search`） |
 | `FIRECRAWL_API_URL` | 否 | `https://api.firecrawl.dev/v2` | Firecrawl API 地址 |
 | `GROK_DEBUG` | 否 | `false` | 调试模式；同时控制 debug-only 进度日志与 `ctx.info()` 中间进度转发 |
