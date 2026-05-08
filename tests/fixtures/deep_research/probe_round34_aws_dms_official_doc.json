@@ -1,33 +1,238 @@
 {
-  "sample": "probe-round34-aws-dms-official-doc",
-  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, and Postgres-specific restart behavior",
+  "artifact_payload": {
+    "citations": {
+      "sections": [
+        {
+          "claims": [
+            {
+              "citations": [
+                "R1"
+              ],
+              "claim_id": "claim-1",
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-1",
+                  "line_end": 1,
+                  "line_start": 1,
+                  "source_backed": true,
+                  "source_id": "R1"
+                }
+              ],
+              "evidence_ids": [
+                "evidence-1"
+              ],
+              "source_ids": [
+                "R1"
+              ],
+              "text": "Sanitized replay claim for public-surface fixture validation."
+            }
+          ],
+          "section_id": "summary",
+          "title": "Sanitized Fixture Section"
+        }
+      ],
+      "source_registry": {
+        "R1": {
+          "domain": "docs.aws.amazon.com",
+          "source_id": "R1",
+          "source_type": "official_docs",
+          "title": "StartReplicationTask",
+          "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"
+        }
+      }
+    },
+    "coverage_gaps": {},
+    "evidence_bank": [],
+    "evidence_items": [
+      {
+        "evidence_id": "evidence-1",
+        "source_ids": [
+          "R1"
+        ],
+        "summary": "Sanitized replay evidence for public-surface fixture validation.",
+        "unit_id": "fixture-unit"
+      }
+    ],
+    "final_report": "# Final Report\n\nSanitized replay fixture for deep research public-surface tests.\n",
+    "report": {
+      "runtime": {
+        "release_gate": {
+          "all_reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ],
+          "passed": true,
+          "reason_codes": [],
+          "soft_reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ]
+        },
+        "verifier": {
+          "passed": false,
+          "reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ]
+        },
+        "warnings": [
+          "coverage_incomplete",
+          "domain_constraints_applied",
+          "medium_single_source_search_only",
+          "selected_evidence_unused"
+        ]
+      },
+      "sections": [
+        {
+          "claims": [
+            {
+              "citations": [
+                "R1"
+              ],
+              "claim_id": "claim-1",
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-1",
+                  "line_end": 1,
+                  "line_start": 1,
+                  "source_backed": true,
+                  "source_id": "R1"
+                }
+              ],
+              "evidence_ids": [
+                "evidence-1"
+              ],
+              "source_ids": [
+                "R1"
+              ],
+              "text": "Sanitized replay claim for public-surface fixture validation."
+            }
+          ],
+          "section_id": "summary",
+          "title": "Sanitized Fixture Section"
+        }
+      ],
+      "status": "degraded",
+      "unit_results": {}
+    },
+    "sources": [
+      {
+        "domain": "docs.aws.amazon.com",
+        "source_id": "R1",
+        "source_type": "official_docs",
+        "title": "StartReplicationTask",
+        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"
+      }
+    ],
+    "verification": {}
+  },
+  "event_window": {
+    "after_seq": 4,
+    "job_terminal": true,
+    "last_event_type": "job_completed",
+    "next_after_seq": 7,
+    "returned_count": 3,
+    "window_has_terminal_event": true
+  },
+  "events_after_seq": [
+    {
+      "data": {
+        "section_count": 1
+      },
+      "message": "Synthesizing findings.",
+      "phase": "synthesizing",
+      "seq": 5,
+      "type": "phase_started"
+    },
+    {
+      "data": {},
+      "message": "Finalizing report.",
+      "phase": "finalizing",
+      "seq": 6,
+      "type": "phase_started"
+    },
+    {
+      "data": {
+        "artifact_batch_id": "$seeded_batch_id",
+        "sources_count": 3
+      },
+      "message": "Deep research completed successfully.",
+      "phase": "finalizing",
+      "seq": 7,
+      "type": "job_completed"
+    }
+  ],
+  "initial_events": [
+    {
+      "data": {
+        "continuation_mode": "fresh",
+        "plan_only": false
+      },
+      "message": "Deep research job created.",
+      "phase": "planning",
+      "seq": 1,
+      "type": "job_created"
+    },
+    {
+      "data": {
+        "unit_count": 2
+      },
+      "message": "Planning started.",
+      "phase": "planning",
+      "seq": 2,
+      "type": "phase_started"
+    },
+    {
+      "data": {
+        "completed_units": 0
+      },
+      "message": "Researching source material.",
+      "phase": "researching",
+      "seq": 3,
+      "type": "phase_started"
+    },
+    {
+      "data": {
+        "sources_count": 3,
+        "unit_type": "search"
+      },
+      "message": "Completed unit-search-1.",
+      "phase": "researching",
+      "seq": 4,
+      "type": "research_unit_completed"
+    }
+  ],
   "job": {
-    "status": "completed",
-    "phase": "finalizing",
-    "effort": "deep",
-    "resolved_budget_seconds": 180,
     "attempt_count": 2,
+    "cancel_requested": false,
+    "continued_from_job_id": "",
     "current_checkpoint": "finalizing",
     "current_checkpoint_kind": "finalizing",
+    "effort": "deep",
     "last_error": "",
-    "cancel_requested": false,
-    "continued_from_job_id": ""
+    "phase": "finalizing",
+    "resolved_budget_seconds": 180,
+    "status": "completed"
   },
   "plan": {
-    "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, and Postgres-specific restart behavior",
-    "include_domains": [
-      "docs.aws.amazon.com"
-    ],
-    "exclude_domains": [
-      "repost.aws"
-    ],
+    "brief": {
+      "deliverable": "A cited follow-up with official docs only.",
+      "objective": "Check the latest AWS DMS checkpoint recovery surface."
+    },
     "continuation": {
       "mode": "fresh"
     },
-    "brief": {
-      "objective": "Check the latest AWS DMS checkpoint recovery surface.",
-      "deliverable": "A cited follow-up with official docs only."
+    "exclude_domains": [
+      "repost.aws"
+    ],
+    "include_domains": [
+      "docs.aws.amazon.com"
+    ],
+    "planner_metadata": {
+      "planner": "probe",
+      "used_fallback": false
     },
+    "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, and Postgres-specific restart behavior",
     "search_strategy": {
       "approach": "targeted",
       "search_queries": [
@@ -46,140 +251,55 @@
         "question": "What does the official guidance say about awsdms_txn_state and Postgres restart behavior?",
         "reason": "Cover restart semantics."
       }
-    ],
-    "planner_metadata": {
-      "planner": "probe",
-      "used_fallback": false
-    }
-  },
-  "artifact_payload": {
-    "sources": [
-      {
-        "source_id": "R1",
-        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
-        "title": "StartReplicationTask",
-        "domain": "docs.aws.amazon.com",
-        "source_type": "official_docs"
-      },
-      {
-        "source_id": "R2",
-        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
-        "title": "DescribeReplicationTasks",
-        "domain": "docs.aws.amazon.com",
-        "source_type": "official_docs"
-      },
-      {
-        "source_id": "R3",
-        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
-        "title": "Creating tasks for ongoing replication using AWS DMS",
-        "domain": "docs.aws.amazon.com",
-        "source_type": "official_docs"
-      }
-    ],
-    "report": {
-      "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, and Postgres-specific restart behavior",
-      "summary": "Round34 official-doc probe expands the resolved batch surface to cover RecoveryCheckpoint and awsdms_txn_state together.",
-      "status": "degraded",
-      "sections": [
-        {
-          "section_id": "checkpoint-api-surface",
-          "title": "Checkpoint API surface",
-          "claims": [
-            {
-              "claim_id": "c1",
-              "text": "StartReplicationTask and DescribeReplicationTasks share the public recovery checkpoint surface.",
-              "citations": [
-                "R1",
-                "R2"
-              ]
-            },
-            {
-              "claim_id": "c2",
-              "text": "Official CDC guidance documents recovery checkpoint reuse for ongoing replication.",
-              "citations": [
-                "R3"
-              ]
-            }
-          ]
-        }
-      ],
-      "unit_results": {
-        "unit-search-1": {
-          "status": "completed",
-          "source_ids": [
-            "R1",
-            "R2",
-            "R3"
-          ]
-        }
-      },
-      "runtime": {
-        "warnings": [
-          "coverage_incomplete",
-          "domain_constraints_applied",
-          "medium_single_source_search_only",
-          "selected_evidence_unused"
-        ],
-        "constraint_violations": [
-          "official_doc_only_scope",
-          "postgres_restart_gap"
-        ],
-        "verifier": {
-          "passed": false,
-          "reason_codes": [
-            "selected_evidence_unused",
-            "medium_single_source_search_only"
-          ]
-        },
-        "release_gate": {
-          "passed": true,
-          "reason_codes": [],
-          "all_reason_codes": [
-            "selected_evidence_unused",
-            "medium_single_source_search_only"
-          ],
-          "soft_reason_codes": [
-            "selected_evidence_unused",
-            "medium_single_source_search_only"
-          ]
-        }
-      }
-    },
-    "final_report": "# Final Report\n\nRound34 official-doc probe expands the resolved batch surface to cover RecoveryCheckpoint and awsdms_txn_state together.\n",
-    "evidence_items": [
-      {
-        "evidence_id": "ev-r34-aws-1",
-        "unit_id": "unit-search-1",
-        "summary": "The API surface exposes both restart and describe recovery semantics.",
-        "detail": "RecoveryCheckpoint remains visible in both StartReplicationTask and DescribeReplicationTasks flows.",
-        "source_ids": [
-          "R1",
-          "R2"
-        ],
-        "source_urls": [
-          "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
-          "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"
-        ]
-      }
     ]
   },
   "public_surface": {
-    "status": {
-      "current_checkpoint": "finalizing",
-      "current_checkpoint_kind": "finalizing",
+    "result": {
       "artifact_fallback_used": false,
+      "constraint_violations": [
+        "official_doc_only_scope",
+        "postgres_restart_gap"
+      ],
+      "current_checkpoint_kind": "finalizing",
       "planner_fallback_used": false,
+      "report": {
+        "runtime": {
+          "constraint_violations": [
+            "official_doc_only_scope",
+            "postgres_restart_gap"
+          ],
+          "release_gate": {
+            "all_reason_codes": [
+              "selected_evidence_unused",
+              "medium_single_source_search_only"
+            ],
+            "passed": true,
+            "reason_codes": [],
+            "soft_reason_codes": [
+              "selected_evidence_unused",
+              "medium_single_source_search_only"
+            ]
+          },
+          "warnings": [
+            "coverage_incomplete",
+            "domain_constraints_applied",
+            "medium_single_source_search_only",
+            "selected_evidence_unused"
+          ]
+        },
+        "status": "degraded",
+        "summary": "Round34 official-doc probe expands the resolved batch surface to cover RecoveryCheckpoint and awsdms_txn_state together."
+      },
       "resolved_artifact_batch_id": "$seeded_batch_id",
       "runtime_warnings": [
         "coverage_incomplete",
         "domain_constraints_applied",
         "medium_single_source_search_only",
         "selected_evidence_unused"
-      ],
-      "constraint_violations": [
-        "official_doc_only_scope",
-        "postgres_restart_gap"
-      ],
+      ]
+    },
+    "status": {
+      "artifact_fallback_used": false,
       "artifact_kinds": [
         "plan.json",
         "sources.json",
@@ -191,146 +311,43 @@
         "grounding.json",
         "verifier.json"
       ],
+      "constraint_violations": [
+        "official_doc_only_scope",
+        "postgres_restart_gap"
+      ],
+      "current_checkpoint": "finalizing",
+      "current_checkpoint_kind": "finalizing",
       "operator_summary": {
-        "status": "completed",
-        "phase": "finalizing",
         "attempt_count": 2,
-        "current_checkpoint": "finalizing",
         "cancel_requested": false,
+        "constraint_violations": [
+          "official_doc_only_scope",
+          "postgres_restart_gap"
+        ],
         "continued_from_job_id": "",
-        "resolved_artifact_batch_id": "$seeded_batch_id",
+        "current_checkpoint": "finalizing",
+        "phase": "finalizing",
         "planner_fallback_used": false,
+        "resolved_artifact_batch_id": "$seeded_batch_id",
         "runtime_warnings": [
           "coverage_incomplete",
           "domain_constraints_applied",
           "medium_single_source_search_only",
           "selected_evidence_unused"
         ],
-        "constraint_violations": [
-          "official_doc_only_scope",
-          "postgres_restart_gap"
-        ]
-      }
-    },
-    "result": {
-      "current_checkpoint_kind": "finalizing",
-      "resolved_artifact_batch_id": "$seeded_batch_id",
-      "artifact_fallback_used": false,
+        "status": "completed"
+      },
       "planner_fallback_used": false,
+      "resolved_artifact_batch_id": "$seeded_batch_id",
       "runtime_warnings": [
         "coverage_incomplete",
         "domain_constraints_applied",
         "medium_single_source_search_only",
         "selected_evidence_unused"
-      ],
-      "constraint_violations": [
-        "official_doc_only_scope",
-        "postgres_restart_gap"
-      ],
-      "report": {
-        "status": "degraded",
-        "summary": "Round34 official-doc probe expands the resolved batch surface to cover RecoveryCheckpoint and awsdms_txn_state together.",
-        "runtime": {
-          "warnings": [
-            "coverage_incomplete",
-            "domain_constraints_applied",
-            "medium_single_source_search_only",
-            "selected_evidence_unused"
-          ],
-          "constraint_violations": [
-            "official_doc_only_scope",
-            "postgres_restart_gap"
-          ],
-          "release_gate": {
-            "passed": true,
-            "reason_codes": [],
-            "all_reason_codes": [
-              "selected_evidence_unused",
-              "medium_single_source_search_only"
-            ],
-            "soft_reason_codes": [
-              "selected_evidence_unused",
-              "medium_single_source_search_only"
-            ]
-          }
-        }
-      }
+      ]
     }
   },
-  "event_window": {
-    "after_seq": 4,
-    "next_after_seq": 7,
-    "returned_count": 3,
-    "last_event_type": "job_completed",
-    "window_has_terminal_event": true,
-    "job_terminal": true
-  },
-  "initial_events": [
-    {
-      "seq": 1,
-      "type": "job_created",
-      "phase": "planning",
-      "message": "Deep research job created.",
-      "data": {
-        "continuation_mode": "fresh",
-        "plan_only": false
-      }
-    },
-    {
-      "seq": 2,
-      "type": "phase_started",
-      "phase": "planning",
-      "message": "Planning started.",
-      "data": {
-        "unit_count": 2
-      }
-    },
-    {
-      "seq": 3,
-      "type": "phase_started",
-      "phase": "researching",
-      "message": "Researching source material.",
-      "data": {
-        "completed_units": 0
-      }
-    },
-    {
-      "seq": 4,
-      "type": "research_unit_completed",
-      "phase": "researching",
-      "message": "Completed unit-search-1.",
-      "data": {
-        "sources_count": 3,
-        "unit_type": "search"
-      }
-    }
-  ],
-  "events_after_seq": [
-    {
-      "seq": 5,
-      "type": "phase_started",
-      "phase": "synthesizing",
-      "message": "Synthesizing findings.",
-      "data": {
-        "section_count": 1
-      }
-    },
-    {
-      "seq": 6,
-      "type": "phase_started",
-      "phase": "finalizing",
-      "message": "Finalizing report.",
-      "data": {}
-    },
-    {
-      "seq": 7,
-      "type": "job_completed",
-      "phase": "finalizing",
-      "message": "Deep research completed successfully.",
-      "data": {
-        "artifact_batch_id": "$seeded_batch_id",
-        "sources_count": 3
-      }
-    }
-  ]
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, and Postgres-specific restart behavior",
+  "sample": "probe-round34-aws-dms-official-doc",
+  "selected_bank": []
 }

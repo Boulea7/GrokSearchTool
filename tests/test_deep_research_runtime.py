@@ -20449,6 +20449,58 @@ def test_provider_attempts_payload_keeps_distinct_failed_attempt_contexts():
     }
 
 
+def test_provider_attempts_payload_keeps_distinct_model_attempts():
+    attempts = deep_research_runtime_module._provider_attempts_payload(
+        unit_results={
+            "unit-search-1": {
+                "unit_type": "search",
+                "provider_name": "primary-grok",
+                "provider_api_url": "https://provider.example.invalid/v1",
+                "provider_model": "grok-4-a",
+                "effective_model": "grok-4-a",
+                "source_ids": ["R1"],
+                "supplemental_attempts": [
+                    {
+                        "operation": "search",
+                        "status": "completed",
+                        "provider_name": "tavily",
+                        "provider_model": "search-basic",
+                        "effective_model": "search-basic",
+                        "provider_api_url": "https://api.tavily.example.invalid/search",
+                        "source_count": 1,
+                        "evidence_count": 0,
+                    },
+                    {
+                        "operation": "search",
+                        "status": "completed",
+                        "provider_name": "tavily",
+                        "provider_model": "search-advanced",
+                        "effective_model": "search-advanced",
+                        "provider_api_url": "https://api.tavily.example.invalid/search",
+                        "source_count": 1,
+                        "evidence_count": 0,
+                    },
+                ],
+            }
+        },
+        failed_units=[],
+        evidence_items=[{"unit_id": "unit-search-1", "evidence_id": "e1"}],
+    )
+
+    supplemental_attempts = [
+        attempt for attempt in attempts if attempt.get("attempt_role") == "supplemental"
+    ]
+    assert len(supplemental_attempts) == 2
+    assert {attempt["provider_model"] for attempt in supplemental_attempts} == {
+        "search-basic",
+        "search-advanced",
+    }
+    assert {attempt["effective_model"] for attempt in supplemental_attempts} == {
+        "search-basic",
+        "search-advanced",
+    }
+
+
 def test_selected_bank_bundle_gate_rejects_selected_row_outside_selected_evidence_ids():
     matches = deep_research_runtime_module._selected_bank_matches_bundle(
         selected_bank_value=[

@@ -5504,6 +5504,8 @@ def _provider_attempt_key(attempt: dict[str, Any]) -> tuple[Any, ...]:
         attempt.get("operation", ""),
         attempt.get("status", ""),
         attempt.get("provider_name", ""),
+        attempt.get("provider_model", ""),
+        attempt.get("effective_model", ""),
         attempt.get("provider_api_url", ""),
         attempt.get("attempt_role", ""),
         attempt.get("error_code", ""),
