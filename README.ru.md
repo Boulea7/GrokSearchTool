@@ -21,7 +21,23 @@ GrokSearch — это независимо поддерживаемый MCP-се
 
 Сейчас опубликовано `13` MCP-инструментов.
 
+- `web_search`
+- `get_sources`
+- `web_fetch`
+- `web_map`
+- `get_config_info`
+- `switch_model`
+- `toggle_builtin_tools`
+- `plan_intent`
+- `plan_complexity`
+- `plan_sub_query`
+- `plan_search_term`
+- `plan_tool_mapping`
+- `plan_execution`
+
 `plan_search_term` задаёт `approach` / `fallback_plan` при первом создании `search_strategy`; последующие вызовы без `is_revision` только добавляют `search_terms` и не переписывают существующие strategy metadata неявно.
+planning `session_id` — это in-process transient handle с TTL около 1 часа и LRU-лимитом 256 сессий; после рестарта процесса, истечения TTL или eviction нужно начинать заново с нового `plan_intent`.
+wrapper'ы намеренно сохраняют scalar shim-входы: `depends_on` передаётся как CSV, `parallel_groups` — как CSV с разделением групп через `;`, а `params_json` — как строковый JSON. Первый вызов `plan_search_term` обязан передавать `approach`.
 
 ## Установка
 
@@ -43,6 +59,7 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `toggle_builtin_tools` относится только к проектным настройкам Claude Code.
 - readiness для `toggle_builtin_tools` в `get_config_info` означает только то, что обнаружен локальный Git-контекст проекта; это не полная проверка хоста Claude Code.
 - Ниже используются актуальные публичные установочные ссылки из поддерживаемого репозитория `Boulea7/GrokSearchTool`.
+- Локальные worktree, исторические имена remote или старые следы совместной работы не следует трактовать как признак того, что проект всё ещё ведётся через `fork/upstream` PR-процесс.
 
 ### Добавление как MCP
 
@@ -130,9 +147,12 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 Примечания:
 
-- Порядок разрешения модели: переменная окружения процесса `GROK_MODEL` → проектный `.env.local` → проектный `.env` → сохранённое значение в `~/.config/grok-search/config.json` → кодовый default `grok-4.1-fast`. Для OpenRouter-совместимых URL при необходимости автоматически добавляется суффикс `:online`.
+- Порядок разрешения модели: переменная окружения процесса `GROK_MODEL` → проектный `.env.local` → проектный `.env` → сохранённое значение в `~/.config/grok-search/config.json` → кодовый default `grok-4.20-0309`. Для OpenRouter-совместимых URL при необходимости автоматически добавляется суффикс `:online`.
 - Приоритет env определяется по самому факту наличия ключа: если ключ явно присутствует в окружении процесса, даже пустое значение не даст откатиться к проектным `.env.local` / `.env`.
+- Текущий встроенный предпочтительный default — `grok-4.20-0309`. Для семейства Grok 4.1+ runtime-выбор теперь сделан более гибким: если запрошенная модель отсутствует в `/models`, но доступна совместимая Grok 4.1+, система старается откатиться к ней, а не падать только из-за отличающегося суффикса.
 - `switch_model` обновляет только сохранённое значение в `~/.config/grok-search/config.json`; если задан `GROK_MODEL`, приоритет остаётся у env.
+- Базовый снимок `get_config_info` теперь также включает `GROK_MODEL_SOURCE`, чтобы было видно, какой слой сейчас задаёт активную модель (`process_env`, `project_env_local`, `project_env`, `persisted_config`, `default`). Если здесь стоит `process_env`, `project_env_local` или `project_env`, одного вызова `switch_model` недостаточно, чтобы изменить текущий процесс.
+- В таком override-сценарии `switch_model` всё равно обновит сохранённую конфигурацию, но возвращаемый `current_model` останется текущей runtime-эффективной моделью. Поле `runtime_model_source` показывает, какой более приоритетный слой всё ещё активен.
 - `GROK_TIME_CONTEXT_MODE` по умолчанию равен `always`, то есть текущее поведение с постоянной инъекцией локального времени сохраняется.
 - При `GROK_DEBUG=false` эти helper progress logs не пишутся и не пересылаются через `ctx.info()`; они намеренно работают как debug-only progress/debug signal.
 - Если нужно экономить контекст, можно переключить `GROK_TIME_CONTEXT_MODE` в `auto` (инъекция только для явно временных запросов) или `never`.
@@ -152,8 +172,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch` / `web_map` по умолчанию отклоняют не-`http/https`, loopback, очевидные private-network targets, одноярлыковые host'ы, типичные private-suffix host'ы (`.internal` / `.local` / `.lan` / `.home` / `.corp`), loopback-helper домены вроде `localtest.me` / `lvh.me`, а также распространённые публичные DNS-alias'ы, в которые закодирован локальный/приватный IP (`nip.io` / `xip.io` / `sslip.io`).
 - После статической проверки URL `web_fetch` / `web_map` также перепроверяют видимые redirect-цели до вызова provider.
 - Сейчас эта видимая redirect-проверка использует `GET`, а не `HEAD`; для presigned URL, one-shot token или ссылок, где даже чтение может иметь побочный эффект, это означает возможный дополнительный preflight-read и должно рассматриваться как известная граница.
+- Сейчас видимая redirect-проверка выполняется не более `5` раз; если на `5`-й проверке всё ещё появляется новый видимый redirect, запрос жёстко отклоняется с текущим контрактом `目标 URL 重定向次数过多`, и до downstream provider дело не доходит.
 - Если redirect-preflight завершается timeout'ом или request-level ошибкой, текущая реализация помечает этот шаг как `skipped_due_to_error`; `web_fetch` / `web_map` сейчас всё ещё продолжают downstream-вызов provider.
-- Эта граница сейчас не даёт жёсткой гарантии против split-horizon или локально отравленного DNS, который резолвит публично выглядящий hostname в приватную цель.
+- Эту границу сейчас следует понимать как `best-effort safety boundary`, а не как hard-stop гарантию против split-horizon или локально отравленного DNS, который резолвит публично выглядящий hostname в приватную цель.
 
 ### Минимальный smoke check
 
@@ -169,13 +190,17 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `doctor.recommendations_detail` даёт структурированные подсказки по исправлению, связанные с `check_id` и feature.
 - `get_config_info` теперь принимает необязательный `detail="full" | "summary"`; по умолчанию остаётся `full`, а `summary` оставляет только базовый config snapshot, `connection_test`, `doctor.status/summary/recommendations` и `feature_readiness`.
 - `detail="summary"` сейчас является компактной проекцией того же диагностического запуска, а не отдельным облегчённым execution path.
-- `feature_readiness.web_fetch.providers` содержит состояние по каждому provider; `verified_path` показывает backend, который прошёл реальный fetch-probe, а для пропущенных provider может присутствовать `skipped_reason`.
-- `feature_readiness.get_sources` показывает `ready` только тогда, когда в текущем процессе уже есть хотя бы один читаемый non-error source session; если в кэше остались только сессии от неуспешных поисков, статус остаётся `partial_ready`.
-- Даже при маскировании API key диагностический payload всё ещё может содержать локальные абсолютные пути, endpoint/hostname и короткие сводки upstream-ошибок; перед внешней публикацией его стоит перепроверить.
+- `connection_test` сейчас отражает только достижимость `/models`; если `web_search` находится в состоянии `degraded`, нужно смотреть на `doctor`, `feature_readiness`, `GROK_MODEL_SOURCE` и проверки `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` вместе.
+- `grok_model_selection` означает, что модель оказалась неподходящей уже на стадии видимости `/models`, а `grok_model_runtime_fallback` означает, что реальный путь `/chat/completions` смог завершиться только после повторного runtime-fallback к другому кандидату Grok; оба check могут появиться одновременно.
+- `feature_readiness.web_fetch.providers` содержит состояние по каждому provider; `verified_path` показывает backend, который прошёл реальный fetch-probe. Каждый provider item стабильно содержит `check_id`, при выводимом машинном диагнозе также включает `reason_code`, а для пропущенных provider может присутствовать `skipped_reason`.
+- `feature_readiness.get_sources` показывает `ready` только тогда, когда в текущем процессе уже есть хотя бы один читаемый non-error source session; если в кэше остались только сессии от неуспешных поисков, статус остаётся `partial_ready`. Даже если `web_search` сейчас not ready, `get_sources` всё ещё может оставаться `ready`, когда читаемый cached session уже есть, а upstream-проблема будет отражена в `degraded_by`.
+- Даже при маскировании API key диагностический payload всё ещё может содержать локальные абсолютные пути, endpoint/hostname и короткие сводки upstream-ошибок; при этом маскируются не только bearer/token/подписанные query, но и высокодостоверные cloud-signed credential key, такие как `X-Amz-Credential`, `X-Goog-Credential` и `GoogleAccessId`. Перед внешней публикацией payload всё равно стоит перепроверить.
 - При успешном `get_sources` ответ всегда содержит `session_id`, `sources`, `sources_count`, `search_status`, `search_error` и `source_state`; только при отсутствии или истечении `session_id` дополнительно возвращается `error=session_id_not_found_or_expired`.
 - `get_sources` сейчас читает из in-process memory-backed LRU cache на запущенном сервере (по умолчанию TTL около 1 часа, лимит 256 session). `session_id` здесь является shared-daemon transient handle, а не durable, caller-bound capability или secret token; `session_id_not_found_or_expired` покрывает рестарт процесса, истечение TTL, вытеснение и miss для нечитаемых legacy-cache записей.
 - `sources_count` сейчас означает итоговое количество источников после стандартизации, дедупликации и фильтрации, записанное в кэш, а не сырое число upstream-citation'ов.
-- `rank` в `get_sources` сейчас определяется по `score`, качеству идентичности источника и стабильному dedupe-порядку без дополнительного приоритета для цитат Grok. `standardize_sources` также canonicalize'ит регистр scheme/host при dedupe, поэтому mixed-case варианты одной и той же страницы могут схлопываться в один source; при этом безопасные URL fragment сохраняются, а `userinfo` и типичные подписи/токены по-прежнему удаляются или маскируются. Явные default-port значения вроде `:443` и `:80` сейчас сохраняются и не схлопываются автоматически с implicit-default URL.
+- `rank` в `get_sources` сейчас определяется по `score`, качеству идентичности источника и стабильному dedupe-порядку без дополнительного приоритета для цитат Grok. `standardize_sources` также canonicalize'ит регистр scheme/host при dedupe, поэтому mixed-case варианты одной и той же страницы могут схлопываться в один source; при этом безопасные URL fragment сохраняются, а `userinfo`, типичные подписи/токены и высокодостоверные cloud-signed credential key вроде `X-Amz-Credential`, `X-Goog-Credential` и `GoogleAccessId` по-прежнему удаляются или маскируются. Явные default-port значения вроде `:443` и `:80` сейчас сохраняются и не схлопываются автоматически с implicit-default URL.
+- Каждая итоговая запись источника сейчас является lossy aggregate display row; если нужен contributor-level attribution, читайте additive `contributors`.
+- `source` остаётся legacy-overloaded field: при отсутствии `origin_type` старые cache entries всё ещё могут использовать его как provider alias.
 
 ## Companion Skill
 

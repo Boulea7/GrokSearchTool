@@ -21,7 +21,23 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 
 公開 MCP ツールは現在 `13` 個です。
 
+- `web_search`
+- `get_sources`
+- `web_fetch`
+- `web_map`
+- `get_config_info`
+- `switch_model`
+- `toggle_builtin_tools`
+- `plan_intent`
+- `plan_complexity`
+- `plan_sub_query`
+- `plan_search_term`
+- `plan_tool_mapping`
+- `plan_execution`
+
 `plan_search_term` は `search_strategy` の初回作成時に `approach` / `fallback_plan` を設定します。以後の非 `is_revision` 呼び出しは `search_terms` の追加だけを行い、既存の strategy metadata を暗黙に上書きしません。
+planning `session_id` は現在のプロセス内だけで有効な transient handle であり、既定 TTL は約 1 時間、LRU 上限は 256 です。プロセス再起動、TTL 切れ、eviction 後は新しい `plan_intent` からやり直してください。
+wrapper はあえて scalar shim 入力を保っており、`depends_on` は CSV、`parallel_groups` はセミコロン区切りの CSV、`params_json` は文字列化 JSON を受け取ります。最初の `plan_search_term` 呼び出しでは `approach` が必須です。
 
 ## インストール
 
@@ -43,6 +59,7 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 - `toggle_builtin_tools` は Claude Code のプロジェクト設定専用です。
 - `get_config_info` における `toggle_builtin_tools` の readiness は、ローカル Git プロジェクト文脈を検出したことだけを示し、Claude Code ホスト全体の検証ではありません。
 - 以下のインストール例は、現在メンテナンスされている公開配布元 `Boulea7/GrokSearchTool` を使います。
+- ローカル worktree、過去の remote 名、古い協業痕跡は、現在も `fork/upstream` PR フローを使っている証拠として読まないでください。
 
 ### MCP として追加
 
@@ -130,9 +147,12 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 補足:
 
-- モデル解決順はプロセス `GROK_MODEL` 環境変数 → プロジェクト `.env.local` → プロジェクト `.env` → `~/.config/grok-search/config.json` の永続値 → コード既定値 `grok-4.1-fast` です。OpenRouter 互換 URL を使う場合、必要に応じて `:online` が自動付与されます。
+- モデル解決順はプロセス `GROK_MODEL` 環境変数 → プロジェクト `.env.local` → プロジェクト `.env` → `~/.config/grok-search/config.json` の永続値 → コード既定値 `grok-4.20-0309` です。OpenRouter 互換 URL を使う場合、必要に応じて `:online` が自動付与されます。
 - 環境変数の優先は「キーが存在するか」で判定されます。プロセス環境に明示的にキーがある場合、値が空文字でもプロジェクト `.env.local` / `.env` にはフォールバックしません。
+- 現在の内蔵既定プリファレンスは `grok-4.20-0309` です。Grok 4.1+ 系では実行時選択をできるだけ柔軟に保ち、要求モデルが `/models` 一覧に存在しなくても、互換な Grok 4.1+ の利用可能モデルがあれば、サフィックス差だけで失敗する代わりにそちらへ回退します。
 - `switch_model` は `~/.config/grok-search/config.json` の永続値のみを更新します。`GROK_MODEL` が設定されている場合は env が優先されます。
+- `get_config_info` のベース設定スナップショットには `GROK_MODEL_SOURCE` も含まれ、現在のアクティブモデルをどの層が供給しているか（`process_env`、`project_env_local`、`project_env`、`persisted_config`、`default`）を確認できます。ここが `process_env`、`project_env_local`、`project_env` の場合、`switch_model` を単独で呼んでも現在のプロセスは切り替わりません。
+- その override 状態では、`switch_model` は永続設定を更新しても、返り値の `current_model` は現在のランタイムで実際に有効なモデルのままです。どの上位レイヤーがまだ有効かは `runtime_model_source` で確認できます。
 - `GROK_TIME_CONTEXT_MODE` の既定値は `always` で、現在の「常にローカル時間を注入する」動作を維持します。
 - `GROK_DEBUG=false` のとき、これらの helper progress log は logger にも `ctx.info()` にも流れません。`GROK_DEBUG=true` のときだけ debug-only progress/debug signal として転送されます。
 - コンテキストを節約したい場合は、`GROK_TIME_CONTEXT_MODE` を `auto`（明確に時系列依存の問い合わせ時のみ注入）または `never` に変更できます。
@@ -152,8 +172,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `web_fetch` / `web_map` は、非 `http/https`、loopback、明らかな private network target、単一ラベル host、`.internal` / `.local` / `.lan` / `.home` / `.corp` のような代表的な private suffix host、`localtest.me` / `lvh.me` のような loopback helper domain、さらにローカル/私用 IP を公開 DNS 名に埋め込む alias（`nip.io` / `xip.io` / `sslip.io`）も既定で拒否します。
 - 静的な URL 検査を通過した後も、`web_fetch` / `web_map` は provider 呼び出し前に可視な redirect 先を再検査します。
 - 現在この可視 redirect 再検査は `HEAD` ではなく `GET` を使います。presigned URL、one-shot token、読み取り自体に副作用があるリンクでは、追加の事前取得が起き得る点を既知の境界として扱ってください。
+- 現在の可視 redirect 再検査は最大 `5` 回までです。第 `5` 回の事前検査時点でも新しい可視 redirect が続く場合は、`目標 URL 重定向次数过多` として hard reject され、下流 provider 呼び出しへは進みません。
 - redirect の事前検査で timeout または request-level error が起きた場合、現在の実装はその段階を `skipped_due_to_error` として扱います。`web_fetch` / `web_map` は現状では下流 provider 呼び出しを継続します。
-- この境界は、ローカル DNS が公開ホスト風の名前を私用アドレスへ解決した場合まで強制的には拒否しないため、split-horizon やローカル DNS 汚染に対する強保証とはみなせません。
+- この境界は、ローカル DNS が公開ホスト風の名前を私用アドレスへ解決した場合まで強制的には拒否しないため、`best-effort safety boundary` として理解すべきであり、split-horizon やローカル DNS 汚染に対する hard-stop 保証ではありません。
 
 ### 最小 smoke check
 
@@ -169,13 +190,17 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `doctor.recommendations_detail` は `check_id` / feature に紐づく構造化された修復ヒントです。
 - `get_config_info` は任意の `detail="full" | "summary"` を受け付けます。既定値は引き続き `full` で、`summary` はベース設定スナップショット、`connection_test`、`doctor.status/summary/recommendations`、`feature_readiness` のみを返します。
 - `detail="summary"` は現時点では同じ診断実行結果のコンパクトな投影であり、別個の軽量実行パスではありません。
-- `feature_readiness.web_fetch.providers` には provider 単位の状態が含まれ、`verified_path` は実 fetch probe が通った backend を示します。skip された provider には `skipped_reason` が付く場合があります。
-- `feature_readiness.get_sources` が `ready` になるのは、現在のプロセス内に少なくとも 1 つの非 error で読み出し可能な source session がある場合だけです。失敗検索だけが残っている場合は `partial_ready` のままです。
-- API Key はマスクされますが、診断ペイロードにはローカル絶対パス、endpoint/hostname、短い upstream エラー要約が残る場合があります。外部共有前に確認してください。
+- `connection_test` は現時点では `/models` 到達性しか表しません。`web_search` が `degraded` の場合は、`doctor`、`feature_readiness`、`GROK_MODEL_SOURCE`、`grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` を合わせて原因を判断してください。
+- `grok_model_selection` は `/models` 可視段階でそのモデルが不適切だと分かったことを示し、`grok_model_runtime_fallback` は実際の `/chat/completions` 経路が別の Grok 候補への実行時の再フォールバックでようやく成功したことを示します。両方の check が同時に現れる場合があります。
+- `feature_readiness.web_fetch.providers` には provider 単位の状態が含まれ、`verified_path` は実 fetch probe が通った backend を示します。各 provider item には安定した `check_id` が含まれ、判定できる場合は `reason_code` も付き、skip された provider には `skipped_reason` が付く場合があります。
+- `feature_readiness.get_sources` が `ready` になるのは、現在のプロセス内に少なくとも 1 つの非 error で読み出し可能な source session がある場合だけです。失敗検索だけが残っている場合は `partial_ready` のままです。`web_search` が現在 not ready でも、読み出し可能な cached session が残っていれば `get_sources` は引き続き `ready` を返し、上流問題は `degraded_by` に出ます。
+- API Key はマスクされますが、診断ペイロードにはローカル絶対パス、endpoint/hostname、短い upstream エラー要約が残る場合があります。明白な bearer/token/署名 query に加えて、`X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId` のような高信頼 cloud-signed credential key もマスクされますが、外部共有前に確認してください。
 - `get_sources` が成功したときは、常に `session_id`、`sources`、`sources_count`、`search_status`、`search_error`、`source_state` を返します。`session_id` が欠落または期限切れのときだけ `error=session_id_not_found_or_expired` が追加されます。
 - `get_sources` は現在のサーバープロセス内にあるメモリ型 LRU キャッシュ（既定 TTL は約 1 時間、上限 256 session）を参照します。`session_id` は shared-daemon transient handle であり、durable でも caller-bound でも secret token でもありません。`session_id_not_found_or_expired` はプロセス再起動、TTL 切れ、eviction、読み出せない旧キャッシュ miss をまとめて表します。
 - `sources_count` は現在、標準化・重複排除・フィルタ後に最終的にキャッシュへ書き込まれた source 数を表し、upstream の生 citation 件数そのものではありません。
-- `get_sources` の `rank` は現在 `score`、source identity の明確さ、安定した dedupe 順に従い、Grok 由来の引用へ追加の優先度は与えません。`standardize_sources` は dedupe の際に scheme/host の大文字小文字差を正規化するため、同じページの mixed-case variant は 1 件に畳み込まれる場合があります。その一方で安全な fragment は保持し、URL の `userinfo` と代表的な署名パラメータは引き続き除去・マスクします。明示的な既定ポート（`:443` / `:80`）は現時点では保持され、暗黙の既定ポート URL と自動では畳み込まれません。
+- `get_sources` の `rank` は現在 `score`、source identity の明確さ、安定した dedupe 順に従い、Grok 由来の引用へ追加の優先度は与えません。`standardize_sources` は dedupe の際に scheme/host の大文字小文字差を正規化するため、同じページの mixed-case variant は 1 件に畳み込まれる場合があります。その一方で安全な fragment は保持し、URL の `userinfo`、代表的な署名パラメータ、そして `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId` のような高信頼 cloud-signed credential key は引き続き除去またはマスクします。明示的な既定ポート（`:443` / `:80`）は現時点では保持され、暗黙の既定ポート URL と自動では畳み込まれません。
+- 重複排除後の 1 行は現在 lossy aggregate display row として解釈してください。contributor 単位の attribution が必要な場合は additive `contributors` を優先してください。
+- `source` は現在も legacy-overloaded field であり、`origin_type` が無い場合は古い cache で provider alias として再利用されることがあります。
 
 ## Companion Skill
 
