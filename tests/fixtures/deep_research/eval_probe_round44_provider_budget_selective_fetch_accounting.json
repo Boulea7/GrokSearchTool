@@ -14,7 +14,7 @@
             "operation": "fetch",
             "status": "completed",
             "provider_name": "tavily",
-            "provider_api_url": "https://api.tavily.com/extract",
+            "provider_api_url": "https://api.tavily.example.invalid/extract",
             "source_count": 1,
             "evidence_count": 1,
             "attempt_role": "selective_fetch"
@@ -74,7 +74,7 @@
           "provider_name": "tavily",
           "provider_model": "",
           "effective_model": "",
-          "provider_api_url": "https://api.tavily.com/extract",
+          "provider_api_url": "https://api.tavily.example.invalid/extract",
           "source_count": 1,
           "evidence_count": 1,
           "error_code": "",

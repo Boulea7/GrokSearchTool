@@ -1,36 +1,231 @@
 {
-  "sample": "probe-round33-aws-dms-official-doc",
-  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
+  "artifact_payload": {
+    "citations": {
+      "sections": [
+        {
+          "claims": [
+            {
+              "citations": [
+                "R1"
+              ],
+              "claim_id": "claim-1",
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-1",
+                  "line_end": 1,
+                  "line_start": 1,
+                  "source_backed": true,
+                  "source_id": "R1"
+                }
+              ],
+              "evidence_ids": [
+                "evidence-1"
+              ],
+              "source_ids": [
+                "R1"
+              ],
+              "text": "Sanitized replay claim for public-surface fixture validation."
+            }
+          ],
+          "section_id": "summary",
+          "title": "Sanitized Fixture Section"
+        }
+      ],
+      "source_registry": {
+        "R1": {
+          "domain": "docs.aws.amazon.com",
+          "source_id": "R1",
+          "source_type": "official_docs",
+          "title": "DescribeReplicationTasks",
+          "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"
+        }
+      }
+    },
+    "coverage_gaps": {},
+    "evidence_bank": [],
+    "evidence_items": [
+      {
+        "evidence_id": "evidence-1",
+        "source_ids": [
+          "R1"
+        ],
+        "summary": "Sanitized replay evidence for public-surface fixture validation.",
+        "unit_id": "fixture-unit"
+      }
+    ],
+    "final_report": "# Final Report\n\nSanitized replay fixture for deep research public-surface tests.\n",
+    "report": {
+      "runtime": {
+        "release_gate": {
+          "all_reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ],
+          "passed": true,
+          "reason_codes": [],
+          "soft_reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ]
+        },
+        "verifier": {
+          "passed": false,
+          "reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ]
+        },
+        "warnings": [
+          "coverage_incomplete",
+          "domain_constraints_applied",
+          "medium_single_source_search_only",
+          "selected_evidence_unused"
+        ]
+      },
+      "sections": [
+        {
+          "claims": [
+            {
+              "citations": [
+                "R1"
+              ],
+              "claim_id": "claim-1",
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-1",
+                  "line_end": 1,
+                  "line_start": 1,
+                  "source_backed": true,
+                  "source_id": "R1"
+                }
+              ],
+              "evidence_ids": [
+                "evidence-1"
+              ],
+              "source_ids": [
+                "R1"
+              ],
+              "text": "Sanitized replay claim for public-surface fixture validation."
+            }
+          ],
+          "section_id": "summary",
+          "title": "Sanitized Fixture Section"
+        }
+      ],
+      "status": "degraded",
+      "unit_results": {}
+    },
+    "sources": [
+      {
+        "domain": "docs.aws.amazon.com",
+        "source_id": "R1",
+        "source_type": "official_docs",
+        "title": "DescribeReplicationTasks",
+        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"
+      }
+    ],
+    "verification": {}
+  },
+  "event_window": {
+    "after_seq": 4,
+    "job_terminal": true,
+    "last_event_type": "job_completed",
+    "next_after_seq": 6,
+    "returned_count": 2,
+    "window_has_terminal_event": true
+  },
+  "events_after_seq": [
+    {
+      "data": {},
+      "message": "Finalizing report.",
+      "phase": "finalizing",
+      "seq": 5,
+      "type": "phase_started"
+    },
+    {
+      "data": {
+        "artifact_batch_id": "$seeded_batch_id",
+        "sources_count": 2
+      },
+      "message": "Deep research completed successfully.",
+      "phase": "finalizing",
+      "seq": 6,
+      "type": "job_completed"
+    }
+  ],
+  "initial_events": [
+    {
+      "data": {
+        "continuation_mode": "fresh",
+        "plan_only": false
+      },
+      "message": "Deep research job created.",
+      "phase": "planning",
+      "seq": 1,
+      "type": "job_created"
+    },
+    {
+      "data": {
+        "unit_count": 2
+      },
+      "message": "Planning started.",
+      "phase": "planning",
+      "seq": 2,
+      "type": "phase_started"
+    },
+    {
+      "data": {
+        "completed_units": 0
+      },
+      "message": "Researching source material.",
+      "phase": "researching",
+      "seq": 3,
+      "type": "phase_started"
+    },
+    {
+      "data": {
+        "section_count": 1
+      },
+      "message": "Synthesizing findings.",
+      "phase": "synthesizing",
+      "seq": 4,
+      "type": "phase_started"
+    }
+  ],
   "job": {
-    "status": "completed",
-    "phase": "finalizing",
-    "effort": "deep",
-    "resolved_budget_seconds": 180,
     "attempt_count": 1,
+    "cancel_requested": false,
+    "continued_from_job_id": "",
     "current_checkpoint": "finalizing",
     "current_checkpoint_kind": "finalizing",
+    "effort": "deep",
     "last_error": "",
-    "cancel_requested": false,
-    "continued_from_job_id": ""
+    "phase": "finalizing",
+    "resolved_budget_seconds": 180,
+    "status": "completed"
   },
   "plan": {
-    "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
-    "include_domains": [
-      "docs.aws.amazon.com"
-    ],
-    "exclude_domains": [
-      "repost.aws"
-    ],
-    "continuation": {
-      "mode": "fresh"
-    },
     "brief": {
-      "objective": "Follow up AWS DMS checkpoint resume semantics with official docs only.",
       "deliverable": "A structured deep research report with citations.",
+      "objective": "Follow up AWS DMS checkpoint resume semantics with official docs only.",
       "preferred_sources": [
         "docs.aws.amazon.com"
       ]
     },
+    "continuation": {
+      "mode": "fresh"
+    },
+    "exclude_domains": [
+      "repost.aws"
+    ],
+    "include_domains": [
+      "docs.aws.amazon.com"
+    ],
+    "planner_metadata": {
+      "planner": "probe",
+      "used_fallback": false
+    },
+    "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
     "search_strategy": {
       "approach": "targeted",
       "search_queries": [
@@ -49,224 +244,71 @@
         "question": "What recovery timeout and Postgres restart behaviors are explicitly documented?",
         "reason": "Cover operational restart semantics."
       }
-    ],
-    "planner_metadata": {
-      "planner": "probe",
-      "used_fallback": false
-    }
+    ]
   },
-  "artifact_payload": {
-    "sources": [
-      {
-        "source_id": "R1",
-        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
-        "title": "DescribeReplicationTasks",
-        "domain": "docs.aws.amazon.com",
-        "source_type": "official_docs"
-      },
-      {
-        "source_id": "R2",
-        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
-        "title": "Change processing tuning settings",
-        "domain": "docs.aws.amazon.com",
-        "source_type": "official_docs"
-      }
-    ],
-    "citations": {
-      "source_registry": {
-        "R1": {
-          "source_id": "R1",
-          "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
-          "title": "DescribeReplicationTasks",
-          "domain": "docs.aws.amazon.com",
-          "source_type": "official_docs"
-        },
-        "R2": {
-          "source_id": "R2",
-          "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
-          "title": "Change processing tuning settings",
-          "domain": "docs.aws.amazon.com",
-          "source_type": "official_docs"
-        }
-      },
-      "sections": [
-        {
-          "section_id": "aws-dms-checkpoints",
-          "title": "AWS DMS checkpoints",
-          "claims": [
-            {
-              "claim_id": "c1",
-              "text": "RecoveryCheckpoint is exposed through DescribeReplicationTasks and can be reused when resuming CDC work.",
-              "citations": [
-                "R1"
-              ]
-            },
-            {
-              "claim_id": "c2",
-              "text": "RecoveryTimeout defaults to waiting indefinitely unless the task-level timeout is configured.",
-              "citations": [
-                "R2"
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    "report": {
-      "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
-      "summary": "Round33 official-doc probe preserves resolved final artifacts and exposes the release gate as a soft-pass.",
-      "status": "degraded",
-      "sections": [
-        {
-          "section_id": "aws-dms-checkpoints",
-          "title": "AWS DMS checkpoints",
-          "claims": [
-            {
-              "claim_id": "c1",
-              "text": "RecoveryCheckpoint is exposed through DescribeReplicationTasks.",
-              "citations": [
-                "R1"
-              ]
-            },
-            {
-              "claim_id": "c2",
-              "text": "RecoveryTimeout remains part of the documented tuning surface.",
-              "citations": [
-                "R2"
-              ]
-            }
-          ]
-        }
+  "public_surface": {
+    "result": {
+      "artifact_fallback_used": false,
+      "constraint_violations": [
+        "official_doc_only_scope"
       ],
-      "unit_results": {
-        "unit-search-1": {
-          "status": "completed",
-          "source_ids": [
-            "R1",
-            "R2"
-          ]
-        }
-      },
-      "runtime": {
-        "warnings": [
+      "current_checkpoint_kind": "finalizing",
+      "final_report": "# Final Report\n\nRound33 official-doc probe preserves resolved final artifacts and exposes the release gate as a soft-pass.\n",
+      "operator_summary": {
+        "attempt_count": 1,
+        "cancel_requested": false,
+        "constraint_violations": [
+          "official_doc_only_scope"
+        ],
+        "continued_from_job_id": "",
+        "current_checkpoint": "finalizing",
+        "phase": "finalizing",
+        "planner_fallback_used": false,
+        "resolved_artifact_batch_id": "$seeded_batch_id",
+        "runtime_warnings": [
           "coverage_incomplete",
           "domain_constraints_applied",
           "medium_single_source_search_only",
           "selected_evidence_unused"
         ],
-        "constraint_violations": [
-          "official_doc_only_scope"
-        ],
-        "verifier": {
-          "passed": false,
-          "reason_codes": [
-            "selected_evidence_unused",
-            "medium_single_source_search_only"
+        "status": "completed"
+      },
+      "partial_report": null,
+      "planner_fallback_used": false,
+      "report": {
+        "runtime": {
+          "constraint_violations": [
+            "official_doc_only_scope"
+          ],
+          "release_gate": {
+            "all_reason_codes": [
+              "selected_evidence_unused",
+              "medium_single_source_search_only"
+            ],
+            "passed": true,
+            "reason_codes": [],
+            "soft_reason_codes": [
+              "selected_evidence_unused",
+              "medium_single_source_search_only"
+            ]
+          },
+          "verifier": {
+            "passed": false,
+            "reason_codes": [
+              "selected_evidence_unused",
+              "medium_single_source_search_only"
+            ]
+          },
+          "warnings": [
+            "coverage_incomplete",
+            "domain_constraints_applied",
+            "medium_single_source_search_only",
+            "selected_evidence_unused"
           ]
         },
-        "release_gate": {
-          "passed": true,
-          "reason_codes": [],
-          "all_reason_codes": [
-            "selected_evidence_unused",
-            "medium_single_source_search_only"
-          ],
-          "soft_reason_codes": [
-            "selected_evidence_unused",
-            "medium_single_source_search_only"
-          ]
-        }
-      }
-    },
-    "final_report": "# Final Report\n\nRound33 official-doc probe preserves resolved final artifacts and exposes the release gate as a soft-pass.\n",
-    "evidence_items": [
-      {
-        "evidence_id": "ev-r33-aws-1",
-        "unit_id": "unit-search-1",
-        "summary": "DescribeReplicationTasks exposes RecoveryCheckpoint.",
-        "detail": "The official API reference surfaces RecoveryCheckpoint for task recovery flows.",
-        "source_ids": [
-          "R1"
-        ],
-        "source_urls": [
-          "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"
-        ]
-      }
-    ],
-    "coverage": {
-      "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
-      "planned_section_ids": [
-        "aws-dms-checkpoints",
-        "postgres-restart"
-      ],
-      "answered_section_ids": [
-        "aws-dms-checkpoints"
-      ],
-      "unanswered_sections": [
-        "postgres-restart"
-      ],
-      "planned_sub_question_ids": [
-        "sq1",
-        "sq2"
-      ],
-      "covered_sub_question_ids": [
-        "sq1"
-      ],
-      "uncovered_sub_questions": [
-        "sq2"
-      ],
-      "coverage_gate_passed": true,
-      "hard_coverage_gate_passed": false
-    },
-    "grounding": {
-      "total_claims": 2,
-      "grounded_claims": 2,
-      "ungrounded_claims": 0,
-      "single_source_claims": 2,
-      "low_confidence_claims": 0,
-      "missing_evidence_binding_claims": 0,
-      "total_evidence_bindings": 1,
-      "source_backed_binding_count": 1,
-      "search_only_binding_count": 0,
-      "null_span_binding_count": 0,
-      "grounded_claims_without_source_backed_binding": 0,
-      "sections": [],
-      "sources": []
-    },
-    "verifier": {
-      "passed": false,
-      "reason_codes": [
-        "selected_evidence_unused",
-        "medium_single_source_search_only"
-      ],
-      "flagged_claim_ids": [],
-      "summary": {
-        "section_count": 1,
-        "total_claims": 2,
-        "low_confidence_claims": 0,
-        "single_source_claims": 2,
-        "source_backed_binding_count": 1,
-        "search_only_binding_count": 0,
-        "null_span_binding_count": 0,
-        "missing_evidence_items": 0,
-        "mismatched_binding_source": 0,
-        "mismatched_binding_evidence": 0,
-        "invalid_source_backed_span": 0,
-        "duplicate_claims": 0,
-        "low_value_claims": 0,
-        "medium_single_source_search_only": 1,
-        "same_domain_off_topic_dominance": 0,
-        "unbound_citation_sources": 0,
-        "unbound_evidence_ids": 0
-      }
-    }
-  },
-  "public_surface": {
-    "status": {
-      "current_checkpoint": "finalizing",
-      "current_checkpoint_kind": "finalizing",
-      "artifact_fallback_used": false,
-      "planner_fallback_used": false,
+        "status": "degraded",
+        "summary": "Round33 official-doc probe preserves resolved final artifacts and exposes the release gate as a soft-pass."
+      },
       "resolved_artifact_batch_id": "$seeded_batch_id",
       "runtime_warnings": [
         "coverage_incomplete",
@@ -274,9 +316,25 @@
         "medium_single_source_search_only",
         "selected_evidence_unused"
       ],
-      "constraint_violations": [
-        "official_doc_only_scope"
-      ],
+      "sources": [
+        {
+          "domain": "docs.aws.amazon.com",
+          "source_id": "R1",
+          "source_type": "official_docs",
+          "title": "DescribeReplicationTasks",
+          "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"
+        },
+        {
+          "domain": "docs.aws.amazon.com",
+          "source_id": "R2",
+          "source_type": "official_docs",
+          "title": "Change processing tuning settings",
+          "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html"
+        }
+      ]
+    },
+    "status": {
+      "artifact_fallback_used": false,
       "artifact_kinds": [
         "plan.json",
         "sources.json",
@@ -288,177 +346,41 @@
         "grounding.json",
         "verifier.json"
       ],
+      "constraint_violations": [
+        "official_doc_only_scope"
+      ],
+      "current_checkpoint": "finalizing",
+      "current_checkpoint_kind": "finalizing",
       "operator_summary": {
-        "status": "completed",
-        "phase": "finalizing",
         "attempt_count": 1,
-        "current_checkpoint": "finalizing",
         "cancel_requested": false,
+        "constraint_violations": [
+          "official_doc_only_scope"
+        ],
         "continued_from_job_id": "",
-        "resolved_artifact_batch_id": "$seeded_batch_id",
+        "current_checkpoint": "finalizing",
+        "phase": "finalizing",
         "planner_fallback_used": false,
+        "resolved_artifact_batch_id": "$seeded_batch_id",
         "runtime_warnings": [
           "coverage_incomplete",
           "domain_constraints_applied",
           "medium_single_source_search_only",
           "selected_evidence_unused"
         ],
-        "constraint_violations": [
-          "official_doc_only_scope"
-        ]
-      }
-    },
-    "result": {
-      "current_checkpoint_kind": "finalizing",
-      "resolved_artifact_batch_id": "$seeded_batch_id",
-      "artifact_fallback_used": false,
+        "status": "completed"
+      },
       "planner_fallback_used": false,
+      "resolved_artifact_batch_id": "$seeded_batch_id",
       "runtime_warnings": [
         "coverage_incomplete",
         "domain_constraints_applied",
         "medium_single_source_search_only",
         "selected_evidence_unused"
-      ],
-      "constraint_violations": [
-        "official_doc_only_scope"
-      ],
-      "operator_summary": {
-        "status": "completed",
-        "phase": "finalizing",
-        "attempt_count": 1,
-        "current_checkpoint": "finalizing",
-        "cancel_requested": false,
-        "continued_from_job_id": "",
-        "resolved_artifact_batch_id": "$seeded_batch_id",
-        "planner_fallback_used": false,
-        "runtime_warnings": [
-          "coverage_incomplete",
-          "domain_constraints_applied",
-          "medium_single_source_search_only",
-          "selected_evidence_unused"
-        ],
-        "constraint_violations": [
-          "official_doc_only_scope"
-        ]
-      },
-      "partial_report": null,
-      "final_report": "# Final Report\n\nRound33 official-doc probe preserves resolved final artifacts and exposes the release gate as a soft-pass.\n",
-      "sources": [
-        {
-          "source_id": "R1",
-          "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
-          "title": "DescribeReplicationTasks",
-          "domain": "docs.aws.amazon.com",
-          "source_type": "official_docs"
-        },
-        {
-          "source_id": "R2",
-          "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
-          "title": "Change processing tuning settings",
-          "domain": "docs.aws.amazon.com",
-          "source_type": "official_docs"
-        }
-      ],
-      "report": {
-        "status": "degraded",
-        "summary": "Round33 official-doc probe preserves resolved final artifacts and exposes the release gate as a soft-pass.",
-        "runtime": {
-          "warnings": [
-            "coverage_incomplete",
-            "domain_constraints_applied",
-            "medium_single_source_search_only",
-            "selected_evidence_unused"
-          ],
-          "constraint_violations": [
-            "official_doc_only_scope"
-          ],
-          "verifier": {
-            "passed": false,
-            "reason_codes": [
-              "selected_evidence_unused",
-              "medium_single_source_search_only"
-            ]
-          },
-          "release_gate": {
-            "passed": true,
-            "reason_codes": [],
-            "all_reason_codes": [
-              "selected_evidence_unused",
-              "medium_single_source_search_only"
-            ],
-            "soft_reason_codes": [
-              "selected_evidence_unused",
-              "medium_single_source_search_only"
-            ]
-          }
-        }
-      }
+      ]
     }
   },
-  "event_window": {
-    "after_seq": 4,
-    "next_after_seq": 6,
-    "returned_count": 2,
-    "last_event_type": "job_completed",
-    "window_has_terminal_event": true,
-    "job_terminal": true
-  },
-  "initial_events": [
-    {
-      "seq": 1,
-      "type": "job_created",
-      "phase": "planning",
-      "message": "Deep research job created.",
-      "data": {
-        "continuation_mode": "fresh",
-        "plan_only": false
-      }
-    },
-    {
-      "seq": 2,
-      "type": "phase_started",
-      "phase": "planning",
-      "message": "Planning started.",
-      "data": {
-        "unit_count": 2
-      }
-    },
-    {
-      "seq": 3,
-      "type": "phase_started",
-      "phase": "researching",
-      "message": "Researching source material.",
-      "data": {
-        "completed_units": 0
-      }
-    },
-    {
-      "seq": 4,
-      "type": "phase_started",
-      "phase": "synthesizing",
-      "message": "Synthesizing findings.",
-      "data": {
-        "section_count": 1
-      }
-    }
-  ],
-  "events_after_seq": [
-    {
-      "seq": 5,
-      "type": "phase_started",
-      "phase": "finalizing",
-      "message": "Finalizing report.",
-      "data": {}
-    },
-    {
-      "seq": 6,
-      "type": "job_completed",
-      "phase": "finalizing",
-      "message": "Deep research completed successfully.",
-      "data": {
-        "artifact_batch_id": "$seeded_batch_id",
-        "sources_count": 2
-      }
-    }
-  ]
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
+  "sample": "probe-round33-aws-dms-official-doc",
+  "selected_bank": []
 }

@@ -32,12 +32,18 @@ jobs:
       - name: Install development dependencies
         run: uv sync --extra dev
 
-      - name: Run packaging and docs contract tests
+      - name: Run packaging, docs, and focused deep research contract tests
         if: ${{ github.event_name == 'pull_request' && github.base_ref != 'main' && github.head_ref != 'stack/dr3-10-live-quality-release-ci' }}
         run: |
           uv run --with pytest --with pytest-asyncio pytest -q \
             tests/test_package_imports.py \
-            tests/test_docs_contracts.py
+            tests/test_docs_contracts.py \
+            tests/test_deep_research_store.py \
+            tests/test_deep_research_runtime.py \
+            tests/test_deep_research_server.py \
+            tests/test_deep_research_cli.py \
+            tests/test_deep_research_eval.py \
+            -k 'provider_attempts or provider_budget or selective_fetch or artifact_batch or public_surface or continuation or RecoveryCheckpoint or recoverycheckpoint'
 
       - name: Run packaging, docs, and deep research contract tests
         if: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' || github.head_ref == 'stack/dr3-10-live-quality-release-ci' }}
