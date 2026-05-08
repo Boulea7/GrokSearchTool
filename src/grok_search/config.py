@@ -755,14 +755,11 @@ class Config:
 
     @property
     def tavily_fallback_enabled(self) -> bool:
-        return (self._get_env_value("TAVILY_FALLBACK_ENABLED", "true") or "true").lower() in ("true", "1", "yes")
+        return (self._get_env_value("TAVILY_FALLBACK_ENABLED", "false") or "false").lower() in ("true", "1", "yes")
 
     @property
     def tavily_fallback_api_url(self) -> str:
-        return (
-            self._get_env_value("TAVILY_FALLBACK_API_URL", "https://tavily-fallback.example.com/api/tavily")
-            or "https://tavily-fallback.example.com/api/tavily"
-        )
+        return self._get_env_value("TAVILY_FALLBACK_API_URL", "") or ""
 
     @property
     def tavily_fallback_api_key(self) -> str | None:

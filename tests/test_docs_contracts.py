@@ -444,6 +444,9 @@ def test_docs_keep_planning_first_and_cli_first_research_story():
 def test_docs_explain_deep_research_job_surface_and_cli():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
+    readme_zh_tw = README_ZH_TW.read_text(encoding="utf-8")
+    readme_ja = README_JA.read_text(encoding="utf-8")
+    readme_ru = README_RU.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
     agents = _read_private_agents_contract_text()
     skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
@@ -452,6 +455,9 @@ def test_docs_explain_deep_research_job_surface_and_cli():
     assert "`grok-search-research`" in readme
     assert "`deep_research_start`" in readme_en
     assert "`grok-search-research`" in readme_en
+    for localized in (readme_zh_tw, readme_ja, readme_ru):
+        assert "`21`" in localized
+        assert "`deep_research_artifact`" in localized
     assert "`deep_research_*`" in compatibility
     assert "`deep_research_resume`" in agents
     assert "`deep_research_*`" in skill

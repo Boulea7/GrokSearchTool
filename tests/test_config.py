@@ -659,7 +659,7 @@ def test_empty_process_env_still_blocks_project_env_fallback(monkeypatch, tmp_pa
     assert config.tavily_api_key == ""
 
 
-def test_tavily_fallback_config_defaults_to_primary_key_and_masks_snapshot(monkeypatch, tmp_path):
+def test_tavily_fallback_config_defaults_to_disabled_without_remote_url(monkeypatch, tmp_path):
     config = Config()
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-primary-secret")
     monkeypatch.delenv("TAVILY_FALLBACK_API_KEY", raising=False)
@@ -673,11 +673,11 @@ def test_tavily_fallback_config_defaults_to_primary_key_and_masks_snapshot(monke
 
     info = config.get_config_info()
 
-    assert config.tavily_fallback_enabled is True
-    assert config.tavily_fallback_api_url == "https://tavily-fallback.example.com/api/tavily"
+    assert config.tavily_fallback_enabled is False
+    assert config.tavily_fallback_api_url == ""
     assert config.tavily_fallback_api_key == "tvly-primary-secret"
-    assert info["TAVILY_FALLBACK_ENABLED"] is True
-    assert "example-user.cc" in info["TAVILY_FALLBACK_API_URL"]
+    assert info["TAVILY_FALLBACK_ENABLED"] is False
+    assert info["TAVILY_FALLBACK_API_URL"] == ""
     assert "tvly-primary-secret" not in info["TAVILY_FALLBACK_API_KEY"]
 
 

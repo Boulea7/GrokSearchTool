@@ -165,9 +165,9 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
 | `TAVILY_ENABLED` | No | Enable or disable Tavily-backed fetch/map paths |
-| `TAVILY_FALLBACK_API_URL` | No | Remote HTTP API fallback used when the primary Tavily URL is a local loopback endpoint and is unavailable |
+| `TAVILY_FALLBACK_API_URL` | No | Remote HTTP API fallback used when the primary Tavily URL is a local loopback endpoint and is unavailable; must be explicitly configured |
 | `TAVILY_FALLBACK_API_KEY` | No | Tavily fallback Bearer token; defaults to `TAVILY_API_KEY` and must not be committed |
-| `TAVILY_FALLBACK_ENABLED` | No | Enable or disable the local-loopback Tavily fallback path |
+| `TAVILY_FALLBACK_ENABLED` | No | Enable or disable the local-loopback Tavily fallback path; defaults to disabled |
 | `FIRECRAWL_API_KEY` | No | Firecrawl key for fetch fallback and optional supplemental `web_search` |
 | `FIRECRAWL_API_URL` | No | Firecrawl endpoint |
 | `GROK_DEBUG` | No | Enable debug logging |

@@ -20,7 +20,7 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 - `switch_model`: デフォルト Grok モデルを切り替え
 - `toggle_builtin_tools`: Claude Code の組み込み WebSearch / WebFetch を切り替え
 
-公開 MCP ツールは現在 `20` 個です。
+公開 MCP ツールは現在 `21` 個です。
 
 - `web_search`
 - `get_sources`
@@ -39,6 +39,7 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 - `deep_research_status`
 - `deep_research_events`
 - `deep_research_result`
+- `deep_research_artifact`
 - `deep_research_resume`
 - `deep_research_cancel`
 - `deep_research_list`

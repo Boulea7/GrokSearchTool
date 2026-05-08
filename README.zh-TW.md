@@ -20,7 +20,7 @@ GrokSearch 是一個獨立維護的 MCP 伺服器，面向需要快速、可靠�
 - `switch_model`：切換預設 Grok 模型
 - `toggle_builtin_tools`：切換 Claude Code 內建 WebSearch / WebFetch
 
-目前公開 MCP 工具共 `20` 個：
+目前公開 MCP 工具共 `21` 個：
 
 - `web_search`
 - `get_sources`
@@ -39,6 +39,7 @@ GrokSearch 是一個獨立維護的 MCP 伺服器，面向需要快速、可靠�
 - `deep_research_status`
 - `deep_research_events`
 - `deep_research_result`
+- `deep_research_artifact`
 - `deep_research_resume`
 - `deep_research_cancel`
 - `deep_research_list`
