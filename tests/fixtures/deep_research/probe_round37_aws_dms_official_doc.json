@@ -1446,7 +1446,7 @@
           "effective_model": "grok-4.20-expert-4-agent",
           "provider_name": "primary",
           "provider_model": "grok-4.20-fast",
-          "provider_api_url": "https://elysiver.h-e.top/v1"
+          "provider_api_url": "https://provider-primary.example/v1"
         },
         "u2": {
           "unit_id": "u2",
@@ -1464,7 +1464,7 @@
           "effective_model": "grok-4.20-expert-4-agent",
           "provider_name": "provider_2",
           "provider_model": "grok-4.20-0309-non-reasoning",
-          "provider_api_url": "https://marybrown.dpdns.org/v1"
+          "provider_api_url": "https://provider-fallback.example/v1"
         },
         "u3": {
           "unit_id": "u3",
@@ -1482,7 +1482,7 @@
           "effective_model": "grok-4.20-expert-4-agent",
           "provider_name": "provider_2",
           "provider_model": "grok-4.20-0309-non-reasoning",
-          "provider_api_url": "https://marybrown.dpdns.org/v1"
+          "provider_api_url": "https://provider-fallback.example/v1"
         }
       },
       "runtime": {
