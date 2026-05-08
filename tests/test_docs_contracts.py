@@ -445,7 +445,7 @@ def test_docs_explain_deep_research_job_surface_and_cli():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
     skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
 
     assert "`deep_research_start`" in readme
@@ -460,7 +460,7 @@ def test_docs_explain_deep_research_job_surface_and_cli():
 def test_docs_explain_checkpoint_resume_continuation_and_structured_artifacts():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
     skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
 
     assert "`sources.json`" in readme
@@ -478,7 +478,7 @@ def test_docs_explain_checkpoint_resume_continuation_and_structured_artifacts():
 def test_docs_explain_deep_research_reuse_batch_and_citations_contract():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "`reused`" in readme
     assert "`force_new`" in readme
@@ -497,7 +497,7 @@ def test_docs_explain_deep_research_reuse_batch_and_citations_contract():
 def test_docs_explain_deep_research_lifecycle_and_source_quality_contracts():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
     skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
 
     assert "`failed` / `canceled` / `interrupted`" in readme
@@ -520,7 +520,7 @@ def test_docs_explain_deep_research_lifecycle_and_source_quality_contracts():
 def test_docs_explain_continuation_source_fallback_and_resume_attempt_reset():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "`citations.json.source_registry`" in readme
     assert "新的 attempt 时间窗口" in readme
@@ -533,7 +533,7 @@ def test_docs_explain_continuation_source_fallback_and_resume_attempt_reset():
 def test_docs_explain_runtime_concurrency_as_ready_unit_parallelism():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "同一轮 ready research unit 的最大并发执行数" in readme
     assert "ready research units" in readme_en
@@ -899,7 +899,7 @@ def test_ja_and_ru_readmes_enumerate_public_tool_surface():
 def test_docs_explain_compact_continuation_and_artifact_error_contract():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "compact 摘要视图" in readme
     assert "`continuation.json`" in readme
