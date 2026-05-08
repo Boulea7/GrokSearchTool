@@ -41,7 +41,12 @@
         }
       }
     },
-    "coverage_gaps": {},
+    "coverage_gaps": {
+      "blocking_gap_count": 0,
+      "gaps": [],
+      "hard_gap_count": 0,
+      "total_gap_count": 0
+    },
     "evidence_bank": [
       {
         "evidence_id": "evidence-unit-search-1-fetch-1",
