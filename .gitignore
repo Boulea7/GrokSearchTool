@@ -1,12 +1,17 @@
 .DS_Store
 __pycache__/
 .pytest_cache/
+.coverage
 .grok-search/
 logs/
+build/
+dist/
 *.egg-info/
 uv.lock
 .env
 .env.*
+.codex/
+.claude/
 *.pem
 *.key
 *.p12
@@ -14,3 +19,6 @@ uv.lock
 credentials*
 *secret*
 *api_key*
+
+# Local-only development docs
+.local/

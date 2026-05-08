@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from collections import OrderedDict
+import time
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Literal
 import uuid
 
@@ -35,15 +37,48 @@ class SubQuery(BaseModel):
     id: str = Field(description="Unique identifier (e.g., 'sq1')")
     goal: str
     expected_output: str = Field(description="What a successful result looks like")
-    tool_hint: Optional[str] = Field(default=None, description="Suggested tool: web_search | web_fetch | web_map")
+    tool_hint: Optional[Literal["web_search", "web_fetch", "web_map"]] = Field(
+        default=None,
+        description="Suggested tool: web_search | web_fetch | web_map",
+    )
     boundary: str = Field(description="What this sub-query explicitly excludes — MUST state mutual exclusion with sibling sub-queries, not just the broader domain")
     depends_on: Optional[list[str]] = Field(default=None, description="IDs of prerequisite sub-queries")
+
+    @field_validator("id")
+    @classmethod
+    def normalize_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("id must not be empty")
+        return stripped
+
+    @field_validator("depends_on")
+    @classmethod
+    def normalize_dependencies(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return value
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
 class SearchTerm(BaseModel):
     term: str = Field(description="Search query string. MUST be ≤8 words. Drop redundant synonyms (e.g., use 'RAG' not 'RAG retrieval augmented generation').")
     purpose: str = Field(description="Single sub-query ID this term serves (e.g., 'sq2'). ONE term per sub-query — do NOT combine like 'sq1+sq2'.")
     round: int = Field(ge=1, description="Execution round: 1=broad discovery, 2+=targeted follow-up refined by round 1 findings")
+
+    @field_validator("term")
+    @classmethod
+    def validate_term_word_limit(cls, value: str) -> str:
+        if len(value.split()) > 8:
+            raise ValueError("term must be 8 words or fewer")
+        return value
+
+    @field_validator("purpose")
+    @classmethod
+    def validate_single_purpose(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped or any(separator in stripped for separator in (",", "+")) or len(stripped.split()) != 1:
+            raise ValueError("purpose must reference exactly one sub-query ID")
+        return stripped
 
 
 class StrategyOutput(BaseModel):
@@ -59,6 +94,14 @@ class ToolPlanItem(BaseModel):
     tool: Literal["web_search", "web_fetch", "web_map"]
     reason: str
     params: Optional[dict] = Field(default=None, description="Tool-specific parameters")
+
+    @field_validator("sub_query_id")
+    @classmethod
+    def normalize_sub_query_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("sub_query_id must not be empty")
+        return stripped
 
 
 class ExecutionOrderOutput(BaseModel):
@@ -117,21 +160,168 @@ class PlanningSession:
     def required_phases(self) -> set[str]:
         return REQUIRED_PHASES.get(self.complexity_level or 3, REQUIRED_PHASES[3])
 
+    def sub_query_ids(self) -> set[str]:
+        record = self.phases.get("query_decomposition")
+        if not record or not isinstance(record.data, list):
+            return set()
+        return {
+            item["id"].strip()
+            for item in record.data
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
+        }
+
+    def search_term_purposes(self) -> set[str]:
+        record = self.phases.get("search_strategy")
+        if not record or not isinstance(record.data, dict):
+            return set()
+        terms = record.data.get("search_terms") or []
+        return {
+            item["purpose"]
+            for item in terms
+            if isinstance(item, dict) and isinstance(item.get("purpose"), str) and item["purpose"].strip()
+        }
+
+    def tool_mapping_ids(self) -> list[str]:
+        record = self.phases.get("tool_selection")
+        if not record or not isinstance(record.data, list):
+            return []
+        return [
+            item["sub_query_id"].strip()
+            for item in record.data
+            if isinstance(item, dict) and isinstance(item.get("sub_query_id"), str) and item["sub_query_id"].strip()
+        ]
+
+    def has_duplicate_tool_mapping_ids(self) -> bool:
+        mapping_ids = self.tool_mapping_ids()
+        return len(mapping_ids) != len(set(mapping_ids))
+
+    def missing_search_term_ids(self) -> set[str]:
+        return self.sub_query_ids() - self.search_term_purposes()
+
+    def missing_tool_mapping_ids(self) -> set[str]:
+        return self.sub_query_ids() - set(self.tool_mapping_ids())
+
     def is_complete(self) -> bool:
         if self.complexity_level is None:
             return False
-        return self.required_phases().issubset(self.phases.keys())
+        if not self.required_phases().issubset(self.phases.keys()):
+            return False
+        if self.complexity_level in {2, 3}:
+            if self.missing_search_term_ids():
+                return False
+            if self.missing_tool_mapping_ids():
+                return False
+            if self.has_duplicate_tool_mapping_ids():
+                return False
+        return True
 
     def build_executable_plan(self) -> dict:
         return {name: record.data for name, record in self.phases.items()}
 
+    def sub_queries(self) -> list[dict]:
+        record = self.phases.get("query_decomposition")
+        if not record or not isinstance(record.data, list):
+            return []
+        return [item for item in record.data if isinstance(item, dict)]
+
+
+def _validate_execution_order(session: PlanningSession, phase_data: dict | None) -> str | None:
+    if not isinstance(phase_data, dict):
+        return "Invalid execution_order payload: expected dict"
+
+    existing_ids = session.sub_query_ids()
+    placement_stage: dict[str, int] = {}
+    seen_ids: set[str] = set()
+
+    for stage_index, group in enumerate(phase_data.get("parallel") or []):
+        if not isinstance(group, list):
+            continue
+        for sub_query_id in group:
+            if sub_query_id not in existing_ids:
+                return f"Unknown sub-query id: {sub_query_id}"
+            if sub_query_id in seen_ids:
+                return f"Duplicate execution id: {sub_query_id}"
+            seen_ids.add(sub_query_id)
+            placement_stage[sub_query_id] = stage_index
+
+    sequential = phase_data.get("sequential") or []
+    sequential_offset = len(phase_data.get("parallel") or [])
+    for offset, sub_query_id in enumerate(sequential):
+        if sub_query_id not in existing_ids:
+            return f"Unknown sub-query id: {sub_query_id}"
+        if sub_query_id in seen_ids:
+            return f"Duplicate execution id: {sub_query_id}"
+        seen_ids.add(sub_query_id)
+        placement_stage[sub_query_id] = sequential_offset + offset
+
+    missing_ids = sorted(existing_ids - seen_ids)
+    if missing_ids:
+        return f"Missing sub-query ids in execution plan: {', '.join(missing_ids)}"
+
+    for item in session.sub_queries():
+        sub_query_id = item.get("id")
+        if sub_query_id not in placement_stage:
+            continue
+        for dependency in item.get("depends_on") or []:
+            dependency_stage = placement_stage.get(dependency)
+            current_stage = placement_stage[sub_query_id]
+            if dependency_stage is None:
+                continue
+            if dependency_stage >= current_stage:
+                return f"Dependency order violation: {sub_query_id} depends on {dependency}"
+
+    return None
+
 
 class PlanningEngine:
-    def __init__(self):
-        self._sessions: dict[str, PlanningSession] = {}
+    def __init__(
+        self,
+        max_sessions: int = 256,
+        ttl_seconds: float = 3600.0,
+        now_fn=None,
+    ):
+        self._max_sessions = max_sessions
+        self._ttl_seconds = ttl_seconds
+        self._now = now_fn or time.monotonic
+        self._sessions: OrderedDict[str, tuple[PlanningSession, float | None]] = OrderedDict()
+
+    def _expires_at(self) -> float | None:
+        if self._ttl_seconds <= 0:
+            return None
+        return self._now() + self._ttl_seconds
+
+    def _purge_expired(self) -> None:
+        if self._ttl_seconds <= 0:
+            return
+
+        now = self._now()
+        expired_ids = [
+            session_id
+            for session_id, (_, expires_at) in self._sessions.items()
+            if expires_at is not None and expires_at <= now
+        ]
+        for session_id in expired_ids:
+            self._sessions.pop(session_id, None)
+
+    def _store_session(self, session: PlanningSession) -> None:
+        self._sessions[session.session_id] = (session, self._expires_at())
+        self._sessions.move_to_end(session.session_id)
+        while self._max_sessions > 0 and len(self._sessions) > self._max_sessions:
+            self._sessions.popitem(last=False)
+
+    def _touch_session(self, session_id: str) -> PlanningSession | None:
+        cached = self._sessions.get(session_id)
+        if cached is None:
+            return None
+
+        session, _ = cached
+        self._sessions[session_id] = (session, self._expires_at())
+        self._sessions.move_to_end(session_id)
+        return session
 
     def get_session(self, session_id: str) -> PlanningSession | None:
-        return self._sessions.get(session_id)
+        self._purge_expired()
+        return self._touch_session(session_id)
 
     def reset(self) -> None:
         self._sessions.clear()
@@ -146,18 +336,60 @@ class PlanningEngine:
         confidence: float = 1.0,
         phase_data: dict | list | None = None,
     ) -> dict:
-        if session_id and session_id in self._sessions:
-            session = self._sessions[session_id]
-        else:
-            sid = session_id if session_id else uuid.uuid4().hex[:12]
-            session = PlanningSession(sid)
-            self._sessions[sid] = session
+        self._purge_expired()
 
-        target = revises_phase if is_revision and revises_phase else phase
+        if is_revision and not session_id:
+            return {
+                "error": "session_not_found",
+                "message": "Revision requires an existing session. Restart from intent_analysis with an empty session_id only for new plans.",
+                "session_id": session_id,
+                "restart_from_intent_analysis": True,
+                "expected_phase_order": PHASE_NAMES,
+            }
+
+        if is_revision and revises_phase and revises_phase != phase:
+            return {
+                "error": f"revises_phase must match phase when revision is enabled: {revises_phase} != {phase}",
+                "expected_phase_order": PHASE_NAMES,
+                "session_id": session_id,
+            }
+
+        if session_id:
+            session = self._touch_session(session_id)
+            if session is None:
+                return {
+                    "error": "session_not_found",
+                    "message": f"Session '{session_id}' not found. Restart from intent_analysis with an empty session_id.",
+                    "session_id": session_id,
+                    "restart_from_intent_analysis": True,
+                    "expected_phase_order": PHASE_NAMES,
+                }
+        else:
+            sid = uuid.uuid4().hex[:12]
+            session = PlanningSession(sid)
+
+        if is_revision:
+            try:
+                phase_index = PHASE_NAMES.index(phase)
+            except ValueError:
+                phase_index = -1
+            if phase_index >= 0:
+                downstream_phases = PHASE_NAMES[phase_index + 1 :]
+                if any(name in session.phases for name in downstream_phases):
+                    return {
+                        "error": f"{phase} revision would invalidate downstream phases. Open a new session to restart planning from {phase}.",
+                        "session_id": session.session_id,
+                        "completed_phases": session.completed_phases,
+                        "complexity_level": session.complexity_level,
+                    }
+
+        target = phase
         if target not in PHASE_NAMES:
             return {"error": f"Unknown phase: {target}. Valid: {', '.join(PHASE_NAMES)}"}
 
-        if not is_revision:
+        creating_new_phase = target not in session.phases
+
+        if creating_new_phase:
             predecessor = _PHASE_PREDECESSORS.get(target)
             if predecessor and predecessor not in session.phases:
                 return {
@@ -186,6 +418,52 @@ class PlanningEngine:
                     "complexity_level": session.complexity_level,
                 }
 
+        normalized_tool_mapping_id = (
+            phase_data.get("sub_query_id", "").strip()
+            if isinstance(phase_data, dict) and isinstance(phase_data.get("sub_query_id"), str)
+            else ""
+        )
+        if (
+            target == "tool_selection"
+            and not is_revision
+            and normalized_tool_mapping_id
+            and normalized_tool_mapping_id in session.tool_mapping_ids()
+        ):
+            return {
+                "error": f"Duplicate tool mapping for sub_query_id: {normalized_tool_mapping_id}",
+                "session_id": session.session_id,
+                "completed_phases": session.completed_phases,
+                "complexity_level": session.complexity_level,
+            }
+
+        normalized_sub_query_id = (
+            phase_data.get("id", "").strip()
+            if isinstance(phase_data, dict) and isinstance(phase_data.get("id"), str)
+            else ""
+        )
+        if (
+            target == "query_decomposition"
+            and not is_revision
+            and normalized_sub_query_id
+            and normalized_sub_query_id in session.sub_query_ids()
+        ):
+            return {
+                "error": f"Duplicate sub-query id: {normalized_sub_query_id}",
+                "session_id": session.session_id,
+                "completed_phases": session.completed_phases,
+                "complexity_level": session.complexity_level,
+            }
+
+        if target == "execution_order":
+            execution_error = _validate_execution_order(session, phase_data)
+            if execution_error:
+                return {
+                    "error": execution_error,
+                    "session_id": session.session_id,
+                    "completed_phases": session.completed_phases,
+                    "complexity_level": session.complexity_level,
+                }
+
         if target in _ACCUMULATIVE_LIST_PHASES:
             if is_revision:
                 session.phases[target] = PhaseRecord(
@@ -209,10 +487,6 @@ class PlanningEngine:
                 )
             elif existing and isinstance(existing.data, dict) and isinstance(phase_data, dict):
                 existing.data.setdefault("search_terms", []).extend(phase_data.get("search_terms", []))
-                if phase_data.get("approach"):
-                    existing.data["approach"] = phase_data["approach"]
-                if phase_data.get("fallback_plan"):
-                    existing.data["fallback_plan"] = phase_data["fallback_plan"]
                 existing.thought = thought
                 existing.confidence = confidence
             else:
@@ -244,6 +518,7 @@ class PlanningEngine:
         if complete:
             result["executable_plan"] = session.build_executable_plan()
 
+        self._store_session(session)
         return result
 
 

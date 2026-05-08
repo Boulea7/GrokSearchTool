@@ -1,12 +1,15 @@
 import httpx
 import json
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import List, Optional
+from ipaddress import ip_address
+from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
 from tenacity.wait import wait_base
-from .base import BaseSearchProvider, SearchResult
-from ..sources import merge_sources
+from .base import BaseSearchProvider
+from ..sources import merge_sources, sanitize_answer_text, split_answer_and_sources
 from ..utils import search_prompt, fetch_prompt, url_describe_prompt, rank_sources_prompt
 from ..logger import log_info
 from ..config import config
@@ -52,7 +55,7 @@ def _needs_time_context(query: str) -> bool:
         "this month", "last month", "next month",
         "this year", "last year", "next year",
         "latest", "recent", "recently", "just now",
-        "real-time", "realtime", "up-to-date",
+        "real-time", "up-to-date",
     ]
 
     query_lower = query.lower()
@@ -62,12 +65,100 @@ def _needs_time_context(query: str) -> bool:
             return True
 
     for keyword in en_keywords:
-        if keyword in query_lower:
+        if re.search(rf"\b{re.escape(keyword)}\b", query_lower):
             return True
 
     return False
 
+
+_SENSITIVE_CITATION_URL_PARAM_KEYS = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "client_secret",
+    "code",
+    "id_token",
+    "password",
+    "refresh_token",
+    "token",
+    "signature",
+    "sig",
+    "x-amz-credential",
+    "x-amz-signature",
+    "x-amz-security-token",
+    "x-goog-credential",
+    "x-goog-signature",
+    "x-ms-signature",
+    "googleaccessid",
+}
+
+
+def _sanitize_citation_url(value: str) -> str:
+    if not isinstance(value, str):
+        return ""
+
+    url = value.strip()
+    if not url:
+        return ""
+
+    split = urlsplit(url)
+    if split.scheme.lower() not in {"http", "https"} or not split.netloc:
+        return ""
+    if not split.username and not split.password and not split.query and not split.fragment:
+        return url
+
+    hostname = split.hostname or ""
+    if not hostname:
+        return ""
+
+    if ":" in hostname and not hostname.startswith("["):
+        host = f"[{hostname}]"
+    else:
+        host = hostname
+
+    raw_port = ""
+    hostinfo = split.netloc.rsplit("@", 1)[-1]
+    if hostinfo.startswith("["):
+        closing_idx = hostinfo.find("]")
+        if closing_idx != -1 and closing_idx + 1 < len(hostinfo) and hostinfo[closing_idx + 1] == ":":
+            raw_port = hostinfo[closing_idx + 2 :]
+    elif ":" in hostinfo:
+        raw_port = hostinfo.rsplit(":", 1)[-1]
+
+    netloc = f"{host}:{raw_port}" if raw_port else host
+    query = urlencode(
+        [
+            (key, "REDACTED" if key.lower() in _SENSITIVE_CITATION_URL_PARAM_KEYS else value)
+            for key, value in parse_qsl(split.query, keep_blank_values=True)
+        ],
+        doseq=True,
+    )
+    fragment = split.fragment
+    if fragment and any(token in fragment for token in ("=", "&")):
+        fragment = urlencode(
+            [
+                (key, "REDACTED" if key.lower() in _SENSITIVE_CITATION_URL_PARAM_KEYS else value)
+                for key, value in parse_qsl(fragment, keep_blank_values=True)
+            ],
+            doseq=True,
+        )
+
+    return urlunsplit((split.scheme, netloc, split.path, query, fragment))
+
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+_IGNORED_CONTENT_BLOCK_TYPES = {
+    "reasoning",
+    "thinking",
+    "analysis",
+    "thought",
+    "tool_call",
+    "tool",
+    "function_call",
+    "function",
+    "metadata",
+    "usage",
+}
 
 
 def _is_retryable_exception(exc) -> bool:
@@ -77,6 +168,20 @@ def _is_retryable_exception(exc) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in RETRYABLE_STATUS_CODES
     return False
+
+
+def _httpx_client_kwargs_for_url(url: str, *, timeout: httpx.Timeout) -> dict:
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    kwargs = {"timeout": timeout, "follow_redirects": True}
+    is_loopback = host == "localhost"
+    if not is_loopback:
+        try:
+            is_loopback = ip_address(host).is_loopback
+        except ValueError:
+            is_loopback = host.startswith("127.")
+    if is_loopback:
+        kwargs["trust_env"] = False
+    return kwargs
 
 
 class _WaitWithRetryAfter(wait_base):
@@ -118,9 +223,10 @@ class _WaitWithRetryAfter(wait_base):
 
 
 class GrokSearchProvider(BaseSearchProvider):
-    def __init__(self, api_url: str, api_key: str, model: str = "grok-4.1-fast"):
+    def __init__(self, api_url: str, api_key: str, model: str = "grok-4.20-0309"):
         super().__init__(api_url, api_key)
         self.model = model
+        self._last_completion_sources: list[dict] = []
 
     def get_provider_name(self) -> str:
         return "Grok"
@@ -133,14 +239,37 @@ class GrokSearchProvider(BaseSearchProvider):
             "User-Agent": "grok-search-mcp/0.1.0",
         }
 
-    async def search(self, query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx=None) -> List[SearchResult]:
+    async def search(self, query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx=None) -> str:
+        body, sources = await self.search_with_sources(
+            query,
+            platform=platform,
+            min_results=min_results,
+            max_results=max_results,
+            ctx=ctx,
+        )
+        return self._finalize_content(body, sources, render_sources=True)
+
+    async def search_with_sources(
+        self,
+        query: str,
+        platform: str = "",
+        min_results: int = 3,
+        max_results: int = 10,
+        ctx=None,
+    ) -> tuple[str, list[dict]]:
         headers = self._build_api_headers()
         platform_prompt = ""
 
         if platform:
             platform_prompt = "\n\nYou should search the web for the information you need, and focus on these platform: " + platform + "\n"
 
-        time_context = get_local_time_info() + "\n"
+        time_context_mode = config.time_context_mode
+        time_context_required = bool(getattr(self, "time_context_required", False))
+        should_inject_time_context = (
+            time_context_mode == "always"
+            or (time_context_mode == "auto" and (_needs_time_context(query) or time_context_required))
+        )
+        time_context = get_local_time_info() + "\n" if should_inject_time_context else ""
 
         payload = {
             "model": self.model,
@@ -154,9 +283,28 @@ class GrokSearchProvider(BaseSearchProvider):
             "stream": False,
         }
 
-        await log_info(ctx, f"platform_prompt: { query + platform_prompt}", config.debug_enabled)
+        await log_info(
+            ctx,
+            f"search request prepared (platform={platform or 'general'}, time_context={should_inject_time_context})",
+            config.debug_enabled,
+        )
 
-        return await self._execute_completion_with_retry(headers, payload, ctx)
+        if (
+            "_execute_completion_with_retry" in self.__dict__
+            and "_execute_completion_with_retry_result" not in self.__dict__
+        ):
+            self._last_completion_sources = []
+            execute_completion = self._execute_completion_with_retry
+            content = await execute_completion(headers, payload, ctx)
+            return content, list(self._last_completion_sources)
+
+        content, sources = await self._execute_completion_with_retry_result(
+            headers,
+            payload,
+            ctx,
+            render_sources=False,
+        )
+        return content, sources
 
     async def fetch(self, url: str, ctx=None) -> str:
         headers = self._build_api_headers()
@@ -178,6 +326,9 @@ class GrokSearchProvider(BaseSearchProvider):
             return value
 
         if isinstance(value, dict):
+            block_type = str(value.get("type", "")).strip().lower()
+            if block_type in _IGNORED_CONTENT_BLOCK_TYPES:
+                return ""
             for key in ("text", "content", "value", "output_text"):
                 nested = self._flatten_text_content(value.get(key))
                 if nested:
@@ -194,23 +345,26 @@ class GrokSearchProvider(BaseSearchProvider):
 
         return ""
 
-    def _normalize_source_items(self, data) -> list[dict]:
+    def _normalize_source_items(self, data, *, origin_type: str | None = None) -> list[dict]:
         items = data if isinstance(data, list) else [data]
         normalized: list[dict] = []
 
         for item in items:
-            if isinstance(item, str) and item.startswith(("http://", "https://")):
-                normalized.append({"url": item})
+            if isinstance(item, str):
+                normalized_url = _sanitize_citation_url(item)
+                if normalized_url:
+                    normalized.append({"url": normalized_url})
                 continue
 
             if not isinstance(item, dict):
                 continue
 
             url = item.get("url") or item.get("href") or item.get("link")
-            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            normalized_url = _sanitize_citation_url(url)
+            if not normalized_url:
                 continue
 
-            source = {"url": url}
+            source = {"url": normalized_url}
             title = item.get("title") or item.get("name") or item.get("label")
             if isinstance(title, str) and title.strip():
                 source["title"] = title.strip()
@@ -224,52 +378,96 @@ class GrokSearchProvider(BaseSearchProvider):
             if isinstance(description, str) and description.strip():
                 source["description"] = description.strip()
 
+            snippet = item.get("snippet")
+            if isinstance(snippet, str) and snippet.strip():
+                source["snippet"] = snippet.strip()
+
+            provider = item.get("provider")
+            if isinstance(provider, str) and provider.strip():
+                source["provider"] = provider.strip()
+            else:
+                source["provider"] = "grok"
+
+            upstream_source = item.get("source")
+            if isinstance(upstream_source, str) and upstream_source.strip():
+                source["source"] = upstream_source.strip()
+
+            published_at = item.get("published_at")
+            if isinstance(published_at, str) and published_at.strip():
+                source["published_at"] = published_at.strip()
+
+            published_date = item.get("published_date")
+            if isinstance(published_date, str) and published_date.strip():
+                source["published_date"] = published_date.strip()
+
+            normalized_origin_type = item.get("origin_type") or origin_type
+            if isinstance(normalized_origin_type, str) and normalized_origin_type.strip():
+                source["origin_type"] = normalized_origin_type.strip()
+
+            score = item.get("score")
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                source["score"] = score
+
             normalized.append(source)
 
         return normalized
 
     def _extract_structured_sources(self, data: dict) -> list[dict]:
         candidate_keys = (
-            "citations",
-            "references",
-            "sources",
-            "source_cards",
-            "source_card",
-            "annotations",
-            "search_results",
-            "searchResults",
-            "urls",
+            ("citations", "citation"),
+            ("references", "reference"),
+            ("sources", "source"),
+            ("source_cards", "source_card"),
+            ("source_card", "source_card"),
+            ("annotations", "annotation"),
+            ("search_results", "search_result"),
+            ("searchResults", "search_result"),
+            ("urls", "url_list"),
         )
         collected: list[dict] = []
+
+        def collect_nested(value):
+            if isinstance(value, dict):
+                block_type = str(value.get("type", "")).strip().lower()
+                if block_type in _IGNORED_CONTENT_BLOCK_TYPES:
+                    return
+                collect_from_mapping(value)
+                for nested in value.values():
+                    collect_nested(nested)
+                return
+
+            if isinstance(value, list):
+                for item in value:
+                    collect_nested(item)
 
         def collect_from_mapping(mapping):
             nonlocal collected
             if not isinstance(mapping, dict):
                 return
-            for key in candidate_keys:
+            for key, origin_type in candidate_keys:
                 if key in mapping:
-                    collected = merge_sources(collected, self._normalize_source_items(mapping[key]))
+                    collected = merge_sources(
+                        collected,
+                        self._normalize_source_items(mapping[key], origin_type=origin_type),
+                    )
 
         if not isinstance(data, dict):
             return []
 
-        collect_from_mapping(data)
-        for choice in data.get("choices", []) or []:
-            if not isinstance(choice, dict):
-                continue
-            collect_from_mapping(choice)
-            for key in ("message", "delta"):
-                nested = choice.get(key)
-                collect_from_mapping(nested)
+        collect_nested(data)
 
         return collected
 
     def _append_sources_block(self, content: str, sources: list[dict]) -> str:
         if not sources:
-            return content
+            return (content or "").strip()
+
+        existing_content, existing_sources = split_answer_and_sources(content or "")
+        if existing_sources:
+            return (content or "").strip()
 
         lines: list[str] = []
-        body = (content or "").strip()
+        body = existing_content.strip()
         if body:
             lines.append(body)
             lines.append("")
@@ -280,6 +478,46 @@ class GrokSearchProvider(BaseSearchProvider):
             lines.append(f"{index}. [{title}]({source['url']})")
 
         return "\n".join(lines).strip()
+
+    def _normalize_internal_text(self, content: str) -> str:
+        answer, _ = split_answer_and_sources(content or "")
+        cleaned = sanitize_answer_text(answer) if config.output_cleanup_enabled else answer
+        return (cleaned or answer or "").strip()
+
+    def _extract_payload_content_and_sources(self, data: dict) -> tuple[str, list[dict], bool]:
+        if not isinstance(data, dict):
+            return "", [], False
+
+        if self._is_empty_placeholder_payload(data):
+            return "", [], True
+
+        content = ""
+        choices = data.get("choices", [])
+        if isinstance(choices, list) and choices:
+            content = self._extract_content_from_choice(choices[0])
+
+        if not content:
+            for key in ("output_text", "output"):
+                content = self._flatten_text_content(data.get(key))
+                if content:
+                    break
+
+        return content, self._extract_structured_sources(data), False
+
+    def _finalize_content(self, content: str, sources: list[dict], *, render_sources: bool) -> str:
+        body = (content or "").strip()
+        if not render_sources:
+            return body
+        return self._append_sources_block(body, sources)
+
+    def _finalize_result(
+        self,
+        content: str,
+        sources: list[dict],
+        *,
+        render_sources: bool,
+    ) -> tuple[str, list[dict]]:
+        return self._finalize_content(content, sources, render_sources=render_sources), sources
 
     def _extract_content_from_choice(self, choice: dict) -> str:
         if not isinstance(choice, dict):
@@ -327,59 +565,93 @@ class GrokSearchProvider(BaseSearchProvider):
             message += f"，request_id={request_id}"
         return ValueError(message)
 
-    async def _parse_streaming_response(self, response, ctx=None) -> str:
+    async def _parse_streaming_response(self, response, ctx=None, *, render_sources: bool = True) -> str:
+        content, _ = await self._parse_streaming_response_result(response, ctx, render_sources=render_sources)
+        return content
+
+    async def _parse_streaming_response_result(
+        self,
+        response,
+        ctx=None,
+        *,
+        render_sources: bool = True,
+    ) -> tuple[str, list[dict]]:
         content = ""
-        full_body_buffer = []
         empty_placeholder_detected = False
         response_headers = getattr(response, "headers", None)
+        collected_sources: list[dict] = []
+        event_data_lines: list[str] = []
+
+        def process_event(event_payload: str) -> None:
+            nonlocal content, empty_placeholder_detected, collected_sources
+            payload = event_payload.strip()
+            if not payload:
+                return
+            if payload == "[DONE]":
+                return
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                return
+
+            chunk, chunk_sources, is_placeholder = self._extract_payload_content_and_sources(data)
+            if is_placeholder:
+                empty_placeholder_detected = True
+                return
+            collected_sources = merge_sources(collected_sources, chunk_sources)
+            if chunk:
+                content += chunk
 
         async for line in response.aiter_lines():
-            line = line.strip()
-            if not line:
+            stripped = line.strip()
+            if not stripped:
+                if event_data_lines:
+                    process_event("\n".join(event_data_lines))
+                    event_data_lines.clear()
                 continue
-
-            full_body_buffer.append(line)
-
-            # 兼容 "data: {...}" 和 "data:{...}" 两种 SSE 格式
-            if line.startswith("data:"):
-                if line in ("data: [DONE]", "data:[DONE]"):
+            if stripped.startswith("data:"):
+                event_payload = stripped[5:].lstrip()
+                if event_payload == "[DONE]":
+                    if event_data_lines:
+                        process_event("\n".join(event_data_lines))
+                        event_data_lines.clear()
                     continue
-                try:
-                    # 去掉 "data:" 前缀，并去除可能的空格
-                    json_str = line[5:].lstrip()
-                    data = json.loads(json_str)
-                    if self._is_empty_placeholder_payload(data):
-                        empty_placeholder_detected = True
-                        continue
-                    choices = data.get("choices", [])
-                    if isinstance(choices, list) and choices:
-                        chunk = self._extract_content_from_choice(choices[0])
-                        if chunk:
-                            content += chunk
-                except (json.JSONDecodeError, IndexError):
-                    continue
+                event_data_lines.append(event_payload)
+                continue
+            if event_data_lines:
+                process_event("\n".join(event_data_lines))
+                event_data_lines.clear()
+            process_event(stripped)
 
-        if not content and full_body_buffer:
-            try:
-                full_text = "".join(full_body_buffer)
-                data = json.loads(full_text)
-                if self._is_empty_placeholder_payload(data):
-                    empty_placeholder_detected = True
-                choices = data.get("choices", [])
-                if isinstance(choices, list) and choices:
-                    content = self._extract_content_from_choice(choices[0])
-            except json.JSONDecodeError:
-                pass
+        if event_data_lines:
+            process_event("\n".join(event_data_lines))
 
         if not content and empty_placeholder_detected:
             raise self._build_placeholder_error(response_headers)
 
-        await log_info(ctx, f"content: {content}", config.debug_enabled)
+        content, collected_sources = self._finalize_result(
+            content,
+            collected_sources,
+            render_sources=render_sources,
+        )
 
+        await log_info(ctx, f"stream completion parsed ({len(content)} chars)", config.debug_enabled)
+
+        return content, collected_sources
+
+    async def _parse_completion_response(self, response: httpx.Response, ctx=None, *, render_sources: bool = True) -> str:
+        content, _ = await self._parse_completion_response_result(response, ctx, render_sources=render_sources)
         return content
 
-    async def _parse_completion_response(self, response: httpx.Response, ctx=None) -> str:
+    async def _parse_completion_response_result(
+        self,
+        response: httpx.Response,
+        ctx=None,
+        *,
+        render_sources: bool = True,
+    ) -> tuple[str, list[dict]]:
         content = ""
+        sources: list[dict] = []
         body_text = response.text or ""
 
         try:
@@ -388,12 +660,10 @@ class GrokSearchProvider(BaseSearchProvider):
             data = None
 
         if isinstance(data, dict):
-            if self._is_empty_placeholder_payload(data):
+            content, sources, is_placeholder = self._extract_payload_content_and_sources(data)
+            if is_placeholder:
                 raise self._build_placeholder_error(response.headers)
-            choices = data.get("choices", [])
-            if isinstance(choices, list) and choices:
-                content = self._extract_content_from_choice(choices[0])
-            content = self._append_sources_block(content, self._extract_structured_sources(data))
+            content, sources = self._finalize_result(content, sources, render_sources=render_sources)
 
         if not content and any(line.lstrip().startswith("data:") for line in body_text.splitlines()):
             class _LineResponse:
@@ -405,23 +675,28 @@ class GrokSearchProvider(BaseSearchProvider):
                     for line in self._lines:
                         yield line
 
-            content = await self._parse_streaming_response(_LineResponse(body_text, response.headers), ctx)
+            content, sources = await self._parse_streaming_response_result(
+                _LineResponse(body_text, response.headers),
+                ctx,
+                render_sources=render_sources,
+            )
 
-        if not content and body_text.strip():
+        if not content and not sources and body_text.strip():
             normalized = body_text.lower()
             if "<html" in normalized and "login" in normalized:
                 raise ValueError("API 代理返回了登录页面，请检查认证状态")
             raise ValueError("上游返回了无法解析的 completion 响应")
 
-        await log_info(ctx, f"content: {content}", config.debug_enabled)
+        await log_info(ctx, f"completion parsed ({len(content)} chars)", config.debug_enabled)
 
-        return content
+        return content, sources
 
-    async def _execute_stream_with_retry(self, headers: dict, payload: dict, ctx=None) -> str:
+    async def _execute_stream_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
         """执行带重试机制的流式 HTTP 请求"""
         timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
+        endpoint = f"{self.api_url}/chat/completions"
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(config.retry_max_attempts + 1),
                 wait=_WaitWithRetryAfter(config.retry_multiplier, config.retry_max_wait),
@@ -431,18 +706,36 @@ class GrokSearchProvider(BaseSearchProvider):
                 with attempt:
                     async with client.stream(
                         "POST",
-                        f"{self.api_url}/chat/completions",
+                        endpoint,
                         headers=headers,
                         json=payload,
                     ) as response:
                         response.raise_for_status()
-                        return await self._parse_streaming_response(response, ctx)
+                        return await self._parse_streaming_response(response, ctx, render_sources=render_sources)
 
-    async def _execute_completion_with_retry(self, headers: dict, payload: dict, ctx=None) -> str:
+    async def _execute_completion_with_retry(self, headers: dict, payload: dict, ctx=None, *, render_sources: bool = True) -> str:
+        content, sources = await self._execute_completion_with_retry_result(
+            headers,
+            payload,
+            ctx,
+            render_sources=render_sources,
+        )
+        self._last_completion_sources = sources
+        return content
+
+    async def _execute_completion_with_retry_result(
+        self,
+        headers: dict,
+        payload: dict,
+        ctx=None,
+        *,
+        render_sources: bool = True,
+    ) -> tuple[str, list[dict]]:
         """执行带重试机制的非流式 HTTP 请求，兼容 JSON completion 与 SSE 文本响应。"""
         timeout = httpx.Timeout(connect=6.0, read=120.0, write=10.0, pool=None)
+        endpoint = f"{self.api_url}/chat/completions"
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(endpoint, timeout=timeout)) as client:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(config.retry_max_attempts + 1),
                 wait=_WaitWithRetryAfter(config.retry_multiplier, config.retry_max_wait),
@@ -451,12 +744,16 @@ class GrokSearchProvider(BaseSearchProvider):
             ):
                 with attempt:
                     response = await client.post(
-                        f"{self.api_url}/chat/completions",
+                        endpoint,
                         headers=headers,
                         json=payload,
                     )
                     response.raise_for_status()
-                    return await self._parse_completion_response(response, ctx)
+                    return await self._parse_completion_response_result(
+                        response,
+                        ctx,
+                        render_sources=render_sources,
+                    )
 
     async def describe_url(self, url: str, ctx=None) -> dict:
         """让 Grok 阅读单个 URL 并返回 title + extracts"""
@@ -469,13 +766,29 @@ class GrokSearchProvider(BaseSearchProvider):
             ],
             "stream": False,
         }
-        result = await self._execute_completion_with_retry(headers, payload, ctx)
+        result = self._normalize_internal_text(
+            await self._execute_completion_with_retry(headers, payload, ctx, render_sources=False)
+        )
         title, extracts = url, ""
+        extract_lines: list[str] = []
+        reading_extracts = False
         for line in result.strip().splitlines():
-            if line.startswith("Title:"):
-                title = line[6:].strip() or url
-            elif line.startswith("Extracts:"):
-                extracts = line[9:].strip()
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("Title:"):
+                title = stripped[6:].strip() or url
+                reading_extracts = False
+            elif stripped.startswith("Extracts:"):
+                extract_lines = []
+                first_line = stripped[9:].strip()
+                if first_line:
+                    extract_lines.append(first_line)
+                reading_extracts = True
+            elif reading_extracts:
+                extract_lines.append(stripped)
+        if extract_lines:
+            extracts = " ".join(extract_lines).strip()
         return {"title": title, "extracts": extracts, "url": url}
 
     async def rank_sources(self, query: str, sources_text: str, total: int, ctx=None) -> list[int]:
@@ -489,10 +802,12 @@ class GrokSearchProvider(BaseSearchProvider):
             ],
             "stream": False,
         }
-        result = await self._execute_completion_with_retry(headers, payload, ctx)
+        result = self._normalize_internal_text(
+            await self._execute_completion_with_retry(headers, payload, ctx, render_sources=False)
+        )
         order: list[int] = []
         seen: set[int] = set()
-        for token in result.strip().split():
+        for token in re.findall(r"\b\d+\b", result):
             try:
                 n = int(token)
                 if 1 <= n <= total and n not in seen:
