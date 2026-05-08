@@ -17,11 +17,11 @@ Long-running `deep research` remains a separate advanced capability direction an
 - Strengthen the core `web_search`, `get_sources`, `web_fetch`, `web_map`, and `get_config_info` experience while keeping the default workflow fast and lightweight
 - Improve source provenance, confidence cues, and result ordering so useful evidence is surfaced before low-value noise
 - Expand compatibility and installation validation for important MCP hosts, with clear distinctions between officially tested, community-tested, and planned integrations
-- Build a stronger diagnostics and release discipline around configuration checks, compatibility smoke tests, tags, changelog hygiene, and installation verification
+- Keep tightening diagnostics and release discipline around configuration checks, compatibility smoke tests, tags, changelog hygiene, and installation verification, with packaging contracts enforced in CI and release steps documented explicitly
 
 ## Next
 
-- Align the companion skill, README, and compatibility docs around the existing rule: `plan_* -> web_search` is the recommended core path, while clear single-hop lookups may still call `web_search` directly
+- Finish aligning any remaining companion-skill guidance and host-facing examples around the existing rule: `plan_* -> web_search` is the recommended core path, while clear single-hop lookups may still call `web_search` directly
 - Improve structured observability and troubleshooting guidance without widening the default tool surface too aggressively
 - Add richer source metadata and more selective result packaging so calling models receive high-value context first and low-value output is suppressed
 - Clarify transport and host integration guidance for local `stdio` usage first, then remote MCP patterns where they are stable enough to document responsibly

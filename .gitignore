@@ -4,6 +4,8 @@ __pycache__/
 .coverage
 .grok-search/
 logs/
+build/
+dist/
 *.egg-info/
 uv.lock
 .env
