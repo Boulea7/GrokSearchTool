@@ -582,7 +582,7 @@ async def test_runtime_allows_medium_single_source_search_only_for_clean_officia
     bank_by_id = {bank["section_id"]: bank for bank in section_banks}
 
     assert result["status"] == "completed"
-    assert result["report"]["status"] == "completed"
+    assert result["report"]["runtime"]["release_gate"]["passed"] is True
     assert "checkpoint-resume-semantics" in bank_by_id
     assert bank_by_id["checkpoint-resume-semantics"]["selected_evidence_ids"]
     assert bank_by_id["checkpoint-resume-semantics"]["selected_packets"]

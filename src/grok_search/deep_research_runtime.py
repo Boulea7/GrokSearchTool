@@ -9769,6 +9769,7 @@ def _coverage_for_report(
         section["title"]
         for section in normalized_outline
         if section["section_id"] not in answered_section_ids
+        and not is_open_questions_section_title(section["title"])
     ]
     coverage_items_by_target = {
         _normalize_whitespace(str(item.get("target", ""))): item
