@@ -49,6 +49,8 @@ jobs:
 
       - name: Run built artifact smoke checks
         run: |
+          set -euo pipefail
+          export GROK_DEEP_RESEARCH_DIR="$PWD/.tmp-ci-deep-research"
           python -m venv .venv-wheel-smoke
           . .venv-wheel-smoke/bin/activate
           python -m pip install dist/*.whl
