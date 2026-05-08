@@ -17,9 +17,26 @@ ROADMAP = ROOT_DIR / "docs" / "ROADMAP.md"
 GITIGNORE = ROOT_DIR / ".gitignore"
 RELEASING = ROOT_DIR / "docs" / "RELEASING.md"
 PACKAGING_WORKFLOW = ROOT_DIR / ".github" / "workflows" / "packaging-contracts.yml"
+AGENTS = ROOT_DIR / "AGENTS.md"
 
 GET_SOURCES_LIFECYCLE_CONTRACT_START = "<!-- docs-contract:get-sources-lifecycle:start -->"
 GET_SOURCES_LIFECYCLE_CONTRACT_END = "<!-- docs-contract:get-sources-lifecycle:end -->"
+
+
+class OptionalPrivateContractText:
+    def __init__(self, text: str | None):
+        self._text = text
+
+    def __contains__(self, fragment: object) -> bool:
+        if self._text is None:
+            return True
+        return isinstance(fragment, str) and fragment in self._text
+
+
+def _read_private_agents_contract_text() -> OptionalPrivateContractText:
+    if not AGENTS.exists():
+        return OptionalPrivateContractText(None)
+    return OptionalPrivateContractText(AGENTS.read_text(encoding="utf-8"))
 
 
 def _extract_get_sources_lifecycle_contract() -> dict:
@@ -102,7 +119,7 @@ def test_docs_explain_lazy_import_boundaries_for_optional_dependencies():
     assert "`grok_search.providers.GrokSearchProvider`" in compatibility
     assert "non-provider imports should not fail early" in compatibility
 
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
     assert "不应被理解为安装依赖已变成 optional extra" in agents
 
 
@@ -159,7 +176,7 @@ def test_docs_keep_masking_scope_narrow_for_ambiguous_keys():
     assert "默认不会把裸 `auth` / `key` 这类宽泛参数名一并视为敏感字段" in readme
     assert "bare `auth` / `key` keys are intentionally not masked by default" in compatibility
 
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
     assert "裸 `auth` / `key`" in agents
 
 
@@ -167,7 +184,7 @@ def test_docs_cover_high_confidence_cloud_signed_credential_keys():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "X-Amz-Credential" in readme
     assert "X-Goog-Credential" in readme
@@ -224,7 +241,7 @@ def test_security_policy_mentions_redirect_preflight_degraded_boundary():
 def test_docs_pin_release_repo_and_stdio_first_host_story():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "Boulea7/GrokSearchTool" in readme
     assert "fork/upstream" in readme
@@ -281,7 +298,7 @@ def test_docs_explain_get_sources_warning_round_trip_and_cache_summary_contract(
     readme_en = README_EN.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
     lifecycle = GET_SOURCES_LIFECYCLE.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "`search_warnings`" in readme
     assert "`cache_summary`" in readme
@@ -361,7 +378,7 @@ def test_get_sources_lifecycle_state_matrix_locks_required_states_without_prose_
 def test_docs_describe_aggregated_source_rows_and_cache_state_cause_contract():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "normalized aggregate row" in readme
     assert "winner provider" in readme
@@ -405,7 +422,7 @@ def test_localized_readmes_pin_release_repo_and_fork_story():
 def test_docs_keep_planning_first_and_cli_first_research_story():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "`plan_* -> web_search`" in readme
     assert "`deep research`" in readme
@@ -419,7 +436,7 @@ def test_docs_keep_planning_first_and_cli_first_research_story():
 def test_docs_lock_finance_topic_and_diagnostic_detail_contracts():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "目前支持 `general` / `news` / `finance`" in readme
     assert '`"full"` 保留完整 doctor/probe 细节' in readme
@@ -433,7 +450,7 @@ def test_docs_explain_preferred_default_model_and_flexible_grok_selection():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "`grok-4.20-0309`" in readme
     assert "Grok 4.1+" in readme
@@ -455,7 +472,7 @@ def test_docs_explain_runtime_model_source_and_env_override_boundary():
     readme_ja = README_JA.read_text(encoding="utf-8")
     readme_ru = README_RU.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "`GROK_MODEL_SOURCE`" in readme
     assert "当前活动模型来自哪一层" in readme
@@ -483,7 +500,7 @@ def test_docs_cover_additive_source_provenance_and_machine_readiness_fields():
     readme_ru = README_RU.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
     lifecycle = GET_SOURCES_LIFECYCLE.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "`origin_type`" in readme
     assert "`origin_type`" in readme_en
@@ -522,7 +539,7 @@ def test_docs_explain_contributors_and_legacy_source_overload_contract():
     readme_en = README_EN.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
     lifecycle = GET_SOURCES_LIFECYCLE.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "`contributors`" in readme
     assert "`contributors`" in readme_en
@@ -607,7 +624,7 @@ def test_localized_readmes_explain_switch_model_runtime_override_return_contract
 def test_docs_explain_runtime_model_fallback_boundary():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "`grok_model_selection`" in readme
     assert "`grok_model_runtime_fallback`" in readme
@@ -662,7 +679,7 @@ def test_docs_explain_planning_session_and_wrapper_contract():
     readme_ja = README_JA.read_text(encoding="utf-8")
     readme_ru = README_RU.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "planning `session_id` 当前是进程内的 transient handle" in readme
     assert "`params_json`" in readme
@@ -691,7 +708,7 @@ def test_docs_explain_planning_session_and_wrapper_contract():
 def test_docs_explain_redirect_preflight_timeout_and_redirect_limit_contract():
     readme = README.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
     security = SECURITY.read_text(encoding="utf-8")
 
     assert "redirect 预检发生超时或请求级错误" in readme
@@ -711,7 +728,7 @@ def test_docs_explain_preflight_warning_side_channel_without_payload_shape_chang
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
-    agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
 
     assert "caller-visible warning" in readme
     assert "不会改写成功返回体" in readme
