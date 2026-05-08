@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from grok_search import deep_research_store as deep_research_store_module
@@ -300,6 +301,42 @@ def test_store_retains_multiple_versions_for_same_checkpoint_key(monkeypatch, tm
     assert store.get_checkpoint(job.job_id, "researching-u1") == second
     assert first.checkpoint_seq == 1
     assert second.checkpoint_seq == 2
+
+
+def test_store_assigns_checkpoint_sequences_atomically_under_concurrency(tmp_path):
+    store = make_store(tmp_path)
+    job = store.create_job(
+        query="Research concurrent checkpoint writes",
+        request_fingerprint="fp-checkpoint-concurrency",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    def save(index: int) -> DeepResearchCheckpoint:
+        return store.save_checkpoint(
+            job.job_id,
+            phase="researching",
+            checkpoint_key=f"researching-u{index}",
+            state={"n": index},
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        saved = list(executor.map(save, range(8)))
+
+    checkpoints = store.list_checkpoints(job.job_id)
+
+    assert len(saved) == 8
+    assert len(checkpoints) == 8
+    assert [checkpoint.checkpoint_seq for checkpoint in checkpoints] == list(range(1, 9))
+    assert sorted(checkpoint.checkpoint_seq for checkpoint in saved) == list(range(1, 9))
 
 
 def test_store_reuses_active_or_recent_job_by_request_fingerprint(tmp_path):
