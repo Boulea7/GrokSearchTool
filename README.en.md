@@ -149,31 +149,31 @@ Create a `STDIO` MCP server entry with the same core fields:
 
 ### Core environment variables
 
-| Variable | Required | Description |
-| --- | --- | --- |
-| `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint; using an explicit `/v1` suffix is recommended, the current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
-| `GROK_API_KEY` | Yes | Grok API key |
-| `GROK_MODEL` | No | Default model; see the precedence notes below |
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `GROK_API_URL` | Yes | - | OpenAI-compatible Grok base URL supplied by your provider; common paths include `/v1`. The current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
+| `GROK_API_KEY` | Yes | - | Grok API key |
+| `GROK_MODEL` | No | Code default | Default model; see the precedence notes below |
 | `GROK_MODEL_PROFILE` | No | `balanced_auto` | When `GROK_MODEL` is not explicitly set, resolve a provider-aware default model for official xAI, OpenRouter, and common OpenAI-compatible relays / grok2api-like proxies |
 | `GROK_DEEP_RESEARCH_STANDARD_PROFILE` | No | `reasoning` | Default deep research profile for `standard` effort; automatically downgrades when unavailable |
 | `GROK_DEEP_RESEARCH_DEEP_PROFILE` | No | `multi_agent` | Default deep research profile for `deep` effort; automatically downgrades to single-agent when multi-agent is unavailable |
 | `GROK_DEEP_RESEARCH_ULTRA_PROFILE` | No | `ultra` | Default deep research profile for `ultra` effort; when explicitly requested it prefers `grok-4.20-heavy-16-agent` and automatically downgrades to lighter multi-agent or single-agent models when needed |
-| `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | No | The second Grok provider; real requests automatically fail over to it when the primary provider fails |
-| `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | No | Additional Grok providers, tried in numeric order as the fallback chain |
+| `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | No | - | The second Grok provider; real requests automatically fail over to it when the primary provider fails |
+| `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | No | - | Additional Grok providers, tried in numeric order as the fallback chain |
 | `GROK_MODEL_FALLBACKS` | No | Built-in downgrade chain | A comma-separated model fallback order used when a provider explicitly reports that the requested model is unavailable; this can explicitly include `grok-4.1-fast` |
-| `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |
-| `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
-| `TAVILY_API_URL` | No | Tavily endpoint |
-| `TAVILY_ENABLED` | No | Enable or disable Tavily-backed fetch/map paths |
-| `TAVILY_FALLBACK_API_URL` | No | Remote HTTP API fallback used when the primary Tavily URL is a local loopback endpoint and is unavailable |
-| `TAVILY_FALLBACK_API_KEY` | No | Tavily fallback Bearer token; defaults to `TAVILY_API_KEY` and must not be committed |
-| `TAVILY_FALLBACK_ENABLED` | No | Enable or disable the local-loopback Tavily fallback path |
-| `FIRECRAWL_API_KEY` | No | Firecrawl key for fetch fallback and optional supplemental `web_search` |
-| `FIRECRAWL_API_URL` | No | Firecrawl endpoint |
-| `GROK_DEBUG` | No | Enable debug logging |
-| `GROK_LOG_LEVEL` | No | Log level |
-| `GROK_LOG_DIR` | No | Log directory; `get_config_info` returns the resolved runtime path |
-| `GROK_OUTPUT_CLEANUP` | No | Enable answer cleanup |
+| `GROK_TIME_CONTEXT_MODE` | No | `always` | Time-context injection mode: `always`, `auto`, or `never` |
+| `TAVILY_API_KEY` | No | - | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
+| `TAVILY_API_URL` | No | Tavily default | Tavily endpoint |
+| `TAVILY_ENABLED` | No | Enabled | Enable or disable Tavily-backed fetch/map paths |
+| `TAVILY_FALLBACK_API_URL` | No | - | Remote HTTP API fallback used when the primary Tavily URL is a local loopback endpoint and is unavailable; must be explicitly configured |
+| `TAVILY_FALLBACK_API_KEY` | No | `TAVILY_API_KEY` | Tavily fallback Bearer token; defaults to `TAVILY_API_KEY` and must not be committed |
+| `TAVILY_FALLBACK_ENABLED` | No | `false` | Enable or disable the local-loopback Tavily fallback path; defaults to disabled |
+| `FIRECRAWL_API_KEY` | No | - | Firecrawl key for fetch fallback and optional supplemental `web_search` |
+| `FIRECRAWL_API_URL` | No | Firecrawl default | Firecrawl endpoint |
+| `GROK_DEBUG` | No | `false` | Enable debug logging |
+| `GROK_LOG_LEVEL` | No | `INFO` | Log level |
+| `GROK_LOG_DIR` | No | User config path | Log directory; `get_config_info` returns the resolved runtime path |
+| `GROK_OUTPUT_CLEANUP` | No | Enabled | Enable answer cleanup |
 | `GROK_FILTER_THINK_TAGS` | No | Legacy alias for `GROK_OUTPUT_CLEANUP`; prefer `GROK_OUTPUT_CLEANUP` |
 | `GROK_RETRY_MAX_ATTEMPTS` | No | Max retry attempts |
 | `GROK_RETRY_MULTIPLIER` | No | Retry backoff multiplier |
@@ -334,7 +334,7 @@ The current deep research runtime now centers on a structured `plan.json` with `
 The `force_new` flag controls whether `deep_research_start` must create a brand-new job.
 When `force_new=false`, `deep_research_start` may reuse a matching in-flight job or a recently completed job and will surface that via the `reused` field. That reuse rule now also applies to follow-up jobs keyed by `continue_from_job_id`. Set `force_new=true` when you require a brand-new job. Completed jobs are only reusable when the readable final provenance bundle is consistent: `sources.json`, `citations.json`, `report.json`, `final_report.md`, plus the currently bundled provenance sidecars (`evidence_items.json`, `coverage.json`, `grounding.json`, `verifier.json`) must agree on the resolved `batch_id`. Completed final artifacts are published with a shared `batch_id`, `deep_research_result.citations` now uses the same structure as `citations.json`, and unreadable JSON artifacts are surfaced through `artifact_errors` instead of failing the whole result read. For `completed` jobs, missing final artifacts now surface through `artifact_errors`; for `failed`, `canceled`, and `interrupted` jobs that already reached `finalizing`, a readable resolved final batch may still be surfaced before falling back to checkpoints or partial artifacts. `deep_research_status` may also surface additive attempt-window/operator fields such as `watch_attach_after_seq`, `attempt_window_start_seq`, `partial_payload`, and the mirrored values inside `operator_summary`.
 
-`sources.json` now carries additive source-quality metadata such as `source_key`, `quality_score`, `quality_tier`, `source_type`, and `ranking_reasons` alongside `source_id`. Source rows may also expose additive `winner_provider`, `citation_count`, and `section_count` fields. `report.json.runtime.provider_winners` now exposes each winning unit's `provider_name`, `provider_model`, `effective_model`, and `provider_api_url`; `provider_attempts` / `provider_capabilities` expose the search/fetch/map provider paths that were used or failed; `report.json.runtime.budget` exposes the deep research budget, concurrency summary, and local call/evidence counts. Sections inside `citations.json` and `report.json` may also include additive `summary`, `prose`, `confidence`, `claim_cluster_count`, `supporting_source_count`, and `supporting_domain_count` fields, and claims may include additive `unit_id`, `evidence_ids`, `cluster_type`, `supporting_source_count`, `supporting_domain_count`, and `confidence` provenance/quality fields. `status` / `result` may also surface additive operator diagnostics such as `artifact_fallback_used`, `resolved_artifact_batch_id`, `artifact_visibility_reason`, `watch_attach_after_seq`, `attempt_window_start_seq`, and `partial_payload`; those attempt-window and partial-availability fields are also mirrored inside `operator_summary`. Continuation rebuilds now prefer `sources.json`, but can fall back to `citations.json.source_registry` when the sources artifact is missing or unreadable. When the current artifact pointers for a completed job are mixed or incomplete, continuation first falls back to the latest complete final artifact batch before falling back again to checkpoints or partial artifacts. Jobs recovered from in-flight `queued` or `running` state are now reconciled into `interrupted` with an explicit recovery reason. `resume` now starts a new attempt time window instead of replaying the previous terminal timestamps.
+`sources.json` now carries additive source-quality metadata such as `source_key`, `quality_score`, `quality_tier`, `source_type`, and `ranking_reasons` alongside `source_id`. Source rows may also expose additive `winner_provider`, `citation_count`, and `section_count` fields. `report.json.runtime.provider_winners` now exposes each winning unit's `provider_name`, `provider_model`, `effective_model`, `provider_api_url`, `source_count`, and `evidence_count`; `provider_attempts` / `provider_capabilities` expose the search/fetch/map provider paths that were used or failed. Supplemental search attempts use `attempt_role=supplemental`, search/map internal selective fetch attempts use `attempt_role=selective_fetch`, and failed attempts may include additive `failure_reason` and `warnings`. `report.json.runtime.budget` exposes the deep research budget, concurrency summary, and local call/evidence counts; selective fetch is counted in `budget.usage.fetch_calls`. Provider Accounting may also appear as an additive final-report section in both `report.json` and `citations.json`, describing search/fetch/map call counts, provider attempts, failed attempts, warnings, and budget usage in report prose. Sections inside `citations.json` and `report.json` may also include additive `summary`, `prose`, `confidence`, `claim_cluster_count`, `supporting_source_count`, and `supporting_domain_count` fields, and claims may include additive `unit_id`, `evidence_ids`, `cluster_type`, `supporting_source_count`, `supporting_domain_count`, and `confidence` provenance/quality fields. `status` / `result` may also surface additive operator diagnostics such as `artifact_fallback_used`, `resolved_artifact_batch_id`, `artifact_visibility_reason`, `watch_attach_after_seq`, `attempt_window_start_seq`, and `partial_payload`; those attempt-window and partial-availability fields are also mirrored inside `operator_summary`. Continuation rebuilds now prefer `sources.json`, but can fall back to `citations.json.source_registry` when the sources artifact is missing or unreadable. When the current artifact pointers for a completed job are mixed or incomplete, continuation first falls back to the latest complete final artifact batch before falling back again to checkpoints or partial artifacts. Jobs recovered from in-flight `queued` or `running` state are now reconciled into `interrupted` with an explicit recovery reason. `resume` now starts a new attempt time window instead of replaying the previous terminal timestamps.
 
 When reading a single artifact through the CLI, `grok-search-research result --artifact <kind>` now follows the same resolved-final-batch preference as `deep_research_result`, instead of blindly reading the current artifact pointer for completed jobs. MCP callers can use `deep_research_artifact(job_id, artifact)` for the same single-artifact visibility behavior, including `state` and `artifact_visibility_reason`.
 

@@ -222,7 +222,7 @@ claude mcp add-json grok-search --scope user '{
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式，推荐显式包含 `/v1` 后缀；代码层不会仅因省略 `/v1` 就预先拦截，但多数 OpenAI 兼容端点仍可能因此在运行时失败，并通常伴随兼容性 warning） |
+| `GROK_API_URL` | 是 | - | Grok API 地址（填写你的 OpenAI-compatible base URL；常见路径形式包含 `/v1`。代码层不会仅因省略 `/v1` 就预先拦截，但不少 OpenAI-compatible 端点可能因此在运行时失败，并通常伴随兼容性 warning） |
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
 | `GROK_MODEL` | 否 | `grok-4.20-0309` | 默认模型；优先级见下方说明（进程 env > 项目 `.env.local` > 项目 `.env` > 持久化 config > 代码默认值） |
 | `GROK_MODEL_PROFILE` | 否 | `balanced_auto` | 当未显式设置 `GROK_MODEL` 时，按统一工具级策略解析默认模型；provider 只影响 suffix、endpoint path 与兼容性诊断 |
@@ -238,9 +238,9 @@ claude mcp add-json grok-search --scope user '{
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
 | `TAVILY_ENABLED` | 否 | `true` | 是否启用 Tavily |
-| `TAVILY_FALLBACK_API_URL` | 否 | `https://tavily-fallback.example.com/api/tavily` | 当主 Tavily 地址是本机 loopback 且不可用时使用的远端 HTTP API fallback 地址 |
+| `TAVILY_FALLBACK_API_URL` | 否 | - | 当主 Tavily 地址是本机 loopback 且不可用时使用的远端 HTTP API fallback 地址；需要显式配置 |
 | `TAVILY_FALLBACK_API_KEY` | 否 | 复用 `TAVILY_API_KEY` | Tavily fallback Bearer token；不要写入公开仓库 |
-| `TAVILY_FALLBACK_ENABLED` | 否 | `true` | 是否允许本机 Tavily 端口失败后尝试 fallback |
+| `TAVILY_FALLBACK_ENABLED` | 否 | `false` | 是否允许本机 Tavily 端口失败后尝试 fallback |
 | `FIRECRAWL_API_KEY` | 否 | - | Firecrawl API 密钥（用于 `web_fetch` 托底，也可用于 supplemental `web_search`） |
 | `FIRECRAWL_API_URL` | 否 | `https://api.firecrawl.dev/v2` | Firecrawl API 地址 |
 | `GROK_DEBUG` | 否 | `false` | 调试模式；同时控制 debug-only 进度日志与 `ctx.info()` 中间进度转发 |
@@ -286,7 +286,7 @@ claude mcp add-json grok-search --scope user '{
 
 经验建议：
 
-- `GROK_API_URL` 推荐使用带显式 `/v1` 后缀的 OpenAI 兼容根路径；代码层不会仅因省略 `/v1` 就预先拦截，但多数 OpenAI 兼容端点仍可能因此在运行时失败，并通常伴随兼容性 warning
+- `GROK_API_URL` 填写你所用服务商提供的 OpenAI-compatible base URL；常见路径形式包含 `/v1`。代码层不会仅因省略 `/v1` 就预先拦截，但不少 OpenAI-compatible 端点可能因此在运行时失败，并通常伴随兼容性 warning
 - `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
 - 如需更省上下文，可将 `GROK_TIME_CONTEXT_MODE` 设为 `auto`（只在明显时效查询或显式时效控制下注入）或 `never`
 - `GROK_DEBUG=false` 时，`log_info()` 不会写入这类 helper 日志，也不会通过 `ctx.info()` 暴露中间进度；仅在 `GROK_DEBUG=true` 时转发 debug-only progress
@@ -517,11 +517,11 @@ claude mcp list
 - `get_config_info(detail=summary)` 与默认 doctor 当前应优先反映轻路径主能力的健康状态；`deep_research_*` readiness 仍会保留在详细输出里，但属于高级可选层，不应单独把默认总体健康结论拉成 degraded。
 - `deep_research_start` 会创建 job，并立即生成结构化 `plan.json`；其中至少包含 `brief`、`sub_questions`、`search_strategy`、`report_outline`、`research_units`。在 continuation 场景下，`plan.json` 里的 `continuation` 当前只保留 compact 摘要视图，完整 carry-forward state 会额外写到 `continuation.json`。非 `plan_only` 场景下，任务会异步推进并逐步产出 `partial_report.md`、`final_report.md`、`sources.json`、`citations.json`、`report.json`。
 - `force_new` 用于控制 `deep_research_start` 是否必须创建全新 job。
-- 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；这条规则当前同样适用于带 `continue_from_job_id` 的 follow-up job，返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。当前 request fingerprint 也会区分 `plan_only`；`plan_only=true` 不应再复用 execution job，execution start 也不应复用 plan-only draft。对 `completed` job，当前只有在最终四件套可读且来自一致 `batch_id` 时才应继续被视为可复用结果。
+- 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；这条规则当前同样适用于带 `continue_from_job_id` 的 follow-up job，返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。当前 request fingerprint 也会区分 `plan_only`；`plan_only=true` 不应再复用 execution job，execution start 也不应复用 plan-only draft。对 `completed` job，当前只有在最终 provenance bundle 可读且核心 artifacts 与 sidecars 来自一致 `batch_id` 时才应继续被视为可复用结果；除 `sources.json`、`citations.json`、`report.json`、`final_report.md` 外，还会校验 `evidence_items.json`、`coverage.json`、`grounding.json`、`verifier.json` 以及可用的 additive sidecars。
 - 若 `deep_research_start(force_new=false)` 命中的是 `interrupted` 且已存在可读 final artifact batch 的 job，当前也会先把它解析成 `completed` 再作为 reusable result 返回，避免与 `deep_research_resume` 对同一 job 给出不同终态语义。
 - `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要；对 `completed` job，还会额外返回当前是否正在读取 resolved final batch 的 additive 诊断字段，如 `artifact_fallback_used`、`resolved_artifact_batch_id`、`artifact_visibility_reason`。对 `interrupted` / `failed` / `canceled` 且 `current_checkpoint/phase` 已到 `finalizing` 的 job，只要存在一致且可读的 final provenance bundle，当前也应暴露同一批 resolved final artifacts。`evidence_items.json` 现在也会跟着 resolved final batch 一起出现在 `artifact_kinds` / `artifacts` 中；`evidence_bank.json` 与 `verification.json` 目前仍是 additive artifact，不参与 resolved batch 的硬门槛。`status` 现在还会暴露 additive attempt-window / operator 诊断字段，如 `watch_attach_after_seq`、`attempt_window_start_seq`、`partial_payload`，以及镜像这些字段的 `operator_summary`。CLI `grok-search-research result --artifact <kind>` 当前也应优先读取同一批 resolved final artifacts，而不是盲读当前指针。
 - `deep_research_events` 返回有序事件流，支持 `after_seq` 增量读取；空 fetch/map 等显式 unit 失败当前会通过 `research_unit_failed` 暴露，而不应再静默计作 completed。
-- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化；`evidence_items` 也会作为独立字段一起返回。`report.json.sections` 现在还可能带 additive `prose`，`report.runtime` 还可能带 additive `verification`。若某个 JSON artifact 不可读，结果会在 `artifact_errors` 里返回稳定错误码，而不是直接让整次读取失败。对 `completed` job，若最终 provenance bundle 缺失核心 sidecar，当前会通过 `artifact_errors` 暴露缺失项；对 `failed` / `canceled` / `interrupted` job，则优先读取当前可解析的 resolved final batch，再退到 checkpoint 与 partial artifacts。`result` 现在也会返回 `watch_attach_after_seq`、`attempt_window_start_seq`、`partial_payload`，并在 `operator_summary` 中镜像 attempt-window / partial-availability 状态，便于 CLI `watch` 与宿主做断点续看。continuation context 在 artifact 可解析但 shape 非法时，也会继续按 `sources.json -> citations.json.source_registry -> checkpoint -> partial/runtime carry-forward` 的顺序回退；当 resolved final batch 缺少 `evidence_items.json` 时，当前会优先回退到当前 job 上的 `evidence_items.json`，而不是直接退到 checkpoint reconstruction。
+- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化；`evidence_items` 也会作为独立字段一起返回。`report.json.sections` 现在还可能带 additive `prose`，`report.runtime` 还可能带 additive `verification`。Provider Accounting 当前也会作为最终报告正文与 `report.json` / `citations.json` 的 additive section 暴露，用于说明 search/fetch/map 调用计数、provider attempts、失败 attempt、warnings 与预算用量。若某个 JSON artifact 不可读，结果会在 `artifact_errors` 里返回稳定错误码，而不是直接让整次读取失败。对 `completed` job，若最终 provenance bundle 缺失核心 sidecar，当前会通过 `artifact_errors` 暴露缺失项；对 `failed` / `canceled` / `interrupted` job，则优先读取当前可解析的 resolved final batch，再退到 checkpoint 与 partial artifacts。`result` 现在也会返回 `watch_attach_after_seq`、`attempt_window_start_seq`、`partial_payload`，并在 `operator_summary` 中镜像 attempt-window / partial-availability 状态，便于 CLI `watch` 与宿主做断点续看。continuation context 在 artifact 可解析但 shape 非法时，也会继续按 `sources.json -> citations.json.source_registry -> checkpoint -> partial/runtime carry-forward` 的顺序回退；当 resolved final batch 缺少 `evidence_items.json` 时，当前会优先回退到当前 job 上的 `evidence_items.json`，而不是直接退到 checkpoint reconstruction。
 - `deep_research_artifact(job_id, artifact)` 提供 MCP 单 artifact 读取入口，并沿用 CLI `grok-search-research result --artifact <kind>` 的可见性规则；返回会带 `state` 与 `artifact_visibility_reason`，便于宿主区分当前指针、resolved final batch、checkpoint 或 partial artifact。
 - continuation context 当前对 `sources.json`、`citations.json`、`report.json` 逐项判断是否仍可读；某个当前 artifact shape 非法时，不应把仍然可读的其他当前 artifacts 一起降级到 checkpoint。
 - `deep_research_resume` 目前支持从 `draft`、`failed`、`interrupted` job 继续，并优先从最新的 completed research-unit checkpoint 续跑，而不是整 job 从头执行。恢复后的新 attempt 会清理上一轮的终态时间戳，并重新使用新的 attempt 时间窗口。
@@ -529,7 +529,7 @@ claude mcp list
 - `deep_research_list` 提供最近 job 列表，适合 CLI 或宿主做结果检索。
 - 最终 artifacts 当前按同一 `batch_id` 原子发布；调用方如需确认 `sources.json`、`citations.json`、`report.json`、`final_report.md` 来自同一批结果，可读取 artifact metadata 里的 `batch_id`。`sources.json` 当前还可能附带 `topic_match_score` 与 `ranking_penalties`；unused source 若与同域中已被 grounding 的页面相比明显更 off-topic，当前可被直接从最终 source registry 压掉，并带 `same_domain_off_topic` penalty。`report.json.runtime` 当前除 `warnings` 外，也可能附带 `failed_units`。
 - `report.json.runtime.warnings` 当前也会在 coverage 明显不完整时附带 `coverage_incomplete`；coverage 现在区分 `coverage_gate_passed` 与 additive `hard_coverage_gate_passed`。`hard_coverage_gate_passed` 只看 `must_cover` / `coverage_checklist` 这类硬目标，决定 release gate 是否直接失败；`unanswered_sections`、`uncovered_sub_questions` 这类软缺口仍会保留在 coverage ledger 中，并至少把 `report.status` 降级为 `degraded`。
-- `sources.json` 当前除 `source_id` 外，还会附带 additive `source_key`、`quality_score`、`quality_tier`、`source_type`、`ranking_reasons` 一类来源质量与排序解释元数据；来源条目还可能带 `winner_provider`、`citation_count`、`section_count` 这类更直接的 provenance / usage 字段。`report.json.runtime.provider_winners` 当前会按 unit 暴露 `provider_name`、`provider_model`、`effective_model` 与 `provider_api_url`；`provider_attempts` / `provider_capabilities` 会按 search/fetch/map 暴露实际使用或失败的 provider 路径；`report.json.runtime.budget` 会暴露本次 deep research 的预算、并发摘要与本地调用/证据计数。`citations.json` 与 `report.json` 的 section 当前也可能带 `summary`、`confidence`、`claim_cluster_count`、`supporting_source_count`、`supporting_domain_count`；claim 当前也可能附带 additive `unit_id`、`evidence_ids`、`cluster_type`、`supporting_source_count`、`supporting_domain_count`、`confidence`，用于回溯 claim 来自哪个 research unit / evidence，以及它当前是单来源、同域共识还是更强跨域 corroboration 型证据。
+- `sources.json` 当前除 `source_id` 外，还会附带 additive `source_key`、`quality_score`、`quality_tier`、`source_type`、`ranking_reasons` 一类来源质量与排序解释元数据；来源条目还可能带 `winner_provider`、`citation_count`、`section_count` 这类更直接的 provenance / usage 字段。`report.json.runtime.provider_winners` 当前会按 unit 暴露 `provider_name`、`provider_model`、`effective_model`、`provider_api_url`、`source_count` 与 `evidence_count`；`provider_attempts` / `provider_capabilities` 会按 search/fetch/map 暴露实际使用或失败的 provider 路径，其中 supplemental search 会带 `attempt_role=supplemental`，search/map 内部的 selective fetch 会带 `attempt_role=selective_fetch`，失败 attempt 还可能带 additive `failure_reason` 与 `warnings`。`report.json.runtime.budget` 会暴露本次 deep research 的预算、并发摘要与本地调用/证据计数；其中 selective fetch 会计入 `budget.usage.fetch_calls`。`citations.json` 与 `report.json` 的 section 当前也可能带 `summary`、`confidence`、`claim_cluster_count`、`supporting_source_count`、`supporting_domain_count`；claim 当前也可能附带 additive `unit_id`、`evidence_ids`、`cluster_type`、`supporting_source_count`、`supporting_domain_count`、`confidence`，用于回溯 claim 来自哪个 research unit / evidence，以及它当前是单来源、同域共识还是更强跨域 corroboration 型证据。
 - continuation context 当前会优先复用 `sources.json`；若该 artifact 缺失或不可读，会回退到 `citations.json.source_registry` 重建 carry-forward sources。若已完成 job 的当前 artifact 指针混批或缺件，则会优先回退到最近的完整 final artifact batch，再回退到 checkpoint / partial artifacts。运行中的 `queued` / `running` job 在新进程启动时会被回收成 `interrupted`，并带上恢复原因。
 </details>
 
@@ -546,7 +546,7 @@ A: Grok（`GROK_API_URL` + `GROK_API_KEY`）为必填，提供核心搜索能力
 <summary>
 Q: Grok API 地址需要什么格式？
 </summary>
-A: 推荐使用带显式 `/v1` 后缀的 OpenAI 兼容根路径，并确保 `/chat/completions` 与 `/models` 端点可用；代码层不会仅因省略 `/v1` 就预先拦截，但多数 OpenAI 兼容端点仍可能因此在运行时失败，并通常伴随兼容性 warning。代码层并不要求它必须是“官方”还是“镜像/中转”。
+A: 填写你所用服务商提供的 OpenAI-compatible base URL，并确认 `/chat/completions` 与 `/models` 端点可用；常见路径形式包含 `/v1`。代码层不会仅因省略 `/v1` 就预先拦截，但不少 OpenAI-compatible 端点可能因此在运行时失败，并通常伴随兼容性 warning。代码层并不要求它必须是“官方”还是“镜像/中转”。
 </details>
 
 <details>

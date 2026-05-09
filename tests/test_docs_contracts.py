@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 README = ROOT_DIR / "README.md"
+DOCS_README = ROOT_DIR / "docs" / "README.md"
 COMPATIBILITY = ROOT_DIR / "docs" / "COMPATIBILITY.md"
 GET_SOURCES_LIFECYCLE = ROOT_DIR / "docs" / "GET_SOURCES_LIFECYCLE.md"
 README_EN = ROOT_DIR / "README.en.md"
@@ -50,17 +51,19 @@ def _extract_get_sources_lifecycle_contract() -> dict:
     return json.loads(match.group(1))
 
 
-def test_readme_requires_explicit_v1_suffix_for_grok_api_url():
+def test_readme_describes_grok_api_url_without_site_recommendations():
     text = README.read_text(encoding="utf-8")
 
     assert "尽量写成 OpenAI 兼容根路径并显式带上 `/v1`" not in text
     assert "值必须显式包含 `/v1` 后缀" not in text
-    assert "`GROK_API_URL` 推荐使用带显式 `/v1` 后缀的 OpenAI 兼容根路径" in text
+    assert "`GROK_API_URL` 填写你所用服务商提供的 OpenAI-compatible base URL" in text
     assert "代码层不会仅因省略 `/v1` 就预先拦截" in text
-    assert "多数 OpenAI 兼容端点仍可能因此在运行时失败" in text
+    assert "不少 OpenAI-compatible 端点可能因此在运行时失败" in text
+    assert "https://api.example.com/v1" in text
 
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
     assert "must include an explicit `/v1` suffix" not in compatibility
+    assert "OpenAI-compatible base URL supplied by your provider" in compatibility
     assert "does not pre-block the request on its own" in compatibility
     assert "many OpenAI-compatible endpoints may still fail at runtime" in compatibility
 
@@ -68,16 +71,16 @@ def test_readme_requires_explicit_v1_suffix_for_grok_api_url():
 def test_v1_guidance_stays_aligned_across_multilingual_readmes():
     text = README.read_text(encoding="utf-8")
 
-    assert "推荐使用带显式 `/v1` 后缀的 OpenAI 兼容根路径" in text
+    assert "服务商提供的 OpenAI-compatible base URL" in text
     assert "不会仅因省略 `/v1` 就预先拦截" in text
     assert "运行时失败" in text
     assert "需要 OpenAI 兼容根路径，并显式带上 `/v1` 后缀" not in text
 
     localized_expectations = {
-        README_EN: ["recommended", "does not pre-block", "fail at runtime"],
-        README_ZH_TW: ["建議顯式包含", "不會僅因省略", "執行期失敗"],
-        README_JA: ["推奨", "事前にブロック", "実行時に失敗"],
-        README_RU: ["рекомендуется", "не блокирует запрос заранее", "во время выполнения"],
+        README_EN: ["supplied by your provider", "does not pre-block", "fail at runtime"],
+        README_ZH_TW: ["服務商提供", "不會僅因省略", "執行期失敗"],
+        README_JA: ["プロバイダが提供", "事前にブロック", "実行時に失敗"],
+        README_RU: ["предоставленный вашим провайдером", "не блокирует запрос заранее", "во время выполнения"],
     }
     localized_forbidden = {
         README_EN: "must include an explicit `/v1` suffix",
@@ -444,6 +447,9 @@ def test_docs_keep_planning_first_and_cli_first_research_story():
 def test_docs_explain_deep_research_job_surface_and_cli():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
+    readme_zh_tw = README_ZH_TW.read_text(encoding="utf-8")
+    readme_ja = README_JA.read_text(encoding="utf-8")
+    readme_ru = README_RU.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
     agents = _read_private_agents_contract_text()
     skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
@@ -452,9 +458,69 @@ def test_docs_explain_deep_research_job_surface_and_cli():
     assert "`grok-search-research`" in readme
     assert "`deep_research_start`" in readme_en
     assert "`grok-search-research`" in readme_en
+    for localized in (readme_zh_tw, readme_ja, readme_ru):
+        assert "`21`" in localized
+        assert "`deep_research_artifact`" in localized
+        assert "`deep_research_result`" in localized
+        assert "`deep_research_status`" in localized
+        assert "`grok-search-research result --artifact <kind>`" in localized
+        assert "`artifact_errors`" in localized
+        assert "`artifact_visibility_reason`" in localized
+        assert "`operator_summary`" in localized
+        assert "Provider Accounting" in localized
     assert "`deep_research_*`" in compatibility
     assert "`deep_research_resume`" in agents
     assert "`deep_research_*`" in skill
+
+
+def test_docs_readme_points_to_public_entry_points():
+    docs_readme = DOCS_README.read_text(encoding="utf-8")
+
+    assert "../README.md" in docs_readme
+    assert "../README.en.md" in docs_readme
+    assert "./COMPATIBILITY.md" in docs_readme
+    assert "./RELEASING.md" in docs_readme
+
+
+def test_public_docs_and_tests_do_not_embed_private_release_endpoints():
+    private_fragments = tuple(
+        bytes.fromhex(value).decode("utf-8")
+        for value in (
+            "61692e6875616e3636362e6465",
+            "6170692e3932353231342e78797a",
+            "746176696c792e6976616e6c692e6363",
+            "2f55736572732f6578616d706c652d75736572",
+            "2f707269766174652f7661722f666f6c64657273",
+        )
+    )
+    scanned_paths = [
+        *ROOT_DIR.glob("README*.md"),
+        *ROOT_DIR.glob("docs/*.md"),
+        *ROOT_DIR.glob(".github/workflows/*.yml"),
+        *ROOT_DIR.glob("src/**/*.py"),
+        *ROOT_DIR.glob("tests/**/*.py"),
+    ]
+
+    for path in scanned_paths:
+        if path == Path(__file__).resolve():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for fragment in private_fragments:
+            assert fragment not in text, f"{fragment!r} leaked in {path.relative_to(ROOT_DIR)}"
+
+
+def test_localized_readmes_cover_tavily_fallback_contract():
+    localized_readmes = (
+        README_ZH_TW.read_text(encoding="utf-8"),
+        README_JA.read_text(encoding="utf-8"),
+        README_RU.read_text(encoding="utf-8"),
+    )
+
+    for text in localized_readmes:
+        assert "`TAVILY_FALLBACK_API_URL`" in text
+        assert "`TAVILY_FALLBACK_API_KEY`" in text
+        assert "`TAVILY_FALLBACK_ENABLED`" in text
+        assert "`false`" in text
 
 
 def test_docs_explain_checkpoint_resume_continuation_and_structured_artifacts():

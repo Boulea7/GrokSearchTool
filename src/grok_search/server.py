@@ -959,6 +959,7 @@ _PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".lan", ".home", ".corp")
 _LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
 _LOOPBACK_HELPER_SUFFIXES = ("localtest.me", "lvh.me")
 _DNS_ALIAS_IP_SUFFIXES = ("nip.io", "xip.io", "sslip.io")
+_PUBLIC_DOCS_PREFLIGHT_SKIP_HOSTS = {"docs.aws.amazon.com"}
 
 
 @dataclass(frozen=True)
@@ -977,6 +978,28 @@ def _reject_target_preflight(message: str) -> _TargetPreflightResult:
 
 def _skip_target_preflight(message: str) -> _TargetPreflightResult:
     return _TargetPreflightResult("skipped_due_to_error", message)
+
+
+def _allow_skipped_preflight_for_public_docs(url: str, preflight: _TargetPreflightResult) -> bool:
+    if preflight.status != "skipped_due_to_error":
+        return False
+    parsed = urlparse((url or "").strip())
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return parsed.scheme.lower() == "https" and host in _PUBLIC_DOCS_PREFLIGHT_SKIP_HOSTS
+
+
+def _preflight_warning_code(preflight: _TargetPreflightResult) -> str:
+    message = preflight.message or ""
+    if "超时" in message:
+        return "redirect_preflight_timeout"
+    return "redirect_preflight_failed"
+
+
+def _attach_preflight_warnings(data: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+    if warnings:
+        data = dict(data)
+        data["preflight_warnings"] = list(warnings)
+    return data
 
 _SENSITIVE_URL_PARAM_KEYS = {
     "api_key",
@@ -1913,11 +1936,20 @@ async def web_fetch(
     ctx: Context = None
 ) -> str | dict[str, Any]:
     preflight = await _preflight_public_target_url(url)
+    preflight_warnings: list[str] = []
     if preflight.status != "allow":
-        message = f"提取失败: {preflight.message}"
-        if _normalize_response_format(response_format) == "object":
-            return _build_object_envelope(ok=False, error="target_preflight_failed", message=message, data=None)
-        return message
+        if _allow_skipped_preflight_for_public_docs(url, preflight):
+            preflight_warnings.append(_preflight_warning_code(preflight))
+            await log_info(
+                ctx,
+                f"Continuing fetch after public docs preflight warning: {preflight.message}",
+                config.debug_enabled,
+            )
+        else:
+            message = f"提取失败: {preflight.message}"
+            if _normalize_response_format(response_format) == "object":
+                return _build_object_envelope(ok=False, error="target_preflight_failed", message=message, data=None)
+            return message
 
     await log_info(ctx, "Begin Fetch request", config.debug_enabled)
 
@@ -1941,13 +1973,13 @@ async def web_fetch(
                     ok=True,
                     error=None,
                     message="提取成功",
-                    data={
+                    data=_attach_preflight_warnings({
                         "content": result,
                         "provider_name": "tavily",
                         "provider_model": "",
                         "effective_model": "",
                         "provider_api_url": tavily_result.get("provider_api_url") or f"{config.tavily_api_url.rstrip('/')}/extract",
-                    },
+                    }, preflight_warnings),
                 )
             return result
         if tavily_error:
@@ -1964,13 +1996,13 @@ async def web_fetch(
                 ok=True,
                 error=None,
                 message="提取成功",
-                data={
+                data=_attach_preflight_warnings({
                     "content": result,
                     "provider_name": "firecrawl",
                     "provider_model": "",
                     "effective_model": "",
                     "provider_api_url": f"{config.firecrawl_api_url.rstrip('/')}/scrape",
-                },
+                }, preflight_warnings),
             )
         return result
     if firecrawl_error:

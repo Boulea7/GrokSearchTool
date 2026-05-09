@@ -1,0 +1,108 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing"
+  },
+  "query": "Selective fetch provider budget visibility for deep research runtime",
+  "report": {
+    "final_report": "# Selective fetch provider budget visibility for deep research runtime\n\n## Provider Accounting\n\n- Search calls: 1; Fetch calls: 1; Map calls: 0; Provider attempts: 2.\n- Provider paths used: search via primary-grok; fetch via tavily.\n- Completed attempts: 2; failed attempts: 0.\n",
+    "unit_results": {
+      "unit-search-1": {
+        "summary": "Selective fetch grounded the search answer.",
+        "supporting_provider_attempts": [
+          {
+            "operation": "fetch",
+            "status": "completed",
+            "provider_name": "tavily",
+            "provider_api_url": "https://api.tavily.example.invalid/extract",
+            "source_count": 1,
+            "evidence_count": 1,
+            "attempt_role": "selective_fetch"
+          }
+        ]
+      }
+    },
+    "runtime": {
+      "budget": {
+        "effort": "standard",
+        "resolved_budget_seconds": 240,
+        "hard_timeout_seconds": 900,
+        "max_concurrency": 2,
+        "usage": {
+          "completed_units": 1,
+          "failed_units": 0,
+          "skipped_units": 0,
+          "search_calls": 1,
+          "fetch_calls": 1,
+          "map_calls": 0,
+          "provider_attempts": 2,
+          "source_count": 1,
+          "evidence_count": 2
+        }
+      },
+      "provider_capabilities": {
+        "search": {
+          "used": true,
+          "providers": ["primary-grok"]
+        },
+        "fetch": {
+          "used": true,
+          "providers": ["tavily"]
+        },
+        "map": {
+          "used": false,
+          "providers": []
+        }
+      },
+      "provider_attempts": [
+        {
+          "unit_id": "unit-search-1",
+          "operation": "search",
+          "status": "completed",
+          "provider_name": "primary-grok",
+          "provider_model": "grok-4.20-expert",
+          "effective_model": "grok-4.20-expert",
+          "provider_api_url": "https://provider.example.invalid/v1/chat/completions",
+          "source_count": 1,
+          "evidence_count": 1,
+          "error_code": ""
+        },
+        {
+          "unit_id": "unit-search-1",
+          "operation": "fetch",
+          "status": "completed",
+          "provider_name": "tavily",
+          "provider_model": "",
+          "effective_model": "",
+          "provider_api_url": "https://api.tavily.example.invalid/extract",
+          "source_count": 1,
+          "evidence_count": 1,
+          "error_code": "",
+          "attempt_role": "selective_fetch"
+        }
+      ],
+      "provider_winners": [
+        {
+          "unit_id": "unit-search-1",
+          "provider_name": "primary-grok",
+          "provider_model": "grok-4.20-expert",
+          "effective_model": "grok-4.20-expert",
+          "provider_api_url": "https://provider.example.invalid/v1/chat/completions"
+        }
+      ]
+    }
+  },
+  "feature_readiness": {
+    "deep_research_runtime": {
+      "status": "degraded",
+      "degraded_by": ["advanced_optional"]
+    }
+  },
+  "golden": {
+    "provider_budget_surface": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

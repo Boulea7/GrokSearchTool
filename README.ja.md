@@ -20,7 +20,7 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 - `switch_model`: デフォルト Grok モデルを切り替え
 - `toggle_builtin_tools`: Claude Code の組み込み WebSearch / WebFetch を切り替え
 
-公開 MCP ツールは現在 `20` 個です。
+公開 MCP ツールは現在 `21` 個です。
 
 - `web_search`
 - `get_sources`
@@ -39,6 +39,7 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 - `deep_research_status`
 - `deep_research_events`
 - `deep_research_result`
+- `deep_research_artifact`
 - `deep_research_resume`
 - `deep_research_cancel`
 - `deep_research_list`
@@ -46,6 +47,8 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 `plan_search_term` は `search_strategy` の初回作成時に `approach` / `fallback_plan` を設定します。以後の非 `is_revision` 呼び出しは `search_terms` の追加だけを行い、既存の strategy metadata を暗黙に上書きしません。
 planning `session_id` は現在のプロセス内だけで有効な transient handle であり、既定 TTL は約 1 時間、LRU 上限は 256 です。プロセス再起動、TTL 切れ、eviction 後は新しい `plan_intent` からやり直してください。
 wrapper はあえて scalar shim 入力を保っており、`depends_on` は CSV、`parallel_groups` はセミコロン区切りの CSV、`params_json` は文字列化 JSON を受け取ります。最初の `plan_search_term` 呼び出しでは `approach` が必須です。
+
+`deep_research_result` / `deep_research_status` は `artifact_errors`、`artifact_visibility_reason`、resolved `batch_id`、`operator_summary` などの additive artifact diagnostics を公開します。`deep_research_artifact(job_id, artifact)` と CLI `grok-search-research result --artifact <kind>` は同じ artifact visibility rules を使い、resolved final batch を優先します。Provider Accounting は final report body と `report.json` / `citations.json` の additive section として出ることがあり、provider attempts、failed fetch、warnings、budget usage を説明します。
 
 ## インストール
 
@@ -135,13 +138,16 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 | 変数 | 必須 | 説明 |
 | --- | --- | --- |
-| `GROK_API_URL` | Yes | OpenAI 互換 Grok エンドポイント。明示的な `/v1` サフィックス付きのルートを推奨します。現在のコードパスは `/v1` 省略だけでは事前にブロックしませんが、多くの OpenAI 互換エンドポイントでは実行時に失敗し、通常は compatibility warning も伴います |
+| `GROK_API_URL` | Yes | 利用するプロバイダが提供する OpenAI-compatible Grok base URL。一般的なパス形式には `/v1` が含まれます。現在のコードパスは `/v1` 省略だけでは事前にブロックしませんが、多くの OpenAI-compatible エンドポイントでは実行時に失敗し、通常は compatibility warning も伴います |
 | `GROK_API_KEY` | Yes | Grok API Key |
 | `GROK_MODEL` | No | デフォルトモデル。優先順位は process env > project `.env.local` > project `.env` > 永続 config > コード既定値 |
 | `GROK_TIME_CONTEXT_MODE` | No | 時間コンテキスト注入モード：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | No | `web_fetch` / `web_map` 用 Tavily Key。Tavily ベースの supplemental `web_search` にも使用 |
 | `TAVILY_API_URL` | No | Tavily API エンドポイント |
 | `TAVILY_ENABLED` | No | Tavily ルートを有効化するか |
+| `TAVILY_FALLBACK_API_URL` | No | primary Tavily endpoint が利用できない local loopback の場合に使う remote HTTP API fallback。既定の内蔵 endpoint はなく、明示設定が必要 |
+| `TAVILY_FALLBACK_API_KEY` | No | Tavily fallback Bearer token。既定では `TAVILY_API_KEY` を再利用し、公開リポジトリへ commit しないでください |
+| `TAVILY_FALLBACK_ENABLED` | No | local-loopback Tavily fallback を有効化するか。既定は `false` |
 | `FIRECRAWL_API_KEY` | No | Firecrawl fallback Key。supplemental `web_search` にも使用可能 |
 | `FIRECRAWL_API_URL` | No | Firecrawl API エンドポイント |
 | `GROK_DEBUG` | No | デバッグログと debug-only `ctx.info()` 進捗転送を有効化するか |

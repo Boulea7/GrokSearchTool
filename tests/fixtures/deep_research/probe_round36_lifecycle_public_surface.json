@@ -1,72 +1,425 @@
 {
-  "sample": "probe-round36-lifecycle-public-surface",
-  "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, selected evidence usage, and malformed completion robustness for long-running deep research jobs",
-  "job": {
-    "status": "completed",
-    "phase": "finalizing",
-    "effort": "deep",
-    "resolved_budget_seconds": 180,
-    "attempt_count": 1,
-    "current_checkpoint": "finalizing",
-    "current_checkpoint_kind": "finalizing",
-    "last_error": "",
-    "cancel_requested": false,
-    "continued_from_job_id": ""
+  "artifact_payload": {
+    "citations": {
+      "sections": [
+        {
+          "claims": [
+            {
+              "citations": [
+                "R6"
+              ],
+              "claim_id": "executive-summary-claim-1",
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-unit-search-1-fetch-1",
+                  "line_end": 1,
+                  "line_start": 1,
+                  "source_backed": true,
+                  "source_id": "R6"
+                }
+              ],
+              "evidence_ids": [
+                "evidence-unit-search-1-fetch-1"
+              ],
+              "source_ids": [
+                "R6"
+              ],
+              "text": "Sanitized replay claim for public-surface fixture validation."
+            }
+          ],
+          "section_id": "executive-summary",
+          "title": "Sanitized Fixture Section"
+        }
+      ],
+      "source_registry": {
+        "R6": {
+          "domain": "forum.langchain.com",
+          "source_id": "R6",
+          "source_type": "third_party",
+          "title": "LangGraph checkpoint resume thread",
+          "url": "https://forum.langchain.com/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240"
+        }
+      }
+    },
+    "coverage_gaps": {
+      "blocking_gap_count": 0,
+      "gaps": [],
+      "hard_gap_count": 0,
+      "total_gap_count": 0
+    },
+    "evidence_bank": [
+      {
+        "evidence_id": "evidence-unit-search-1-fetch-1",
+        "line_span": {
+          "end": null,
+          "start": null
+        },
+        "origin_tool": "fetch",
+        "snippet_or_excerpt": "Checkpoint resume can continue from the last saved state.",
+        "source_backed": true,
+        "source_ids": [
+          "R6"
+        ],
+        "source_url": "https://forum.langchain.com/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240",
+        "used_by_claim_ids": [
+          "executive-summary-claim-1"
+        ],
+        "used_by_section_ids": [
+          "executive-summary"
+        ]
+      }
+    ],
+    "evidence_items": [
+      {
+        "evidence_id": "evidence-unit-search-1-fetch-1",
+        "source_ids": [
+          "R6"
+        ],
+        "summary": "Sanitized replay evidence for public-surface fixture validation.",
+        "unit_id": "fixture-unit"
+      }
+    ],
+    "final_report": "# Final Report\n\nSanitized replay fixture for deep research public-surface tests.\n",
+    "report": {
+      "runtime": {
+        "release_gate": {
+          "all_reason_codes": [],
+          "passed": true,
+          "reason_codes": [],
+          "soft_reason_codes": []
+        },
+        "verifier": {
+          "passed": true,
+          "reason_codes": []
+        },
+        "warnings": [
+          "planner_fallback_used"
+        ]
+      },
+      "sections": [
+        {
+          "claims": [
+            {
+              "citations": [
+                "R6"
+              ],
+              "claim_id": "executive-summary-claim-1",
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-unit-search-1-fetch-1",
+                  "line_end": 1,
+                  "line_start": 1,
+                  "source_backed": true,
+                  "source_id": "R6"
+                }
+              ],
+              "evidence_ids": [
+                "evidence-unit-search-1-fetch-1"
+              ],
+              "source_ids": [
+                "R6"
+              ],
+              "text": "Sanitized replay claim for public-surface fixture validation."
+            }
+          ],
+          "section_id": "executive-summary",
+          "title": "Sanitized Fixture Section"
+        }
+      ],
+      "status": "degraded",
+      "unit_results": {}
+    },
+    "sources": [
+      {
+        "domain": "forum.langchain.com",
+        "source_id": "R6",
+        "source_type": "third_party",
+        "title": "LangGraph checkpoint resume thread",
+        "url": "https://forum.langchain.com/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240"
+      }
+    ],
+    "verification": {
+      "confidence_by_section": {
+        "executive-summary": "high"
+      },
+      "conflicted_claims": [],
+      "packet_to_prose_fidelity": {
+        "checked_packet_count": 1,
+        "missing_selected_packet_ids": [],
+        "passed": true,
+        "reason_codes": []
+      },
+      "single_source_claims": [
+        {
+          "claim_id": "executive-summary-claim-1"
+        }
+      ],
+      "supported_claims": [
+        {
+          "claim_id": "executive-summary-claim-1"
+        }
+      ],
+      "unmapped_evidence_ids": [],
+      "unresolved_sections": []
+    }
   },
-  "plan": {
-    "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, selected evidence usage, and malformed completion robustness for long-running deep research jobs",
-    "include_domains": [],
-    "exclude_domains": [],
-    "source_policy": {"mode": "mixed_web", "allowed_domains": [], "blocked_domains": [], "allowed_tools": ["search", "fetch", "map"], "must_cite_per_section": true, "continuation_mode": "fresh"},
-    "continuation": {"mode": "fresh"},
-    "planner_metadata": {"planner": "fallback", "used_fallback": true, "fallback_reason": {"stage": "unsafe_plan", "error": "unsafe_normalize_action"}}
+  "event_window": {
+    "after_seq": 3,
+    "job_terminal": true,
+    "last_event_type": "job_completed",
+    "next_after_seq": 13,
+    "returned_count": 10,
+    "window_has_terminal_event": true
   },
-  "source_policy": {"mode": "mixed_web", "allowed_domains": [], "blocked_domains": [], "allowed_tools": ["search", "fetch", "map"], "must_cite_per_section": true, "continuation_mode": "fresh"},
-  "lineage": {"root_job_id": "a34ff8bcbd1a026d01c698e4", "parent_job_id": "", "continued_from_job_id": "", "continued_from_checkpoint": "", "fork_type": "fresh", "carried_forward_source_ids": [], "carried_forward_evidence_ids": [], "skipped_unit_ids": [], "supersedes_job_id": ""},
-  "selected_bank": [
+  "events_after_seq": [
     {
-      "section_id": "executive-summary",
-      "selected_evidence_ids": ["evidence-unit-search-1-fetch-1"],
-      "selected_rows": [{"evidence_id": "evidence-unit-search-1-fetch-1", "selected_section_id": "executive-summary", "selection_reason": "keyword_overlap", "coverage_tags": ["sq1"], "rejected_reason": "", "claim_ids": ["executive-summary-claim-1"], "question_ids": ["sq1"]}],
-      "candidate_evidence_ids": ["evidence-unit-search-1-fetch-1"],
-      "rejected_evidence_ids": []
+      "data": {
+        "attempt_count": 1,
+        "checkpoint_key": "planning",
+        "checkpoint_kind": "planning",
+        "checkpoint_seq": 1,
+        "completed_units_count": 0,
+        "resume_source": "worker_restarted"
+      },
+      "message": "Deep research job resumed from checkpoint.",
+      "phase": "planning",
+      "seq": 4,
+      "type": "job_resumed"
+    },
+    {
+      "data": {
+        "unit_count": 2
+      },
+      "message": "Planning started.",
+      "phase": "planning",
+      "seq": 5,
+      "type": "phase_started"
+    },
+    {
+      "data": {
+        "completed_units": 0
+      },
+      "message": "Researching source material.",
+      "phase": "researching",
+      "seq": 6,
+      "type": "phase_started"
+    },
+    {
+      "data": {
+        "attempt_count": 1,
+        "checkpoint_key": "researching-dispatch-a1-unit-search-1",
+        "checkpoint_kind": "research_dispatch",
+        "checkpoint_seq": 2,
+        "completed_units_count": 0
+      },
+      "message": "Deep research restored execution from the latest durable checkpoint.",
+      "phase": "researching",
+      "seq": 7,
+      "type": "checkpoint_restored"
+    },
+    {
+      "data": {
+        "completed_units": 0
+      },
+      "message": "Researching source material.",
+      "phase": "researching",
+      "seq": 8,
+      "type": "phase_started"
+    },
+    {
+      "data": {
+        "unit_type": "search"
+      },
+      "message": "Completed unit-search-1.",
+      "phase": "researching",
+      "seq": 9,
+      "type": "research_unit_completed"
+    },
+    {
+      "data": {
+        "unit_type": "search"
+      },
+      "message": "Completed unit-search-2.",
+      "phase": "researching",
+      "seq": 10,
+      "type": "research_unit_completed"
+    },
+    {
+      "data": {
+        "section_count": 4
+      },
+      "message": "Synthesizing findings.",
+      "phase": "synthesizing",
+      "seq": 11,
+      "type": "phase_started"
+    },
+    {
+      "data": {},
+      "message": "Finalizing report.",
+      "phase": "finalizing",
+      "seq": 12,
+      "type": "phase_started"
+    },
+    {
+      "data": {
+        "artifact_batch_id": "$seeded_batch_id",
+        "release_gate": {
+          "all_reason_codes": [],
+          "passed": true,
+          "reason_codes": [],
+          "soft_reason_codes": []
+        },
+        "sources_count": 4
+      },
+      "message": "Deep research completed.",
+      "phase": "finalizing",
+      "seq": 13,
+      "type": "job_completed"
     }
   ],
-  "artifact_payload": {
-    "sources": [{"source_id": "R6", "url": "https://forum.langchain.com/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240", "title": "LangGraph checkpoint resume thread", "domain": "forum.langchain.com", "source_type": "third_party"}],
-    "report": {
-      "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, selected evidence usage, and malformed completion robustness for long-running deep research jobs",
-      "summary": "Round36 lifecycle probe reached worker_restarted, resumed from planning, restored a dispatch checkpoint, replayed after_seq, and completed with planner fallback warning.",
-      "status": "degraded",
-      "sections": [{"section_id": "executive-summary", "title": "Executive Summary", "summary": "Checkpoint resume can continue from the last saved state.", "prose": "Checkpoint resume can continue from the last saved state.", "claims": [{"claim_id": "executive-summary-claim-1", "text": "Checkpoint resume can continue from the last saved state.", "citations": ["R6"], "evidence_ids": ["evidence-unit-search-1-fetch-1"]}], "citations": ["R6"]}],
-      "unit_results": {},
-      "runtime": {"warnings": ["planner_fallback_used"], "constraint_violations": [], "verifier": {"passed": true, "reason_codes": []}, "release_gate": {"passed": true, "reason_codes": [], "all_reason_codes": [], "soft_reason_codes": []}}
-    },
-    "final_report": "# Final Report\n\nRound36 lifecycle probe reached worker_restarted, resumed from planning, restored a dispatch checkpoint, replayed after_seq, and completed with planner fallback warning.\n",
-    "evidence_items": [{"evidence_id": "evidence-unit-search-1-fetch-1", "unit_id": "unit-search-1", "summary": "Checkpoint resume can continue from the last saved state.", "detail": "Checkpoint resume can continue from the last saved state.", "source_ids": ["R6"], "source_urls": ["https://forum.langchain.com/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240"], "evidence_kind": "fetch"}],
-    "evidence_bank": [{"evidence_id": "evidence-unit-search-1-fetch-1", "source_ids": ["R6"], "source_url": "https://forum.langchain.com/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240", "snippet_or_excerpt": "Checkpoint resume can continue from the last saved state.", "source_backed": true, "line_span": {"start": null, "end": null}, "origin_tool": "fetch", "used_by_section_ids": ["executive-summary"], "used_by_claim_ids": ["executive-summary-claim-1"]}],
-    "verification": {"supported_claims": [{"claim_id": "executive-summary-claim-1"}], "single_source_claims": [{"claim_id": "executive-summary-claim-1"}], "conflicted_claims": [], "unmapped_evidence_ids": [], "confidence_by_section": {"executive-summary": "high"}, "unresolved_sections": [], "packet_to_prose_fidelity": {"passed": true, "checked_packet_count": 1, "missing_selected_packet_ids": [], "reason_codes": []}}
-  },
   "initial_events": [
-    {"seq": 1, "type": "job_created", "phase": "planning", "message": "Deep research job created.", "data": {"plan_only": false, "continuation_mode": "fresh"}},
-    {"seq": 2, "type": "planner_fallback", "phase": "planning", "message": "Planner fell back to the deterministic backup plan.", "data": {"stage": "unsafe_plan"}},
-    {"seq": 3, "type": "job_interrupted", "phase": "planning", "message": "Deep research interrupted during worker recovery.", "data": {"attempt_count": 0, "checkpoint_key": "planning", "checkpoint_kind": "planning", "checkpoint_seq": 1, "reason": "worker_restarted"}}
+    {
+      "data": {
+        "continuation_mode": "fresh",
+        "plan_only": false
+      },
+      "message": "Deep research job created.",
+      "phase": "planning",
+      "seq": 1,
+      "type": "job_created"
+    },
+    {
+      "data": {
+        "stage": "unsafe_plan"
+      },
+      "message": "Planner fell back to the deterministic backup plan.",
+      "phase": "planning",
+      "seq": 2,
+      "type": "planner_fallback"
+    },
+    {
+      "data": {
+        "attempt_count": 0,
+        "checkpoint_key": "planning",
+        "checkpoint_kind": "planning",
+        "checkpoint_seq": 1,
+        "reason": "worker_restarted"
+      },
+      "message": "Deep research interrupted during worker recovery.",
+      "phase": "planning",
+      "seq": 3,
+      "type": "job_interrupted"
+    }
   ],
-  "events_after_seq": [
-    {"seq": 4, "type": "job_resumed", "phase": "planning", "message": "Deep research job resumed from checkpoint.", "data": {"attempt_count": 1, "checkpoint_key": "planning", "checkpoint_kind": "planning", "checkpoint_seq": 1, "completed_units_count": 0, "resume_source": "worker_restarted"}},
-    {"seq": 5, "type": "phase_started", "phase": "planning", "message": "Planning started.", "data": {"unit_count": 2}},
-    {"seq": 6, "type": "phase_started", "phase": "researching", "message": "Researching source material.", "data": {"completed_units": 0}},
-    {"seq": 7, "type": "checkpoint_restored", "phase": "researching", "message": "Deep research restored execution from the latest durable checkpoint.", "data": {"attempt_count": 1, "checkpoint_key": "researching-dispatch-a1-unit-search-1", "checkpoint_kind": "research_dispatch", "checkpoint_seq": 2, "completed_units_count": 0}},
-    {"seq": 8, "type": "phase_started", "phase": "researching", "message": "Researching source material.", "data": {"completed_units": 0}},
-    {"seq": 9, "type": "research_unit_completed", "phase": "researching", "message": "Completed unit-search-1.", "data": {"unit_type": "search"}},
-    {"seq": 10, "type": "research_unit_completed", "phase": "researching", "message": "Completed unit-search-2.", "data": {"unit_type": "search"}},
-    {"seq": 11, "type": "phase_started", "phase": "synthesizing", "message": "Synthesizing findings.", "data": {"section_count": 4}},
-    {"seq": 12, "type": "phase_started", "phase": "finalizing", "message": "Finalizing report.", "data": {}},
-    {"seq": 13, "type": "job_completed", "phase": "finalizing", "message": "Deep research completed.", "data": {"artifact_batch_id": "$seeded_batch_id", "release_gate": {"passed": true, "reason_codes": [], "all_reason_codes": [], "soft_reason_codes": []}, "sources_count": 4}}
-  ],
-  "event_window": {"after_seq": 3, "next_after_seq": 13, "returned_count": 10, "last_event_type": "job_completed", "window_has_terminal_event": true, "job_terminal": true},
+  "job": {
+    "attempt_count": 1,
+    "cancel_requested": false,
+    "continued_from_job_id": "",
+    "current_checkpoint": "finalizing",
+    "current_checkpoint_kind": "finalizing",
+    "effort": "deep",
+    "last_error": "",
+    "phase": "finalizing",
+    "resolved_budget_seconds": 180,
+    "status": "completed"
+  },
+  "lineage": {
+    "carried_forward_evidence_ids": [],
+    "carried_forward_source_ids": [],
+    "continued_from_checkpoint": "",
+    "continued_from_job_id": "",
+    "fork_type": "fresh",
+    "parent_job_id": "",
+    "root_job_id": "a34ff8bcbd1a026d01c698e4",
+    "skipped_unit_ids": [],
+    "supersedes_job_id": ""
+  },
+  "plan": {
+    "continuation": {
+      "mode": "fresh"
+    },
+    "exclude_domains": [],
+    "include_domains": [],
+    "planner_metadata": {
+      "fallback_reason": {
+        "error": "unsafe_normalize_action",
+        "stage": "unsafe_plan"
+      },
+      "planner": "fallback",
+      "used_fallback": true
+    },
+    "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, selected evidence usage, and malformed completion robustness for long-running deep research jobs",
+    "source_policy": {
+      "allowed_domains": [],
+      "allowed_tools": [
+        "search",
+        "fetch",
+        "map"
+      ],
+      "blocked_domains": [],
+      "continuation_mode": "fresh",
+      "mode": "mixed_web",
+      "must_cite_per_section": true
+    }
+  },
   "public_surface": {
-    "status": {"runtime_warnings": ["planner_fallback_used"], "resolved_artifact_batch_id": "$seeded_batch_id", "planner_fallback_used": true, "operator_summary": {"planner_fallback_used": true, "runtime_warnings": ["planner_fallback_used"], "resolved_artifact_batch_id": "$seeded_batch_id"}},
-    "result": {"runtime_warnings": ["planner_fallback_used"], "resolved_artifact_batch_id": "$seeded_batch_id", "report": {"status": "degraded"}}
+    "result": {
+      "report": {
+        "status": "degraded"
+      },
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "runtime_warnings": [
+        "planner_fallback_used"
+      ]
+    },
+    "status": {
+      "operator_summary": {
+        "planner_fallback_used": true,
+        "resolved_artifact_batch_id": "$seeded_batch_id",
+        "runtime_warnings": [
+          "planner_fallback_used"
+        ]
+      },
+      "planner_fallback_used": true,
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "runtime_warnings": [
+        "planner_fallback_used"
+      ]
+    }
+  },
+  "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, continuation lineage, selected evidence usage, and malformed completion robustness for long-running deep research jobs",
+  "sample": "probe-round36-lifecycle-public-surface",
+  "selected_bank": [
+    {
+      "candidate_evidence_ids": [
+        "evidence-unit-search-1-fetch-1"
+      ],
+      "rejected_evidence_ids": [],
+      "section_id": "executive-summary",
+      "selected_evidence_ids": [
+        "evidence-unit-search-1-fetch-1"
+      ],
+      "selected_rows": [
+        {
+          "claim_ids": [
+            "executive-summary-claim-1"
+          ],
+          "evidence_id": "evidence-unit-search-1-fetch-1",
+          "selected_section_id": "executive-summary"
+        }
+      ]
+    }
+  ],
+  "source_policy": {
+    "allowed_domains": [],
+    "allowed_tools": [
+      "search",
+      "fetch",
+      "map"
+    ],
+    "blocked_domains": [],
+    "continuation_mode": "fresh",
+    "mode": "mixed_web",
+    "must_cite_per_section": true
   }
 }

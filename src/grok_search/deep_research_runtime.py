@@ -105,6 +105,9 @@ _NOISY_EVIDENCE_MARKERS = (
     "español",
     "privacy policy",
     "cookie policy",
+    "did you find this page useful",
+    "give us feedback",
+    "do you have a suggestion to improve the documentation",
     "we use essential cookies",
     "performance cookies",
     "anonymous statistics",
@@ -118,6 +121,16 @@ _NOISY_EVIDENCE_MARKERS = (
     "validate checkpoint information",
     "follow the migration pattern shell",
     "starts the replication task",
+)
+_PROVIDER_RESPONSE_WARNING_PATTERNS = (
+    (
+        re.compile(r"\bmodel\s+is\s+overloaded\b", re.IGNORECASE),
+        "provider_response_model_overloaded",
+    ),
+    (
+        re.compile(r"\btry\s+again\s+shortly\b", re.IGNORECASE),
+        "provider_response_temporarily_unavailable",
+    ),
 )
 _PREFERRED_TECHNICAL_TERMS = (
     "checkpoint",
@@ -377,6 +390,16 @@ def _is_noisy_text(value: str) -> bool:
     return False
 
 
+def _provider_response_warning_code(value: str) -> str:
+    text = _normalize_whitespace(value)
+    if not text:
+        return ""
+    for pattern, warning_code in _PROVIDER_RESPONSE_WARNING_PATTERNS:
+        if pattern.search(text):
+            return warning_code
+    return ""
+
+
 def _extract_meaningful_lines(value: str) -> list[str]:
     meaningful: list[str] = []
     for raw_line in (value or "").splitlines():
@@ -474,22 +497,40 @@ def _extract_relevant_excerpt_with_span(
     keywords = _dedupe_preserve_order(
         [token for text in reference_texts for token in _tokenize_keywords(text)]
     )
-    ranked: list[tuple[int, int, int, str]] = []
+    identifier_terms = _dedupe_preserve_order(
+        [term for text in reference_texts for term in _query_identifier_terms(text)]
+    )
+    strong_terms = _dedupe_preserve_order(
+        [
+            token
+            for token in keywords
+            if token in _PREFERRED_TECHNICAL_TERMS or len(token) >= 12
+        ]
+    )
+    ranked: list[tuple[int, int, int, int, int, int, str]] = []
     for index, line in meaningful_lines:
         overlap = _count_keyword_overlap(line, keywords) if keywords else 0
-        ranked.append((overlap, len(line), index, line))
-    ranked.sort(key=lambda item: (item[0], item[1], -item[2]), reverse=True)
-    max_overlap = ranked[0][0] if ranked else 0
-    overlap_threshold = max(1, max_overlap - 1) if max_overlap > 0 else 0
-    selected = [item for item in ranked if item[0] >= overlap_threshold and item[0] > 0][:line_limit]
+        identifier_overlap = _count_identifier_overlap(line, identifier_terms) if identifier_terms else 0
+        strong_overlap = _count_keyword_overlap(line, strong_terms) if strong_terms else 0
+        score = (
+            (identifier_overlap * 5)
+            + (strong_overlap * 3)
+            + overlap
+            + _field_definition_line_bonus(line, identifier_terms)
+            - _example_request_line_penalty(line)
+        )
+        ranked.append((score, identifier_overlap, strong_overlap, overlap, -len(line), index, line))
+    ranked.sort(key=lambda item: item[:6], reverse=True)
+    identifier_selected = [item for item in ranked if item[1] > 0]
+    selected = (identifier_selected or [item for item in ranked if item[0] > 0])[:line_limit]
     if not selected:
         selected = ranked[:line_limit]
-    selected.sort(key=lambda item: item[2])
+    selected.sort(key=lambda item: item[5])
     separator = "\n" if multiline else " "
-    excerpt = _trim_text(separator.join(item[3] for item in selected), limit=char_limit)
+    excerpt = _trim_text(separator.join(item[6] for item in selected), limit=char_limit)
     if not excerpt:
         return excerpt, None, None
-    return excerpt, selected[0][2], selected[-1][2]
+    return excerpt, selected[0][5], selected[-1][5]
 
 
 def _find_excerpt_line_span(source_text: str, excerpt: str) -> tuple[int | None, int | None]:
@@ -561,6 +602,142 @@ def _count_keyword_overlap(text: str, keywords: list[str]) -> int:
     return sum(1 for keyword in keywords if keyword in lowered)
 
 
+def _count_identifier_overlap(text: str, identifiers: list[str]) -> int:
+    line_identifiers = set(_query_identifier_terms(text))
+    return sum(1 for identifier in identifiers if identifier in line_identifiers)
+
+
+def _example_request_line_penalty(text: str) -> int:
+    lowered = (text or "").lower()
+    penalty = 0
+    if text.count("](") >= 2:
+        penalty += 5
+    if "this example illustrates" in lowered:
+        penalty += 2
+    if "current page is" in lowered:
+        penalty += 2
+    if "did you find this page useful" in lowered or "give us feedback" in lowered:
+        penalty += 5
+    if re.search(r"\btype:\s+(?:array of )?\[", lowered):
+        penalty += 1
+    if "x-amz-target:" in lowered:
+        penalty += 2
+    if "arn:aws:" in lowered:
+        penalty += 2
+    if re.search(r"\baws\s+dms\s+describe-replication-tasks\b", lowered):
+        penalty += 1
+    return penalty
+
+
+def _field_definition_line_bonus(text: str, identifier_terms: list[str]) -> int:
+    lowered = (text or "").lower()
+    if not any(term in lowered for term in identifier_terms):
+        return 0
+    if re.search(r'"[A-Za-z][A-Za-z0-9_]*"\s*:', text):
+        return 8
+    if "->" in text or re.search(r"\((?:string|integer|boolean|list|array|object)\)", lowered):
+        return 8
+    if re.search(r"\b(?:type|description|required|field)\b", lowered):
+        return 4
+    return 0
+
+
+def _meaningful_identifier_terms(value: str) -> list[str]:
+    ignored = {
+        "amazon",
+        "amazondms",
+        "amazonaws",
+        "apireference",
+        "x-amz",
+        "xamz",
+    }
+    terms: list[str] = []
+    for raw_term in re.findall(r"[A-Za-z][A-Za-z0-9_]{4,}", str(value or "")):
+        term = raw_term.strip().lower()
+        if "_" in raw_term:
+            continue
+        if len(term) < 10:
+            continue
+        if not (re.search(r"[a-z][A-Z]", raw_term) or len(term) >= 16):
+            continue
+        if any(marker in term for marker in ignored):
+            continue
+        if term not in terms:
+            terms.append(term)
+    return terms
+
+
+def _detail_adds_meaningful_identifier(summary_text: str, detail_text: str) -> bool:
+    if not detail_text:
+        return False
+    summary_terms = set(_meaningful_identifier_terms(summary_text))
+    return any(term not in summary_terms for term in _meaningful_identifier_terms(detail_text))
+
+
+def _source_matches_meaningful_identifier(source: dict[str, Any], reference_texts: list[str] | None) -> bool:
+    reference_terms = set(_meaningful_identifier_terms(" ".join(str(text or "") for text in reference_texts or [])))
+    if not reference_terms:
+        return False
+    source_text = " ".join(
+        str(source.get(key, "") or "")
+        for key in ("url", "title", "description", "snippet", "summary")
+    )
+    return bool(reference_terms & set(_meaningful_identifier_terms(source_text)))
+
+
+def _section_should_include_query_keywords(section_title: str, section_goal: str, query: str) -> bool:
+    if not _meaningful_identifier_terms(query):
+        return False
+    lowered = f"{section_title} {section_goal}".lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "verification result",
+            "direct evidence",
+            "field details",
+            "response snippet",
+            "response snippets",
+            "resume",
+            "restart",
+            "related api",
+            "related apis",
+            "cross-reference",
+            "cross-references",
+        )
+    )
+
+
+def _target_identifier_terms_for_source(reference_texts: list[str], source: dict[str, Any]) -> list[str]:
+    identifiers = _dedupe_preserve_order(
+        [
+            term
+            for text in reference_texts
+            for term in _query_identifier_terms(text)
+            if len(term) >= 10 and "_" not in term
+        ]
+    )
+    if not identifiers:
+        return []
+    source_identity = " ".join(
+        str(source.get(key, "") or "")
+        for key in ("url", "title")
+    ).lower()
+    return [term for term in identifiers if term not in source_identity]
+
+
+def _fetched_text_matches_target_identifiers(
+    fetched: str,
+    *,
+    reference_texts: list[str],
+    source: dict[str, Any],
+) -> bool:
+    target_terms = _target_identifier_terms_for_source(reference_texts, source)
+    if not target_terms:
+        return True
+    lowered = (fetched or "").lower()
+    return any(term in lowered for term in target_terms)
+
+
 def _has_noisy_source_metadata(source: dict[str, Any]) -> bool:
     for key in ("title", "description", "snippet"):
         value = source.get(key)
@@ -608,6 +785,8 @@ def _docs_aws_namespace_priority(source: dict[str, Any], reference_texts: list[s
     if not _aws_dms_intent_signals(reference):
         return 0
     traits = _source_doc_traits(source)
+    if "/goto/boto3/" in url or "/boto3/" in url:
+        return 1
     if "/dms/latest/" in url:
         return 2
     if "/cli/latest/reference/dms/" in url:
@@ -653,6 +832,95 @@ def _aws_dms_intent_signals(text: str) -> tuple[str, ...]:
         (" restart", "restart"),
     )
     return tuple(label for marker, label in signals if marker in normalized)
+
+
+_AWS_DMS_API_REFERENCE_HINTS = (
+    (
+        ("describereplicationtasks", "describe replication tasks"),
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        "DescribeReplicationTasks",
+        "AWS DMS API reference for DescribeReplicationTasks response syntax and replication task fields.",
+    ),
+    (
+        ("recoverycheckpoint", "replicationtask", "replication task"),
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_ReplicationTask.html",
+        "ReplicationTask",
+        "AWS DMS API reference for ReplicationTask fields including RecoveryCheckpoint.",
+    ),
+    (
+        ("startreplicationtask", "start replication task", "resume-processing", "reload-target"),
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+        "StartReplicationTask",
+        "AWS DMS API reference for starting, resuming, and reloading replication tasks.",
+    ),
+    (
+        ("modifyreplicationtask", "modify replication task"),
+        "https://docs.aws.amazon.com/dms/latest/APIReference/API_ModifyReplicationTask.html",
+        "ModifyReplicationTask",
+        "AWS DMS API reference for modifying replication task settings.",
+    ),
+)
+
+
+def _known_aws_dms_api_reference_sources(reference_text: str) -> list[dict[str, Any]]:
+    lowered = f" {_normalize_whitespace(reference_text).lower()} "
+    if not _aws_dms_intent_signals(lowered):
+        return []
+    sources: list[dict[str, Any]] = []
+    for markers, url, title, description in _AWS_DMS_API_REFERENCE_HINTS:
+        if any(marker in lowered for marker in markers):
+            sources.append(
+                {
+                    "url": url,
+                    "title": title,
+                    "description": description,
+                    "domain": "docs.aws.amazon.com",
+                    "provider": "official_doc_hint",
+                    "origin_type": "official_doc_hint",
+                    "source_type": "official_docs",
+                    "ranking_reasons": ["official_docs", "api_reference", "known_official_doc_hint"],
+                }
+            )
+    return sources
+
+
+def _augment_search_sources_with_official_doc_hints(
+    sources: list[dict[str, Any]],
+    plan: DeepResearchPlan,
+    unit: DeepResearchResearchUnit,
+) -> list[dict[str, Any]]:
+    source_policy = plan.source_policy
+    if isinstance(source_policy, dict):
+        policy_domains = _normalize_string_list(source_policy.get("allowed_domains"))
+    else:
+        policy_domains = list(source_policy.allowed_domains)
+    allowed_domains = [*list(plan.include_domains), *policy_domains]
+    if not any(domain == "docs.aws.amazon.com" for domain in allowed_domains):
+        return sources
+    reference_text = " ".join(
+        [
+            plan.query,
+            unit.title,
+            unit.goal,
+            unit.query,
+            unit.instructions,
+        ]
+    )
+    hints = _known_aws_dms_api_reference_sources(reference_text)
+    if not hints:
+        return sources
+    existing_keys = {
+        _source_registry_key(str(source.get("url", "") or ""))
+        for source in sources
+        if str(source.get("url", "") or "").strip()
+    }
+    augmented = list(sources)
+    for hint in hints:
+        key = _source_registry_key(str(hint.get("url", "") or ""))
+        if key and key not in existing_keys:
+            augmented.append(hint)
+            existing_keys.add(key)
+    return augmented
 
 
 def _continuation_anchor_terms(continuation: DeepResearchContinuationState) -> list[str]:
@@ -1201,6 +1469,46 @@ def _rewrite_research_query(query: str, continuation: DeepResearchContinuationSt
     return _normalize_whitespace(text)
 
 
+def _domain_search_constraint(domain: str) -> str:
+    text = _normalize_whitespace(domain).lower()
+    if not text:
+        return ""
+    if text.startswith(("http://", "https://")):
+        text = urlsplit(text).netloc.lower()
+    text = text.split("/", 1)[0].strip()
+    text = text.lstrip(".")
+    if not text or " " in text or "." not in text:
+        return ""
+    return f"site:{text}"
+
+
+def _contextualized_sub_question_query(
+    question: str,
+    *,
+    job_query: str,
+    include_domains: list[str] | None,
+    continuation: DeepResearchContinuationState,
+) -> str:
+    query = _rewrite_research_query(question, continuation)
+    if continuation.mode == "continue":
+        return query
+    query_parts = [query] if query else []
+    normalized_job_query = _rewrite_research_query(job_query, continuation)
+    if normalized_job_query and _stable_text_key(normalized_job_query) not in _stable_text_key(query):
+        query_parts.append(normalized_job_query)
+    domain_constraints = _dedupe_preserve_order(
+        [
+            constraint
+            for domain in include_domains or []
+            if (constraint := _domain_search_constraint(domain))
+        ]
+    )
+    for constraint in domain_constraints[:3]:
+        if constraint not in query_parts:
+            query_parts.append(constraint)
+    return _normalize_whitespace(" ".join(query_parts))
+
+
 def _best_text_claim(lines: list[str], fallback: str) -> str:
     for line in lines:
         if not _is_noisy_text(line):
@@ -1231,6 +1539,43 @@ def _is_gap_section(section: DeepResearchReportSection | dict[str, Any]) -> bool
     goal = section.goal if isinstance(section, DeepResearchReportSection) else str(section.get("goal", ""))
     lowered = f"{title} {goal}".lower()
     return any(marker in lowered for marker in _GAP_SECTION_MARKERS)
+
+
+def _is_report_scaffold_section(title: str, section_id: str = "") -> bool:
+    normalized_title = _normalize_whitespace(title).lower()
+    normalized_id = _normalize_whitespace(section_id).lower()
+    if is_summary_section_title(normalized_title) or is_key_findings_section_title(normalized_title):
+        return True
+    scaffold_markers = (
+        "summary finding",
+        "provider accounting",
+        "evidence from api structures and responses",
+        "conclusion",
+        "citations",
+        "citation",
+        "references",
+        "sources",
+        "source",
+    )
+    if "provider accounting" in normalized_title or "provider-accounting" in normalized_id:
+        return True
+    return normalized_title in scaffold_markers or normalized_id in {
+        marker.replace(" ", "-") for marker in scaffold_markers
+    }
+
+
+def _evidence_coverage_text(value: str) -> str:
+    text = _normalize_whitespace(value)
+    if not text:
+        return ""
+    stripped = re.sub(r"\b(?:and\s+)?summari[sz]e\s+provider accounting\b", " ", text, flags=re.IGNORECASE)
+    stripped = re.sub(r"\bprovider accounting\b", " ", stripped, flags=re.IGNORECASE)
+    stripped = _normalize_whitespace(stripped)
+    if not stripped:
+        return text
+    if not (_meaningful_identifier_terms(stripped) or len(_tokenize_keywords(stripped)) >= 2):
+        return text
+    return stripped
 
 
 def _has_gap_signal(text: str) -> bool:
@@ -1549,8 +1894,51 @@ def _parse_utc_iso(value: str) -> dt.datetime | None:
         return None
 
 
+def _strip_json_transport_prefix(value: str) -> str:
+    return (value or "").lstrip("\ufeff\u200b\u200c\u200d").strip()
+
+
+def _unwrap_plan_like_json_payload(parsed: Any) -> tuple[Any, str, dict[str, Any]]:
+    min_plan_score = 8
+    unwrap_paths: list[str] = []
+    unwrap_meta: dict[str, Any] = {}
+    current = parsed
+    for _ in range(4):
+        if isinstance(current, list) and len(current) == 1 and isinstance(current[0], dict):
+            current = current[0]
+            unwrap_paths.append("array_wrapped_json")
+            continue
+        if isinstance(current, dict):
+            outer_score = _embedded_json_object_score(current)
+            best_key = ""
+            best_value: dict[str, Any] | None = None
+            best_score = outer_score
+            for key in ("plan", "data", "result", "output", "json"):
+                value = current.get(key)
+                if not isinstance(value, dict):
+                    continue
+                score = _embedded_json_object_score(value)
+                if score >= min_plan_score and score > best_score:
+                    best_key = key
+                    best_value = value
+                    best_score = score
+            if best_value is not None:
+                current = best_value
+                unwrap_paths.append("envelope_wrapped_json")
+                unwrap_meta["envelope_key"] = best_key
+                continue
+        break
+    if not unwrap_paths:
+        return parsed, "", {}
+    if unwrap_paths == ["array_wrapped_json"]:
+        return current, "array_wrapped_json", unwrap_meta
+    if unwrap_paths == ["envelope_wrapped_json"]:
+        return current, "envelope_wrapped_json", unwrap_meta
+    return current, "+".join(unwrap_paths), unwrap_meta
+
+
 def _parse_json_object(value: str) -> dict[str, Any]:
-    text = (value or "").strip()
+    text = _strip_json_transport_prefix(value)
     if not text:
         raise ValueError("planner returned empty content")
     fenced = _JSON_BLOCK_RE.search(text)
@@ -1561,6 +1949,7 @@ def _parse_json_object(value: str) -> dict[str, Any]:
         nested = parsed.strip()
         if nested.startswith("{") or nested.startswith("["):
             parsed = json.loads(nested)
+    parsed, _, _ = _unwrap_plan_like_json_payload(parsed)
     if not isinstance(parsed, dict):
         raise ValueError("planner returned non-object json")
     return parsed
@@ -1617,7 +2006,7 @@ def _embedded_json_object_score(parsed: dict[str, Any]) -> int:
 
 
 def _parse_json_object_with_trace(value: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    text = (value or "").strip()
+    text = _strip_json_transport_prefix(value)
     trace = {
         "raw_preview": _trim_text(text, limit=280),
         "raw_length": len(text),
@@ -1647,6 +2036,11 @@ def _parse_json_object_with_trace(value: str) -> tuple[dict[str, Any], dict[str,
             trace["parse_path"] = "string_wrapped_json"
             parsed = json.loads(nested)
             trace["parsed_type"] = type(parsed).__name__
+    parsed, unwrap_path, unwrap_meta = _unwrap_plan_like_json_payload(parsed)
+    if unwrap_path:
+        trace["parse_path"] = unwrap_path
+        trace.update(unwrap_meta)
+        trace["parsed_type"] = type(parsed).__name__
     if not isinstance(parsed, dict):
         raise ValueError("planner returned non-object json")
     return parsed, trace
@@ -1730,6 +2124,19 @@ def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
             return "invalid_shape"
         for key in ("unanswered_sections", "uncovered_sub_questions", "hard_uncovered_targets", "gaps"):
             if not isinstance(value.get(key, []), list):
+                return "invalid_shape"
+        for gap in value.get("gaps", []) or []:
+            if not isinstance(gap, dict):
+                return "invalid_shape"
+            if "blocking_scope" not in gap:
+                continue
+            if str(gap.get("blocking_scope", "") or "") not in {"hard", "soft"}:
+                return "invalid_shape"
+            if not isinstance(gap.get("blocking"), bool):
+                return "invalid_shape"
+            if not str(gap.get("gap_type", "") or "").strip():
+                return "invalid_shape"
+            if not str(gap.get("target", "") or "").strip():
                 return "invalid_shape"
         return None
     return None
@@ -1923,6 +2330,11 @@ def _selected_bank_matches_bundle(
         section_id = str(bank.get("section_id", "")).strip()
         if not section_id or section_id not in section_ids:
             return False
+        selected_evidence_ids = {
+            str(item).strip()
+            for item in bank.get("selected_evidence_ids", []) or []
+            if str(item).strip()
+        }
         for field in ("selected_evidence_ids", "candidate_evidence_ids", "rejected_evidence_ids"):
             values = [
                 str(item).strip()
@@ -1937,6 +2349,8 @@ def _selected_bank_matches_bundle(
             evidence_id = str(row.get("evidence_id", "")).strip()
             if evidence_id and evidence_id not in evidence_ids:
                 return False
+            if evidence_id and evidence_id not in selected_evidence_ids:
+                return False
             selected_section_id = str(row.get("selected_section_id", "")).strip()
             if selected_section_id and selected_section_id != section_id:
                 return False
@@ -1945,6 +2359,8 @@ def _selected_bank_matches_bundle(
                 for claim_id in row.get("claim_ids", []) or []
                 if str(claim_id).strip()
             ]
+            if not claim_ids:
+                return False
             if any(claim_id not in claim_ids_by_section.get(section_id, set()) for claim_id in claim_ids):
                 return False
     return True
@@ -2060,6 +2476,9 @@ def _coverage_gaps_matches_report(
             "total_gap_count",
         }
         return all(coverage_gaps_value.get(key) == expected_payload.get(key) for key in legacy_keys)
+    required_keys = set(expected_payload)
+    if not required_keys.issubset(set(coverage_gaps_value)):
+        return False
     for key, value in coverage_gaps_value.items():
         if expected_payload.get(key) != value:
             return False
@@ -2078,7 +2497,10 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
     citations_value: dict[str, Any] | None = None
     evidence_items_value: list[dict[str, Any]] | None = None
     for kind in _FINAL_ARTIFACT_KINDS:
-        text = _read_text_if_exists(paths.get(kind))
+        path = paths.get(kind)
+        if path is None:
+            return False
+        text = _read_text_if_exists(path)
         if text is None:
             return False
         if kind.endswith(".json"):
@@ -2202,6 +2624,23 @@ def _complete_batch_bundles(store: DeepResearchStore, job_id: str) -> list[dict[
         if all(paths.get(kind) is not None and _read_text_if_exists(paths[kind]) is not None for kind in _FINAL_ARTIFACT_KINDS):
             bundles.append(bundle)
     return bundles
+
+
+def _core_complete_batch_bundles(store: DeepResearchStore, job_id: str) -> list[dict[str, Any]]:
+    bundles: list[dict[str, Any]] = []
+    for bundle in _batch_bundle_candidates(store, job_id):
+        paths = bundle.get("paths") or {}
+        if all(
+            paths.get(kind) is not None and _read_text_if_exists(paths[kind]) is not None
+            for kind in _CORE_FINAL_ARTIFACT_KINDS
+        ):
+            bundles.append(bundle)
+    return bundles
+
+
+def _latest_core_complete_batch_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
+    candidates = _core_complete_batch_bundles(store, job_id)
+    return candidates[0] if candidates else None
 
 
 def _latest_complete_batch_bundle(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
@@ -3210,6 +3649,8 @@ def _ensure_sub_question_unit_coverage(
     units: list[dict[str, Any]],
     *,
     sub_questions: list[dict[str, Any]],
+    job_query: str,
+    include_domains: list[str] | None,
     continuation: DeepResearchContinuationState,
     normalize_actions: list[str],
     validation_issues: list[str],
@@ -3226,13 +3667,19 @@ def _ensure_sub_question_unit_coverage(
             auto_index += 1
         unit_id = f"unit-search-auto-{auto_index}"
         used_ids.add(unit_id)
-        query = _rewrite_research_query(str(sub_question.get("question", "")), continuation)
+        question = _rewrite_research_query(str(sub_question.get("question", "")), continuation)
+        query = _contextualized_sub_question_query(
+            question,
+            job_query=job_query,
+            include_domains=include_domains,
+            continuation=continuation,
+        )
         covered_units.append(
             {
                 "unit_id": unit_id,
                 "unit_type": "search",
                 "title": _trim_text(query, limit=96),
-                "goal": query,
+                "goal": question or query,
                 "query": query,
                 "depends_on": [],
                 "status": "pending",
@@ -3248,6 +3695,8 @@ def _ensure_sub_question_search_query_coverage(
     search_queries: list[str],
     *,
     sub_questions: list[dict[str, Any]],
+    job_query: str,
+    include_domains: list[str] | None,
     continuation: DeepResearchContinuationState,
     normalize_actions: list[str],
 ) -> list[str]:
@@ -3276,7 +3725,12 @@ def _ensure_sub_question_search_query_coverage(
             for query in covered_queries
         ):
             continue
-        query = _rewrite_research_query(question, continuation)
+        query = _contextualized_sub_question_query(
+            question,
+            job_query=job_query,
+            include_domains=include_domains,
+            continuation=continuation,
+        )
         if not query:
             continue
         covered_queries.append(query)
@@ -4000,6 +4454,8 @@ def _selected_bank_payload(
                     and claim_id in valid_claim_ids
                 )
             ]
+            if sections is not None and not claim_ids:
+                continue
             selection_details = decisions_by_section_evidence.get((section_id, evidence_id), {})
             selected_rows.append(
                 {
@@ -4082,6 +4538,13 @@ def _evidence_bank_payload(
                 "used_by_claim_ids": sorted(usage["claim_ids"]),
             }
         )
+    payload.sort(
+        key=lambda item: (
+            0 if item.get("used_by_section_ids") or item.get("used_by_claim_ids") else 1,
+            0 if item.get("source_backed") else 1,
+            str(item.get("evidence_id", "")),
+        )
+    )
     return payload
 
 
@@ -4674,8 +5137,14 @@ def _claim_conflict_reason(left_text: str, right_text: str) -> str:
     overlap = left_tokens & right_tokens
     if len(overlap) < 2:
         return ""
-    left_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", left))
-    right_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", right))
+    def conflict_numbers(value: str) -> set[str]:
+        normalized = re.sub(r"\[\[?\d+\]?\]\([^)]*\)", " ", value)
+        normalized = re.sub(r"\[[A-Za-z]?\d+\]", " ", normalized)
+        normalized = re.sub(r"checkpoint:v1#[A-Za-z0-9:#-]+", " ", normalized, flags=re.IGNORECASE)
+        return set(re.findall(r"\b\d+(?:\.\d+)?\b", normalized))
+
+    left_numbers = conflict_numbers(left)
+    right_numbers = conflict_numbers(right)
     if left_numbers and right_numbers and left_numbers != right_numbers:
         return "numeric_mismatch"
     negation_markers = (" no ", " not ", " never ", " without ", " cannot ", " can't ", " unavailable ")
@@ -5003,8 +5472,11 @@ def _provider_attempt_payload(
     source_count: int = 0,
     evidence_count: int = 0,
     error_code: str = "",
+    attempt_role: str = "",
+    failure_reason: str = "",
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "unit_id": unit_id,
         "operation": operation,
         "status": status,
@@ -5016,6 +5488,32 @@ def _provider_attempt_payload(
         "evidence_count": max(0, int(evidence_count or 0)),
         "error_code": error_code,
     }
+    if attempt_role:
+        payload["attempt_role"] = attempt_role
+    if failure_reason:
+        payload["failure_reason"] = failure_reason
+    normalized_warnings = sorted({str(warning).strip() for warning in warnings or [] if str(warning).strip()})
+    if normalized_warnings:
+        payload["warnings"] = normalized_warnings
+    return payload
+
+
+def _provider_attempt_key(attempt: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        attempt.get("unit_id", ""),
+        attempt.get("operation", ""),
+        attempt.get("status", ""),
+        attempt.get("provider_name", ""),
+        attempt.get("provider_model", ""),
+        attempt.get("effective_model", ""),
+        attempt.get("provider_api_url", ""),
+        attempt.get("attempt_role", ""),
+        attempt.get("error_code", ""),
+        attempt.get("failure_reason", ""),
+        tuple(attempt.get("warnings", []) or []),
+        attempt.get("source_count", 0),
+        attempt.get("evidence_count", 0),
+    )
 
 
 def _provider_attempts_payload(
@@ -5033,7 +5531,7 @@ def _provider_attempts_payload(
             evidence_count_by_unit[unit_id] = evidence_count_by_unit.get(unit_id, 0) + 1
 
     attempts: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[Any, ...]] = set()
     for unit_id, result in unit_results.items():
         if not isinstance(result, dict):
             continue
@@ -5049,11 +5547,72 @@ def _provider_attempts_payload(
             provider_model=str(result.get("provider_model", "") or ""),
             effective_model=str(result.get("effective_model", "") or ""),
             provider_api_url=str(result.get("provider_api_url", "") or ""),
-            source_count=len(result.get("source_ids") or result.get("citations") or []),
+            source_count=(
+                int(result.get("provider_source_count", 0) or 0)
+                if "provider_source_count" in result
+                else len(result.get("source_ids") or result.get("citations") or [])
+            ),
             evidence_count=evidence_count_by_unit.get(str(unit_id), 0),
+            warnings=list(result.get("warnings") or []),
         )
+        if "provider_evidence_count" in result:
+            attempt["evidence_count"] = max(0, int(result.get("provider_evidence_count") or 0))
         attempts.append(attempt)
-        seen.add((attempt["unit_id"], attempt["operation"], attempt["status"]))
+        seen.add(_provider_attempt_key(attempt))
+        for supplemental in result.get("supplemental_attempts") or []:
+            if not isinstance(supplemental, dict):
+                continue
+            supplemental_operation = str(supplemental.get("operation", "") or operation).strip()
+            supplemental_status = str(supplemental.get("status", "") or "completed").strip()
+            if supplemental_operation not in {"search", "fetch", "map"}:
+                continue
+            supplemental_attempt = _provider_attempt_payload(
+                unit_id=str(unit_id),
+                operation=supplemental_operation,
+                status=supplemental_status if supplemental_status in {"completed", "failed"} else "completed",
+                provider_name=str(supplemental.get("provider_name", "") or ""),
+                provider_model=str(supplemental.get("provider_model", "") or ""),
+                effective_model=str(supplemental.get("effective_model", "") or ""),
+                provider_api_url=str(supplemental.get("provider_api_url", "") or ""),
+                source_count=int(supplemental.get("source_count", 0) or 0),
+                evidence_count=int(supplemental.get("evidence_count", 0) or 0),
+                error_code=str(supplemental.get("error_code", "") or ""),
+                attempt_role=str(supplemental.get("attempt_role") or "supplemental"),
+                failure_reason=str(supplemental.get("failure_reason", "") or ""),
+                warnings=list(supplemental.get("warnings") or []),
+            )
+            supplemental_key = _provider_attempt_key(supplemental_attempt)
+            if supplemental_key in seen:
+                continue
+            attempts.append(supplemental_attempt)
+            seen.add(supplemental_key)
+        for supporting in result.get("supporting_provider_attempts") or []:
+            if not isinstance(supporting, dict):
+                continue
+            supporting_operation = str(supporting.get("operation", "") or "").strip()
+            if supporting_operation not in {"search", "fetch", "map"}:
+                continue
+            supporting_status = str(supporting.get("status", "") or "completed").strip()
+            supporting_attempt = _provider_attempt_payload(
+                unit_id=str(supporting.get("unit_id", "") or unit_id),
+                operation=supporting_operation,
+                status=supporting_status if supporting_status in {"completed", "failed"} else "completed",
+                provider_name=str(supporting.get("provider_name", "") or ""),
+                provider_model=str(supporting.get("provider_model", "") or ""),
+                effective_model=str(supporting.get("effective_model", "") or ""),
+                provider_api_url=str(supporting.get("provider_api_url", "") or ""),
+                source_count=int(supporting.get("source_count", 0) or 0),
+                evidence_count=int(supporting.get("evidence_count", 0) or 0),
+                error_code=str(supporting.get("error_code", "") or ""),
+                attempt_role=str(supporting.get("attempt_role", "") or ""),
+                failure_reason=str(supporting.get("failure_reason", "") or ""),
+                warnings=list(supporting.get("warnings") or []),
+            )
+            supporting_key = _provider_attempt_key(supporting_attempt)
+            if supporting_key in seen:
+                continue
+            attempts.append(supporting_attempt)
+            seen.add(supporting_key)
 
     for failed in failed_units:
         if not isinstance(failed, dict):
@@ -5062,21 +5621,24 @@ def _provider_attempts_payload(
         operation = str(failed.get("unit_type", "") or "").strip()
         if not unit_id or operation not in {"search", "fetch", "map"}:
             continue
-        key = (unit_id, operation, "failed")
+        error_code = str(failed.get("error_code", "") or failed.get("reason", "") or "")
+        failure_reason = str(failed.get("reason", "") or "")
+        attempt = _provider_attempt_payload(
+            unit_id=unit_id,
+            operation=operation,
+            status="failed",
+            provider_name=str(failed.get("provider_name", "") or ""),
+            provider_model=str(failed.get("provider_model", "") or ""),
+            effective_model=str(failed.get("effective_model", "") or ""),
+            provider_api_url=str(failed.get("provider_api_url", "") or ""),
+            error_code=error_code,
+            failure_reason=failure_reason if failure_reason and failure_reason != error_code else "",
+            warnings=list(failed.get("warnings") or []),
+        )
+        key = _provider_attempt_key(attempt)
         if key in seen:
             continue
-        attempts.append(
-            _provider_attempt_payload(
-                unit_id=unit_id,
-                operation=operation,
-                status="failed",
-                provider_name=str(failed.get("provider_name", "") or ""),
-                provider_model=str(failed.get("provider_model", "") or ""),
-                effective_model=str(failed.get("effective_model", "") or ""),
-                provider_api_url=str(failed.get("provider_api_url", "") or ""),
-                error_code=str(failed.get("reason", "") or failed.get("error_code", "") or ""),
-            )
-        )
+        attempts.append(attempt)
         seen.add(key)
     return attempts
 
@@ -5090,6 +5652,8 @@ def _provider_capabilities_payload(provider_attempts: list[dict[str, Any]]) -> d
     for attempt in provider_attempts:
         if not isinstance(attempt, dict):
             continue
+        if str(attempt.get("attempt_role", "") or "") == "supplemental":
+            continue
         operation = str(attempt.get("operation", "") or "").strip()
         if operation not in capabilities:
             continue
@@ -5100,6 +5664,87 @@ def _provider_capabilities_payload(provider_attempts: list[dict[str, Any]]) -> d
     for operation, providers in providers_by_operation.items():
         capabilities[operation]["providers"] = sorted(providers)
     return capabilities
+
+
+def _provider_accounting_report_lines(
+    *,
+    provider_attempts: list[dict[str, Any]],
+    budget_usage: dict[str, Any],
+    provider_capabilities: dict[str, Any],
+) -> list[str]:
+    if not provider_attempts and not budget_usage:
+        return []
+    lines = ["## Provider Accounting", ""]
+    lines.append(
+        "- "
+        f"Search calls: {int(budget_usage.get('search_calls', 0) or 0)}; "
+        f"Fetch calls: {int(budget_usage.get('fetch_calls', 0) or 0)}; "
+        f"Map calls: {int(budget_usage.get('map_calls', 0) or 0)}; "
+        f"Provider attempts: {int(budget_usage.get('provider_attempts', 0) or 0)}."
+    )
+    providers_by_operation: dict[str, set[str]] = {operation: set() for operation in ("search", "fetch", "map")}
+    for attempt in provider_attempts:
+        if not isinstance(attempt, dict):
+            continue
+        operation = str(attempt.get("operation", "") or "").strip()
+        if operation not in providers_by_operation:
+            continue
+        provider_name = str(attempt.get("provider_name", "") or "").strip()
+        if provider_name:
+            providers_by_operation[operation].add(provider_name)
+    capability_parts: list[str] = []
+    for operation in ("search", "fetch", "map"):
+        capability = provider_capabilities.get(operation) if isinstance(provider_capabilities, dict) else None
+        providers = providers_by_operation[operation]
+        if isinstance(capability, dict):
+            providers.update(
+                str(provider).strip()
+                for provider in capability.get("providers", []) or []
+                if str(provider).strip()
+            )
+        if not providers and (not isinstance(capability, dict) or not capability.get("used")):
+            continue
+        provider_text = ", ".join(sorted(providers)) if providers else "provider metadata unavailable"
+        capability_parts.append(f"{operation} via {provider_text}")
+    if capability_parts:
+        lines.append(f"- Provider paths used: {'; '.join(capability_parts)}.")
+    completed_count = sum(1 for attempt in provider_attempts if attempt.get("status") == "completed")
+    failed_count = sum(1 for attempt in provider_attempts if attempt.get("status") == "failed")
+    if completed_count or failed_count:
+        lines.append(f"- Completed attempts: {completed_count}; failed attempts: {failed_count}.")
+    warning_codes = sorted(
+        {
+            str(warning).strip()
+            for attempt in provider_attempts
+            for warning in attempt.get("warnings", []) or []
+            if str(warning).strip()
+        }
+    )
+    if warning_codes:
+        lines.append(f"- Provider warnings: {', '.join(warning_codes)}.")
+    return lines
+
+
+def _provider_accounting_report_section(provider_accounting_lines: list[str]) -> dict[str, Any] | None:
+    if not provider_accounting_lines:
+        return None
+    prose = "\n".join(line for line in provider_accounting_lines if not line.startswith("##")).strip()
+    if not prose:
+        return None
+    return {
+        "section_id": "provider-accounting",
+        "title": "Provider Accounting",
+        "summary": "",
+        "prose": prose,
+        "claims": [],
+        "citations": [],
+        "source_ids": [],
+        "evidence_ids": [],
+        "confidence": "medium",
+        "claim_cluster_count": 0,
+        "supporting_source_count": 0,
+        "supporting_domain_count": 0,
+    }
 
 
 def _budget_usage_payload(
@@ -5379,7 +6024,7 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
             domain = ""
 
     traits = _source_doc_traits(source)
-    if _is_official_doc_domain(domain) or "/docs/" in url or "/documentation/" in url:
+    if _is_official_doc_domain(domain):
         bias = 3
         if "api_reference" in traits or "reference" in traits:
             bias += 2
@@ -5390,6 +6035,8 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
         if "troubleshooting" in traits:
             bias -= 1
         return bias
+    if "/docs/" in url or "/documentation/" in url:
+        return 1
     if domain.startswith("standards.") or "standards." in domain or "/rfc" in url or "/spec" in url or "/standard" in url:
         return 3
     if domain == "arxiv.org" or domain.endswith(".arxiv.org") or domain.endswith(".acm.org") or domain.endswith(".ieee.org") or url.endswith(".pdf"):
@@ -5410,7 +6057,7 @@ def _source_type(source: dict[str, Any]) -> str:
             domain = urlsplit(url).netloc.lower()
         except Exception:
             domain = ""
-    if _is_official_doc_domain(domain) or "/docs/" in url:
+    if _is_official_doc_domain(domain):
         return "official_docs"
     if domain.startswith("standards.") or "standards." in domain or "/rfc" in url or "/spec" in url or "/standard" in url:
         return "standard"
@@ -5644,6 +6291,7 @@ class DeepResearchRuntime:
                         status="completed",
                         phase="finalizing",
                         progress_pct=100.0,
+                        current_checkpoint="finalizing",
                         finished_at=completed_at,
                         heartbeat_at=utc_now_iso(),
                         last_error="",
@@ -6092,6 +6740,7 @@ class DeepResearchRuntime:
                     status="completed",
                     phase="finalizing",
                     progress_pct=100.0,
+                    current_checkpoint="finalizing",
                     finished_at=completed_at,
                     heartbeat_at=utc_now_iso(),
                     last_error="",
@@ -7114,6 +7763,8 @@ class DeepResearchRuntime:
         normalized_units = _ensure_sub_question_unit_coverage(
             normalized_units,
             sub_questions=sub_questions,
+            job_query=job.query,
+            include_domains=job.include_domains,
             continuation=continuation,
             normalize_actions=normalize_actions,
             validation_issues=validation_issues,
@@ -7165,6 +7816,8 @@ class DeepResearchRuntime:
                 ]
             ),
             sub_questions=sub_questions,
+            job_query=job.query,
+            include_domains=job.include_domains,
             continuation=continuation,
             normalize_actions=normalize_actions,
         )
@@ -7265,11 +7918,9 @@ class DeepResearchRuntime:
 
         final_bundle = _resolve_final_artifact_bundle(self.store, continue_from_job_id)
         use_final_bundle = _artifact_bundle_is_usable(final_bundle)
-        bundle_candidate = (
-            _latest_batch_bundle_candidate(self.store, continue_from_job_id)
-            if final_bundle is None
-            else final_bundle
-        )
+        bundle_candidate = None
+        if final_bundle is None:
+            bundle_candidate = _latest_core_complete_batch_bundle(self.store, continue_from_job_id)
         bundle_candidate_used = bool(bundle_candidate is not None and not use_final_bundle)
         current_report_text = self.store.read_artifact_text(continue_from_job_id, "report.json") or ""
         current_final_report = self.store.read_artifact_text(continue_from_job_id, "final_report.md") or ""
@@ -7486,6 +8137,13 @@ class DeepResearchRuntime:
             artifact_origin_map[_EVIDENCE_ITEMS_ARTIFACT_KIND] = "latest_checkpoint_snapshot"
         elif reconstructed_evidence_used:
             artifact_origin_map[_EVIDENCE_ITEMS_ARTIFACT_KIND] = "reconstructed"
+        if selected_bank_payload and not _selected_bank_matches_bundle(
+            selected_bank_value=selected_bank_payload,
+            report_value=report,
+            evidence_items_value=carry_forward_evidence,
+        ):
+            selected_bank_payload = []
+            artifact_origin_map[_SELECTED_BANK_ARTIFACT_KIND] = "current_artifact_invalid_for_continuation_context"
         carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
         carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
@@ -8324,6 +8982,12 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "provider_name": unit_result.get("provider_name", ""),
                 "provider_model": unit_result.get("provider_model", ""),
                 "provider_api_url": unit_result.get("provider_api_url", ""),
+                "provider_source_count": int(unit_result.get("provider_source_count", 0) or 0),
+                "provider_evidence_count": int(
+                    unit_result.get("provider_evidence_count", len(new_evidence)) or 0
+                ),
+                "supplemental_attempts": list(unit_result.get("supplemental_attempts") or []),
+                "supporting_provider_attempts": list(unit_result.get("supporting_provider_attempts") or []),
             }
             evidence_items.extend(new_evidence)
             ledger_entries = build_evidence_ledger_entries(
@@ -8510,6 +9174,13 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         ],
         include_domains=plan.include_domains,
         exclude_domains=plan.exclude_domains,
+        preserve_unused_source_ids={
+            str(source.get("source_id", "") or "").strip()
+            for source in continuation.carry_forward_sources
+            if str(source.get("source_id", "") or "").strip()
+        }
+        if continuation.mode == "continue"
+        else set(),
     )
     unit_results = _sanitize_unit_results(unit_results, source_registry)
     runtime.store.update_job(job_id, phase="synthesizing", progress_pct=82.0, heartbeat_at=utc_now_iso())
@@ -8568,6 +9239,28 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         evidence_ledger,
         citations["sections"],
     )
+    provider_attempts = _provider_attempts_payload(
+        unit_results=unit_results,
+        failed_units=failed_units,
+        evidence_items=evidence_items,
+    )
+    provider_capabilities = _provider_capabilities_payload(provider_attempts)
+    budget_usage = _budget_usage_payload(
+        completed_unit_ids=completed_unit_ids,
+        failed_unit_ids=failed_unit_ids,
+        skipped_unit_ids=skipped_unit_ids,
+        provider_attempts=provider_attempts,
+        source_registry=source_registry,
+        evidence_items=evidence_items,
+    )
+    provider_accounting_lines = _provider_accounting_report_lines(
+        provider_attempts=provider_attempts,
+        budget_usage=budget_usage,
+        provider_capabilities=provider_capabilities,
+    )
+    provider_accounting_section = _provider_accounting_report_section(provider_accounting_lines)
+    if provider_accounting_section is not None:
+        citations["sections"].append(provider_accounting_section)
     section_banks = sync_section_banks_to_outline(
         section_banks,
         planned_outline=active_outline,
@@ -8662,20 +9355,6 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         evidence_items=evidence_items,
         sections=citations["sections"],
     )
-    provider_attempts = _provider_attempts_payload(
-        unit_results=unit_results,
-        failed_units=failed_units,
-        evidence_items=evidence_items,
-    )
-    provider_capabilities = _provider_capabilities_payload(provider_attempts)
-    budget_usage = _budget_usage_payload(
-        completed_unit_ids=completed_unit_ids,
-        failed_unit_ids=failed_unit_ids,
-        skipped_unit_ids=skipped_unit_ids,
-        provider_attempts=provider_attempts,
-        source_registry=source_registry,
-        evidence_items=evidence_items,
-    )
     report = {
         "query": plan.query,
         "summary": report_summary,
@@ -8727,13 +9406,21 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     "provider_model": result.get("provider_model", ""),
                     "effective_model": result.get("effective_model", ""),
                     "provider_api_url": result.get("provider_api_url", ""),
+                    "source_count": int(result.get("provider_source_count", 0) or 0),
+                    "evidence_count": int(result.get("provider_evidence_count", 0) or 0),
                 }
                 for result in unit_results.values()
                 if result.get("provider_name")
             ],
         },
     }
-    final_report = _build_final_report(plan, citations["sections"], citations["source_registry"], report_summary)
+    final_report = _build_final_report(
+        plan,
+        citations["sections"],
+        citations["source_registry"],
+        report_summary,
+        provider_accounting_lines=provider_accounting_lines,
+    )
     verification = _verification_payload(
         sections=citations["sections"],
         coverage=report_coverage,
@@ -8973,6 +9660,8 @@ async def _execute_research_unit(
                 "provider_model": str(fetch_result.get("provider_model", "") or ""),
                 "effective_model": str(fetch_result.get("effective_model", "") or ""),
                 "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                "provider_source_count": 1,
+                "provider_evidence_count": 1,
             },
             [source],
             [
@@ -9051,11 +9740,57 @@ async def _execute_research_unit(
         )
         fetch_limit = max(0, plan.search_strategy.selective_fetch.max_urls_per_search)
         ranked_candidate_sources = _select_fetch_sources(candidate_sources, plan, unit)
-        for candidate_source in ranked_candidate_sources[:fetch_limit]:
+        supporting_provider_attempts: list[dict[str, Any]] = []
+        successful_candidate_fetches = 0
+        for candidate_source in ranked_candidate_sources:
+            if successful_candidate_fetches >= fetch_limit:
+                break
             candidate_url = candidate_source["url"]
             fetch_result = await _fetch_url_with_details(candidate_url)
             fetched = fetch_result.get("content", "")
+            fetch_error_code = str(fetch_result.get("error_code", "") or "")
             if not fetched:
+                supporting_provider_attempts.append(
+                    {
+                        "unit_id": unit.unit_id,
+                        "operation": "fetch",
+                        "status": "failed",
+                        "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                        "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                        "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                        "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                        "source_count": 0,
+                        "evidence_count": 0,
+                        "error_code": fetch_error_code or "empty_fetch_result",
+                        "failure_reason": fetch_error_code or "empty_fetch_result",
+                        "attempt_role": "selective_fetch",
+                        "warnings": list(fetch_result.get("warnings") or []),
+                    }
+                )
+                continue
+            fetch_warnings = list(fetch_result.get("warnings") or [])
+            if not _fetched_text_matches_target_identifiers(
+                fetched,
+                reference_texts=reference_texts,
+                source=candidate_source,
+            ):
+                supporting_provider_attempts.append(
+                    {
+                        "unit_id": unit.unit_id,
+                        "operation": "fetch",
+                        "status": "failed",
+                        "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                        "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                        "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                        "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                        "source_count": 1,
+                        "evidence_count": 0,
+                        "error_code": "low_topic_match_fetch_result",
+                        "failure_reason": "low_topic_match_fetch_result",
+                        "attempt_role": "selective_fetch",
+                        "warnings": sorted({*fetch_warnings, "low_topic_match_fetch_result"}),
+                    }
+                )
                 continue
             fetched_source = _enrich_source_from_fetched_text(
                 candidate_source,
@@ -9089,6 +9824,23 @@ async def _execute_research_unit(
                     line_end=candidate_detail_end or candidate_line_end,
                 ).model_dump()
             )
+            supporting_provider_attempts.append(
+                {
+                    "unit_id": unit.unit_id,
+                    "operation": "fetch",
+                    "status": "completed",
+                    "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                    "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                    "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                    "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                    "source_count": 1,
+                    "evidence_count": 1,
+                    "error_code": str(fetch_result.get("error_code", "") or ""),
+                    "attempt_role": "selective_fetch",
+                    "warnings": fetch_warnings,
+                }
+            )
+            successful_candidate_fetches += 1
         return (
             {
                 "summary": _extract_relevant_excerpt(
@@ -9102,6 +9854,9 @@ async def _execute_research_unit(
                 "provider_model": str(map_result.get("provider_model", "") or ""),
                 "effective_model": str(map_result.get("effective_model", "") or ""),
                 "provider_api_url": str(map_result.get("provider_api_url", "") or ""),
+                "provider_source_count": 1,
+                "provider_evidence_count": 1,
+                "supporting_provider_attempts": supporting_provider_attempts,
             },
             sources,
             evidence_items,
@@ -9133,14 +9888,20 @@ async def _execute_research_unit(
             "provider_model": "",
             "provider_api_url": "",
         }
+    provider_warning_code = _provider_response_warning_code(str(search_result.get("answer", "") or ""))
+    answer_for_extraction = str(search_result.get("answer", "") or "")
+    if provider_warning_code and not search_result.get("warning_code"):
+        search_result = {**search_result, "warning_code": provider_warning_code}
+        answer_for_extraction = ""
+    sources = _augment_search_sources_with_official_doc_hints(sources, plan, unit)
     answer_summary, search_line_start, search_line_end = _extract_relevant_excerpt_with_span(
-        search_result["answer"],
+        answer_for_extraction,
         reference_texts=reference_texts,
         line_limit=4,
         char_limit=_MAX_CLAIM_LENGTH,
     )
     answer_detail, search_detail_start, search_detail_end = _extract_relevant_excerpt_with_span(
-        search_result["answer"],
+        answer_for_extraction,
         reference_texts=reference_texts,
         line_limit=8,
         char_limit=1200,
@@ -9179,10 +9940,56 @@ async def _execute_research_unit(
             ).model_dump()
         )
     fetched_evidence_items: list[dict[str, Any]] = []
-    for source in selected_sources_for_grounding[:fetch_limit]:
+    supporting_provider_attempts: list[dict[str, Any]] = []
+    successful_fetches = 0
+    for source in selected_sources_for_grounding:
+        if successful_fetches >= fetch_limit:
+            break
         fetch_result = await _fetch_url_with_details(source["url"])
         fetched = fetch_result.get("content", "")
+        fetch_error_code = str(fetch_result.get("error_code", "") or "")
         if not fetched:
+            supporting_provider_attempts.append(
+                {
+                    "unit_id": unit.unit_id,
+                    "operation": "fetch",
+                    "status": "failed",
+                    "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                    "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                    "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                    "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                    "source_count": 0,
+                    "evidence_count": 0,
+                    "error_code": fetch_error_code or "empty_fetch_result",
+                    "failure_reason": fetch_error_code or "empty_fetch_result",
+                    "attempt_role": "selective_fetch",
+                    "warnings": list(fetch_result.get("warnings") or []),
+                }
+            )
+            continue
+        fetch_warnings = list(fetch_result.get("warnings") or [])
+        if not _fetched_text_matches_target_identifiers(
+            fetched,
+            reference_texts=reference_texts,
+            source=source,
+        ):
+            supporting_provider_attempts.append(
+                {
+                    "unit_id": unit.unit_id,
+                    "operation": "fetch",
+                    "status": "failed",
+                    "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                    "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                    "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                    "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                    "source_count": 1,
+                    "evidence_count": 0,
+                    "error_code": "low_topic_match_fetch_result",
+                    "failure_reason": "low_topic_match_fetch_result",
+                    "attempt_role": "selective_fetch",
+                    "warnings": sorted({*fetch_warnings, "low_topic_match_fetch_result"}),
+                }
+            )
             continue
         enriched_source = _enrich_source_from_fetched_text(source, fetched)
         for index, original_source in enumerate(sources):
@@ -9216,6 +10023,24 @@ async def _execute_research_unit(
                 line_end=fetched_detail_end or fetched_line_end,
             ).model_dump()
         )
+        supporting_provider_attempts.append(
+            {
+                "unit_id": unit.unit_id,
+                "operation": "fetch",
+                "status": "completed",
+                "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                "source_count": 1,
+                "evidence_count": 1,
+                "error_code": str(fetch_result.get("error_code", "") or ""),
+                "attempt_role": "selective_fetch",
+                "warnings": fetch_warnings,
+            }
+        )
+        successful_fetches += 1
+    provider_evidence_count = len(evidence_items)
     evidence_items.extend(fetched_evidence_items)
     return (
         {
@@ -9227,6 +10052,10 @@ async def _execute_research_unit(
             "provider_name": search_result.get("provider_name", ""),
             "provider_model": search_result.get("provider_model", ""),
             "provider_api_url": search_result.get("provider_api_url", ""),
+            "provider_source_count": int(search_result.get("provider_source_count", len(sources)) or 0),
+            "provider_evidence_count": provider_evidence_count,
+            "supplemental_attempts": list(search_result.get("supplemental_attempts") or []),
+            "supporting_provider_attempts": supporting_provider_attempts,
         },
         sources,
         evidence_items,
@@ -9287,7 +10116,9 @@ def _annotate_source_usage(
     reference_texts: list[str] | None = None,
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
+    preserve_unused_source_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
+    preserve_unused_source_ids = preserve_unused_source_ids or set()
     citation_count: dict[str, int] = {}
     section_count: dict[str, int] = {}
     for section in sections:
@@ -9327,12 +10158,24 @@ def _annotate_source_usage(
     for item in annotated:
         domain = str(item.get("domain", "") or "").strip().lower()
         topic_match_score = int(item.get("topic_match_score", 0) or 0)
+        strongest_topic_score = strongest_used_topic_by_domain.get(domain, 0)
+        is_used = item.get("citation_count", 0) > 0 or item.get("section_count", 0) > 0
+        source_id = str(item.get("source_id", "") or "").strip()
+        preserve_unused = source_id in preserve_unused_source_ids
         if (
             domain
             and domain in strongest_used_topic_by_domain
-            and item.get("citation_count", 0) <= 0
-            and item.get("section_count", 0) <= 0
-            and strongest_used_topic_by_domain.get(domain, 0) >= topic_match_score
+            and is_used
+            and strongest_topic_score - topic_match_score >= 2
+            and not _source_matches_meaningful_identifier(item, reference_texts)
+        ):
+            item["ranking_penalties"].append("same_domain_off_topic")
+        if (
+            domain
+            and domain in strongest_used_topic_by_domain
+            and not is_used
+            and not preserve_unused
+            and strongest_topic_score >= topic_match_score
         ):
             item["ranking_penalties"].append("same_domain_off_topic")
             continue
@@ -9340,7 +10183,12 @@ def _annotate_source_usage(
     if any(item.get("citation_count", 0) > 0 or item.get("section_count", 0) > 0 for item in filtered):
         used_only: list[dict[str, Any]] = []
         for item in filtered:
-            if item.get("citation_count", 0) > 0 or item.get("section_count", 0) > 0:
+            source_id = str(item.get("source_id", "") or "").strip()
+            if (
+                item.get("citation_count", 0) > 0
+                or item.get("section_count", 0) > 0
+                or source_id in preserve_unused_source_ids
+            ):
                 used_only.append(item)
             else:
                 item["ranking_penalties"].append("unused_source")
@@ -9394,7 +10242,7 @@ def _select_fetch_sources(
         and sum(1 for text in candidate_texts if term in set(_tokenize_keywords(text))) == 1
     ]
 
-    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, int, int, str]:
+    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, int, int, int, str]:
         title = f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
         quality_bias = _source_quality_bias(source)
         lowered_title = title.lower()
@@ -9410,6 +10258,7 @@ def _select_fetch_sources(
             trait_priority = 1
         elif "prescriptive_guidance" in traits:
             trait_priority = -1
+        exact_identifier_match_count = _count_identifier_overlap(title, query_identifier_terms)
         identifier_match_count = sum(1 for term in query_identifier_terms if term and term in lowered_title)
         non_shell_distinctive_match_count = 0
         if "prescriptive_guidance" not in traits and "troubleshooting" not in traits:
@@ -9428,6 +10277,7 @@ def _select_fetch_sources(
             shell_penalty -= 2
         return (
             namespace_priority,
+            exact_identifier_match_count,
             non_shell_distinctive_match_count,
             trait_priority,
             identifier_match_count,
@@ -9539,6 +10389,25 @@ def _coverage_for_report(
     section_coverage: list[dict[str, Any]] = []
     hard_target_coverage: list[dict[str, Any]] = []
     hard_uncovered_targets: list[str] = []
+    coverage_items_by_target = {
+        _normalize_whitespace(str(item.get("target", ""))): item
+        for item in (coverage_state or {}).get("items", [])
+        if isinstance(item, dict) and _normalize_whitespace(str(item.get("target", "")))
+    }
+    planned_section_ids_for_coverage = {
+        str(section.get("section_id", "")).strip()
+        for section in (planned_outline or [])
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    } or {
+        section.section_id
+        for section in plan.report_outline
+        if section.section_id
+    }
+    legacy_outline_migration = "report_sections_to_report_outline" in set(
+        str(action).strip()
+        for action in ((plan.planner_metadata.get("trace") or {}).get("normalize_actions") or [])
+        if str(action).strip()
+    )
     for section in sections:
         section_id = str(section.get("section_id", "")).strip()
         bank = banks_by_section.get(section_id, {})
@@ -9669,6 +10538,7 @@ def _coverage_for_report(
         question = item.question.strip()
         if not question:
             continue
+        evidence_question = _evidence_coverage_text(question)
         explicit_matching_section_ids = [
             str(section.get("section_id", "")).strip()
             for section in grounded_sections
@@ -9683,8 +10553,10 @@ def _coverage_for_report(
                 ]
             )
         ]
-        question_tokens = _tokenize_keywords(question)
+        question_tokens = _tokenize_keywords(evidence_question or question)
         coverage_threshold = max(2, min(4, max(1, len(question_tokens) // 2)))
+        if _meaningful_identifier_terms(evidence_question or question):
+            coverage_threshold = min(coverage_threshold, 2)
         matching_section_ids: list[str] = list(explicit_matching_section_ids)
         matching_claim_ids: list[str] = []
         for section in grounded_sections:
@@ -9732,6 +10604,93 @@ def _coverage_for_report(
                 if str(source_id).strip()
             ]
         )
+        if (
+            not matching_claim_ids
+            and not legacy_outline_migration
+            and not _meaningful_identifier_terms(evidence_question or question)
+        ):
+            coverage_item = coverage_items_by_target.get(_normalize_whitespace(question), {})
+            coverage_grounded_source_ids = {
+                str(source_id).strip()
+                for source_id in coverage_item.get("grounded_source_ids", [])
+                if str(source_id).strip()
+            }
+            if coverage_grounded_source_ids:
+                for section in grounded_sections:
+                    section_id = str(section.get("section_id", "")).strip()
+                    if section_id not in planned_section_ids_for_coverage:
+                        continue
+                    section_citations = {
+                        str(citation).strip()
+                        for citation in section.get("citations", [])
+                        if str(citation).strip()
+                    }
+                    if not (section_citations & coverage_grounded_source_ids):
+                        continue
+                    for claim in section.get("claims", []) or []:
+                        if not isinstance(claim, dict):
+                            continue
+                        has_binding_support = bool(claim.get("evidence_ids")) or any(
+                            isinstance(binding, dict)
+                            and (
+                                str(binding.get("evidence_id", "")).strip()
+                                or str(binding.get("source_id", "")).strip()
+                            )
+                            for binding in claim.get("evidence_bindings", []) or []
+                        )
+                        if not has_binding_support:
+                            continue
+                        claim_id = str(claim.get("claim_id", "")).strip()
+                        if claim_id and claim_id not in matching_claim_ids:
+                            matching_claim_ids.append(claim_id)
+                        if section_id and section_id not in matching_section_ids:
+                            matching_section_ids.append(section_id)
+                if not supporting_source_ids:
+                    supporting_source_ids = sorted(coverage_grounded_source_ids)
+        ledger_materialized_claim_ids = _dedupe_preserve_order(
+            [
+                str(claim_id).strip()
+                for entry in filtered_question_entries
+                for claim_id in entry.get("materialized_claim_ids", []) or []
+                if str(claim_id).strip()
+            ]
+        )
+        if ledger_materialized_claim_ids:
+            for claim_id in ledger_materialized_claim_ids:
+                if claim_id not in matching_claim_ids:
+                    matching_claim_ids.append(claim_id)
+            ledger_section_ids = _dedupe_preserve_order(
+                [
+                    str(entry.get("selected_section_id", "")).strip()
+                    for entry in filtered_question_entries
+                    if str(entry.get("selected_section_id", "")).strip()
+                ]
+            )
+            for section_id in ledger_section_ids:
+                if section_id and section_id not in matching_section_ids:
+                    matching_section_ids.append(section_id)
+        if matching_claim_ids and not (supporting_evidence_ids or supporting_source_ids):
+            matching_claim_id_set = set(matching_claim_ids)
+            supporting_evidence_ids = _dedupe_preserve_order(
+                [
+                    str(evidence_id).strip()
+                    for section in grounded_sections
+                    for claim in section.get("claims", []) or []
+                    if str(claim.get("claim_id", "")).strip() in matching_claim_id_set
+                    for evidence_id in claim.get("evidence_ids", []) or []
+                    if str(evidence_id).strip()
+                ]
+            )
+            supporting_source_ids = _dedupe_preserve_order(
+                [
+                    str(source_id).strip()
+                    for section in grounded_sections
+                    for claim in section.get("claims", []) or []
+                    if str(claim.get("claim_id", "")).strip() in matching_claim_id_set
+                    for source_id in [*(claim.get("source_ids", []) or []), *(claim.get("citations", []) or [])]
+                    if str(source_id).strip()
+                ]
+            )
         packet_backed = bool(supporting_evidence_ids) or bool(supporting_source_ids)
         covered = (bool(explicit_matching_section_ids) and packet_backed) or (
             bool(matching_claim_ids) and packet_backed
@@ -9758,35 +10717,60 @@ def _coverage_for_report(
         {
             "section_id": str(section.get("section_id", "")).strip(),
             "title": str(section.get("title", "")).strip(),
+            "question_id": str(section.get("question_id", "") or "").strip(),
+            "question_ids": [
+                str(question_id).strip()
+                for question_id in section.get("question_ids", []) or []
+                if str(question_id).strip()
+            ],
         }
         for section in (planned_outline or [])
         if isinstance(section, dict)
     ] or [
-        {"section_id": section.section_id, "title": section.title}
+        {"section_id": section.section_id, "title": section.title, "question_id": "", "question_ids": []}
         for section in plan.report_outline
     ]
     unanswered_sections = [
         section["title"]
         for section in normalized_outline
         if section["section_id"] not in answered_section_ids
-        and not is_open_questions_section_title(section["title"])
+        and not (
+            str(section.get("question_id", "") or "").strip() in set(covered_sub_question_ids)
+            or bool(set(section.get("question_ids", []) or []) & set(covered_sub_question_ids))
+        )
+        and not _is_report_scaffold_section(section["title"], section["section_id"])
     ]
-    coverage_items_by_target = {
-        _normalize_whitespace(str(item.get("target", ""))): item
-        for item in (coverage_state or {}).get("items", [])
-        if isinstance(item, dict) and _normalize_whitespace(str(item.get("target", "")))
-    }
     for target in _stop_policy_targets(plan):
-        target_tokens = _tokenize_keywords(target)
+        evidence_target = _evidence_coverage_text(target)
+        target_tokens = _tokenize_keywords(evidence_target or target)
         coverage_threshold = max(2, min(4, max(1, len(target_tokens) // 2)))
+        target_has_meaningful_identifier = bool(_meaningful_identifier_terms(evidence_target or target))
+        if target_has_meaningful_identifier:
+            coverage_threshold = min(coverage_threshold, 2)
         target_question_ids = {
             item.id
             for item in plan.sub_questions
             if _normalize_whitespace(item.question) == _normalize_whitespace(target)
             or _count_keyword_overlap(item.question, target_tokens) >= coverage_threshold
         }
+        target_question_coverage = [
+            item
+            for item in sub_question_coverage
+            if str(item.get("sub_question_id", "")).strip() in target_question_ids and bool(item.get("covered"))
+        ]
         matching_section_ids: list[str] = []
         matching_claim_ids: list[str] = []
+        for question_coverage in target_question_coverage:
+            for section_id in question_coverage.get("section_ids", []) or []:
+                normalized_section_id = str(section_id).strip()
+                if normalized_section_id not in planned_section_ids_for_coverage:
+                    continue
+                if normalized_section_id and normalized_section_id not in matching_section_ids:
+                    matching_section_ids.append(normalized_section_id)
+            for claim_id in question_coverage.get("claim_ids", []) or []:
+                normalized_claim_id = str(claim_id).strip()
+                if normalized_claim_id and normalized_claim_id not in matching_claim_ids:
+                    matching_claim_ids.append(normalized_claim_id)
         for section in grounded_sections:
             section_id = str(section.get("section_id", "")).strip()
             section_matched = False
@@ -9847,6 +10831,8 @@ def _coverage_for_report(
         if not matching_claim_ids and grounded_source_ids:
             for section in grounded_sections:
                 section_id = str(section.get("section_id", "")).strip()
+                if section_id not in planned_section_ids_for_coverage:
+                    continue
                 section_citations = {
                     str(citation).strip()
                     for citation in section.get("citations", [])
@@ -9885,11 +10871,17 @@ def _coverage_for_report(
                     if str(question_id).strip()
                 }
                 question_aligned = bool(target_question_ids & (section_question_ids | packet_question_ids))
+                coverage_state_aligned = bool(
+                    grounded_source_ids
+                    and not legacy_outline_migration
+                    and not target_has_meaningful_identifier
+                    and section_id in planned_section_ids_for_coverage
+                )
                 if (
                     section_id
                     and section_citations & grounded_source_ids
                     and (has_packet_support or has_binding_support)
-                    and (section_text_aligned or question_aligned)
+                    and (section_text_aligned or question_aligned or coverage_state_aligned)
                     and section_id not in matching_section_ids
                 ):
                     matching_section_ids.append(section_id)
@@ -10770,23 +11762,197 @@ def _build_claim_evidence_bindings(
     return bindings
 
 
-def _best_cluster_claim_text(items: list[DeepResearchEvidenceItem]) -> str:
+def _claim_text_without_markdown_artifacts(value: str) -> str:
+    text = _normalize_whitespace(value)
+    if not text:
+        return ""
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\[\[?\d+\]?\]\([^)]*\)", "", text)
+    text = re.sub(r"\[[A-Za-z]?\d+\]", "", text)
+    text = re.sub(r"\]\(https?://[^)]*", "", text)
+    text = re.sub(r"\[\[?\d+\]?", "", text)
+    return _normalize_whitespace(text.strip(" .,:;") + ("." if text and text[-1] not in ".!?:;" else ""))
+
+
+def _verification_answer_claim_text(query: str, items: list[DeepResearchEvidenceItem]) -> str:
+    evidence_text = " ".join(
+        f"{item.summary} {item.detail} {' '.join(item.source_urls)}"
+        for item in items
+    )
+    query_terms = set(_meaningful_identifier_terms(query))
+    available_terms = set(_meaningful_identifier_terms(evidence_text))
+    if not available_terms or not query_terms:
+        return ""
+    ordered_terms: list[str] = []
+    for raw_term in re.findall(r"[A-Za-z][A-Za-z0-9_]{4,}", query):
+        normalized = raw_term.lower()
+        if (
+            (normalized in query_terms or re.match(r"^(describe|get|list|search|query|fetch|read)", raw_term, re.IGNORECASE))
+            and (
+                normalized in available_terms
+                or re.match(r"^(describe|get|list|search|query|fetch|read)", raw_term, re.IGNORECASE)
+            )
+            and raw_term not in ordered_terms
+        ):
+            ordered_terms.append(raw_term)
+    api_term = next(
+        (
+            term
+            for term in ordered_terms
+            if re.match(r"^(describe|get|list|search|query|fetch|read|create|start|stop|modify)", term, re.IGNORECASE)
+        ),
+        "",
+    )
+    field_term = next(
+        (
+            term
+            for term in ordered_terms
+            if term != api_term and re.search(r"(checkpoint|position|status|arn|id|name|type|field)$", term, re.IGNORECASE)
+        ),
+        "",
+    )
+    object_term = next(
+        (
+            term
+            for term in ordered_terms
+            if term not in {api_term, field_term} and re.search(r"(task|object|record|item|entry|resource)$", term, re.IGNORECASE)
+        ),
+        "",
+    )
+    if not api_term or not field_term:
+        return ""
+    field_reference = f"{object_term}.{field_term}" if object_term else field_term
+    return _trim_text(f"Yes, {api_term} returns {field_reference}.", limit=_MAX_CLAIM_LENGTH)
+
+
+def _section_claim_intent(section_title: str, section_goal: str) -> str:
+    lowered = f"{section_title} {section_goal}".lower()
+    if any(marker in lowered for marker in ("verification result", "yes/no", "yes no")):
+        return "verification"
+    if any(marker in lowered for marker in ("exact", "api reference", "field evidence", "field definition")):
+        return "exact_field"
+    if any(marker in lowered for marker in ("resume", "restart", "cdcstartposition")):
+        return "impact"
+    return ""
+
+
+def _focused_claim_candidate_text(value: str, *, section_intent: str, limit: int = _MAX_CLAIM_LENGTH) -> str:
+    text = _normalize_whitespace(value)
+    if not text:
+        return ""
+    if section_intent == "impact":
+        sentences = [
+            _normalize_whitespace(sentence)
+            for sentence in re.split(r"(?<=[.!?])\s+", text)
+            if _normalize_whitespace(sentence)
+        ]
+        impact_sentences: list[str] = []
+        for sentence in sentences:
+            lowered = sentence.lower()
+            if "recoverycheckpoint" not in lowered:
+                continue
+            if any(marker in lowered for marker in ("cdcstartposition", "resume", "restart", "resumption", "restarting")):
+                if len(sentence) > 220:
+                    marker_positions = [
+                        lowered.find(marker)
+                        for marker in ("cdcstartposition", "resume", "restart", "resumption", "restarting")
+                        if marker in lowered
+                    ]
+                    marker_pos = min(marker_positions) if marker_positions else 0
+                    start = max(0, sentence.rfind(" - ", 0, marker_pos))
+                    if start <= 0:
+                        start = max(0, sentence.rfind(". ", 0, marker_pos))
+                    if start <= 0:
+                        start = max(0, marker_pos - 90)
+                    sentence = sentence[start:].lstrip(" -.•")
+                impact_sentences.append(sentence)
+        if impact_sentences:
+            quote_match = re.search(r'"[A-Za-z][A-Za-z0-9_]*"\s*:\s*"[^"]+"', text)
+            quote_prefix = f"{quote_match.group(0)}. " if quote_match else ""
+            return _claim_text_without_markdown_artifacts(
+                _trim_text(f"{quote_prefix}{' '.join(impact_sentences[:2])}", limit=limit)
+            )
+    return _claim_text_without_markdown_artifacts(_summarize_evidence_text(text, limit=limit))
+
+
+def _best_cluster_claim_text(
+    items: list[DeepResearchEvidenceItem],
+    *,
+    section_title: str = "",
+    section_goal: str = "",
+    section_intent_override: str = "",
+) -> str:
+    section_intent = section_intent_override or _section_claim_intent(section_title, section_goal)
+
+    def explanatory_score(text: str) -> int:
+        lowered = (text or "").lower()
+        score = 0
+        for marker in ("cdcstartposition", "resume", "restart", "resumption", "indicates", "provide this value"):
+            if marker in lowered:
+                score += 2
+        if section_intent == "impact":
+            for marker in ("cdcstartposition", "resume", "restart", "resumption", "provide this value"):
+                if marker in lowered:
+                    score += 3
+        elif section_intent == "exact_field":
+            if re.search(r'"\s*[A-Za-z][A-Za-z0-9_]*\s*"\s*:', text or ""):
+                score += 4
+            if "type:" in lowered or "indicates the last checkpoint" in lowered:
+                score += 2
+            for marker in ("resume", "restart", "provide this value"):
+                if marker in lowered:
+                    score -= 3
+        if re.match(r'^\s*"[A-Za-z][A-Za-z0-9_]*"\s*:', text or ""):
+            score -= 1
+        if lowered.count("checkpoint:v1#") >= 2:
+            score -= 1
+        return score
+
     def candidate_text(item: DeepResearchEvidenceItem) -> str:
-        summary_text = _summarize_evidence_text(item.summary, limit=_MAX_CLAIM_LENGTH)
-        detail_text = _summarize_evidence_text(item.detail, limit=_MAX_CLAIM_LENGTH)
+        summary_text = _focused_claim_candidate_text(
+            item.summary,
+            section_intent=section_intent,
+            limit=_MAX_CLAIM_LENGTH,
+        )
+        detail_text = _focused_claim_candidate_text(
+            item.detail,
+            section_intent=section_intent,
+            limit=_MAX_CLAIM_LENGTH,
+        )
+        if (
+            summary_text
+            and detail_text
+            and _meaningful_identifier_terms(summary_text)
+            and _example_request_line_penalty(detail_text) > _example_request_line_penalty(summary_text)
+        ):
+            return summary_text
         summary_keywords = _tokenize_keywords(summary_text)
         detail_keywords = _tokenize_keywords(detail_text)
         if detail_text and (
             not summary_text
+            or _detail_adds_meaningful_identifier(summary_text, detail_text)
             or len(summary_keywords) < 3
             or (len(detail_keywords) >= max(3, len(summary_keywords) + 2))
         ):
             return detail_text
         return summary_text or detail_text
 
+    def source_backed_claim_quality(item: DeepResearchEvidenceItem) -> int:
+        if item.evidence_kind == "search":
+            return 0
+        text = candidate_text(item)
+        if not text:
+            return 0
+        lowered = text.lower()
+        if re.match(r'^\s*"[A-Za-z][A-Za-z0-9_]*"\s*:', text) or lowered.count("checkpoint:v1#") >= 1:
+            return 0
+        return 2
+
     ranked = sorted(
         items,
         key=lambda item: (
+            source_backed_claim_quality(item),
+            explanatory_score(candidate_text(item)),
             1 if item.evidence_kind != "search" else 0,
             item.weight,
             len(item.source_ids),
@@ -10799,7 +11965,9 @@ def _best_cluster_claim_text(items: list[DeepResearchEvidenceItem]) -> str:
         if text and not _is_noisy_text(text):
             sentences = [chunk.strip() for chunk in re.split(r"(?<=[.!?])\s+", text) if chunk.strip()]
             if sentences:
-                return _trim_text(" ".join(sentences[:2]), limit=min(220, _MAX_CLAIM_LENGTH))
+                return _claim_text_without_markdown_artifacts(
+                    _trim_text(" ".join(sentences[:2]), limit=min(220, _MAX_CLAIM_LENGTH))
+                )
             return text
     return ""
 
@@ -11047,12 +12215,59 @@ def _build_section_citations(
     def _section_value(section: dict[str, Any], key: str) -> str:
         return str(section.get(key, "") or "").strip()
 
+    def _expand_pool_with_source_backed_identifier_peers(
+        section: dict[str, Any],
+        pool_items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        section_title = _section_value(section, "title")
+        section_goal = _section_value(section, "goal")
+        if not _section_should_include_query_keywords(section_title, section_goal, plan.query):
+            return pool_items
+        if any(str(item.get("evidence_kind", "")).strip() != "search" for item in pool_items):
+            return pool_items
+        target_terms = set(_meaningful_identifier_terms(plan.query))
+        if not target_terms:
+            return pool_items
+        selected_source_ids = {
+            str(source_id).strip()
+            for item in pool_items
+            if isinstance(item, dict)
+            for source_id in item.get("source_ids", []) or []
+            if str(source_id).strip()
+        }
+        selected_ids = {
+            str(item.get("evidence_id", "")).strip()
+            for item in pool_items
+            if isinstance(item, dict) and str(item.get("evidence_id", "")).strip()
+        }
+        expanded = list(pool_items)
+        for item in claims_pool:
+            if item.evidence_kind == "search" or item.evidence_id in selected_ids:
+                continue
+            if selected_source_ids and not (set(item.source_ids) & selected_source_ids):
+                continue
+            item_terms = set(_meaningful_identifier_terms(f"{item.summary} {item.detail}"))
+            if not item_terms & target_terms:
+                continue
+            expanded.append(item.model_dump())
+            selected_ids.add(item.evidence_id)
+        return expanded
+
     def build_section_from_pool(
         section: dict[str, Any],
         evidence_pool: list[DeepResearchEvidenceItem],
         *,
         enforce_overlap: bool,
     ) -> dict[str, Any] | None:
+        def _evidence_match_text(evidence: DeepResearchEvidenceItem) -> str:
+            return " ".join(
+                [
+                    evidence.summary,
+                    evidence.detail,
+                    " ".join(evidence.source_urls),
+                ]
+            )
+
         section_title = _section_value(section, "title")
         section_id = _section_value(section, "section_id")
         section_goal = _section_value(section, "goal")
@@ -11062,7 +12277,28 @@ def _build_section_citations(
             _has_gap_signal(item.summary) or _has_gap_signal(item.detail) for item in evidence_pool
         ):
             return None
-        section_keywords = _tokenize_keywords(f"{section_title} {section_goal}") or query_keywords
+        generic_section_keywords = {
+            "answer",
+            "behavior",
+            "direct",
+            "evidence",
+            "explain",
+            "finding",
+            "findings",
+            "impact",
+            "overview",
+            "present",
+            "result",
+            "results",
+            "summary",
+        }
+        section_keywords = [
+            token
+            for token in _tokenize_keywords(f"{section_title} {section_goal}")
+            if token not in generic_section_keywords
+        ] or query_keywords
+        if _section_should_include_query_keywords(section_title, section_goal, plan.query):
+            section_keywords = _dedupe_preserve_order([*section_keywords, *query_keywords])
         section_bank = banks_by_section.get(section_id, {})
         question_ids = [
             str(question_id).strip()
@@ -11088,9 +12324,57 @@ def _build_section_citations(
             for packet in section_bank.get("selected_packets", []) or []
             if isinstance(packet, dict) and str(packet.get("evidence_id", "")).strip()
         ]
+        packet_question_ids_by_evidence_id: dict[str, list[str]] = {}
+        for packet in [
+            *(section_bank.get("selected_packets", []) or []),
+            *(section_bank.get("candidate_packets", []) or []),
+        ]:
+            if not isinstance(packet, dict):
+                continue
+            evidence_id = str(packet.get("evidence_id", "")).strip()
+            if not evidence_id:
+                continue
+            packet_question_ids_by_evidence_id[evidence_id] = _dedupe_preserve_order(
+                [
+                    str(question_id).strip()
+                    for question_id in packet.get("question_ids", []) or []
+                    if str(question_id).strip()
+                ]
+            )
         selected_bank_evidence_ids = _dedupe_preserve_order(
             [*selected_packet_evidence_ids, *selected_evidence_ids]
         )
+        if selected_bank_evidence_ids and _section_should_include_query_keywords(section_title, section_goal, plan.query):
+            target_terms = set(_meaningful_identifier_terms(plan.query))
+            selected_source_ids = {
+                source_id
+                for evidence in evidence_pool
+                if evidence.evidence_id in set(selected_bank_evidence_ids)
+                for source_id in evidence.source_ids
+            }
+            selected_keyword_terms = {
+                token
+                for evidence in evidence_pool
+                if evidence.evidence_id in set(selected_bank_evidence_ids)
+                for token in _tokenize_keywords(_evidence_match_text(evidence))
+            }
+            query_semantic_terms = set(_tokenize_keywords(plan.query)) - set(target_terms)
+            for evidence in evidence_pool:
+                if evidence.evidence_id in set(selected_bank_evidence_ids):
+                    continue
+                if selected_source_ids and not (set(evidence.source_ids) & selected_source_ids):
+                    continue
+                evidence_terms = set(_meaningful_identifier_terms(_evidence_match_text(evidence)))
+                evidence_keyword_terms = set(_tokenize_keywords(_evidence_match_text(evidence)))
+                adds_identifier = bool(target_terms and evidence_terms & target_terms)
+                adds_query_semantics = bool(query_semantic_terms & (evidence_keyword_terms - selected_keyword_terms))
+                if evidence.evidence_kind != "search" and adds_identifier:
+                    selected_bank_evidence_ids.append(evidence.evidence_id)
+                    selected_keyword_terms.update(evidence_keyword_terms)
+                elif evidence.evidence_kind == "search" and adds_query_semantics:
+                    selected_bank_evidence_ids.append(evidence.evidence_id)
+                    selected_keyword_terms.update(evidence_keyword_terms)
+            selected_bank_evidence_ids = _dedupe_preserve_order(selected_bank_evidence_ids)
         candidate_bank_evidence_ids = _dedupe_preserve_order(
             [*candidate_packet_evidence_ids, *[
                 str(evidence_id).strip()
@@ -11110,7 +12394,7 @@ def _build_section_citations(
             ranking_pool,
             key=lambda evidence: (
                 1 if evidence.evidence_id in set(active_packet_evidence_ids) else 0,
-                _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords),
+                _count_keyword_overlap(_evidence_match_text(evidence), section_keywords),
                 evidence.weight,
                 sum(_source_quality_score(registry_by_id.get(source_id, {})) for source_id in evidence.source_ids),
                 len(evidence.source_ids),
@@ -11119,11 +12403,82 @@ def _build_section_citations(
             reverse=True,
         )
         relevant_evidence: list[DeepResearchEvidenceItem] = []
+        has_source_backed_candidate = any(evidence.evidence_kind != "search" for evidence in ranking_pool)
+        section_intent = _section_claim_intent(section_title, section_goal)
+        if not section_intent and any(
+            marker in plan.query.lower()
+            for marker in ("cdcstartposition", "resume", "restart", "resumption", "restarting")
+        ):
+            section_intent = "impact"
+        section_identifier_terms = set(
+            _meaningful_identifier_terms(" ".join([plan.query, section_title, section_goal]))
+        )
+        source_backed_identifier_terms = {
+            term
+            for candidate in ranking_pool
+            if candidate.evidence_kind != "search"
+            for term in _meaningful_identifier_terms(_evidence_match_text(candidate))
+        }
         for evidence in ranked_pool:
-            overlap_score = _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords)
+            overlap_score = _count_keyword_overlap(_evidence_match_text(evidence), section_keywords)
             if not evidence.source_ids:
                 continue
-            if enforce_overlap and overlap_score <= 0 and section_keywords:
+            if (
+                active_bank_evidence_ids
+                and overlap_score <= 0
+                and section_keywords
+                and not packet_question_ids_by_evidence_id.get(evidence.evidence_id)
+                and not (
+                    is_summary_section_title(section_title)
+                    or is_key_findings_section_title(section_title)
+                    or is_open_questions_section_title(section_title)
+                )
+            ):
+                continue
+            if has_source_backed_candidate and evidence.evidence_kind == "search":
+                cited_sources = [
+                    registry_by_id.get(source_id, {})
+                    for source_id in evidence.source_ids
+                    if registry_by_id.get(source_id)
+                ]
+                if cited_sources and all(
+                    "same_domain_off_topic" in set(source.get("ranking_penalties") or [])
+                    for source in cited_sources
+                ):
+                    continue
+                if section_intent == "impact" and any(
+                    marker in f"{evidence.summary} {evidence.detail}".lower()
+                    for marker in ("cdcstartposition", "resume", "restart", "resumption", "restarting")
+                ):
+                    relevant_evidence.append(evidence)
+                    continue
+                search_identifier_terms = set(_meaningful_identifier_terms(_evidence_match_text(evidence)))
+                if (
+                    section_identifier_terms
+                    and source_backed_identifier_terms
+                    and (search_identifier_terms & section_identifier_terms)
+                    <= (source_backed_identifier_terms & section_identifier_terms)
+                    and not (
+                        (set(_tokenize_keywords(f"{evidence.summary} {evidence.detail}")) - {
+                            token
+                            for candidate in ranking_pool
+                            if candidate.evidence_kind != "search"
+                            for token in _tokenize_keywords(_evidence_match_text(candidate))
+                        })
+                        & (set(_tokenize_keywords(plan.query)) - section_identifier_terms)
+                    )
+                ):
+                    continue
+            min_overlap_score = 1
+            if not (
+                is_summary_section_title(section_title)
+                or is_key_findings_section_title(section_title)
+                or is_open_questions_section_title(section_title)
+            ):
+                min_overlap_score = 2
+            if active_bank_evidence_ids and packet_question_ids_by_evidence_id.get(evidence.evidence_id):
+                min_overlap_score = 0
+            if enforce_overlap and overlap_score < min_overlap_score and section_keywords:
                 continue
             relevant_evidence.append(evidence)
         if (
@@ -11162,7 +12517,16 @@ def _build_section_citations(
                     best_cluster = cluster
             cluster_source_ids = {source_id for item in (best_cluster or []) for source_id in item.source_ids}
             single_source_match = len(set(evidence.source_ids)) == 1 and bool(set(evidence.source_ids) & cluster_source_ids)
-            if best_cluster is not None and (best_similarity >= 0.35 or single_source_match):
+            impact_search_peer = (
+                section_intent == "impact"
+                and evidence.evidence_kind == "search"
+                and single_source_match
+                and any(
+                    marker in f"{evidence.summary} {evidence.detail}".lower()
+                    for marker in ("cdcstartposition", "resume", "restart", "resumption")
+                )
+            )
+            if best_cluster is not None and (best_similarity >= 0.35 or single_source_match or impact_search_peer):
                 best_cluster.append(evidence)
             else:
                 clusters.append([evidence])
@@ -11170,15 +12534,32 @@ def _build_section_citations(
             clusters,
             key=lambda cluster: (
                 max(1 if item.evidence_kind != "search" else 0 for item in cluster),
-                max(_count_keyword_overlap(f"{item.summary} {item.detail}", section_keywords) for item in cluster),
+                max(_count_keyword_overlap(_evidence_match_text(item), section_keywords) for item in cluster),
                 sum(item.weight for item in cluster),
                 len({source_id for item in cluster for source_id in item.source_ids}),
                 len(cluster),
             ),
             reverse=True,
         )
+        section_lower = f"{section_title} {section_goal}".lower()
+        max_section_claims = 1 if section_intent == "verification" else 2
+        if section_intent == "impact" and any(
+            marker in section_lower for marker in ("impact on", "resume/restart", "resume restart")
+        ):
+            max_section_claims = 1
+        verification_claim_materialized = False
         for cluster in ranked_clusters:
-            claim_text = _best_cluster_claim_text(cluster)
+            claim_text = ""
+            if section_intent == "verification" and not verification_claim_materialized:
+                claim_text = _verification_answer_claim_text(plan.query, cluster)
+                verification_claim_materialized = bool(claim_text)
+            if not claim_text:
+                claim_text = _best_cluster_claim_text(
+                    cluster,
+                    section_title=section_title,
+                    section_goal=section_goal,
+                    section_intent_override=section_intent,
+                )
             if not claim_text or _is_noisy_text(claim_text):
                 continue
             claim_key = _stable_text_key(claim_text)
@@ -11215,10 +12596,27 @@ def _build_section_citations(
             section_claims.append(claim.model_dump())
             section_claim_keys.add(claim_key)
             claim_counter["value"] += 1
-            if len(section_claims) >= 2:
+            if len(section_claims) >= max_section_claims:
                 break
         if not section_claims:
             return None
+        if not (
+            is_summary_section_title(section_title)
+            or is_key_findings_section_title(section_title)
+            or is_open_questions_section_title(section_title)
+        ):
+            section_claim_overlap = max(
+                _count_keyword_overlap(str(claim.get("text", "") or ""), section_keywords)
+                for claim in section_claims
+            )
+            question_packet_claim = any(
+                packet_question_ids_by_evidence_id.get(str(evidence_id).strip())
+                for claim in section_claims
+                for evidence_id in claim.get("evidence_ids", []) or []
+                if str(evidence_id).strip()
+            )
+            if section_claim_overlap < 1 and not question_packet_claim:
+                return None
         section_summary = _build_section_summary(section_claims)
         section_source_count = len({citation for claim in section_claims for citation in claim.get("citations", [])})
         section_domain_count = _supporting_domain_count(
@@ -11272,6 +12670,7 @@ def _build_section_citations(
             is_summary_section_title(title)
             or is_key_findings_section_title(title)
             or is_open_questions_section_title(title)
+            or _is_report_scaffold_section(title, _section_value(section, "section_id"))
         ):
             continue
         pool_items, pool_mode = evidence_pool_for_section(
@@ -11279,6 +12678,7 @@ def _build_section_citations(
             evidence_items=[item.model_dump() for item in claims_pool],
             section_banks=section_banks,
         )
+        pool_items = _expand_pool_with_source_backed_identifier_peers(section, pool_items)
         materialized = build_section_from_pool(
             section,
             [DeepResearchEvidenceItem.model_validate(item) for item in pool_items],
@@ -11462,11 +12862,14 @@ def _build_section_citations(
             if materialized is not None:
                 sections.append(materialized)
             continue
+        if _is_report_scaffold_section(title, section_id):
+            continue
         pool_items, pool_mode = evidence_pool_for_section(
             section_id,
             evidence_items=[item.model_dump() for item in claims_pool],
             section_banks=section_banks,
         )
+        pool_items = _expand_pool_with_source_backed_identifier_peers(section, pool_items)
         materialized = build_section_from_pool(
             section,
             [DeepResearchEvidenceItem.model_validate(item) for item in pool_items],
@@ -11556,10 +12959,17 @@ def _build_final_report(
     sections: list[dict[str, Any]],
     source_registry: dict[str, dict[str, Any]],
     summary: str,
+    provider_accounting_lines: list[str] | None = None,
 ) -> str:
     lines = [f"# {plan.query}", ""]
     if summary:
         lines.extend(["## Summary", "", summary, ""])
+    has_provider_accounting_section = any(
+        _normalize_whitespace(str(section.get("title", "") or "")).lower() == "provider accounting"
+        or str(section.get("section_id", "") or "").strip() == "provider-accounting"
+        for section in sections
+        if isinstance(section, dict)
+    )
     for section in sections:
         lines.append(f"## {section['title']}")
         lines.append("")
@@ -11574,6 +12984,9 @@ def _build_final_report(
         if section_prose:
             lines.append(section_prose)
             lines.append("")
+    if provider_accounting_lines and not has_provider_accounting_section:
+        lines.extend(provider_accounting_lines)
+        lines.append("")
     lines.extend(["## Sources", ""])
     for source_id, item in source_registry.items():
         title = item.get("title") or item["url"]
@@ -11643,8 +13056,9 @@ async def _search_query_with_details(
     merged = standardize_sources(merge_sources(sources, extracted_sources))
     if not merged:
         merged = standardize_sources([{"url": url} for url in extract_unique_urls(answer or content)])
+    primary_source_count = len(merged)
     warning_code = server_module._assess_search_body_quality(answer, merged)
-    supplemental_sources = await _supplemental_sources_for_deep_research(
+    supplemental_result = await _supplemental_sources_for_deep_research(
         query,
         answer=answer,
         existing_sources=merged,
@@ -11652,11 +13066,27 @@ async def _search_query_with_details(
         include_domains=include_domains,
         exclude_domains=exclude_domains,
     )
+    if isinstance(supplemental_result, dict):
+        supplemental_sources = (
+            supplemental_result.get("sources")
+            if isinstance(supplemental_result.get("sources"), list)
+            else []
+        )
+        supplemental_attempts = (
+            supplemental_result.get("provider_attempts")
+            if isinstance(supplemental_result.get("provider_attempts"), list)
+            else []
+        )
+    else:
+        supplemental_sources = supplemental_result if isinstance(supplemental_result, list) else []
+        supplemental_attempts = []
     if supplemental_sources:
         merged = standardize_sources(merge_sources(merged, supplemental_sources))
     return {
         "answer": answer.strip() or content.strip(),
         "sources": merged,
+        "provider_source_count": primary_source_count,
+        "supplemental_attempts": supplemental_attempts,
         "warning_code": warning_code,
         "requested_model": provider_meta.get("requested_model"),
         "effective_model": provider_meta.get("effective_model"),
@@ -11696,9 +13126,9 @@ async def _supplemental_sources_for_deep_research(
     warning_code: str | None,
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     if not warning_code and answer.strip() and existing_sources:
-        return []
+        return {"sources": [], "provider_attempts": []}
     from . import server as server_module
 
     results = await server_module._call_tavily_search(
@@ -11708,9 +13138,58 @@ async def _supplemental_sources_for_deep_research(
         exclude_domains=exclude_domains or None,
     )
     provider_name = "tavily"
+    attempts: list[dict[str, Any]] = []
+    if isinstance(results, list):
+        tavily_source_count = len(results)
+        attempt = _provider_attempt_payload(
+            unit_id="",
+            operation="search",
+            status="completed" if tavily_source_count else "failed",
+            provider_name="tavily",
+            provider_api_url=f"{config.tavily_api_url.rstrip('/')}/search",
+            source_count=tavily_source_count,
+            error_code="" if tavily_source_count else "empty_search_result",
+        )
+        attempt["attempt_role"] = "supplemental"
+        attempts.append(attempt)
+    else:
+        attempt = _provider_attempt_payload(
+            unit_id="",
+            operation="search",
+            status="failed",
+            provider_name="tavily",
+            provider_api_url=f"{config.tavily_api_url.rstrip('/')}/search",
+            error_code="search_unavailable",
+        )
+        attempt["attempt_role"] = "supplemental"
+        attempts.append(attempt)
     if not results:
         results = await server_module._call_firecrawl_search(query, 4)
         provider_name = "firecrawl"
+        if isinstance(results, list):
+            firecrawl_source_count = len(results)
+            attempt = _provider_attempt_payload(
+                unit_id="",
+                operation="search",
+                status="completed" if firecrawl_source_count else "failed",
+                provider_name="firecrawl",
+                provider_api_url=f"{config.firecrawl_api_url.rstrip('/')}/search",
+                source_count=firecrawl_source_count,
+                error_code="" if firecrawl_source_count else "empty_search_result",
+            )
+            attempt["attempt_role"] = "supplemental"
+            attempts.append(attempt)
+        else:
+            attempt = _provider_attempt_payload(
+                unit_id="",
+                operation="search",
+                status="failed",
+                provider_name="firecrawl",
+                provider_api_url=f"{config.firecrawl_api_url.rstrip('/')}/search",
+                error_code="search_unavailable",
+            )
+            attempt["attempt_role"] = "supplemental"
+            attempts.append(attempt)
     supplemental: list[dict[str, Any]] = []
     for item in results or []:
         if not isinstance(item, dict):
@@ -11720,7 +13199,7 @@ async def _supplemental_sources_for_deep_research(
         if provider_name == "tavily" and not source.get("description") and source.get("content"):
             source["description"] = source.get("content")
         supplemental.append(source)
-    return supplemental
+    return {"sources": supplemental, "provider_attempts": attempts}
 
 
 async def _fetch_url(url: str) -> str | None:
@@ -11753,6 +13232,7 @@ async def _fetch_url_with_details(url: str) -> dict[str, Any]:
             "effective_model": str(data.get("effective_model", "") or ""),
             "provider_api_url": str(data.get("provider_api_url", "") or ""),
             "error_code": str(result.get("error", "") or ""),
+            "warnings": list(data.get("preflight_warnings") or []),
         }
     if not result or result.startswith("提取失败:") or result.startswith("配置错误:"):
         return {"content": "", "error_code": "fetch_failed"}

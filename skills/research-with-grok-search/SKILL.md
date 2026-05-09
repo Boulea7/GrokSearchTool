@@ -11,7 +11,7 @@ Use this skill when a task needs current web information and the GrokSearch MCP 
 
 ### 1. Prefer the lightweight default path
 
-Default to `plan_* -> web_search` when the task is not obviously trivial.
+Default to `plan_* -> web_search` when the task is not obviously trivial.  
 Use `web_search` directly only when the task is clearly single-hop and planning would add little value, such as:
 
 - single-hop factual questions
@@ -30,7 +30,7 @@ Use the `plan_*` tools when the task is:
 - time-sensitive and high-risk
 - likely to need decomposition before searching
 
-For non-obviously-trivial research, start with `plan_*`.
+For non-obviously-trivial research, start with `plan_*`.  
 Skip planning only when the task is already clear, bounded, and low-friction enough for direct `web_search`.
 
 Required order:

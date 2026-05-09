@@ -20,7 +20,7 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `switch_model`: смена модели Grok по умолчанию
 - `toggle_builtin_tools`: переключение встроенных WebSearch / WebFetch в Claude Code
 
-Сейчас опубликовано `20` MCP-инструментов.
+Сейчас опубликовано `21` MCP-инструмент.
 
 - `web_search`
 - `get_sources`
@@ -39,6 +39,7 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `deep_research_status`
 - `deep_research_events`
 - `deep_research_result`
+- `deep_research_artifact`
 - `deep_research_resume`
 - `deep_research_cancel`
 - `deep_research_list`
@@ -46,6 +47,8 @@ GrokSearch — это независимо поддерживаемый MCP-се
 `plan_search_term` задаёт `approach` / `fallback_plan` при первом создании `search_strategy`; последующие вызовы без `is_revision` только добавляют `search_terms` и не переписывают существующие strategy metadata неявно.
 planning `session_id` — это in-process transient handle с TTL около 1 часа и LRU-лимитом 256 сессий; после рестарта процесса, истечения TTL или eviction нужно начинать заново с нового `plan_intent`.
 wrapper'ы намеренно сохраняют scalar shim-входы: `depends_on` передаётся как CSV, `parallel_groups` — как CSV с разделением групп через `;`, а `params_json` — как строковый JSON. Первый вызов `plan_search_term` обязан передавать `approach`.
+
+`deep_research_result` / `deep_research_status` публикуют additive artifact diagnostics, включая `artifact_errors`, `artifact_visibility_reason`, resolved `batch_id` и `operator_summary`. `deep_research_artifact(job_id, artifact)` и CLI `grok-search-research result --artifact <kind>` используют одинаковые artifact visibility rules и сначала читают resolved final batch. Provider Accounting также может появляться как additive section в final report body, `report.json` и `citations.json`, описывая provider attempts, failed fetch, warnings и budget usage.
 
 ## Установка
 
@@ -135,13 +138,16 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 | Переменная | Обязательна | Описание |
 | --- | --- | --- |
-| `GROK_API_URL` | Да | OpenAI-совместимый Grok endpoint; рекомендуется явно указывать суффикс `/v1`, текущая кодовая ветка не блокирует запрос заранее только из-за его отсутствия, но многие OpenAI-совместимые endpoint'ы без него всё равно могут завершиться ошибкой во время выполнения и обычно сопровождаются compatibility warning |
+| `GROK_API_URL` | Да | OpenAI-compatible Grok base URL, предоставленный вашим провайдером; распространенная форма пути включает `/v1`. Текущая кодовая ветка не блокирует запрос заранее только из-за его отсутствия, но многие OpenAI-compatible endpoint'ы без него всё равно могут завершиться ошибкой во время выполнения и обычно сопровождаются compatibility warning |
 | `GROK_API_KEY` | Да | Grok API key |
 | `GROK_MODEL` | Нет | Модель по умолчанию; приоритет: process env > project `.env.local` > project `.env` > persisted config > кодовый default |
 | `GROK_TIME_CONTEXT_MODE` | Нет | Режим внедрения временного контекста: `always` / `auto` / `never` |
 | `TAVILY_API_KEY` | Нет | Tavily key для `web_fetch` / `web_map`, а также для Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | Нет | Tavily API endpoint |
 | `TAVILY_ENABLED` | Нет | Включать ли Tavily-пути |
+| `TAVILY_FALLBACK_API_URL` | Нет | Remote HTTP API fallback для случая, когда основной Tavily endpoint указывает на недоступный local loopback; встроенного endpoint по умолчанию нет, значение нужно задавать явно |
+| `TAVILY_FALLBACK_API_KEY` | Нет | Tavily fallback Bearer token; по умолчанию переиспользует `TAVILY_API_KEY`, его нельзя commit'ить в публичный репозиторий |
+| `TAVILY_FALLBACK_ENABLED` | Нет | Включать ли local-loopback Tavily fallback; по умолчанию `false` |
 | `FIRECRAWL_API_KEY` | Нет | Firecrawl key для fallback fetch и optional supplemental `web_search` |
 | `FIRECRAWL_API_URL` | Нет | Firecrawl API endpoint |
 | `GROK_DEBUG` | Нет | Включить debug-логи и debug-only пересылку прогресса через `ctx.info()` |
