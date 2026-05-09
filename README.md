@@ -223,12 +223,15 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式，推荐显式包含 `/v1` 后缀；代码层不会仅因省略 `/v1` 就预先拦截，但多数 OpenAI 兼容端点仍可能因此在运行时失败，并通常伴随兼容性 warning） |
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
 | `GROK_MODEL` | 否 | `grok-4.20-0309` | 默认模型；优先级见下方说明（进程 env > 项目 `.env.local` > 项目 `.env` > 持久化 config > 代码默认值） |
-| `GROK_MODEL_PROFILE` | 否 | `balanced_auto` | 当未显式设置 `GROK_MODEL` 时，按 provider family 解析默认模型；当前优先兼容官方 xAI、OpenRouter、常见 OpenAI-compatible relay 与 `grok2api` 风格反代 |
-| `GROK_DEEP_RESEARCH_STANDARD_PROFILE` | 否 | `reasoning` | `deep research` 的 `standard` 档默认 profile；不可用时会自动回落 |
+| `GROK_MODEL_PROFILE` | 否 | `balanced_auto` | 当未显式设置 `GROK_MODEL` 时，按统一工具级策略解析默认模型；provider 只影响 suffix、endpoint path 与兼容性诊断 |
+| `GROK_DEEP_RESEARCH_STANDARD_PROFILE` | 否 | `reasoning` | `deep research` 的 `standard` 档默认 profile；当前默认主模型为 `grok-4.20-expert`，不可用时按统一 fallback 顺序自动回落 |
 | `GROK_DEEP_RESEARCH_DEEP_PROFILE` | 否 | `multi_agent` | `deep research` 的 `deep` 档默认 profile；若当前 provider / relay / 账户不支持多 agent，会自动回落到单 agent |
+| `GROK_DEEP_RESEARCH_ULTRA_PROFILE` | 否 | `ultra` | `deep research` 的 `ultra` 档默认 profile；显式请求时优先尝试 `grok-4.20-heavy-16-agent`，不可用时会自动降级到更轻的多 agent / 单 agent 模型 |
 | `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | 否 | - | 第 2 个 Grok 供应商；当主供应商失败时会自动切到该供应商继续重试 |
 | `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | 否 | - | 更多 Grok 供应商，按编号升序依次作为 failover provider chain |
 | `GROK_MODEL_FALLBACKS` | 否 | 内建降级链 | 逗号分隔的模型自动降级顺序；当当前供应商明确返回“模型不可用”时，会在同一供应商内按该顺序继续尝试，例如可显式包含 `grok-4.1-fast` |
+| `GROK_WEB_SEARCH_MODEL` | 否 | `grok-4.20-fast` | `web_search` 的工具级默认主模型；默认不再隐式继承全局 `GROK_MODEL` |
+| `GROK_WEB_SEARCH_FALLBACK_MODELS` | 否 | `grok-4.20-0309,grok-4.20-auto,grok-4.20-0309-non-reasoning,grok-4.20-reasoning,grok-4.20-expert` | `web_search` 的工具级 fallback 顺序；provider 只补 suffix / path / diagnostics，不改这组顺序 |
 | `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
@@ -264,13 +267,15 @@ claude mcp add-json grok-search --scope user '{
 
 > 当前默认首选模型是 `grok-4.20-0309`。运行时模型选择对 Grok 4.1+ 族会保持弹性：如果显式或隐式请求的模型不在 `/models` 返回列表里，但列表中存在兼容的 Grok 4.1+ 可用模型，系统会优先回退到更合适的可用模型，而不是仅因后缀不匹配而直接失败。
 
-> 当没有显式 `GROK_MODEL` 时，运行时当前会按 `GROK_MODEL_PROFILE` 做 provider-aware 默认解析；`get_config_info` 基础快照会额外返回 `GROK_MODEL_PROFILE`、`GROK_DEEP_RESEARCH_STANDARD_PROFILE`、`GROK_DEEP_RESEARCH_DEEP_PROFILE` 与 `GROK_PROVIDER_FAMILY`，便于排查官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代的差异。
+> 当没有显式 `GROK_MODEL` 时，运行时当前会按统一工具级策略解析默认模型；同一工具的主模型与 fallback 顺序不会因 provider family 改变。provider 当前只影响 `:online` suffix、`/chat/completions` vs `/responses` 路径选择，以及 capability / availability / diagnostics metadata。`get_config_info` 基础快照会额外返回 `GROK_MODEL_PROFILE`、`GROK_DEEP_RESEARCH_STANDARD_PROFILE`、`GROK_DEEP_RESEARCH_DEEP_PROFILE`、`GROK_DEEP_RESEARCH_ULTRA_PROFILE` 与 `GROK_PROVIDER_FAMILY`，便于排查兼容层差异。
 
 > `get_config_info` 的基础快照现在还会返回 `GROK_ROUTING_DIAGNOSTICS`。其中会列出当前 active provider、编号 provider chain、各 profile 解析出的默认模型、预期会走 `/chat/completions` 还是 `/responses`，以及 multi-agent 相关 routing signals，方便判断官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代在当前配置下到底会怎么走。
 
 > 当前 Grok 路由已支持 `/chat/completions` 与 `/responses` 双通道。多 agent 家族与部分 response-only relay 模型会优先走 `/responses`；OpenRouter 与多数兼容 relay 仍优先 `chat/completions`。
 
-> `deep research` 当前默认采用 `standard` 单 agent、`deep` 多 agent 优先的策略；若当前 provider、relay、账户套餐或单模型配置不支持多 agent，会自动回落到单 agent。多 agent 通常会带来更高时延，单次大约可能在 `10` 秒到 `2` 分钟之间。
+> `web_search` 当前默认采用独立的工具级模型策略：主模型默认 `grok-4.20-fast`，fallback 顺序为 `grok-4.20-0309 -> grok-4.20-auto -> grok-4.20-0309-non-reasoning -> grok-4.20-reasoning -> grok-4.20-expert`。如果没有显式设置 `GROK_WEB_SEARCH_MODEL` / `GROK_WEB_SEARCH_FALLBACK_MODELS`，这组顺序不会因为全局 `GROK_MODEL` 或 provider family 改变。
+
+> `deep research` 当前默认采用统一工具级模型策略：`standard` 默认主模型 `grok-4.20-expert`，fallback 为 `grok-4.20-reasoning -> grok-4.20-auto -> grok-4.20-fast`；`deep` 默认主模型 `grok-4.20-expert-4-agent`，fallback 为 `grok-4.20-expert -> grok-4.20-multi-agent -> grok-4.20-reasoning`；`ultra` 默认主模型 `grok-4.20-heavy-16-agent`，fallback 为 `grok-4.20-heavy -> grok-4.20-expert-4-agent -> grok-4.20-expert -> grok-4.20-reasoning`。provider / relay 不改变同一工具的工具层策略，只负责路径、suffix 与兼容性落地。多 agent 通常会带来更高时延，单次大约可能在 `10` 秒到 `2` 分钟之间，`ultra` 通常还会更慢。
 
 > `GROK_TIME_CONTEXT_MODE` 默认是 `always`，保持当前“全量注入本地时间上下文”的行为；如需节省上下文，可改为 `auto` 或 `never`。
 
@@ -448,7 +453,7 @@ claude mcp list
 - `feature_readiness.get_sources` 只有在当前进程内至少存在一个非 error 的可读取 source session 时才会显示 `ready`；如果只有失败搜索留下的 session，状态会保持 `partial_ready`。即使 `web_search` 当前尚未 ready，只要当前进程里仍保有可读取 session，`get_sources` 也会继续显示 `ready`，同时通过 `degraded_by` 暴露上游配置问题。
 - `feature_readiness.get_sources` 当前会附带 `cache_summary`，至少包含 `total_sessions`、`readable_sessions`、`error_sessions`、`partial_sessions`、`unreadable_sessions`，用于快速判断当前 source cache 的可读性与退化面。
 - `feature_readiness` 当前还会提供一组 summary-safe 机器字段：`based_on_checks` 表示该能力主要参考了哪些 doctor checks，`probe_scope` 表示结论属于哪类探针/状态面，`degraded_by` 用 `check_id/status/reason_code` 描述当前退化来源。对 `get_sources`，cache 侧退化当前会使用 synthetic cause `source_cache_state`；对 `web_search` 还会额外返回 `runtime_override_active` 与 `runtime_model_source`，用于标记当前退化是否受进程 env / 项目 `.env.local` / `.env` 覆盖层影响。
-- `feature_readiness.deep_research_planner` 与 `feature_readiness.deep_research_runtime` 当前共享 Grok provider chain 与真实搜索探针的 readiness 结论，用于区分“默认轻路径正常”与“deep research 也能在相同运行时下工作”。
+- `feature_readiness.deep_research_planner` 与 `feature_readiness.deep_research_runtime` 当前会额外暴露 `profile_probes`，分别给出 `standard` / `deep` / `ultra` 三档 deep research 的真实探针结果、winning provider / model，以及命中的 endpoint path，用于区分“默认轻路径正常”与“指定档位的 deep research 也能真实工作”。
 - `feature_readiness` / `doctor` 的状态语义当前可按以下方式理解：`ready`=当前能力已验证可用，`degraded`=能力存在但探针或局部依赖异常，`not_ready`=配置或前置条件不足，`partial_ready`=接口存在但仍缺少运行中瞬时条件；其中 `transient` 和 `client_specific` 项默认不拉低 overall doctor。
 - 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query、常见 OAuth/OIDC credential 参数，以及高置信度 cloud-signed credential 键（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）也会做遮罩。但诊断结果仍可能包含本机绝对路径、endpoint/主机名或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
 
@@ -501,15 +506,15 @@ claude mcp list
 - `force_new` 用于控制 `deep_research_start` 是否必须创建全新 job。
 - 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；这条规则当前同样适用于带 `continue_from_job_id` 的 follow-up job，返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。当前 request fingerprint 也会区分 `plan_only`；`plan_only=true` 不应再复用 execution job，execution start 也不应复用 plan-only draft。对 `completed` job，当前只有在最终四件套可读且来自一致 `batch_id` 时才应继续被视为可复用结果。
 - 若 `deep_research_start(force_new=false)` 命中的是 `interrupted` 且已存在可读 final artifact batch 的 job，当前也会先把它解析成 `completed` 再作为 reusable result 返回，避免与 `deep_research_resume` 对同一 job 给出不同终态语义。
-- `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要；对 `completed` job，还会额外返回当前是否正在读取 resolved final batch 的 additive 诊断字段，如 `artifact_fallback_used`、`resolved_artifact_batch_id`。对 `interrupted` 且 `current_checkpoint/phase` 已到 `finalizing` 的 job，只要存在一致且可读的 final artifact batch，当前也应暴露同一批 resolved final artifacts。CLI `grok-search-research result --artifact <kind>` 当前也应优先读取同一批 resolved final artifacts，而不是盲读当前指针。
+- `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要；对 `completed` job，还会额外返回当前是否正在读取 resolved final batch 的 additive 诊断字段，如 `artifact_fallback_used`、`resolved_artifact_batch_id`。对 `interrupted` / `failed` / `canceled` 且 `current_checkpoint/phase` 已到 `finalizing` 的 job，只要存在一致且可读的 final artifact batch，当前也应暴露同一批 resolved final artifacts。`evidence_items.json` 现在也会跟着 resolved final batch 一起出现在 `artifact_kinds` / `artifacts` 中。CLI `grok-search-research result --artifact <kind>` 当前也应优先读取同一批 resolved final artifacts，而不是盲读当前指针。
 - `deep_research_events` 返回有序事件流，支持 `after_seq` 增量读取；空 fetch/map 等显式 unit 失败当前会通过 `research_unit_failed` 暴露，而不应再静默计作 completed。
-- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化；若某个 JSON artifact 不可读，结果会在 `artifact_errors` 里返回稳定错误码，而不是直接让整次读取失败。对 `completed` job，若最终四件套缺失，当前会通过 `artifact_errors` 暴露缺失项；对 `failed` / `canceled` / `interrupted` job，则以当前已落盘的 partial artifacts 与 checkpoint 为准。若当前 artifact 指针混批或不可读，`artifact_fallback_used` 会标记结果是否回退到了最近一批可读且 schema 合法的 final artifacts。continuation context 在 artifact 可解析但 shape 非法时，也会继续按 `sources.json -> citations.json.source_registry -> checkpoint -> partial/runtime carry-forward` 的顺序回退，而不是直接让 follow-up job 构建失败。
+- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化；`evidence_items` 也会作为独立字段一起返回。若某个 JSON artifact 不可读，结果会在 `artifact_errors` 里返回稳定错误码，而不是直接让整次读取失败。对 `completed` job，若最终四件套缺失，当前会通过 `artifact_errors` 暴露缺失项；对 `failed` / `canceled` / `interrupted` job，则优先读取当前可解析的 resolved final batch，再退到 checkpoint 与 partial artifacts。continuation context 在 artifact 可解析但 shape 非法时，也会继续按 `sources.json -> citations.json.source_registry -> checkpoint -> partial/runtime carry-forward` 的顺序回退；当 resolved final batch 缺少 `evidence_items.json` 时，当前会优先回退到当前 job 上的 `evidence_items.json`，而不是直接退到 checkpoint reconstruction。
 - continuation context 当前对 `sources.json`、`citations.json`、`report.json` 逐项判断是否仍可读；某个当前 artifact shape 非法时，不应把仍然可读的其他当前 artifacts 一起降级到 checkpoint。
 - `deep_research_resume` 目前支持从 `draft`、`failed`、`interrupted` job 继续，并优先从最新的 completed research-unit checkpoint 续跑，而不是整 job 从头执行。恢复后的新 attempt 会清理上一轮的终态时间戳，并重新使用新的 attempt 时间窗口。
 - `deep_research_cancel` 只负责发起取消请求；运行中的 job 会在阶段边界或下一次检查点更新时收口。
 - `deep_research_list` 提供最近 job 列表，适合 CLI 或宿主做结果检索。
 - 最终 artifacts 当前按同一 `batch_id` 原子发布；调用方如需确认 `sources.json`、`citations.json`、`report.json`、`final_report.md` 来自同一批结果，可读取 artifact metadata 里的 `batch_id`。`sources.json` 当前还可能附带 `topic_match_score` 与 `ranking_penalties`；unused source 若与同域中已被 grounding 的页面相比明显更 off-topic，当前可被直接从最终 source registry 压掉，并带 `same_domain_off_topic` penalty。`report.json.runtime` 当前除 `warnings` 外，也可能附带 `failed_units`。
-- `report.json.runtime.warnings` 当前也会在 coverage 明显不完整时附带 `coverage_incomplete`；当 `unanswered_sections` 或 `uncovered_sub_questions` 非空时，`report.status` 当前至少应降级为 `degraded`。
+- `report.json.runtime.warnings` 当前也会在 coverage 明显不完整时附带 `coverage_incomplete`；coverage 现在区分 `coverage_gate_passed` 与 additive `hard_coverage_gate_passed`。`hard_coverage_gate_passed` 只看 `must_cover` / `coverage_checklist` 这类硬目标，决定 release gate 是否直接失败；`unanswered_sections`、`uncovered_sub_questions` 这类软缺口仍会保留在 coverage ledger 中，并至少把 `report.status` 降级为 `degraded`。
 - `sources.json` 当前除 `source_id` 外，还会附带 additive `source_key`、`quality_score`、`quality_tier`、`source_type`、`ranking_reasons` 一类来源质量与排序解释元数据；来源条目还可能带 `winner_provider`、`citation_count`、`section_count` 这类更直接的 provenance / usage 字段。`citations.json` 与 `report.json` 的 section 当前也可能带 `summary`、`confidence`、`claim_cluster_count`、`supporting_source_count`、`supporting_domain_count`；claim 当前也可能附带 additive `unit_id`、`evidence_ids`、`cluster_type`、`supporting_source_count`、`supporting_domain_count`、`confidence`，用于回溯 claim 来自哪个 research unit / evidence，以及它当前是单来源、同域共识还是更强跨域 corroboration 型证据。
 - continuation context 当前会优先复用 `sources.json`；若该 artifact 缺失或不可读，会回退到 `citations.json.source_registry` 重建 carry-forward sources。若已完成 job 的当前 artifact 指针混批或缺件，则会优先回退到最近的完整 final artifact batch，再回退到 checkpoint / partial artifacts。运行中的 `queued` / `running` job 在新进程启动时会被回收成 `interrupted`，并带上恢复原因。
 </details>

@@ -7,12 +7,17 @@ import pytest
 from grok_search import server
 from grok_search.deep_research_runtime import (
     DeepResearchRuntime,
+    _build_section_citations,
+    _build_grounding_diagnostics,
+    _build_release_gate,
     _build_report_summary,
+    _build_verifier_diagnostics,
     _coverage_for_report,
+    _extract_relevant_excerpt_with_span,
     _search_query,
 )
 from grok_search.providers.grok import GrokSearchProvider
-from grok_search.deep_research_types import DeepResearchPlan, utc_now_iso
+from grok_search.deep_research_types import DeepResearchContinuationState, DeepResearchPlan, utc_now_iso
 
 
 def build_runtime(tmp_path):
@@ -72,6 +77,97 @@ def structured_plan_payload(job, continuation):
     }
 
 
+def with_minimal_provenance_artifacts(
+    artifacts: list[dict],
+    *,
+    query: str,
+    evidence_items: list[dict] | None = None,
+    total_claims: int = 0,
+    section_count: int = 0,
+):
+    payload = list(artifacts)
+    normalized_evidence_items = [] if evidence_items is None else evidence_items
+    payload.extend(
+        [
+            {
+                "kind": "coverage.json",
+                "content": json.dumps(
+                    {
+                        "query": query,
+                        "planned_section_ids": [],
+                        "answered_section_ids": [],
+                        "unanswered_sections": [],
+                        "planned_sub_question_ids": [],
+                        "covered_sub_question_ids": [],
+                        "uncovered_sub_questions": [],
+                        "coverage_gate_passed": True,
+                        "hard_coverage_gate_passed": True,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": json.dumps(
+                    {
+                        "total_claims": total_claims,
+                        "grounded_claims": total_claims,
+                        "ungrounded_claims": 0,
+                        "single_source_claims": total_claims,
+                        "low_confidence_claims": 0,
+                        "missing_evidence_binding_claims": 0,
+                        "total_evidence_bindings": 0,
+                        "source_backed_binding_count": 0,
+                        "search_only_binding_count": 0,
+                        "null_span_binding_count": 0,
+                        "grounded_claims_without_source_backed_binding": 0,
+                        "sections": [],
+                        "sources": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verifier.json",
+                "content": json.dumps(
+                    {
+                        "passed": True,
+                        "reason_codes": [],
+                        "flagged_claim_ids": [],
+                        "summary": {
+                            "section_count": section_count,
+                            "total_claims": total_claims,
+                            "low_confidence_claims": 0,
+                            "single_source_claims": total_claims,
+                            "source_backed_binding_count": 0,
+                            "search_only_binding_count": 0,
+                            "null_span_binding_count": 0,
+                            "missing_evidence_items": 0,
+                            "mismatched_binding_source": 0,
+                            "mismatched_binding_evidence": 0,
+                            "invalid_source_backed_span": 0,
+                            "duplicate_claims": 0,
+                            "low_value_claims": 0,
+                            "medium_single_source_search_only": 0,
+                            "same_domain_off_topic_dominance": 0,
+                        },
+                    }
+                ),
+                "content_type": "application/json",
+            },
+        ]
+    )
+    if not any(item.get("kind") == "evidence_items.json" for item in payload):
+        payload.append(
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(normalized_evidence_items),
+                "content_type": "application/json",
+            }
+        )
+    return payload
+
+
 @pytest.mark.asyncio
 async def test_plan_brief_includes_focused_scope_fields(tmp_path):
     runtime = build_runtime(tmp_path)
@@ -106,6 +202,7 @@ def create_completed_source_job(
     checkpoint_sections: list[dict] | None = None,
     checkpoint_sources: list[dict] | None = None,
     checkpoint_unit_results: dict | None = None,
+    include_provenance_bundle: bool = True,
 ):
     job = runtime.store.create_job(
         query=query,
@@ -173,31 +270,115 @@ def create_completed_source_job(
         "sections": sections,
         "unit_results": unit_results,
     }
-    runtime.write_artifact_batch(
-        job.job_id,
-        [
-            {
-                "kind": "sources.json",
-                "content": sources_content if sources_content is not None else json.dumps(source_registry),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "citations.json",
-                "content": json.dumps(citations),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "report.json",
-                "content": json.dumps(report),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "final_report.md",
-                "content": "# Final Report\n\nResume continues from the last checkpoint.",
-                "content_type": "text/markdown",
-            },
-        ],
-    )
+    evidence_items = [
+        {
+            "evidence_id": "evidence-unit-search-1-search",
+            "unit_id": "unit-search-1",
+            "summary": "Resume continues from the last checkpoint.",
+            "detail": "Resume continues from the last checkpoint.",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+        }
+    ]
+    artifacts = [
+        {
+            "kind": "sources.json",
+            "content": sources_content if sources_content is not None else json.dumps(source_registry),
+            "content_type": "application/json",
+        },
+        {
+            "kind": "citations.json",
+            "content": json.dumps(citations),
+            "content_type": "application/json",
+        },
+        {
+            "kind": "report.json",
+            "content": json.dumps(report),
+            "content_type": "application/json",
+        },
+        {
+            "kind": "final_report.md",
+            "content": "# Final Report\n\nResume continues from the last checkpoint.",
+            "content_type": "text/markdown",
+        },
+    ]
+    if include_provenance_bundle:
+        artifacts.extend(
+            [
+                {
+                    "kind": "evidence_items.json",
+                    "content": json.dumps(evidence_items),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "coverage.json",
+                    "content": json.dumps(
+                        {
+                            "query": query,
+                            "planned_section_ids": [section["section_id"] for section in sections],
+                            "answered_section_ids": [section["section_id"] for section in sections],
+                            "unanswered_sections": [],
+                            "planned_sub_question_ids": ["sq1"],
+                            "covered_sub_question_ids": ["sq1"],
+                            "uncovered_sub_questions": [],
+                            "coverage_gate_passed": True,
+                            "hard_coverage_gate_passed": True,
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "grounding.json",
+                    "content": json.dumps(
+                        {
+                            "total_claims": sum(len(section.get("claims", [])) for section in sections),
+                            "grounded_claims": sum(len(section.get("claims", [])) for section in sections),
+                            "ungrounded_claims": 0,
+                            "single_source_claims": sum(len(section.get("claims", [])) for section in sections),
+                            "low_confidence_claims": 0,
+                            "missing_evidence_binding_claims": 0,
+                            "total_evidence_bindings": 0,
+                            "source_backed_binding_count": 0,
+                            "search_only_binding_count": 0,
+                            "null_span_binding_count": 0,
+                            "grounded_claims_without_source_backed_binding": 0,
+                            "sections": [],
+                            "sources": [],
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "verifier.json",
+                    "content": json.dumps(
+                        {
+                            "passed": True,
+                            "reason_codes": [],
+                            "flagged_claim_ids": [],
+                            "summary": {
+                                "section_count": len(sections),
+                                "total_claims": sum(len(section.get("claims", [])) for section in sections),
+                                "low_confidence_claims": 0,
+                                "single_source_claims": sum(len(section.get("claims", [])) for section in sections),
+                                "source_backed_binding_count": 0,
+                                "search_only_binding_count": 0,
+                                "null_span_binding_count": 0,
+                                "missing_evidence_items": 0,
+                                "mismatched_binding_source": 0,
+                                "mismatched_binding_evidence": 0,
+                                "invalid_source_backed_span": 0,
+                                "duplicate_claims": 0,
+                                "low_value_claims": 0,
+                                "medium_single_source_search_only": 0,
+                                "same_domain_off_topic_dominance": 0,
+                            },
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+            ]
+        )
+    runtime.write_artifact_batch(job.job_id, artifacts)
     runtime.store.save_checkpoint(
         job.job_id,
         phase="finalizing",
@@ -207,16 +388,7 @@ def create_completed_source_job(
             "completed_unit_ids": list(unit_results),
             "unit_results": unit_results,
             "sources": source_registry,
-            "evidence_items": [
-                {
-                    "evidence_id": "evidence-unit-search-1-search",
-                    "unit_id": "unit-search-1",
-                    "summary": "Resume continues from the last checkpoint.",
-                    "detail": "Resume continues from the last checkpoint.",
-                    "source_ids": ["R1"],
-                    "source_urls": ["https://docs.example.com/runtime/checkpoints"],
-                }
-            ],
+            "evidence_items": evidence_items,
             "sections": sections,
         },
     )
@@ -755,11 +927,80 @@ async def test_status_reconciles_stale_running_job_before_read(tmp_path):
             ("2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", stale_job.job_id),
         )
 
-    status = await runtime.status(stale_job.job_id)
-    events = await runtime.events(stale_job.job_id)
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+    status = await other_runtime.status(stale_job.job_id)
+    events = await other_runtime.events(stale_job.job_id)
 
     assert status["status"] == "interrupted"
     assert any(event["type"] == "job_interrupted" for event in events["events"])
+
+
+@pytest.mark.asyncio
+async def test_status_does_not_reconcile_fresh_running_job_from_another_runtime(tmp_path):
+    runtime = build_runtime(tmp_path)
+    fresh_job = runtime.store.create_job(
+        query="Fresh running job",
+        request_fingerprint="fp-fresh-running-read",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        fresh_job.job_id,
+        current_checkpoint="researching-unit-search-1",
+        heartbeat_at=utc_now_iso(),
+        started_at=utc_now_iso(),
+    )
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+
+    status = await other_runtime.status(fresh_job.job_id)
+    events = await other_runtime.events(fresh_job.job_id)
+
+    assert status["status"] == "running"
+    assert not any(event["type"] == "job_interrupted" for event in events["events"])
+    assert runtime.store.get_job(fresh_job.job_id).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_start_keeps_job_draft_until_planning_artifacts_are_persisted(tmp_path):
+    runtime = build_runtime(tmp_path)
+    planner_entered = asyncio.Event()
+    allow_finish = asyncio.Event()
+
+    async def blocked_planner(job, continuation):
+        planner_entered.set()
+        await allow_finish.wait()
+        return structured_plan_payload(job, continuation)
+
+    runtime._generate_plan_with_model = blocked_planner
+
+    start_task = asyncio.create_task(runtime.start(query="Draft planning window", force_new=True, schedule=False))
+    await planner_entered.wait()
+
+    jobs = runtime.store.list_jobs(limit=10)
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert job.status == "draft"
+
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+    status = await other_runtime.status(job.job_id)
+    events = await other_runtime.events(job.job_id)
+
+    assert status["status"] == "draft"
+    assert not any(event["type"] == "job_interrupted" for event in events["events"])
+
+    allow_finish.set()
+    response = await start_task
+
+    assert response["status"] == "queued"
+    assert runtime.store.get_job(job.job_id).status == "queued"
 
 
 @pytest.mark.asyncio
@@ -810,6 +1051,57 @@ async def test_planner_preselects_available_grok_model_for_deep_research(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_standard_effort_prefers_expert_before_fallback(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    observed_models = []
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-expert", "grok-4.20-reasoning", "grok-4.20-auto"]
+
+    async def fake_execute(self, headers, payload, ctx=None, render_sources=False):
+        observed_models.append(payload["model"])
+        return json.dumps(
+            {
+                "brief": {"objective": "Standard effort", "deliverable": "A cited report.", "success_criteria": ["Produce a structured report."]},
+                "sub_questions": [{"id": "sq1", "question": "Standard effort", "reason": "Cover the primary question."}],
+                "search_strategy": {
+                    "approach": "targeted",
+                    "search_queries": ["Standard effort"],
+                    "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+                },
+                "report_outline": [{"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."}],
+                "research_units": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "unit_type": "search",
+                        "title": "Primary search",
+                        "goal": "Standard effort",
+                        "query": "Standard effort",
+                        "depends_on": [],
+                        "status": "pending",
+                        "notes": "",
+                    }
+                ],
+                "planner_metadata": {"planner": "test", "used_fallback": False},
+            }
+        ), []
+
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.delenv("GROK_DEEP_RESEARCH_STANDARD_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {})
+    server.config.reset_runtime_state()
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
+
+    await runtime.start(query="Standard effort", effort="standard", plan_only=True, force_new=True, schedule=False)
+
+    assert observed_models == ["grok-4.20-expert"]
+
+
+@pytest.mark.asyncio
 async def test_deep_effort_prefers_multi_agent_default_and_preserves_single_agent_fallback(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     observed_models = []
@@ -848,6 +1140,10 @@ async def test_deep_effort_prefers_multi_agent_default_and_preserves_single_agen
     monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
     monkeypatch.setenv("GROK_API_KEY", "primary-key")
     monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.delenv("GROK_DEEP_RESEARCH_ULTRA_PROFILE", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {})
+    server.config.reset_runtime_state()
     monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
     monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
 
@@ -895,12 +1191,67 @@ async def test_ultra_effort_prefers_heavy_16_agent_before_fallback(monkeypatch, 
     monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
     monkeypatch.setenv("GROK_API_KEY", "primary-key")
     monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.delenv("GROK_DEEP_RESEARCH_ULTRA_PROFILE", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {})
+    server.config.reset_runtime_state()
     monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
     monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
 
     await runtime.start(query="Ultra effort", effort="ultra", plan_only=True, force_new=True, schedule=False)
 
     assert observed_models == ["grok-4.20-heavy-16-agent"]
+
+
+@pytest.mark.asyncio
+async def test_ultra_effort_falls_back_to_heavy_single_agent_before_lower_tiers(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    observed_models = []
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-heavy", "grok-4.20-expert-4-agent", "grok-4.20-reasoning"]
+
+    async def fake_execute(self, headers, payload, ctx=None, render_sources=False):
+        observed_models.append(payload["model"])
+        return json.dumps(
+            {
+                "brief": {"objective": "Ultra effort fallback", "deliverable": "A cited report.", "success_criteria": ["Produce a structured report."]},
+                "sub_questions": [{"id": "sq1", "question": "Ultra effort fallback", "reason": "Cover the primary question."}],
+                "search_strategy": {
+                    "approach": "targeted",
+                    "search_queries": ["Ultra effort fallback"],
+                    "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+                },
+                "report_outline": [{"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the answer."}],
+                "research_units": [
+                    {
+                        "unit_id": "unit-search-1",
+                        "unit_type": "search",
+                        "title": "Primary search",
+                        "goal": "Ultra effort fallback",
+                        "query": "Ultra effort fallback",
+                        "depends_on": [],
+                        "status": "pending",
+                        "notes": "",
+                    }
+                ],
+                "planner_metadata": {"planner": "test", "used_fallback": False},
+            }
+        ), []
+
+    monkeypatch.setenv("GROK_API_URL", "https://grok2api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.delenv("GROK_DEEP_RESEARCH_ULTRA_PROFILE", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {})
+    server.config.reset_runtime_state()
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setattr(GrokSearchProvider, "_execute_completion_with_retry_result", fake_execute)
+
+    await runtime.start(query="Ultra effort fallback", effort="ultra", plan_only=True, force_new=True, schedule=False)
+
+    assert observed_models == ["grok-4.20-heavy"]
 
 
 @pytest.mark.asyncio
@@ -1076,8 +1427,8 @@ async def test_completed_report_with_only_runtime_warning_is_marked_degraded(mon
     response = await runtime.start(query="Degraded runtime warning", force_new=True, schedule=False)
     result = await runtime.run_job(response["job_id"])
 
-    assert result["status"] == "completed"
-    assert result["report"]["status"] == "degraded"
+    assert result["status"] == "failed"
+    assert result["report"]["status"] == "failed"
     assert "body_missing_sources_only" in result["report"]["runtime"]["warnings"]
 
 
@@ -1331,7 +1682,7 @@ async def test_run_job_outputs_consistent_sources_citations_and_report(monkeypat
     citations = result["citations"]
     report = result["report"]
 
-    assert result["status"] == "completed"
+    assert result["status"] == "failed"
     assert sources[0]["source_id"] == "R1"
     assert citations["source_registry"]["R1"]["url"] == "https://example.com/resume"
     assert citations["sections"][0]["claims"]
@@ -1829,7 +2180,7 @@ async def test_resume_migrates_legacy_plan_and_checkpoint(monkeypatch, tmp_path)
     result = await runtime.run_job(job.job_id)
 
     assert resumed["status"] == "queued"
-    assert result["status"] == "completed"
+    assert result["status"] == "failed"
     assert result["plan"]["brief"]["objective"] == "Legacy resume"
 
 
@@ -1988,6 +2339,8 @@ async def test_continuation_plan_stays_compact_while_artifact_keeps_full_state(t
         "source_job_id",
         "source_job_status",
         "continuation_identity",
+        "compaction_policy",
+        "compaction_reason_codes",
         "previous_summary",
         "prior_plan_summary",
         "continuation_goal",
@@ -1995,6 +2348,8 @@ async def test_continuation_plan_stays_compact_while_artifact_keeps_full_state(t
         "checkpoint_key",
     }.issubset(plan_continuation)
     assert plan_continuation["state_version"] >= 2
+    assert plan_continuation["compaction_policy"] == "focused_snapshot_v1"
+    assert "current_artifacts" in plan_continuation["compaction_reason_codes"]
     assert plan_continuation["confirmed_claims"] == ["Claim"]
     assert plan_continuation["carry_forward_constraints"] == {
         "include_domains": [],
@@ -2662,9 +3017,9 @@ async def test_empty_fetch_and_map_units_emit_failed_events_and_degrade_report(m
     result = await runtime.run_job(response["job_id"])
     events = await runtime.events(response["job_id"])
 
-    assert result["status"] == "completed"
-    assert result["report"]["status"] == "degraded"
-    assert {event["type"] for event in events["events"]} >= {"research_unit_failed", "job_completed"}
+    assert result["status"] == "failed"
+    assert result["report"]["status"] == "failed"
+    assert {event["type"] for event in events["events"]} >= {"research_unit_failed", "job_failed"}
     assert not any(event["type"] == "research_unit_completed" for event in events["events"])
     assert result["report"]["runtime"]["failed_units"] == [
         {"reason": "empty_fetch_result", "unit_id": "unit-fetch-1", "unit_type": "fetch"},
@@ -2728,8 +3083,8 @@ async def test_failed_fetch_dependency_skips_downstream_units_instead_of_blockin
     result = await runtime.run_job(response["job_id"])
     events = await runtime.events(response["job_id"])
 
-    assert result["status"] == "completed"
-    assert result["report"]["status"] == "degraded"
+    assert result["status"] == "failed"
+    assert result["report"]["status"] == "failed"
     assert any(event["type"] == "research_unit_failed" and event["message"] == "Failed unit-fetch-1." for event in events["events"])
     assert any(event["type"] == "research_unit_skipped" and event["message"] == "Skipped unit-search-2." for event in events["events"])
     assert result["report"]["runtime"]["skipped_units"] == [
@@ -2860,7 +3215,8 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
     original = create_completed_source_job(runtime, query="Original research")
     runtime.write_artifact_batch(
         original.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -2881,7 +3237,9 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
                 "content": "# Final Report\n\nCheckpoint resume summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Original research",
+        ),
     )
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
 
@@ -2895,7 +3253,8 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
     runtime.store.update_job(follow_up["job_id"], status="completed", phase="finalizing", finished_at=utc_now_iso())
     runtime.write_artifact_batch(
         follow_up["job_id"],
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -2916,7 +3275,9 @@ async def test_continuation_start_reuses_recent_completed_follow_up_job(tmp_path
                 "content": "# Final Report\n\nCheckpoint resume summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Follow up query",
+        ),
     )
 
     response = await runtime.start(
@@ -3046,7 +3407,8 @@ async def test_reused_start_payload_surfaces_resolved_artifact_diagnostics(tmp_p
     source = create_completed_source_job(runtime, query="Reuse diagnostics source")
     runtime.write_artifact_batch(
         source.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -3067,7 +3429,9 @@ async def test_reused_start_payload_surfaces_resolved_artifact_diagnostics(tmp_p
                 "content": "# Final Report\n\nReusable summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Reuse diagnostics source",
+        ),
     )
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
     first = await runtime.start(
@@ -3079,7 +3443,8 @@ async def test_reused_start_payload_surfaces_resolved_artifact_diagnostics(tmp_p
     runtime.store.update_job(first["job_id"], status="completed", phase="finalizing", finished_at=utc_now_iso())
     runtime.write_artifact_batch(
         first["job_id"],
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -3100,7 +3465,9 @@ async def test_reused_start_payload_surfaces_resolved_artifact_diagnostics(tmp_p
                 "content": "# Final Report\n\nReusable follow-up summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Reuse diagnostics follow-up",
+        ),
     )
     runtime.write_artifact(first["job_id"], "sources.json", json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]), "application/json")
 
@@ -3196,6 +3563,10 @@ async def test_result_returns_artifact_errors_instead_of_raising_for_corrupt_jso
         "sources.json": "invalid_json",
         "citations.json": "invalid_json",
         "final_report.md": "missing_required_artifact",
+        "evidence_items.json": "missing_required_artifact",
+        "coverage.json": "missing_required_artifact",
+        "grounding.json": "missing_required_artifact",
+        "verifier.json": "missing_required_artifact",
     }
 
 
@@ -3219,7 +3590,8 @@ async def test_result_prefers_resolved_final_batch_over_current_mixed_artifacts(
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Mixed final artifacts"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
@@ -3240,7 +3612,9 @@ async def test_result_prefers_resolved_final_batch_over_current_mixed_artifacts(
                 "content": "# Final Report\n\nGood report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Mixed final artifacts",
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -3258,6 +3632,39 @@ async def test_result_prefers_resolved_final_batch_over_current_mixed_artifacts(
         artifact["kind"] == "sources.json" and "batches" in artifact["path"] and "good.example.com" not in artifact["path"]
         for artifact in result["artifacts"]
     )
+
+
+@pytest.mark.asyncio
+async def test_result_prefers_resolved_final_batch_from_fixture(tmp_path):
+    runtime = build_runtime(tmp_path)
+    fixture = load_deep_research_fixture("round13_resolved_final_batch.json")
+    job = runtime.store.create_job(**fixture["job"])
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps(fixture["plan"]), "application/json")
+
+    persisted_batches = []
+    for batch in fixture["batches"]:
+        artifacts = []
+        for kind, content in batch.items():
+            serialized = content if isinstance(content, str) else json.dumps(content)
+            content_type = "text/markdown" if kind.endswith(".md") else "application/json"
+            artifacts.append({"kind": kind, "content": serialized, "content_type": content_type})
+        evidence_items = batch.get("evidence_items.json", [])
+        artifacts = with_minimal_provenance_artifacts(
+            artifacts,
+            query=fixture["job"]["query"],
+            evidence_items=evidence_items,
+        )
+        persisted_batches.append(runtime.write_artifact_batch(job.job_id, artifacts))
+
+    for kind, content in fixture.get("current_artifacts", {}).items():
+        runtime.write_artifact(job.job_id, kind, json.dumps(content), "application/json")
+
+    result = await runtime.result(job.job_id)
+
+    assert result["report"]["summary"] == fixture["expected"]["resolved_summary"]
+    assert result["sources"][0]["url"] == fixture["expected"]["resolved_source_url"]
+    assert result["artifact_fallback_used"] is fixture["expected"]["artifact_fallback_used"]
+    assert result["resolved_artifact_batch_id"] == persisted_batches[0][0]["metadata"]["batch_id"]
 
 
 @pytest.mark.asyncio
@@ -3280,7 +3687,8 @@ async def test_result_falls_back_to_older_usable_final_batch_when_latest_complet
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Older usable batch fallback"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
@@ -3301,11 +3709,14 @@ async def test_result_falls_back_to_older_usable_final_batch_when_latest_complet
                 "content": "# Final Report\n\nOlder good report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Older usable batch fallback",
+        ),
     )
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R2", "url": "https://bad.example.com"}]),
@@ -3326,7 +3737,9 @@ async def test_result_falls_back_to_older_usable_final_batch_when_latest_complet
                 "content": "# Final Report\n\nBad report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Older usable batch fallback",
+        ),
     )
 
     result = await runtime.result(job.job_id)
@@ -3411,6 +3824,151 @@ async def test_result_surfaces_invalid_nested_claim_shape_errors(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_result_surfaces_invalid_provenance_bundle_for_partially_bound_claim_graph(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Invalid provenance bundle handling",
+        request_fingerprint="fp-invalid-provenance-bundle",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Invalid provenance bundle handling"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps(
+                        [
+                            {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"},
+                            {"source_id": "R2", "url": "https://docs.example.com/runtime/state"},
+                        ]
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps(
+                        {
+                            "source_registry": {
+                                "R1": {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"},
+                                "R2": {"source_id": "R2", "url": "https://docs.example.com/runtime/state"},
+                            },
+                            "sections": [
+                                {
+                                    "section_id": "resume-semantics",
+                                    "title": "Resume Semantics",
+                                    "summary": "Resume continues from the last checkpoint and preserves downstream state.",
+                                    "claims": [
+                                        {
+                                            "claim_id": "resume-semantics-claim-1",
+                                            "text": "Resume continues from the last checkpoint and preserves downstream state.",
+                                            "citations": ["R1", "R2"],
+                                            "evidence_ids": ["e1", "e2"],
+                                            "evidence_bindings": [
+                                                {
+                                                    "evidence_id": "e1",
+                                                    "source_id": "R1",
+                                                    "source_backed": True,
+                                                    "line_start": 3,
+                                                    "line_end": 4,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                    "citations": ["R1", "R2"],
+                                }
+                            ],
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps(
+                        {
+                            "summary": "Resume continues from the last checkpoint and preserves downstream state.",
+                            "sections": [
+                                {
+                                    "section_id": "resume-semantics",
+                                    "title": "Resume Semantics",
+                                    "summary": "Resume continues from the last checkpoint and preserves downstream state.",
+                                    "claims": [
+                                        {
+                                            "claim_id": "resume-semantics-claim-1",
+                                            "text": "Resume continues from the last checkpoint and preserves downstream state.",
+                                            "citations": ["R1", "R2"],
+                                            "evidence_ids": ["e1", "e2"],
+                                            "evidence_bindings": [
+                                                {
+                                                    "evidence_id": "e1",
+                                                    "source_id": "R1",
+                                                    "source_backed": True,
+                                                    "line_start": 3,
+                                                    "line_end": 4,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                    "citations": ["R1", "R2"],
+                                }
+                            ],
+                            "unit_results": {},
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nResume continues from the last checkpoint and preserves downstream state.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Invalid provenance bundle handling",
+            evidence_items=[
+                {
+                    "evidence_id": "e1",
+                    "unit_id": "unit-search-1",
+                    "summary": "Resume continues from the last checkpoint.",
+                    "detail": "Resume continues from the last checkpoint.",
+                    "source_ids": ["R1"],
+                    "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                    "evidence_kind": "fetch",
+                    "line_start": 3,
+                    "line_end": 4,
+                },
+                {
+                    "evidence_id": "e2",
+                    "unit_id": "unit-search-1",
+                    "summary": "Preserves downstream state.",
+                    "detail": "Preserves downstream state.",
+                    "source_ids": ["R2"],
+                    "source_urls": ["https://docs.example.com/runtime/state"],
+                    "evidence_kind": "fetch",
+                    "line_start": 8,
+                    "line_end": 9,
+                },
+            ],
+            total_claims=1,
+            section_count=1,
+        ),
+    )
+
+    result = await runtime.result(job.job_id)
+
+    assert result["artifact_errors"]["report.json"] == "invalid_provenance_bundle"
+
+
+@pytest.mark.asyncio
 async def test_status_exposes_resolved_artifact_batch_when_current_artifacts_are_mixed(tmp_path):
     runtime = build_runtime(tmp_path)
     runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
@@ -3430,12 +3988,15 @@ async def test_status_exposes_resolved_artifact_batch_when_current_artifacts_are
     )
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {"kind": "sources.json", "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]), "content_type": "application/json"},
             {"kind": "citations.json", "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}), "content_type": "application/json"},
-            {"kind": "report.json", "content": json.dumps({"summary": "Good batch", "sections": [], "unit_results": {}}), "content_type": "application/json"},
-            {"kind": "final_report.md", "content": "# Final Report\n\nGood batch.", "content_type": "text/markdown"},
-        ],
+            {"kind": "report.json", "content": json.dumps({"summary": "Good batch summary", "sections": [], "unit_results": {}}), "content_type": "application/json"},
+            {"kind": "final_report.md", "content": "# Final Report\n\nGood batch summary.", "content_type": "text/markdown"},
+            ],
+            query="Artifact status fallback",
+        ),
     )
     runtime.write_artifact(job.job_id, "sources.json", json.dumps([{"source_id": "R999", "url": "https://stale.example.com"}]), "application/json")
 
@@ -3469,7 +4030,8 @@ async def test_interrupted_finalizing_job_reads_resolved_final_batch(tmp_path):
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Interrupted finalizing visibility"}), "application/json")
     persisted = runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
@@ -3490,7 +4052,9 @@ async def test_interrupted_finalizing_job_reads_resolved_final_batch(tmp_path):
                 "content": "# Final Report\n\nRecovered final report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Interrupted finalizing visibility",
+        ),
     )
     runtime.write_artifact(
         job.job_id,
@@ -3507,6 +4071,408 @@ async def test_interrupted_finalizing_job_reads_resolved_final_batch(tmp_path):
     assert status["resolved_artifact_batch_id"] == batch_id
     assert result["report"]["summary"] == "Recovered final report"
     assert report_text == "# Final Report\n\nRecovered final report.\n"
+
+
+@pytest.mark.asyncio
+async def test_canceled_finalizing_job_prefers_resolved_final_batch_and_exposes_evidence_artifact(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Canceled finalizing visibility",
+        request_fingerprint="fp-canceled-finalizing-visibility",
+        status="canceled",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        cancel_requested=True,
+        current_checkpoint="finalizing",
+        finished_at=utc_now_iso(),
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps({"query": "Canceled finalizing visibility"}),
+        "application/json",
+    )
+    evidence_items = [
+        {
+            "evidence_id": "evidence-unit-search-1-fetch",
+            "unit_id": "unit-search-1",
+            "summary": "Recovered final batch evidence.",
+            "detail": "Recovered final batch evidence.",
+            "source_ids": ["R1"],
+            "source_urls": ["https://good.example.com/runtime/recovery"],
+            "evidence_kind": "fetch",
+            "derived_from_source_url": "https://good.example.com/runtime/recovery",
+            "line_start": 3,
+            "line_end": 4,
+        }
+    ]
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {
+                            "R1": {
+                                "source_id": "R1",
+                                "url": "https://good.example.com/runtime/recovery",
+                            }
+                        },
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(evidence_items),
+                "content_type": "application/json",
+            },
+            ],
+            query="Canceled finalizing visibility",
+            evidence_items=evidence_items,
+        ),
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "report.json",
+        json.dumps({"summary": "stale current report", "sections": [], "unit_results": {}}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "evidence_items.json",
+        json.dumps(
+            [
+                {
+                    "evidence_id": "evidence-stale-current",
+                    "unit_id": "unit-search-stale",
+                    "summary": "stale current evidence",
+                    "detail": "stale current evidence",
+                    "source_ids": ["R9"],
+                    "source_urls": ["https://stale.example.com"],
+                    "evidence_kind": "search",
+                    "line_start": 99,
+                    "line_end": 100,
+                }
+            ]
+        ),
+        "application/json",
+    )
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+    evidence_text = runtime.read_artifact_text(job.job_id, "evidence_items.json")
+    batch_id = persisted[0]["metadata"]["batch_id"]
+
+    assert status["status"] == "canceled"
+    assert status["resolved_artifact_batch_id"] == batch_id
+    assert status["artifact_fallback_used"] is True
+    assert "evidence_items.json" in status["artifact_kinds"]
+    assert any(artifact["kind"] == "evidence_items.json" for artifact in status["artifacts"])
+    assert result["status"] == "canceled"
+    assert result["resolved_artifact_batch_id"] == batch_id
+    assert result["artifact_fallback_used"] is True
+    assert result["report"]["summary"] == "Recovered final batch report"
+    assert result["sources"][0]["url"] == "https://good.example.com/runtime/recovery"
+    assert any(artifact["kind"] == "evidence_items.json" for artifact in result["artifacts"])
+    assert json.loads(evidence_text or "[]") == evidence_items
+
+
+@pytest.mark.asyncio
+async def test_continue_from_canceled_job_with_resolved_final_batch_builds_continuation_state(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = create_completed_source_job(runtime, query="Canceled continuation source")
+    runtime.store.update_job(
+        source.job_id,
+        status="canceled",
+        cancel_requested=True,
+        current_checkpoint="finalizing",
+        finished_at=utc_now_iso(),
+    )
+
+    response = await runtime.start(
+        query="Follow up canceled continuation source",
+        continue_from_job_id=source.job_id,
+        plan_only=True,
+        force_new=True,
+        schedule=False,
+    )
+
+    assert response["plan"]["continuation"]["mode"] == "continue"
+    assert response["plan"]["continuation"]["source_job_id"] == source.job_id
+    assert response["plan"]["continuation"]["source_job_status"] == "canceled"
+    assert response["plan"]["continuation"]["source_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_continue_from_canceled_job_without_recoverable_surfaces_is_rejected_without_orphan(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+    source = runtime.store.create_job(
+        query="Canceled continuation without artifacts",
+        request_fingerprint="fp-canceled-continuation-without-artifacts",
+        status="canceled",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(source.job_id, finished_at=utc_now_iso())
+
+    with pytest.raises(ValueError, match="continue_from_job_id source is not recoverable"):
+        await runtime.start(
+            query="Follow up canceled continuation without artifacts",
+            continue_from_job_id=source.job_id,
+            plan_only=True,
+            force_new=True,
+            schedule=False,
+        )
+
+    assert [job.job_id for job in runtime.store.list_jobs(limit=20)] == [source.job_id]
+
+
+@pytest.mark.asyncio
+async def test_continue_rejects_dispatch_only_source_without_material_carry_forward_state(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = runtime.store.create_job(
+        query="Dispatch-only continuation source",
+        request_fingerprint="fp-dispatch-only-continuation",
+        status="interrupted",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        source.job_id,
+        current_checkpoint="researching-dispatch-a1-unit-search-1",
+        last_error="worker_restarted",
+    )
+    runtime.store.save_checkpoint(
+        source.job_id,
+        phase="researching",
+        checkpoint_key="researching-dispatch-a1-unit-search-1",
+        state={
+            "plan": structured_plan_payload(source, {"mode": "fresh"}),
+            "completed_unit_ids": [],
+            "sources": [],
+            "evidence_items": [],
+            "sections": [],
+            "unit_results": {},
+        },
+    )
+
+    with pytest.raises(ValueError, match="continue_from_job_id source is not recoverable"):
+        await runtime.start(
+            query="Follow up dispatch-only continuation source",
+            continue_from_job_id=source.job_id,
+            plan_only=True,
+            force_new=True,
+            schedule=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_resolves_worker_restarted_finalizing_job_with_usable_final_batch(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Startup reconcile resolved final batch",
+        request_fingerprint="fp-startup-reconcile-resolved-final-batch",
+        status="running",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="finalizing",
+        heartbeat_at="2000-01-01T00:00:00Z",
+        started_at="2000-01-01T00:00:00Z",
+    )
+    with runtime.store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ? WHERE job_id = ?",
+            ("2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", job.job_id),
+        )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Startup reconcile resolved final batch"}), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            ],
+            query="Startup reconcile resolved final batch",
+        ),
+    )
+
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+    await other_runtime._ensure_startup_reconciled()
+
+    reconciled = other_runtime.store.get_job(job.job_id)
+    events = await other_runtime.events(job.job_id)
+    batch_id = persisted[0]["metadata"]["batch_id"]
+
+    assert reconciled.status == "completed"
+    assert reconciled.phase == "finalizing"
+    assert reconciled.last_error == ""
+    assert any(
+        event["type"] == "job_resolved_from_final_batch"
+        and event["data"]["resolved_artifact_batch_id"] == batch_id
+        for event in events["events"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_preserves_canceled_finalizing_job_with_usable_final_batch(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Startup reconcile canceled final batch",
+        request_fingerprint="fp-startup-reconcile-canceled-final-batch",
+        status="running",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        cancel_requested=True,
+        current_checkpoint="finalizing",
+        heartbeat_at="2000-01-01T00:00:00Z",
+        started_at="2000-01-01T00:00:00Z",
+    )
+    with runtime.store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ? WHERE job_id = ?",
+            ("2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", job.job_id),
+        )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Startup reconcile canceled final batch"}), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            ],
+            query="Startup reconcile canceled final batch",
+        ),
+    )
+
+    other_runtime = DeepResearchRuntime(runtime.store.root_dir)
+    await other_runtime._ensure_startup_reconciled()
+
+    reconciled = other_runtime.store.get_job(job.job_id)
+    status = await other_runtime.status(job.job_id)
+    events = await other_runtime.events(job.job_id)
+    batch_id = persisted[0]["metadata"]["batch_id"]
+
+    assert reconciled.status == "canceled"
+    assert reconciled.phase == "finalizing"
+    assert status["resolved_artifact_batch_id"] == batch_id
+    assert any(
+        event["type"] == "job_canceled"
+        and event["data"]["reason"] == "cancel_requested_during_recovery"
+        for event in events["events"]
+    )
+    assert any(
+        event["type"] == "job_resolved_from_final_batch"
+        and event["data"]["resolved_artifact_batch_id"] == batch_id
+        and event["data"]["resolved_status"] == "canceled"
+        for event in events["events"]
+    )
 
 
 @pytest.mark.asyncio
@@ -3539,7 +4505,8 @@ async def test_start_reuses_interrupted_finalizing_job_with_usable_final_batch(t
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Reuse interrupted final batch"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
@@ -3560,7 +4527,9 @@ async def test_start_reuses_interrupted_finalizing_job_with_usable_final_batch(t
                 "content": "# Final Report\n\nRecovered report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Reuse interrupted final batch",
+        ),
     )
 
     response = await runtime.start(query="Reuse interrupted final batch", force_new=False, schedule=False)
@@ -3591,28 +4560,31 @@ async def test_resume_interrupted_finalizing_job_with_invalid_final_batch_does_n
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Interrupted finalizing invalid bundle"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
-            {
-                "kind": "sources.json",
-                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "citations.json",
-                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "report.json",
-                "content": "{bad-json",
-                "content_type": "application/json",
-            },
-            {
-                "kind": "final_report.md",
-                "content": "# Final Report\n\nBroken report.\n",
-                "content_type": "text/markdown",
-            },
-        ],
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": "{bad-json",
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nBroken report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Interrupted finalizing invalid bundle",
+        ),
     )
 
     resumed = await runtime.resume(job.job_id, schedule=False)
@@ -3642,28 +4614,31 @@ async def test_resume_interrupted_finalizing_job_with_usable_final_batch_short_c
     runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Interrupted finalizing resume"}), "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
-            {
-                "kind": "sources.json",
-                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "citations.json",
-                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "report.json",
-                "content": json.dumps({"summary": "Recovered final report", "sections": [], "unit_results": {}}),
-                "content_type": "application/json",
-            },
-            {
-                "kind": "final_report.md",
-                "content": "# Final Report\n\nRecovered final report.\n",
-                "content_type": "text/markdown",
-            },
-        ],
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Recovered final report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered final report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Interrupted finalizing resume",
+        ),
     )
 
     resumed = await runtime.resume(job.job_id, schedule=False)
@@ -4228,7 +5203,7 @@ async def test_time_budget_interrupts_after_completed_checkpoint_and_resume_fini
     completed = await runtime.run_job(response["job_id"])
 
     assert resumed["status"] == "queued"
-    assert completed["status"] == "completed"
+    assert completed["status"] == "failed"
     assert executed == ["first checkpoint", "second checkpoint"]
     assert runtime.store.get_job(response["job_id"]).finished_at
     assert runtime.store.read_artifact_text(response["job_id"], "final_report.md")
@@ -4343,7 +5318,95 @@ async def test_reconciled_interrupted_job_cannot_be_completed_by_stale_worker(mo
 
 
 @pytest.mark.asyncio
+async def test_stale_worker_exception_after_reconcile_does_not_overwrite_terminal_state(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+
+    async def stale_runner(current_runtime, job_id):
+        current_runtime.store.reconcile_incomplete_jobs()
+        raise RuntimeError("stale boom")
+
+    runtime._runner = stale_runner
+    response = await runtime.start(query="Stale worker exception fencing", force_new=True, schedule=False)
+
+    await runtime._run(response["job_id"])
+
+    job = runtime.store.get_job(response["job_id"])
+    events = await runtime.events(response["job_id"])
+
+    assert job.status == "interrupted"
+    assert job.last_error == "worker_restarted"
+    assert any(event["type"] == "job_interrupted" for event in events["events"])
+    assert not any(event["type"] == "job_failed" for event in events["events"])
+
+
+@pytest.mark.asyncio
 async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoint_for_resume(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    fixture = load_deep_research_fixture("round13_worker_restarted_dispatch.json")
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    did_reconcile = False
+
+    async def reconciling_search(query):
+        nonlocal did_reconcile
+        if not did_reconcile:
+            did_reconcile = True
+            runtime.store.reconcile_incomplete_jobs()
+        return (
+            "Recovered answer",
+            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
+        )
+
+    async def stable_search(query):
+        return (
+            "Recovered answer",
+            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", reconciling_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query=fixture["query"], force_new=True, schedule=False)
+    first_result = await runtime.run_job(response["job_id"])
+    interrupted_job = runtime.store.get_job(response["job_id"])
+
+    assert did_reconcile is True
+    assert first_result["status"] == "interrupted"
+    assert interrupted_job.current_checkpoint.startswith(fixture["expected"]["checkpoint_prefix"])
+
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", stable_search)
+    resumed = await runtime.resume(response["job_id"], schedule=False)
+    final_result = await runtime.run_job(response["job_id"])
+    events = await runtime.events(response["job_id"])
+    interrupted_events = [event for event in events["events"] if event["type"] == "job_interrupted"]
+    resumed_events = [event for event in events["events"] if event["type"] == "job_resumed"]
+
+    assert resumed["status"] == "queued"
+    assert interrupted_events[-1]["data"]["reason"] == fixture["expected"]["interrupted_reason"]
+    assert resumed_events[-1]["data"]["resume_source"] == fixture["expected"]["resume_source"]
+    assert resumed["current_checkpoint_kind"] == "research_dispatch"
+    assert final_result["status"] == "failed"
+    assert interrupted_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")
+    assert interrupted_events[-1]["data"]["checkpoint_kind"] == "research_dispatch"
+    assert resumed_events[-1]["data"]["checkpoint_key"].startswith("researching-dispatch-")
+    assert resumed_events[-1]["data"]["checkpoint_kind"] == "research_dispatch"
+    assert runtime.store.read_artifact_text(response["job_id"], "final_report.md") is not None
+
+
+@pytest.mark.asyncio
+async def test_resume_keeps_distinct_dispatch_checkpoint_identities_across_attempts(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
 
     async def planner(job, continuation):
@@ -4379,23 +5442,63 @@ async def test_reconcile_before_first_completed_unit_preserves_dispatch_checkpoi
     monkeypatch.setattr("grok_search.deep_research_runtime._search_query", reconciling_search)
     monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
 
-    response = await runtime.start(query="Dispatch checkpoint resume", force_new=True, schedule=False)
-    first_result = await runtime.run_job(response["job_id"])
-    interrupted_job = runtime.store.get_job(response["job_id"])
-
-    assert did_reconcile is True
-    assert first_result["status"] == "interrupted"
-    assert interrupted_job.current_checkpoint.startswith("researching-dispatch-")
+    response = await runtime.start(query="Distinct dispatch checkpoint identities", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
 
     monkeypatch.setattr("grok_search.deep_research_runtime._search_query", stable_search)
-    resumed = await runtime.resume(response["job_id"], schedule=False)
-    final_result = await runtime.run_job(response["job_id"])
-    events = await runtime.events(response["job_id"])
+    await runtime.resume(response["job_id"], schedule=False)
+    await runtime.run_job(response["job_id"])
 
-    assert resumed["status"] == "queued"
-    assert final_result["status"] == "completed"
-    assert any(event["type"] == "job_resumed" for event in events["events"])
-    assert runtime.store.read_artifact_text(response["job_id"], "final_report.md") is not None
+    dispatch_keys = [
+        checkpoint.checkpoint_key
+        for checkpoint in runtime.store.list_checkpoints(response["job_id"])
+        if checkpoint.checkpoint_key.startswith("researching-dispatch-")
+    ]
+
+    assert len(dispatch_keys) >= 2
+    assert len(set(dispatch_keys)) == len(dispatch_keys)
+
+
+@pytest.mark.asyncio
+async def test_status_surfaces_checkpoint_kind_for_interrupted_dispatch_resume(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    did_reconcile = False
+
+    async def reconciling_search(query):
+        nonlocal did_reconcile
+        if not did_reconcile:
+            did_reconcile = True
+            runtime.store.reconcile_incomplete_jobs()
+        return (
+            "Recovered answer",
+            [{"url": "https://example.com/recovered", "title": "Recovered source"}],
+        )
+
+    async def no_fetch(url):
+        return None
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", reconciling_search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", no_fetch)
+
+    response = await runtime.start(query="Dispatch checkpoint kind status", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+    status = await runtime.status(response["job_id"])
+    result = await runtime.result(response["job_id"])
+
+    assert status["status"] == "interrupted"
+    assert status["current_checkpoint_kind"] == "research_dispatch"
+    assert result["status"] == "interrupted"
+    assert result["current_checkpoint_kind"] == "research_dispatch"
 
 
 @pytest.mark.asyncio
@@ -4836,7 +5939,8 @@ async def test_continuation_does_not_mix_checkpoint_state_into_selected_final_ba
     runtime.write_artifact(source.job_id, "plan.json", json.dumps({"query": "Single tier continuation source"}), "application/json")
     runtime.write_artifact_batch(
         source.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -4857,7 +5961,9 @@ async def test_continuation_does_not_mix_checkpoint_state_into_selected_final_ba
                 "content": "# Final Report\n\nSelected final batch summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Single tier continuation source",
+        ),
     )
     runtime.store.save_checkpoint(
         source.job_id,
@@ -4999,7 +6105,8 @@ async def test_continuation_falls_back_to_older_usable_final_batch_when_latest_c
     runtime.write_artifact(original.job_id, "plan.json", json.dumps({"query": "Older usable continuation source"}), "application/json")
     runtime.write_artifact_batch(
         original.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -5020,11 +6127,14 @@ async def test_continuation_falls_back_to_older_usable_final_batch_when_latest_c
                 "content": "# Final Report\n\nGood continuation report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Older usable continuation source",
+        ),
     )
     runtime.write_artifact_batch(
         original.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R2", "url": "https://docs.example.com/runtime/bad"}]),
@@ -5045,7 +6155,9 @@ async def test_continuation_falls_back_to_older_usable_final_batch_when_latest_c
                 "content": "# Final Report\n\nBad continuation report.\n",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Older usable continuation source",
+        ),
     )
 
     response = await runtime.start(
@@ -5417,6 +6529,10 @@ async def test_search_only_evidence_does_not_claim_multi_source_corroboration(mo
     assert claim["cluster_type"] == "single_source"
     assert claim["supporting_source_count"] == 1
     assert len(claim["citations"]) == 1
+    assert claim["evidence_bindings"][0]["line_start"] is None
+    assert claim["evidence_bindings"][0]["line_end"] is None
+    assert claim["evidence_bindings"][0]["excerpt_origin"] == "search_answer"
+    assert claim["evidence_bindings"][0]["source_backed"] is False
 
 
 @pytest.mark.asyncio
@@ -6566,7 +7682,7 @@ async def test_incomplete_coverage_degrades_report_status_and_runtime_warnings(m
 
     assert result["report"]["coverage"]["unanswered_sections"] == ["Restart Trade-offs"]
     assert result["report"]["coverage"]["uncovered_sub_questions"] == ["Explain restart trade-offs"]
-    assert result["report"]["status"] == "degraded"
+    assert result["report"]["status"] == "failed"
     assert "coverage_incomplete" in result["report"]["runtime"]["warnings"]
 
 
@@ -6757,6 +7873,1315 @@ async def test_report_exposes_sub_question_to_claim_coverage_ledger(monkeypatch,
             "claim_ids": [],
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_report_coverage_exposes_hard_gate_flag_when_only_executive_summary_is_answered(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["brief"]["must_cover"] = [
+            "Explain checkpoint resume semantics",
+            "Explain restart trade-offs",
+        ]
+        payload["brief"]["coverage_checklist"] = [
+            "Explain checkpoint resume semantics",
+            "Explain restart trade-offs",
+        ]
+        payload["sub_questions"] = [
+            {"id": "sq1", "question": "Explain checkpoint resume semantics", "reason": "Primary question."},
+            {"id": "sq2", "question": "Explain restart trade-offs", "reason": "Secondary question."},
+        ]
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "restart-tradeoffs",
+                "title": "Restart Trade-offs",
+                "goal": "Explain restart trade-offs.",
+            },
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint, while restart replays work from a fresh starting point.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint docs.",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", lambda url: asyncio.sleep(0, result=None))
+
+    response = await runtime.start(query="Coverage hard gate probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+
+    assert result["report"]["coverage"]["coverage_gate_passed"] is False
+    assert result["report"]["status"] == "failed"
+    assert "coverage_incomplete" in result["report"]["runtime"]["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_claims_include_evidence_bindings_in_final_report(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nCheckpoint resume continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Evidence binding probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    claim = result["report"]["sections"][0]["claims"][0]
+
+    assert claim["evidence_bindings"]
+    assert claim["evidence_bindings"][0]["source_id"] == "R1"
+    assert claim["evidence_bindings"][0]["source_url"] == "https://docs.example.com/runtime/checkpoints"
+    assert claim["evidence_bindings"][0]["excerpt"]
+    assert claim["evidence_bindings"][0]["excerpt_hash"]
+    assert claim["evidence_bindings"][0]["line_start"] == 3
+    assert claim["evidence_bindings"][0]["line_end"] == 3
+    assert claim["evidence_bindings"][0]["evidence_kind"] == "fetch"
+    assert claim["evidence_bindings"][0]["winner_provider"] == "grok"
+    assert claim["evidence_bindings"][0]["excerpt_origin"] == "source_text"
+    assert claim["evidence_bindings"][0]["source_backed"] is True
+
+
+def test_release_gate_rejects_claim_with_stale_evidence_binding():
+    sections = [
+        {
+            "section_id": "resume-semantics",
+            "title": "Resume Semantics",
+            "claims": [
+                {
+                    "claim_id": "resume-semantics-claim-1",
+                    "text": "Resume continues from the last checkpoint.",
+                    "citations": ["R1"],
+                    "confidence": "medium",
+                    "evidence_bindings": [
+                        {
+                            "evidence_id": "e1",
+                            "source_id": "R2",
+                            "source_url": "https://docs.example.com/runtime/stale",
+                            "evidence_kind": "fetch",
+                            "excerpt": "Resume continues from the last checkpoint.",
+                        }
+                    ],
+                }
+            ],
+            "citations": ["R1"],
+        }
+    ]
+    source_registry = {
+        "R1": {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/checkpoints",
+            "domain": "docs.example.com",
+        }
+    }
+
+    grounding = _build_grounding_diagnostics(sections, source_registry)
+    release_gate = _build_release_gate({"coverage_gate_passed": True}, grounding)
+
+    assert grounding["missing_evidence_binding_claims"] == 1
+    assert release_gate["passed"] is False
+    assert release_gate["reason_codes"] == ["missing_evidence_bindings"]
+
+
+def test_release_gate_rejects_single_source_low_confidence_verifier_findings():
+    grounding = {
+        "total_claims": 1,
+        "ungrounded_claims": 0,
+        "single_source_claims": 1,
+        "low_confidence_claims": 1,
+        "missing_evidence_binding_claims": 0,
+    }
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding=grounding,
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "confidence": "low",
+                        "supporting_source_count": 1,
+                        "evidence_bindings": [
+                            {
+                                "source_id": "R1",
+                                "source_backed": False,
+                                "excerpt_origin": "search_answer",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+    release_gate = _build_release_gate({"coverage_gate_passed": True}, grounding, verifier)
+
+    assert verifier["reason_codes"] == ["single_source_low_confidence"]
+    assert release_gate["passed"] is False
+    assert release_gate["reason_codes"] == ["single_source_low_confidence"]
+
+
+def test_verifier_flags_missing_evidence_items_and_mismatched_bindings():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "supporting_source_count": 1,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e2",
+                                "source_id": "R2",
+                                "source_backed": True,
+                                "line_start": 4,
+                                "line_end": 5,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            }
+        },
+        evidence_items=[],
+    )
+
+    assert verifier["passed"] is False
+    assert set(verifier["reason_codes"]) >= {
+        "missing_evidence_items",
+        "mismatched_binding_source",
+        "mismatched_binding_evidence",
+    }
+    assert verifier["flagged_claim_ids"] == ["resume-semantics-claim-1"]
+
+
+def test_verifier_flags_invalid_source_backed_span_duplicate_and_low_value_claims():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding={
+            "total_claims": 2,
+            "ungrounded_claims": 0,
+            "single_source_claims": 2,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "supporting_source_count": 1,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": None,
+                                "line_end": 5,
+                            }
+                        ],
+                    },
+                    {
+                        "claim_id": "resume-semantics-claim-2",
+                        "text": "Topics can help you to resolve common issues using both AWS DMS and selected endpoint databases.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e2"],
+                        "confidence": "medium",
+                        "supporting_source_count": 1,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e2",
+                                "source_id": "R1",
+                                "source_backed": False,
+                            }
+                        ],
+                    },
+                    {
+                        "claim_id": "resume-semantics-claim-3",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e3"],
+                        "confidence": "medium",
+                        "supporting_source_count": 1,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e3",
+                                "source_id": "R1",
+                                "source_backed": False,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            }
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R1"], "evidence_kind": "search"},
+            {"evidence_id": "e3", "source_ids": ["R1"], "evidence_kind": "search"},
+        ],
+    )
+
+    assert verifier["passed"] is False
+    assert set(verifier["reason_codes"]) >= {
+        "invalid_source_backed_span",
+        "duplicate_claims",
+        "low_value_claims",
+        "medium_single_source_search_only",
+    }
+    assert set(verifier["flagged_claim_ids"]) >= {
+        "resume-semantics-claim-1",
+        "resume-semantics-claim-2",
+        "resume-semantics-claim-3",
+    }
+
+
+def test_verifier_derives_single_source_search_only_from_citations_not_claim_metadata():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 1,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 0,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last checkpoint.",
+                        "citations": ["R1"],
+                        "evidence_ids": ["e1"],
+                        "confidence": "medium",
+                        "supporting_source_count": 4,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": False,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            }
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "search"},
+        ],
+    )
+
+    assert "medium_single_source_search_only" in verifier["reason_codes"]
+    assert verifier["summary"]["medium_single_source_search_only"] == 1
+
+
+def test_verifier_flags_unbound_citation_sources_and_evidence_ids():
+    verifier = _build_verifier_diagnostics(
+        coverage={"coverage_gate_passed": True},
+        grounding={
+            "total_claims": 1,
+            "ungrounded_claims": 0,
+            "single_source_claims": 0,
+            "low_confidence_claims": 0,
+            "missing_evidence_binding_claims": 0,
+            "source_backed_binding_count": 1,
+            "null_span_binding_count": 0,
+        },
+        sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Resume continues from the last checkpoint and preserves downstream state.",
+                        "citations": ["R1", "R2"],
+                        "evidence_ids": ["e1", "e2"],
+                        "confidence": "medium",
+                        "supporting_source_count": 2,
+                        "evidence_bindings": [
+                            {
+                                "evidence_id": "e1",
+                                "source_id": "R1",
+                                "source_backed": True,
+                                "line_start": 3,
+                                "line_end": 4,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        source_registry={
+            "R1": {
+                "source_id": "R1",
+                "url": "https://docs.example.com/runtime/checkpoints",
+                "domain": "docs.example.com",
+            },
+            "R2": {
+                "source_id": "R2",
+                "url": "https://docs.example.com/runtime/state",
+                "domain": "docs.example.com",
+            },
+        },
+        evidence_items=[
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+            {"evidence_id": "e2", "source_ids": ["R2"], "evidence_kind": "fetch"},
+        ],
+    )
+
+    assert "unbound_citation_sources" in verifier["reason_codes"]
+    assert "unbound_evidence_ids" in verifier["reason_codes"]
+    assert verifier["summary"]["unbound_citation_sources"] == 1
+    assert verifier["summary"]["unbound_evidence_ids"] == 1
+
+
+def test_extract_relevant_excerpt_with_span_tracks_original_line_range():
+    excerpt, line_start, line_end = _extract_relevant_excerpt_with_span(
+        "# Runtime checkpoints\n\n"
+        "Unrelated overview.\n"
+        "Checkpoint resume continues from the last durable checkpoint.\n"
+        "Operational filler.\n"
+        "Restart replays from a fresh starting point when checkpoint metadata is lost.\n",
+        reference_texts=["checkpoint resume semantics", "restart trade-offs"],
+        line_limit=2,
+        char_limit=400,
+        multiline=False,
+    )
+
+    assert "Checkpoint resume continues" in excerpt
+    assert "Restart replays" in excerpt
+    assert line_start == 4
+    assert line_end == 6
+
+
+def test_section_citations_prefer_source_backed_cluster_over_search_only_cluster():
+    plan = DeepResearchPlan.model_validate(
+        {
+            "query": "Checkpoint resume semantics",
+            "context": "",
+            "effort": "standard",
+            "time_budget_seconds": 240,
+            "brief": {
+                "objective": "Checkpoint resume semantics",
+                "deliverable": "A cited report.",
+                "success_criteria": ["Produce a structured report."],
+            },
+            "sub_questions": [{"id": "sq1", "question": "Checkpoint resume semantics", "reason": "Primary question."}],
+            "search_strategy": {
+                "approach": "targeted",
+                "search_queries": ["checkpoint resume semantics"],
+                "selective_fetch": {"max_urls_per_search": 1, "prefer_titles_matching_outline": True},
+            },
+            "report_outline": [
+                {
+                    "section_id": "resume-semantics",
+                    "title": "Resume Semantics",
+                    "goal": "Explain checkpoint resume semantics.",
+                }
+            ],
+            "research_units": [],
+            "continuation": {"mode": "fresh"},
+            "planner_metadata": {},
+        }
+    )
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/checkpoints",
+            "title": "Runtime checkpoints",
+            "domain": "docs.example.com",
+            "source_type": "official_docs",
+            "ranking_reasons": ["official_docs"],
+        }
+    ]
+    sections = _build_section_citations(
+        plan,
+        [
+            {
+                "evidence_id": "e-search",
+                "unit_id": "unit-search-1",
+                "summary": "Checkpoint resume semantics checkpoint resume semantics checkpoint trade-offs.",
+                "detail": "Checkpoint resume semantics checkpoint resume semantics checkpoint trade-offs.",
+                "source_ids": ["R1"],
+                "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                "evidence_kind": "search",
+                "weight": 0.9,
+            },
+            {
+                "evidence_id": "e-fetch",
+                "unit_id": "unit-search-1",
+                "summary": "Resume continues from the last durable checkpoint.",
+                "detail": "Resume continues from the last durable checkpoint.",
+                "source_ids": ["R1"],
+                "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                "evidence_kind": "fetch",
+                "weight": 1.0,
+                "line_start": 10,
+                "line_end": 11,
+            },
+        ],
+        source_registry,
+    )
+
+    claim = sections[0]["claims"][0]
+
+    assert claim["text"] == "Resume continues from the last durable checkpoint."
+    assert any(binding["source_backed"] for binding in claim["evidence_bindings"])
+
+
+@pytest.mark.asyncio
+async def test_report_release_gate_fails_job_when_non_summary_sections_are_unanswered(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "goal": "Summarize the answer.",
+            },
+            {
+                "section_id": "restart-tradeoffs",
+                "title": "Restart Trade-offs",
+                "goal": "Explain restart trade-offs.",
+            },
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume continues from the last durable checkpoint, while restart replays work from a fresh starting point.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint docs.",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", lambda url: asyncio.sleep(0, result=None))
+
+    response = await runtime.start(query="Coverage hard gate probe", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    events = await runtime.events(response["job_id"])
+
+    assert result["status"] == "failed"
+    assert result["report"]["coverage"]["coverage_gate_passed"] is False
+    assert result["report"]["runtime"]["release_gate"]["passed"] is False
+    assert result["report"]["runtime"]["release_gate"]["reason_codes"] == ["coverage_incomplete"]
+    assert result["report"]["status"] == "failed"
+    assert "coverage_incomplete" in result["report"]["runtime"]["warnings"]
+    assert any(event["type"] == "job_failed" for event in events["events"])
+    assert not any(event["type"] == "job_completed" for event in events["events"])
+
+
+@pytest.mark.asyncio
+async def test_runtime_persists_verifier_artifact_and_blocks_single_source_low_confidence_report(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain restart trade-offs that still need confirmation.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "The exact restart trade-off is unclear and needs confirmation from deeper source material.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+
+    response = await runtime.start(
+        query="Explain restart trade-offs that still need confirmation.",
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+    verifier = json.loads(runtime.store.read_artifact_text(response["job_id"], "verifier.json") or "{}")
+
+    assert result["status"] == "failed"
+    assert "single_source_low_confidence" in verifier["reason_codes"]
+    assert "single_source_low_confidence" in result["report"]["runtime"]["verifier"]["reason_codes"]
+    assert "single_source_low_confidence" in result["report"]["runtime"]["release_gate"]["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_blocks_medium_single_source_search_only_report(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+    query = "Checkpoint resume semantics"
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume semantics using only search-answer support.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Checkpoint resume semantics: resume-processing continues from the last durable checkpoint when recovery metadata remains available.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+
+    response = await runtime.start(
+        query=query,
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+    verifier = json.loads(runtime.store.read_artifact_text(response["job_id"], "verifier.json") or "{}")
+
+    assert result["status"] == "failed"
+    assert "medium_single_source_search_only" in verifier["reason_codes"]
+    assert "medium_single_source_search_only" in result["report"]["runtime"]["verifier"]["reason_codes"]
+    assert "medium_single_source_search_only" in result["report"]["runtime"]["release_gate"]["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_flags_high_null_span_ratio_in_release_gate(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume behavior.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume-processing continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nResume-processing continues from the last durable checkpoint."
+
+    def fake_extract(text, reference_texts, *, line_limit=2, char_limit=400, multiline=False):
+        return (
+            "Resume-processing continues from the last durable checkpoint.",
+            None,
+            None,
+        )
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+    monkeypatch.setattr("grok_search.deep_research_runtime._extract_relevant_excerpt_with_span", fake_extract)
+
+    response = await runtime.start(
+        query="checkpoint resume semantics",
+        force_new=True,
+        schedule=False,
+    )
+    result = await runtime.run_job(response["job_id"])
+    verifier = json.loads(runtime.store.read_artifact_text(response["job_id"], "verifier.json") or "{}")
+
+    assert result["status"] == "failed"
+    assert "high_null_span_ratio" in result["report"]["runtime"]["warnings"]
+    assert "high_null_span_ratio" in result["report"]["runtime"]["release_gate"]["reason_codes"]
+    assert "invalid_source_backed_span" in verifier["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_report_exposes_provider_winners(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 0,
+            "prefer_titles_matching_outline": False,
+        }
+        return payload
+
+    async def search_with_details(query, *, effort="standard"):
+        return {
+            "answer": "Checkpoint resume semantics: resume-processing continues from the last durable checkpoint.",
+            "sources": [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint docs.",
+                    "provider": "provider_2",
+                }
+            ],
+            "warning_code": None,
+            "requested_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+            "provider_name": "provider_2",
+            "provider_model": "grok-4.20-expert",
+            "provider_api_url": "https://api.example.com/v1",
+        }
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query_with_details", search_with_details)
+
+    response = await runtime.start(query="Checkpoint resume semantics", force_new=True, schedule=False)
+    result = await runtime.run_job(response["job_id"])
+    winners = result["report"]["runtime"]["provider_winners"]
+
+    assert winners == [
+        {
+            "unit_id": "unit-search-1",
+            "provider_name": "provider_2",
+            "provider_model": "grok-4.20-expert",
+            "effective_model": "grok-4.20-expert",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_plan_with_model_exposes_requested_and_effective_model_trace(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    class FakePlannerProvider:
+        def __init__(self):
+            self.model = "grok-4.20-expert"
+            self._last_success_provider_name = "provider_2"
+            self._last_success_provider_model = "grok-4.20-expert"
+            self._last_success_provider_api_url = "https://api.example.com/v1"
+
+        def _build_api_headers(self):
+            return {}
+
+        async def _execute_completion_with_retry_result(self, headers, payload, render_sources=False):
+            return (
+                json.dumps(structured_plan_payload(payload_job, payload_continuation.model_dump())),
+                {},
+            )
+
+    payload_job = None
+    payload_continuation = None
+
+    async def fake_build_provider(*, effort="standard"):
+        return (
+            FakePlannerProvider(),
+            {
+                "requested_model": "grok-4.20-auto",
+                "effective_model": "grok-4.20-expert",
+                "resolution": "preferred_profile_match",
+                "available_models": ["grok-4.20-expert"],
+            },
+        )
+
+    monkeypatch.setattr("grok_search.deep_research_runtime._build_runtime_grok_provider", fake_build_provider)
+    job = runtime.store.create_job(
+        query="Planner trace model selection",
+        request_fingerprint="fp-planner-trace-model-selection",
+        status="draft",
+        phase="planning",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=True,
+        force_new=True,
+        resolved_budget_seconds=120,
+        continued_from_job_id="",
+    )
+    payload_job = job
+    payload_continuation = DeepResearchContinuationState(mode="fresh")
+
+    _, trace = await runtime._generate_plan_with_model(job, payload_continuation)
+
+    assert trace["requested_model"] == "grok-4.20-auto"
+    assert trace["effective_model"] == "grok-4.20-expert"
+    assert trace["model_resolution"] == "preferred_profile_match"
+    assert trace["provider_name"] == "provider_2"
+    assert trace["provider_model"] == "grok-4.20-expert"
+
+
+@pytest.mark.asyncio
+async def test_continuation_confirmed_claims_filter_low_value_boilerplate(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(
+        runtime,
+        query="Continuation hygiene source",
+        checkpoint_sections=[
+            {
+                "section_id": "executive-summary",
+                "title": "Executive Summary",
+                "summary": "Checkpoint resume continues from the last durable checkpoint.",
+                "claims": [
+                    {
+                        "claim_id": "executive-summary-claim-1",
+                        "text": "Checkpoint resume continues from the last durable checkpoint.",
+                        "citations": ["R1"],
+                    },
+                    {
+                        "claim_id": "executive-summary-claim-2",
+                        "text": "For more information, see the checkpoint recovery appendix.",
+                        "citations": ["R1"],
+                    },
+                ],
+                "citations": ["R1"],
+                "confidence": "medium",
+            }
+        ],
+    )
+
+    continuation = runtime._build_continuation_context(source.job_id)
+
+    assert continuation.confirmed_claims == ["Checkpoint resume continues from the last durable checkpoint."]
+
+
+@pytest.mark.asyncio
+async def test_continuation_confirmed_claims_require_grounded_claims(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(
+        runtime,
+        query="Continuation grounded claims source",
+        checkpoint_sections=[
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "summary": "Checkpoint resume continues from the last durable checkpoint.",
+                "claims": [
+                    {
+                        "claim_id": "resume-semantics-claim-1",
+                        "text": "Checkpoint resume continues from the last durable checkpoint.",
+                        "citations": ["R1"],
+                        "confidence": "medium",
+                    },
+                    {
+                        "claim_id": "resume-semantics-claim-2",
+                        "text": "Restart always preserves target state without any replay cost.",
+                        "citations": [],
+                        "confidence": "high",
+                    },
+                ],
+                "citations": ["R1"],
+                "confidence": "medium",
+            }
+        ],
+    )
+
+    continuation = runtime._build_continuation_context(source.job_id)
+
+    assert continuation.confirmed_claims == ["Checkpoint resume continues from the last durable checkpoint."]
+
+
+@pytest.mark.asyncio
+async def test_continuation_prefers_evidence_artifact_over_reconstructed_evidence(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(runtime, query="Evidence artifact continuation source")
+    plan_payload = structured_plan_payload(source, {"mode": "fresh"})
+    source_registry = [
+        {
+            "source_id": "R1",
+            "url": "https://docs.example.com/runtime/checkpoints",
+            "title": "Runtime checkpoints",
+            "domain": "docs.example.com",
+            "source_type": "official_docs",
+            "ranking_reasons": ["official_docs"],
+        }
+    ]
+    sections = [
+        {
+            "section_id": "resume-semantics",
+            "title": "Resume Semantics",
+            "summary": "Resume continues from the last checkpoint.",
+            "claims": [
+                {
+                    "claim_id": "resume-semantics-claim-1",
+                    "text": "Resume continues from the last checkpoint.",
+                    "citations": ["R1"],
+                    "unit_id": "unit-search-1",
+                    "evidence_ids": ["evidence-unit-search-1-fetch"],
+                    "confidence": "medium",
+                }
+            ],
+            "citations": ["R1"],
+            "confidence": "medium",
+        }
+    ]
+    unit_results = {
+        "unit-search-1": {
+            "summary": "Resume continues from the last checkpoint.",
+            "detail": "Resume continues from the last checkpoint.",
+            "source_ids": ["R1"],
+            "citations": ["R1"],
+        }
+    }
+    runtime.write_artifact_batch(
+        source.job_id,
+        with_minimal_provenance_artifacts(
+            [
+            {
+                "kind": "sources.json",
+                "content": json.dumps(source_registry),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {item["source_id"]: item for item in source_registry},
+                        "sections": sections,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps(
+                    {
+                        "query": source.query,
+                        "summary": "Resume continues from the last checkpoint.",
+                        "sections": sections,
+                        "unit_results": unit_results,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nResume continues from the last checkpoint.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(
+                    [
+                        {
+                            "evidence_id": "evidence-unit-search-1-fetch",
+                            "unit_id": "unit-search-1",
+                            "summary": "Resume continues from the last checkpoint.",
+                            "detail": "Resume continues from the last checkpoint.",
+                            "source_ids": ["R1"],
+                            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                            "evidence_kind": "fetch",
+                            "derived_from_source_url": "https://docs.example.com/runtime/checkpoints",
+                            "line_start": 7,
+                            "line_end": 9,
+                        }
+                    ]
+                ),
+                "content_type": "application/json",
+            },
+            ],
+            query="Evidence artifact continuation source",
+            evidence_items=[
+                {
+                    "evidence_id": "evidence-unit-search-1-fetch",
+                    "unit_id": "unit-search-1",
+                    "summary": "Resume continues from the last checkpoint.",
+                    "detail": "Resume continues from the last checkpoint.",
+                    "source_ids": ["R1"],
+                    "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+                    "evidence_kind": "fetch",
+                    "derived_from_source_url": "https://docs.example.com/runtime/checkpoints",
+                    "line_start": 7,
+                    "line_end": 9,
+                }
+            ],
+            total_claims=1,
+            section_count=1,
+        ),
+    )
+    runtime.store.save_checkpoint(
+        source.job_id,
+        phase="finalizing",
+        checkpoint_key="finalizing",
+        state={
+            "plan": plan_payload,
+            "completed_unit_ids": ["unit-search-1"],
+            "unit_results": unit_results,
+            "sources": source_registry,
+            "evidence_items": [],
+            "sections": sections,
+        },
+    )
+
+    continuation = runtime._build_continuation_context(source.job_id)
+
+    assert continuation.carry_forward_evidence == [
+        {
+            "evidence_id": "evidence-unit-search-1-fetch",
+            "unit_id": "unit-search-1",
+            "summary": "Resume continues from the last checkpoint.",
+            "detail": "Resume continues from the last checkpoint.",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+            "evidence_kind": "fetch",
+            "derived_from_source_url": "https://docs.example.com/runtime/checkpoints",
+            "line_start": 7,
+            "line_end": 9,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_continuation_prefers_resolved_batch_evidence_over_current_artifact(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(runtime, query="Continuation current evidence artifact fallback")
+    current_evidence = [
+        {
+            "evidence_id": "evidence-unit-search-1-current",
+            "unit_id": "unit-search-1",
+            "summary": "Current artifact evidence should outrank checkpoint fallback.",
+            "detail": "Current artifact evidence should outrank checkpoint fallback.",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+            "evidence_kind": "fetch",
+            "derived_from_source_url": "https://docs.example.com/runtime/checkpoints",
+            "line_start": 41,
+            "line_end": 44,
+        }
+    ]
+    runtime.write_artifact(
+        source.job_id,
+        "evidence_items.json",
+        json.dumps(current_evidence),
+        "application/json",
+    )
+
+    continuation = runtime._build_continuation_context(source.job_id)
+
+    assert continuation.carry_forward_evidence == [
+        {
+            "evidence_id": "evidence-unit-search-1-search",
+            "unit_id": "unit-search-1",
+            "summary": "Resume continues from the last checkpoint.",
+            "detail": "Resume continues from the last checkpoint.",
+            "source_ids": ["R1"],
+            "source_urls": ["https://docs.example.com/runtime/checkpoints"],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_persists_evidence_items_artifact_in_final_batch(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path)
+
+    async def planner(job, continuation):
+        payload = structured_plan_payload(job, continuation)
+        payload["report_outline"] = [
+            {
+                "section_id": "resume-semantics",
+                "title": "Resume Semantics",
+                "goal": "Explain checkpoint resume behavior.",
+            }
+        ]
+        payload["search_strategy"]["selective_fetch"] = {
+            "max_urls_per_search": 1,
+            "prefer_titles_matching_outline": True,
+        }
+        return payload
+
+    async def search(query):
+        return (
+            "Resume continues from the last durable checkpoint.",
+            [
+                {
+                    "url": "https://docs.example.com/runtime/checkpoints",
+                    "title": "Runtime checkpoints",
+                    "description": "Checkpoint resume docs.",
+                    "provider": "grok",
+                }
+            ],
+        )
+
+    async def fetch(url):
+        return "# Runtime checkpoints\n\nResume continues from the last durable checkpoint."
+
+    monkeypatch.setattr(runtime, "_generate_plan_with_model", planner)
+    monkeypatch.setattr("grok_search.deep_research_runtime._search_query", search)
+    monkeypatch.setattr("grok_search.deep_research_runtime._fetch_url", fetch)
+
+    response = await runtime.start(query="Persist evidence artifact probe", force_new=True, schedule=False)
+    await runtime.run_job(response["job_id"])
+
+    persisted = json.loads(runtime.store.read_artifact_text(response["job_id"], "evidence_items.json") or "[]")
+
+    assert persisted
+    fetch_items = [item for item in persisted if item.get("evidence_kind") == "fetch"]
+
+    assert fetch_items
+    assert fetch_items[0]["line_start"] == 3
+    assert fetch_items[0]["line_end"] == 3
+
+
+@pytest.mark.asyncio
+async def test_completed_result_requires_full_provenance_bundle_for_resolved_batch(tmp_path):
+    runtime = build_runtime(tmp_path)
+    source = create_completed_source_job(
+        runtime,
+        query="Completed bundle provenance contract",
+        include_provenance_bundle=False,
+    )
+
+    status = await runtime.status(source.job_id)
+    result = await runtime.result(source.job_id)
+
+    assert status["resolved_artifact_batch_id"] == ""
+    assert result["resolved_artifact_batch_id"] == ""
+    assert result["artifact_errors"]["evidence_items.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["coverage.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["grounding.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["verifier.json"] == "missing_required_artifact"
+
+
+@pytest.mark.asyncio
+async def test_finalizing_result_does_not_resolve_partial_batch_with_current_provenance(tmp_path):
+    runtime = build_runtime(tmp_path)
+    job = runtime.store.create_job(
+        query="Interrupted partial bundle provenance contract",
+        request_fingerprint="fp-interrupted-partial-bundle-provenance",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="finalizing",
+        finished_at=utc_now_iso(),
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {
+                            "R1": {
+                                "source_id": "R1",
+                                "url": "https://good.example.com/runtime/recovery",
+                            }
+                        },
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps(
+                    [
+                        {
+                            "evidence_id": "evidence-unit-search-1-fetch",
+                            "unit_id": "unit-search-1",
+                            "summary": "Recovered final batch evidence.",
+                            "detail": "Recovered final batch evidence.",
+                            "source_ids": ["R1"],
+                            "source_urls": ["https://good.example.com/runtime/recovery"],
+                            "evidence_kind": "fetch",
+                            "derived_from_source_url": "https://good.example.com/runtime/recovery",
+                            "line_start": 3,
+                            "line_end": 4,
+                        }
+                    ]
+                ),
+                "content_type": "application/json",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "coverage.json",
+        json.dumps({"query": job.query, "planned_section_ids": ["s1"], "answered_section_ids": []}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "grounding.json",
+        json.dumps({"total_claims": 99, "ungrounded_claims": 99}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "verifier.json",
+        json.dumps({"passed": False, "reason_codes": ["stale_current_only"]}),
+        "application/json",
+    )
+
+    status = await runtime.status(job.job_id)
+    result = await runtime.result(job.job_id)
+
+    assert persisted[0]["metadata"]["batch_id"]
+    assert status["resolved_artifact_batch_id"] == ""
+    assert result["resolved_artifact_batch_id"] == ""
+    assert result["artifact_errors"]["coverage.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["grounding.json"] == "missing_required_artifact"
+    assert result["artifact_errors"]["verifier.json"] == "missing_required_artifact"
 
 
 @pytest.mark.asyncio
@@ -7511,10 +9936,15 @@ async def test_selective_fetch_avoids_same_domain_off_topic_page(monkeypatch, tm
 
     response = await runtime.start(query="AWS DMS checkpoint resume restart semantics", force_new=True, schedule=False)
     result = await runtime.run_job(response["job_id"])
+    source_registry = result["citations"]["source_registry"]
 
     assert "Resume-processing continues from the last checkpoint" in result["final_report"]
     assert "Flink restart restores a job graph from a savepoint" not in result["final_report"]
     assert "jobruns-flink-restart.html" not in result["final_report"]
+    assert all(
+        "same_domain_off_topic" not in set(source.get("ranking_penalties") or [])
+        for source in source_registry.values()
+    )
 
 
 @pytest.mark.asyncio
@@ -7822,7 +10252,8 @@ async def test_reused_job_payload_tolerates_invalid_plan_json(tmp_path):
     runtime.write_artifact(job.job_id, "plan.json", "{bad-json", "application/json")
     runtime.write_artifact_batch(
         job.job_id,
-        [
+        with_minimal_provenance_artifacts(
+            [
             {
                 "kind": "sources.json",
                 "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
@@ -7843,7 +10274,9 @@ async def test_reused_job_payload_tolerates_invalid_plan_json(tmp_path):
                 "content": "# Final Report\n\nCheckpoint resume summary.",
                 "content_type": "text/markdown",
             },
-        ],
+            ],
+            query="Reuse invalid plan",
+        ),
     )
 
     response = await runtime.start(query="Reuse invalid plan", force_new=False, schedule=False)

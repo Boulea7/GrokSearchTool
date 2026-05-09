@@ -377,6 +377,35 @@ def _fallback_candidates_for_model(requested_model: str, current_model: str, ava
     return [model for model in _ordered_flexible_grok_models(available_models) if model != current_model]
 
 
+def _tool_fallback_candidates(
+    current_model: str,
+    available_models: list[str],
+    preferred_models: list[str],
+) -> list[str]:
+    available_by_core = {
+        _normalized_grok_model_core(model): model
+        for model in available_models
+    }
+    preferred: list[str] = []
+    seen: set[str] = set()
+    current_core = _normalized_grok_model_core(current_model)
+    for preferred_model in preferred_models:
+        normalized_preferred = preferred_model.strip()
+        if not normalized_preferred:
+            continue
+        candidate = available_by_core.get(_normalized_grok_model_core(normalized_preferred))
+        if not candidate:
+            continue
+        candidate_core = _normalized_grok_model_core(candidate)
+        if candidate_core == current_core or candidate in seen:
+            continue
+        seen.add(candidate)
+        preferred.append(candidate)
+    if preferred:
+        return preferred
+    return []
+
+
 def _is_grok_model_unavailable_message(message: str) -> bool:
     normalized = (message or "").strip().lower()
     if not normalized:
@@ -1271,8 +1300,8 @@ async def web_search(
         )
 
     try:
-        api_url = config.grok_api_url
-        api_key = config.grok_api_key
+        config.grok_api_url
+        config.grok_api_key
     except ValueError as e:
         await _SOURCES_CACHE.set(
             session_id,
@@ -1386,7 +1415,11 @@ async def web_search(
         if not _is_grok_model_unavailable_message(error_message):
             return "", [], error_message, error_code, effective_model, False
 
-        for candidate in _fallback_candidates_for_model(requested_model, effective_model, available_models):
+        preferred_models = config.preferred_web_search_models_for_url(config.grok_api_url)
+        candidates = _tool_fallback_candidates(effective_model, available_models, preferred_models)
+        if not candidates:
+            candidates = _fallback_candidates_for_model(requested_model, effective_model, available_models)
+        for candidate in candidates:
             retry_result, retry_sources, retry_error_message, retry_error_code = await _run_grok_with_model(candidate)
             if retry_error_message is None:
                 return retry_result, retry_sources, None, None, candidate, True
@@ -2278,6 +2311,7 @@ async def _probe_web_search_with_fallback(
     requested_model: str,
     available_models: list[str],
 ) -> dict:
+    preferred_models = config.preferred_web_search_models_for_url(api_url)
     resolved_model, resolution = _resolve_model_against_available_models(requested_model, available_models)
     current_model = resolved_model or requested_model
     probe_result = await _probe_web_search(api_url, api_key, current_model)
@@ -2291,7 +2325,10 @@ async def _probe_web_search_with_fallback(
     if not _is_model_unavailable_check(probe_result):
         return probe_result
 
-    for candidate in _fallback_candidates_for_model(requested_model, current_model, available_models):
+    candidates = _tool_fallback_candidates(current_model, available_models, preferred_models)
+    if not candidates:
+        candidates = _fallback_candidates_for_model(requested_model, current_model, available_models)
+    for candidate in candidates:
         retry_result = await _probe_web_search(api_url, api_key, candidate)
         if retry_result["status"] == "ok":
             retry_result["fallback_model"] = candidate
@@ -2385,7 +2422,7 @@ def _build_profile_probe_item(check: dict | None, *, default_message: str) -> di
         "requested_model": check.get("requested_model", ""),
         "effective_model": check.get("effective_model", ""),
         "winning_provider": check.get("winning_provider", ""),
-        "winning_model": check.get("winning_model", ""),
+        "winning_model": check.get("winning_model") or check.get("provider_model", ""),
         "endpoint": check.get("endpoint", ""),
     }
     reason_code = _check_reason_code(check)
@@ -2500,6 +2537,11 @@ def _build_feature_readiness(
     web_fetch_probe = checks_by_id["web_fetch_probe"]
     tavily_map = checks_by_id["tavily_map"]
     claude_context = checks_by_id["claude_code_project"]
+    supports_model_listing = grok_models["status"] == "ok"
+    available_model_count = 0
+    if supports_model_listing:
+        available_model_count = len(grok_models.get("available_models") or [])
+    single_model_mode = not supports_model_listing or available_model_count <= 1
 
     if grok_config["status"] != "ok":
         web_search_status = "not_ready"
@@ -2508,8 +2550,8 @@ def _build_feature_readiness(
         web_search_status = "ready"
         web_search_message = "Grok 配置完整，真实搜索探针成功。"
     elif grok_search_probe["status"] == "ok":
-        web_search_status = "degraded"
-        web_search_message = "真实搜索探针成功，但 /models 或模型可见性探测存在问题。"
+        web_search_status = "ready"
+        web_search_message = "真实搜索探针成功；/models 不可用时按当前可工作的模型与单模型模式继续运行。"
     elif grok_search_probe["status"] == "warning":
         web_search_status = "degraded"
         web_search_message = grok_search_probe["message"]
@@ -2619,6 +2661,9 @@ def _build_feature_readiness(
         "grok_models",
         "grok_model_selection",
         "grok_model_runtime_fallback",
+        "deep_research_standard_probe",
+        "deep_research_deep_probe",
+        "deep_research_ultra_probe",
     ]
     deep_research_runtime_check_ids = [
         *deep_research_planner_check_ids,
@@ -2635,6 +2680,9 @@ def _build_feature_readiness(
             grok_models,
             grok_model_selection,
             grok_model_runtime_fallback,
+            deep_research_standard_probe,
+            deep_research_deep_probe,
+            deep_research_ultra_probe,
         )
         if check and check["status"] in {"warning", "error"}
     ]
@@ -2667,12 +2715,21 @@ def _build_feature_readiness(
             default_message="Deep research ultra probe unavailable.",
         ),
     }
+    deep_research_profile_probe_issues = [
+        probe
+        for probe in (
+            deep_research_standard_probe,
+            deep_research_deep_probe,
+            deep_research_ultra_probe,
+        )
+        if probe and probe["status"] in {"warning", "error"}
+    ]
     if grok_config["status"] != "ok":
         deep_research_planner_status = "not_ready"
         deep_research_planner_message = grok_config["message"]
-    elif grok_models["status"] != "ok":
+    elif deep_research_profile_probe_issues:
         deep_research_planner_status = "degraded"
-        deep_research_planner_message = "Deep research planner 依赖的 /models 或模型可见性探测存在问题。"
+        deep_research_planner_message = deep_research_profile_probe_issues[0]["message"]
     elif (
         grok_model_runtime_fallback
         and grok_model_runtime_fallback["status"] == "warning"
@@ -2692,9 +2749,9 @@ def _build_feature_readiness(
     if grok_config["status"] != "ok":
         deep_research_runtime_status = "not_ready"
         deep_research_runtime_message = grok_config["message"]
-    elif grok_models["status"] != "ok":
+    elif deep_research_profile_probe_issues:
         deep_research_runtime_status = "degraded"
-        deep_research_runtime_message = "Deep research runtime 依赖的 /models 或模型可见性探测存在问题。"
+        deep_research_runtime_message = deep_research_profile_probe_issues[0]["message"]
     elif (
         grok_model_runtime_fallback
         and grok_model_runtime_fallback["status"] == "warning"
@@ -2729,6 +2786,8 @@ def _build_feature_readiness(
             "winning_provider": grok_search_probe.get("provider_name", ""),
             "winning_model": grok_search_probe.get("provider_model", ""),
             "winning_endpoint": grok_search_probe.get("endpoint", ""),
+            "supports_model_listing": supports_model_listing,
+            "single_model_mode": single_model_mode,
         },
         "get_sources": _build_get_sources_readiness(
             web_search_status=web_search_status,
@@ -2775,6 +2834,8 @@ def _build_feature_readiness(
             "winning_provider": deep_research_standard_probe.get("provider_name", "") if deep_research_standard_probe else "",
             "winning_model": deep_research_standard_probe.get("provider_model", "") if deep_research_standard_probe else "",
             "winning_endpoint": deep_research_standard_probe.get("endpoint", "") if deep_research_standard_probe else "",
+            "supports_model_listing": supports_model_listing,
+            "single_model_mode": single_model_mode,
         },
         "deep_research_runtime": {
             "status": deep_research_runtime_status,
@@ -2791,6 +2852,8 @@ def _build_feature_readiness(
             "winning_provider": deep_research_deep_probe.get("provider_name", "") if deep_research_deep_probe else "",
             "winning_model": deep_research_deep_probe.get("provider_model", "") if deep_research_deep_probe else "",
             "winning_endpoint": deep_research_deep_probe.get("endpoint", "") if deep_research_deep_probe else "",
+            "supports_model_listing": supports_model_listing,
+            "single_model_mode": single_model_mode,
         },
     }
 
@@ -3153,6 +3216,28 @@ async def get_config_info(
                     skipped_reason="missing_grok_config",
                 )
             )
+    for effort in ("standard", "deep", "ultra"):
+        probe = next((check for check in checks if check.get("check_id") == _deep_research_probe_check_id(effort)), None)
+        if probe is None or probe["status"] not in {"warning", "error"}:
+            continue
+        recommendation = (
+            f"检查 deep research {effort} profile 的默认模型、端点和 provider routing 是否可用；"
+            "必要时调整 profile 配置或回退到已验证模型。"
+        )
+        _append_recommendation(
+            recommendations,
+            recommendation,
+            recommendation_details=recommendation_details,
+            check_id=probe["check_id"],
+            feature="deep_research_runtime",
+            severity="error" if probe["status"] == "error" else "warning",
+            extra_detail_fields={
+                "profile": effort,
+                "winning_provider": probe.get("provider_name", ""),
+                "winning_model": probe.get("provider_model", ""),
+                "endpoint": probe.get("endpoint", ""),
+            },
+        )
 
     if config.tavily_enabled and config.tavily_api_key:
         tavily_extract = await _probe_json_endpoint(

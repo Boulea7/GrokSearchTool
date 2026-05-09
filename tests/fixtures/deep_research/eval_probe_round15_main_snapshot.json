@@ -1,0 +1,79 @@
+{
+  "sample": "probe-round15-main-snapshot",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: filled_search_query:u1"
+    }
+  },
+  "report": {
+    "status": "failed",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "high_null_span_ratio",
+        "planner_fallback_used"
+      ]
+    },
+    "coverage": {
+      "planned_section_ids": [
+        "executive-summary",
+        "key-findings",
+        "open-questions"
+      ],
+      "answered_section_ids": [
+        "executive-summary"
+      ],
+      "unanswered_sections": [
+        "Key Findings",
+        "Open Questions"
+      ],
+      "planned_sub_question_ids": [
+        "sq1"
+      ],
+      "covered_sub_question_ids": [],
+      "uncovered_sub_questions": [
+        "Compare checkpoint resume and restart semantics in AWS DMS with official docs only"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "domain": "docs.aws.amazon.com",
+      "title": "Change processing tuning settings",
+      "quality_tier": "official"
+    }
+  ],
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "fail",
+      "score": 0.167,
+      "reason_tags": [
+        "unanswered_sections",
+        "uncovered_sub_questions"
+      ]
+    },
+    "planner_boundary": {
+      "verdict": "fail",
+      "score": 0.6,
+      "reason_tags": [
+        "planner_fallback_used",
+        "unsafe_plan_fallback"
+      ]
+    },
+    "ranking_noise_suppression": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

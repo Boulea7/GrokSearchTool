@@ -64,6 +64,12 @@ def evaluate_case_metric(case: dict, metric: str) -> dict:
         return evaluate_ranking_noise_suppression(case)
     if metric == "diagnostics_consistency":
         return evaluate_diagnostics_consistency(case)
+    if metric == "provenance_bundle_consistency":
+        return evaluate_provenance_bundle_consistency(case)
+    if metric == "release_gate_consistency":
+        return evaluate_release_gate_consistency(case)
+    if metric == "resolved_batch_parity":
+        return evaluate_resolved_batch_parity(case)
     raise ValueError(f"Unsupported metric: {metric}")
 
 
@@ -298,6 +304,141 @@ def evaluate_diagnostics_consistency(case: dict) -> dict:
     }
 
 
+def evaluate_provenance_bundle_consistency(case: dict) -> dict:
+    registry = _source_registry(case)
+    report = case.get("report") or {}
+    evidence_items = case.get("evidence_items") or []
+    evidence_by_id = {
+        str(item.get("evidence_id", "")).strip(): item
+        for item in evidence_items
+        if str(item.get("evidence_id", "")).strip()
+    }
+    reason_tags: list[str] = []
+    score = 1.0
+
+    report_sections = report.get("sections") or []
+    citation_sections = (case.get("citations") or {}).get("sections") or []
+    if report_sections and citation_sections and report_sections != citation_sections:
+        reason_tags.append("report_citation_section_mismatch")
+        score -= 0.5
+
+    for claim in _iter_claims(case):
+        citations = [str(citation).strip() for citation in claim.get("citations") or [] if str(citation).strip()]
+        evidence_ids = [str(evidence_id).strip() for evidence_id in claim.get("evidence_ids") or [] if str(evidence_id).strip()]
+        bindings = [binding for binding in claim.get("evidence_bindings") or [] if isinstance(binding, dict)]
+
+        if any(citation not in registry for citation in citations):
+            reason_tags.append("missing_cited_source")
+            score -= 0.4
+        if any(evidence_id not in evidence_by_id for evidence_id in evidence_ids):
+            reason_tags.append("missing_evidence_item")
+            score -= 0.4
+
+        for binding in bindings:
+            binding_source_id = str(binding.get("source_id", "")).strip()
+            binding_evidence_id = str(binding.get("evidence_id", "")).strip()
+            if binding_source_id and binding_source_id not in citations:
+                reason_tags.append("unbound_citation_source")
+                score -= 0.3
+            if binding_evidence_id and binding_evidence_id not in evidence_ids:
+                reason_tags.append("unbound_evidence_id")
+                score -= 0.3
+            if bool(binding.get("source_backed")):
+                line_start = binding.get("line_start")
+                line_end = binding.get("line_end")
+                if not isinstance(line_start, int) or not isinstance(line_end, int) or line_end < line_start:
+                    reason_tags.append("invalid_source_backed_span")
+                    score -= 0.3
+
+    score = max(score, 0.0)
+    verdict = "pass" if score >= 0.7 and not reason_tags else "fail"
+    return {
+        "metric": "provenance_bundle_consistency",
+        "verdict": verdict,
+        "score": round(score, 3),
+        "reason_tags": sorted(set(reason_tags)),
+    }
+
+
+def evaluate_release_gate_consistency(case: dict) -> dict:
+    report = case.get("report") or {}
+    runtime = report.get("runtime") or {}
+    release_gate = runtime.get("release_gate") or {}
+    verifier = runtime.get("verifier") or case.get("verifier") or {}
+    artifact_errors = case.get("artifact_errors") or report.get("artifact_errors") or {}
+    warnings = set(runtime.get("warnings") or [])
+    reason_tags: list[str] = []
+    score = 1.0
+
+    release_reason_codes = [str(code) for code in release_gate.get("reason_codes") or [] if str(code).strip()]
+    verifier_reason_codes = [str(code) for code in verifier.get("reason_codes") or [] if str(code).strip()]
+    passed = release_gate.get("passed")
+    status = str(report.get("status") or "")
+
+    if passed is False and status != "failed":
+        reason_tags.append("release_gate_status_mismatch")
+        score -= 0.5
+    if passed is True and status == "failed":
+        reason_tags.append("failed_status_without_release_gate_failure")
+        score -= 0.5
+    if any(code not in warnings for code in release_reason_codes):
+        reason_tags.append("release_gate_warning_gap")
+        score -= 0.3
+    if verifier_reason_codes and not set(verifier_reason_codes).issubset(set(release_reason_codes)):
+        reason_tags.append("release_gate_missing_verifier_reason")
+        score -= 0.4
+    if artifact_errors and status == "completed":
+        reason_tags.append("artifact_error_terminal_mismatch")
+        score -= 0.4
+
+    score = max(score, 0.0)
+    verdict = "pass" if score >= 0.7 and not reason_tags else "fail"
+    return {
+        "metric": "release_gate_consistency",
+        "verdict": verdict,
+        "score": round(score, 3),
+        "reason_tags": sorted(set(reason_tags)),
+    }
+
+
+def evaluate_resolved_batch_parity(case: dict) -> dict:
+    resolved_batch_id = str(case.get("resolved_artifact_batch_id") or "").strip()
+    artifacts = case.get("artifacts") or []
+    reason_tags: list[str] = []
+    score = 1.0
+
+    if resolved_batch_id:
+        relevant = [
+            artifact
+            for artifact in artifacts
+            if str(artifact.get("kind") or "") in {
+                "sources.json",
+                "citations.json",
+                "report.json",
+                "final_report.md",
+                "evidence_items.json",
+            }
+        ]
+        mismatched = [
+            str(artifact.get("kind") or "")
+            for artifact in relevant
+            if str((artifact.get("metadata") or {}).get("batch_id") or "").strip()
+            and str((artifact.get("metadata") or {}).get("batch_id") or "").strip() != resolved_batch_id
+        ]
+        if mismatched:
+            reason_tags.append("mixed_batch_artifacts")
+            score -= 0.6
+
+    score = max(score, 0.0)
+    verdict = "pass" if score >= 0.7 and not reason_tags else "fail"
+    return {
+        "metric": "resolved_batch_parity",
+        "verdict": verdict,
+        "score": round(score, 3),
+        "reason_tags": sorted(set(reason_tags)),
+    }
+
+
 def _iter_claims(case: dict):
     report = case.get("report") or {}
     citations = case.get("citations") or {}
@@ -407,6 +548,12 @@ def test_citation_faithfulness_probe_goldens(fixture_name):
         "eval_probe_5_half.json",
         "eval_round8.json",
         "eval_probe_final.json",
+        "eval_probe_round12_main_snapshot.json",
+        "eval_probe_round13_main_snapshot.json",
+        "eval_probe_round14_main_snapshot.json",
+        "eval_probe_round15_main_snapshot.json",
+        "eval_probe_round16_main_snapshot.json",
+        "eval_probe_round18_aws_dms.json",
     ],
 )
 def test_coverage_completeness_probe_goldens(fixture_name):
@@ -424,6 +571,11 @@ def test_coverage_completeness_probe_goldens(fixture_name):
         "eval_probe_5_real.json",
         "eval_round9_live.json",
         "eval_probe_round11_interrupted_continue.json",
+        "eval_probe_round12_continue_resume.json",
+        "eval_probe_round13_continue_resume.json",
+        "eval_probe_round14_lifecycle.json",
+        "eval_probe_round16_lifecycle.json",
+        "eval_probe_round18_lifecycle.json",
     ],
 )
 def test_resume_continue_semantics_probe_goldens(fixture_name):
@@ -442,6 +594,15 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
         "eval_probe_round10_continuation.json",
         "eval_probe_round11_main_snapshot.json",
         "eval_probe_round11_interrupted_continue.json",
+        "eval_probe_round12_main_snapshot.json",
+        "eval_probe_round12_continue_resume.json",
+        "eval_probe_round13_main_snapshot.json",
+        "eval_probe_round13_continue_resume.json",
+        "eval_probe_round14_main_snapshot.json",
+        "eval_probe_round15_main_snapshot.json",
+        "eval_probe_round16_main_snapshot.json",
+        "eval_probe_round16_lifecycle.json",
+        "eval_probe_round18_lifecycle.json",
     ],
 )
 def test_planner_boundary_probe_goldens(fixture_name):
@@ -460,6 +621,12 @@ def test_planner_boundary_probe_goldens(fixture_name):
         "eval_probe_round10_continuation.json",
         "eval_probe_round11_main_snapshot.json",
         "eval_probe_round11_interrupted_continue.json",
+        "eval_probe_round12_main_snapshot.json",
+        "eval_probe_round13_main_snapshot.json",
+        "eval_probe_round14_main_snapshot.json",
+        "eval_probe_round15_main_snapshot.json",
+        "eval_probe_round16_main_snapshot.json",
+        "eval_probe_round18_aws_dms.json",
     ],
 )
 def test_ranking_noise_suppression_probe_goldens(fixture_name):
@@ -478,6 +645,15 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
         "eval_probe_round10_continuation.json",
         "eval_probe_round11_main_snapshot.json",
         "eval_probe_round11_interrupted_continue.json",
+        "eval_probe_round12_main_snapshot.json",
+        "eval_probe_round12_continue_resume.json",
+        "eval_probe_round13_main_snapshot.json",
+        "eval_probe_round13_continue_resume.json",
+        "eval_probe_round14_main_snapshot.json",
+        "eval_probe_round15_main_snapshot.json",
+        "eval_probe_round16_main_snapshot.json",
+        "eval_probe_round18_aws_dms.json",
+        "eval_probe_round18_lifecycle.json",
     ],
 )
 def test_diagnostics_consistency_probe_goldens(fixture_name):
@@ -532,11 +708,138 @@ def test_diagnostics_consistency_probe_goldens(fixture_name):
                 "reason_tags": ["planner_fallback_not_exposed"],
             },
         ),
+        (
+            "probe_round12_main_snapshot.json",
+            "planner_boundary",
+            {
+                "verdict": "fail",
+                "score": 0.6,
+                "reason_tags": ["planner_fallback_used", "unsafe_plan_fallback"],
+            },
+        ),
+        (
+            "probe_round12_main_snapshot.json",
+            "diagnostics_consistency",
+            {
+                "verdict": "pass",
+                "score": 1.0,
+                "reason_tags": [],
+            },
+        ),
     ],
 )
-def test_round11_snapshot_smoke_metrics(fixture_name, metric, golden):
+def test_round11_round12_snapshot_smoke_metrics(fixture_name, metric, golden):
     case = load_eval_case(fixture_name)
 
     result = evaluate_case_metric(case, metric)
 
     assert_metric_matches_golden(result, golden)
+
+
+def test_provenance_bundle_consistency_detects_unbound_binding_and_invalid_span():
+    case = {
+        "sources": [
+            {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"},
+        ],
+        "citations": {
+            "source_registry": {
+                "R1": {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"},
+            },
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "title": "Resume Semantics",
+                    "claims": [
+                        {
+                            "claim_id": "c1",
+                            "text": "Resume continues from the last durable checkpoint.",
+                            "citations": ["R1"],
+                            "evidence_ids": ["e1"],
+                            "evidence_bindings": [
+                                {
+                                    "source_id": "R9",
+                                    "evidence_id": "e1",
+                                    "source_backed": True,
+                                    "line_start": None,
+                                    "line_end": None,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "title": "Resume Semantics",
+                    "claims": [
+                        {
+                            "claim_id": "c1",
+                            "text": "Resume continues from the last durable checkpoint.",
+                            "citations": ["R1"],
+                            "evidence_ids": ["e1"],
+                            "evidence_bindings": [
+                                {
+                                    "source_id": "R9",
+                                    "evidence_id": "e1",
+                                    "source_backed": True,
+                                    "line_start": None,
+                                    "line_end": None,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+        "evidence_items": [
+            {"evidence_id": "e1", "source_ids": ["R1"], "evidence_kind": "fetch"},
+        ],
+    }
+
+    result = evaluate_case_metric(case, "provenance_bundle_consistency")
+
+    assert result["verdict"] == "fail"
+    assert set(result["reason_tags"]) >= {"unbound_citation_source", "invalid_source_backed_span"}
+
+
+def test_release_gate_consistency_detects_warning_and_terminal_state_mismatch():
+    case = {
+        "report": {
+            "status": "degraded",
+            "runtime": {
+                "warnings": ["coverage_incomplete"],
+                "release_gate": {
+                    "passed": False,
+                    "reason_codes": ["coverage_incomplete", "invalid_source_backed_span"],
+                },
+                "verifier": {
+                    "reason_codes": ["invalid_source_backed_span"],
+                },
+            },
+        }
+    }
+
+    result = evaluate_case_metric(case, "release_gate_consistency")
+
+    assert result["verdict"] == "fail"
+    assert set(result["reason_tags"]) >= {"release_gate_status_mismatch", "release_gate_warning_gap"}
+
+
+def test_resolved_batch_parity_detects_mixed_batch_artifacts():
+    case = {
+        "resolved_artifact_batch_id": "batch-good",
+        "artifacts": [
+            {"kind": "sources.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "citations.json", "metadata": {"batch_id": "batch-bad"}},
+            {"kind": "report.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "final_report.md", "metadata": {"batch_id": "batch-good"}},
+        ],
+    }
+
+    result = evaluate_case_metric(case, "resolved_batch_parity")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["mixed_batch_artifacts"]

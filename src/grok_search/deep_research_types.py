@@ -125,6 +125,8 @@ class DeepResearchContinuation(BaseModel):
     source_job_id: str = ""
     source_job_status: str = ""
     continuation_identity: str = ""
+    compaction_policy: str = ""
+    compaction_reason_codes: list[str] = Field(default_factory=list)
     focused_snapshot: dict[str, Any] = Field(default_factory=dict)
     previous_summary: str = ""
     prior_plan_summary: str = ""
@@ -168,6 +170,8 @@ class DeepResearchEvidenceItem(BaseModel):
     evidence_kind: str = "search"
     weight: float = 1.0
     derived_from_source_url: str = ""
+    line_start: int | None = None
+    line_end: int | None = None
 
 
 class DeepResearchClaim(BaseModel):
@@ -176,6 +180,7 @@ class DeepResearchClaim(BaseModel):
     citations: list[str] = Field(default_factory=list)
     unit_id: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
+    evidence_bindings: list[dict[str, Any]] = Field(default_factory=list)
     cluster_type: str = ""
     supporting_source_count: int = 0
     supporting_domain_count: int = 0

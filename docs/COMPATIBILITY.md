@@ -55,7 +55,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - process env presence overrides project `.env.local` / `.env` fallback, even when the env value is explicitly empty
 - the base config snapshot now includes `GROK_MODEL_SOURCE`, so callers can see the active model source (`process_env`, `project_env_local`, `project_env`, `persisted_config`, or `default`)
 - the preferred built-in default is `grok-4.20-0309`; runtime model resolution stays flexible for Grok 4.1+ families and may fall back to a compatible available Grok model instead of failing just because a suffix differs
-- the base config snapshot now also includes additive `GROK_MODEL_PROFILE`, `GROK_DEEP_RESEARCH_STANDARD_PROFILE`, `GROK_DEEP_RESEARCH_DEEP_PROFILE`, and `GROK_PROVIDER_FAMILY`
+- the base config snapshot now also includes additive `GROK_MODEL_PROFILE`, `GROK_DEEP_RESEARCH_STANDARD_PROFILE`, `GROK_DEEP_RESEARCH_DEEP_PROFILE`, `GROK_DEEP_RESEARCH_ULTRA_PROFILE`, and `GROK_PROVIDER_FAMILY`
 - the base config snapshot now also includes `GROK_ROUTING_DIAGNOSTICS`, which summarizes active-provider routing, numbered provider-chain routing, profile-derived defaults, `/chat/completions` vs `/responses` path visibility, and multi-agent signals for official xAI, OpenRouter, generic relays, and grok2api-like proxies
 - project env fallback accepts both `KEY=value` and optional `export KEY=value` lines
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
@@ -112,7 +112,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 `feature_readiness.get_sources` reports `ready` only when the running process already holds at least one readable non-error source session; failed-search-only cache entries keep it at `partial_ready`. If the process still reports a readable session, it still reports `ready` even when `web_search` is currently not ready, and exposes the upstream configuration problem through `degraded_by`. It now also carries an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, `partial_sessions`, and `unreadable_sessions`. This is still a `transient` readiness signal and does not lower the overall doctor status by itself.
 
 `feature_readiness` now also exposes summary-safe machine fields: `based_on_checks`, `probe_scope`, and `degraded_by`. For `get_sources`, cache-side degradation currently uses the synthetic cause `source_cache_state`; for `web_search`, the payload additionally includes `runtime_override_active` and `runtime_model_source`, so callers can tell whether the current runtime behavior is still pinned by a higher-priority env/file override.
-`feature_readiness.deep_research_planner` and `feature_readiness.deep_research_runtime` now expose the shared Grok readiness surface used by deep research planner/runtime calls.
+`feature_readiness.deep_research_planner` and `feature_readiness.deep_research_runtime` now expose the shared Grok readiness surface used by deep research planner/runtime calls, and additionally report `profile_probes` for `standard`, `deep`, and `ultra` deep research tiers.
 
 `get_sources.rank` currently follows `score`, source identity quality, and stable dedupe order without a Grok-specific boost. `standardize_sources` also canonicalizes scheme/host casing during dedupe, so mixed-case variants of the same page may collapse into one returned source.
 

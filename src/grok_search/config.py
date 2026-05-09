@@ -36,6 +36,34 @@ class Config:
         '"env":{"GROK_API_URL":"https://api.example.com/v1","GROK_API_KEY":"your-api-key"}}\''
     )
     _DEFAULT_MODEL = "grok-4.20-0309"
+    _DEFAULT_BALANCED_MODEL = "grok-4.20-auto"
+    _DEFAULT_WEB_SEARCH_MODEL = "grok-4.20-fast"
+    _DEFAULT_DEEP_RESEARCH_STANDARD_MODEL = "grok-4.20-expert"
+    _DEFAULT_DEEP_RESEARCH_DEEP_MODEL = "grok-4.20-expert-4-agent"
+    _DEFAULT_DEEP_RESEARCH_ULTRA_MODEL = "grok-4.20-heavy-16-agent"
+    _DEFAULT_WEB_SEARCH_FALLBACK_MODELS = (
+        "grok-4.20-0309",
+        "grok-4.20-auto",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-reasoning",
+        "grok-4.20-expert",
+    )
+    _DEFAULT_DEEP_RESEARCH_STANDARD_FALLBACK_MODELS = (
+        "grok-4.20-reasoning",
+        "grok-4.20-auto",
+        "grok-4.20-fast",
+    )
+    _DEFAULT_DEEP_RESEARCH_DEEP_FALLBACK_MODELS = (
+        "grok-4.20-expert",
+        "grok-4.20-multi-agent",
+        "grok-4.20-reasoning",
+    )
+    _DEFAULT_DEEP_RESEARCH_ULTRA_FALLBACK_MODELS = (
+        "grok-4.20-heavy",
+        "grok-4.20-expert-4-agent",
+        "grok-4.20-expert",
+        "grok-4.20-reasoning",
+    )
     _DEFAULT_MODEL_PROFILE = "balanced_auto"
     _DEFAULT_DEEP_RESEARCH_STANDARD_PROFILE = "reasoning"
     _DEFAULT_DEEP_RESEARCH_DEEP_PROFILE = "multi_agent"
@@ -163,6 +191,24 @@ class Config:
             return "process_env"
         _, project_sources = self._load_project_env_with_sources()
         return project_sources.get(key)
+
+    def _tool_profile_model_override(self, override_key: str) -> str | None:
+        value = self._get_env_value(override_key)
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized if normalized else ""
+
+    def _tool_profile_model_list_override(self, override_key: str) -> list[str] | None:
+        value = self._get_env_value(override_key)
+        if value is None:
+            return None
+        items = [item.strip() for item in value.split(",")]
+        return [item for item in items if item]
+
+    def _tool_profile_model_source(self, override_key: str) -> str:
+        source = self._get_env_value_source(override_key)
+        return source or "default"
 
     @staticmethod
     def _provider_env_keys(suffix: int | None = None) -> tuple[str, str, str]:
@@ -422,43 +468,20 @@ class Config:
         ).strip().lower()
         return raw if raw in self._ALLOWED_MODEL_PROFILES else self._DEFAULT_DEEP_RESEARCH_ULTRA_PROFILE
 
-    def _resolved_default_model_for_family(self, provider_family: str, *, profile: str) -> str:
-        family_defaults = {
-            "official_xai": {
-                "balanced_auto": "grok-4.20-0309-non-reasoning",
-                "reasoning": "grok-4.20-0309-reasoning",
-                "multi_agent": "grok-4.20-multi-agent-0309",
-                "ultra": "grok-4.20-heavy-16-agent",
-                "fast": "grok-4-1-fast-non-reasoning",
-                "exact": self._DEFAULT_MODEL,
-            },
-            "openrouter": {
-                "balanced_auto": "x-ai/grok-4.1-fast",
-                "reasoning": "x-ai/grok-4.20",
-                "multi_agent": "x-ai/grok-4.20-multi-agent",
-                "ultra": "x-ai/grok-4.20-multi-agent",
-                "fast": "x-ai/grok-4.1-fast",
-                "exact": "x-ai/grok-4.20",
-            },
-            "openai_compatible_relay": {
-                "balanced_auto": "grok-4.20-auto",
-                "reasoning": "grok-4.20-reasoning",
-                "multi_agent": "grok-4.20-multi-agent",
-                "ultra": "grok-4.20-heavy-16-agent",
-                "fast": "grok-4.20-fast",
-                "exact": self._DEFAULT_MODEL,
-            },
-            "grok2api_like": {
-                "balanced_auto": "grok-4.20-auto",
-                "reasoning": "grok-4.20-reasoning",
-                "multi_agent": "grok-4.20-multi-agent",
-                "ultra": "grok-4.20-heavy-16-agent",
-                "fast": "grok-4.20-fast",
-                "exact": self._DEFAULT_MODEL,
-            },
+    def _preferred_model_candidates_for_family(self, provider_family: str, *, profile: str) -> list[str]:
+        del provider_family
+        profile_defaults = {
+            "balanced_auto": [self._DEFAULT_BALANCED_MODEL, *self._DEFAULT_WEB_SEARCH_FALLBACK_MODELS],
+            "reasoning": [self._DEFAULT_DEEP_RESEARCH_STANDARD_MODEL, *self._DEFAULT_DEEP_RESEARCH_STANDARD_FALLBACK_MODELS],
+            "multi_agent": [self._DEFAULT_DEEP_RESEARCH_DEEP_MODEL, *self._DEFAULT_DEEP_RESEARCH_DEEP_FALLBACK_MODELS],
+            "ultra": [self._DEFAULT_DEEP_RESEARCH_ULTRA_MODEL, *self._DEFAULT_DEEP_RESEARCH_ULTRA_FALLBACK_MODELS],
+            "fast": ["grok-4.20-fast", "grok-4.20-auto", "grok-4.20-0309-non-reasoning"],
+            "exact": [self._DEFAULT_MODEL],
         }
-        selected_family = family_defaults.get(provider_family, family_defaults["openai_compatible_relay"])
-        return selected_family.get(profile, selected_family["balanced_auto"])
+        return list(profile_defaults.get(profile, profile_defaults["balanced_auto"]))
+
+    def _resolved_default_model_for_family(self, provider_family: str, *, profile: str) -> str:
+        return self._preferred_model_candidates_for_family(provider_family, profile=profile)[0]
 
     def resolve_default_grok_model_for_url(
         self,
@@ -482,13 +505,67 @@ class Config:
 
     def resolve_deep_research_model_for_url(self, api_url: str, *, effort: str) -> str:
         normalized_effort = (effort or "").strip().lower()
+        override_key = "GROK_DEEP_RESEARCH_STANDARD_MODEL"
         if normalized_effort == "ultra":
+            override_key = "GROK_DEEP_RESEARCH_ULTRA_MODEL"
             selected_profile = self.grok_deep_research_ultra_profile()
         elif normalized_effort == "deep":
+            override_key = "GROK_DEEP_RESEARCH_DEEP_MODEL"
             selected_profile = self.grok_deep_research_deep_profile()
         else:
             selected_profile = self.grok_deep_research_standard_profile()
+        override_model = self._tool_profile_model_override(override_key)
+        if override_model is not None:
+            return self._apply_model_suffix_for_url(override_model, api_url)
         return self.resolve_default_grok_model_for_url(api_url, profile=selected_profile)
+
+    def preferred_web_search_models_for_url(self, api_url: str) -> list[str]:
+        primary = self._tool_profile_model_override("GROK_WEB_SEARCH_MODEL") or self._DEFAULT_WEB_SEARCH_MODEL
+        fallback = self._tool_profile_model_list_override("GROK_WEB_SEARCH_FALLBACK_MODELS") or list(
+            self._DEFAULT_WEB_SEARCH_FALLBACK_MODELS
+        )
+        ordered = [primary, *fallback]
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for model in ordered:
+            normalized = self._apply_model_suffix_for_url(model, api_url)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(normalized)
+        return deduped
+
+    def preferred_deep_research_models_for_url(self, api_url: str, *, effort: str) -> list[str]:
+        normalized_effort = (effort or "").strip().lower()
+        override_key = "GROK_DEEP_RESEARCH_STANDARD_MODEL"
+        fallback_key = "GROK_DEEP_RESEARCH_STANDARD_FALLBACK_MODELS"
+        selected_profile = self.grok_deep_research_standard_profile()
+        if normalized_effort == "ultra":
+            override_key = "GROK_DEEP_RESEARCH_ULTRA_MODEL"
+            fallback_key = "GROK_DEEP_RESEARCH_ULTRA_FALLBACK_MODELS"
+            selected_profile = self.grok_deep_research_ultra_profile()
+        elif normalized_effort == "deep":
+            override_key = "GROK_DEEP_RESEARCH_DEEP_MODEL"
+            fallback_key = "GROK_DEEP_RESEARCH_DEEP_FALLBACK_MODELS"
+            selected_profile = self.grok_deep_research_deep_profile()
+        default_candidates = list(
+            self._preferred_model_candidates_for_family(
+                self.provider_family_for_url(api_url),
+                profile=selected_profile,
+            )
+        )
+        primary = self._tool_profile_model_override(override_key) or default_candidates[0]
+        fallback = self._tool_profile_model_list_override(fallback_key) or default_candidates[1:]
+        ordered = [primary, *fallback]
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for model in ordered:
+            normalized = self._apply_model_suffix_for_url(model, api_url)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(normalized)
+        return deduped
 
     @property
     def config_file(self) -> Path:
@@ -871,9 +948,21 @@ class Config:
             "GROK_API_KEY": api_key_masked,
             "GROK_MODEL": self.grok_model,
             "GROK_MODEL_SOURCE": self.grok_model_source,
+            "GROK_WEB_SEARCH_MODEL": self._tool_profile_model_override("GROK_WEB_SEARCH_MODEL") or self._DEFAULT_WEB_SEARCH_MODEL,
+            "GROK_WEB_SEARCH_MODEL_SOURCE": self._tool_profile_model_source("GROK_WEB_SEARCH_MODEL"),
+            "GROK_WEB_SEARCH_FALLBACK_MODELS": self._tool_profile_model_list_override("GROK_WEB_SEARCH_FALLBACK_MODELS") or list(self._DEFAULT_WEB_SEARCH_FALLBACK_MODELS),
             "GROK_MODEL_PROFILE": self.grok_model_profile(),
+            "GROK_DEEP_RESEARCH_STANDARD_MODEL": self._tool_profile_model_override("GROK_DEEP_RESEARCH_STANDARD_MODEL") or self._DEFAULT_DEEP_RESEARCH_STANDARD_MODEL,
+            "GROK_DEEP_RESEARCH_STANDARD_MODEL_SOURCE": self._tool_profile_model_source("GROK_DEEP_RESEARCH_STANDARD_MODEL"),
+            "GROK_DEEP_RESEARCH_STANDARD_FALLBACK_MODELS": self._tool_profile_model_list_override("GROK_DEEP_RESEARCH_STANDARD_FALLBACK_MODELS") or list(self._DEFAULT_DEEP_RESEARCH_STANDARD_FALLBACK_MODELS),
             "GROK_DEEP_RESEARCH_STANDARD_PROFILE": self.grok_deep_research_standard_profile(),
+            "GROK_DEEP_RESEARCH_DEEP_MODEL": self._tool_profile_model_override("GROK_DEEP_RESEARCH_DEEP_MODEL") or self._DEFAULT_DEEP_RESEARCH_DEEP_MODEL,
+            "GROK_DEEP_RESEARCH_DEEP_MODEL_SOURCE": self._tool_profile_model_source("GROK_DEEP_RESEARCH_DEEP_MODEL"),
+            "GROK_DEEP_RESEARCH_DEEP_FALLBACK_MODELS": self._tool_profile_model_list_override("GROK_DEEP_RESEARCH_DEEP_FALLBACK_MODELS") or list(self._DEFAULT_DEEP_RESEARCH_DEEP_FALLBACK_MODELS),
             "GROK_DEEP_RESEARCH_DEEP_PROFILE": self.grok_deep_research_deep_profile(),
+            "GROK_DEEP_RESEARCH_ULTRA_MODEL": self._tool_profile_model_override("GROK_DEEP_RESEARCH_ULTRA_MODEL") or self._DEFAULT_DEEP_RESEARCH_ULTRA_MODEL,
+            "GROK_DEEP_RESEARCH_ULTRA_MODEL_SOURCE": self._tool_profile_model_source("GROK_DEEP_RESEARCH_ULTRA_MODEL"),
+            "GROK_DEEP_RESEARCH_ULTRA_FALLBACK_MODELS": self._tool_profile_model_list_override("GROK_DEEP_RESEARCH_ULTRA_FALLBACK_MODELS") or list(self._DEFAULT_DEEP_RESEARCH_ULTRA_FALLBACK_MODELS),
             "GROK_DEEP_RESEARCH_ULTRA_PROFILE": self.grok_deep_research_ultra_profile(),
             "GROK_PROVIDER_FAMILY": (
                 self.provider_family_for_url(api_url) if api_url != "未配置" else "未配置"
