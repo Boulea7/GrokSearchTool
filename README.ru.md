@@ -48,6 +48,8 @@ GrokSearch — это независимо поддерживаемый MCP-се
 planning `session_id` — это in-process transient handle с TTL около 1 часа и LRU-лимитом 256 сессий; после рестарта процесса, истечения TTL или eviction нужно начинать заново с нового `plan_intent`.
 wrapper'ы намеренно сохраняют scalar shim-входы: `depends_on` передаётся как CSV, `parallel_groups` — как CSV с разделением групп через `;`, а `params_json` — как строковый JSON. Первый вызов `plan_search_term` обязан передавать `approach`.
 
+`deep_research_result` / `deep_research_status` публикуют additive artifact diagnostics, включая `artifact_errors`, `artifact_visibility_reason`, resolved `batch_id` и `operator_summary`. `deep_research_artifact(job_id, artifact)` и CLI `grok-search-research result --artifact <kind>` используют одинаковые artifact visibility rules и сначала читают resolved final batch. Provider Accounting также может появляться как additive section в final report body, `report.json` и `citations.json`, описывая provider attempts, failed fetch, warnings и budget usage.
+
 ## Установка
 
 ### Требования
@@ -143,6 +145,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `TAVILY_API_KEY` | Нет | Tavily key для `web_fetch` / `web_map`, а также для Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | Нет | Tavily API endpoint |
 | `TAVILY_ENABLED` | Нет | Включать ли Tavily-пути |
+| `TAVILY_FALLBACK_API_URL` | Нет | Remote HTTP API fallback для случая, когда основной Tavily endpoint указывает на недоступный local loopback; встроенного endpoint по умолчанию нет, значение нужно задавать явно |
+| `TAVILY_FALLBACK_API_KEY` | Нет | Tavily fallback Bearer token; по умолчанию переиспользует `TAVILY_API_KEY`, его нельзя commit'ить в публичный репозиторий |
+| `TAVILY_FALLBACK_ENABLED` | Нет | Включать ли local-loopback Tavily fallback; по умолчанию `false` |
 | `FIRECRAWL_API_KEY` | Нет | Firecrawl key для fallback fetch и optional supplemental `web_search` |
 | `FIRECRAWL_API_URL` | Нет | Firecrawl API endpoint |
 | `GROK_DEBUG` | Нет | Включить debug-логи и debug-only пересылку прогресса через `ctx.info()` |

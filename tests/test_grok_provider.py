@@ -1443,7 +1443,7 @@ async def test_execute_completion_uses_responses_endpoint_for_multi_agent_models
 
 @pytest.mark.asyncio
 async def test_execute_completion_uses_responses_endpoint_for_response_only_relay_models(monkeypatch):
-    provider = GrokSearchProvider("https://grok2api.example.com/v1", "primary-key", "grok-4.20-reasoning")
+    provider = GrokSearchProvider("https://relay.example.com/v1", "primary-key", "grok-4.20-reasoning")
     monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "0")
     monkeypatch.setenv("GROK_RETRY_MULTIPLIER", "0")
     monkeypatch.setenv("GROK_RETRY_MAX_WAIT", "0")
@@ -1472,7 +1472,7 @@ async def test_execute_completion_uses_responses_endpoint_for_response_only_rela
     )
 
     assert result == "relay responses ok"
-    assert calls[0]["url"] == "https://grok2api.example.com/v1/responses"
+    assert calls[0]["url"] == "https://relay.example.com/v1/responses"
 
 
 @pytest.mark.asyncio

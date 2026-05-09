@@ -48,6 +48,8 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 planning `session_id` は現在のプロセス内だけで有効な transient handle であり、既定 TTL は約 1 時間、LRU 上限は 256 です。プロセス再起動、TTL 切れ、eviction 後は新しい `plan_intent` からやり直してください。
 wrapper はあえて scalar shim 入力を保っており、`depends_on` は CSV、`parallel_groups` はセミコロン区切りの CSV、`params_json` は文字列化 JSON を受け取ります。最初の `plan_search_term` 呼び出しでは `approach` が必須です。
 
+`deep_research_result` / `deep_research_status` は `artifact_errors`、`artifact_visibility_reason`、resolved `batch_id`、`operator_summary` などの additive artifact diagnostics を公開します。`deep_research_artifact(job_id, artifact)` と CLI `grok-search-research result --artifact <kind>` は同じ artifact visibility rules を使い、resolved final batch を優先します。Provider Accounting は final report body と `report.json` / `citations.json` の additive section として出ることがあり、provider attempts、failed fetch、warnings、budget usage を説明します。
+
 ## インストール
 
 ### 前提条件
@@ -143,6 +145,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `TAVILY_API_KEY` | No | `web_fetch` / `web_map` 用 Tavily Key。Tavily ベースの supplemental `web_search` にも使用 |
 | `TAVILY_API_URL` | No | Tavily API エンドポイント |
 | `TAVILY_ENABLED` | No | Tavily ルートを有効化するか |
+| `TAVILY_FALLBACK_API_URL` | No | primary Tavily endpoint が利用できない local loopback の場合に使う remote HTTP API fallback。既定の内蔵 endpoint はなく、明示設定が必要 |
+| `TAVILY_FALLBACK_API_KEY` | No | Tavily fallback Bearer token。既定では `TAVILY_API_KEY` を再利用し、公開リポジトリへ commit しないでください |
+| `TAVILY_FALLBACK_ENABLED` | No | local-loopback Tavily fallback を有効化するか。既定は `false` |
 | `FIRECRAWL_API_KEY` | No | Firecrawl fallback Key。supplemental `web_search` にも使用可能 |
 | `FIRECRAWL_API_URL` | No | Firecrawl API エンドポイント |
 | `GROK_DEBUG` | No | デバッグログと debug-only `ctx.info()` 進捗転送を有効化するか |
