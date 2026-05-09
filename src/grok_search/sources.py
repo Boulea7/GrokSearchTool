@@ -134,9 +134,23 @@ class SourcesCache:
             self._cache.pop(session_id, None)
 
     async def set(self, session_id: str, sources: object) -> None:
+        await self.update(session_id, sources)
+
+    async def update(
+        self,
+        session_id: str,
+        sources: object,
+        *,
+        preserve_expiry: bool = False,
+    ) -> None:
         async with self._lock:
             self._purge_expired_locked()
-            self._cache[session_id] = (self._expires_at(), sources)
+            expires_at = self._expires_at()
+            if preserve_expiry:
+                existing = self._cache.get(session_id)
+                if existing is not None:
+                    expires_at = existing[0]
+            self._cache[session_id] = (expires_at, sources)
             self._cache.move_to_end(session_id)
             while len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
@@ -163,19 +177,117 @@ class SourcesCache:
 
 
 def merge_sources(*source_lists: list[dict]) -> list[dict]:
-    seen: set[str] = set()
+    seen_entries: dict[str, tuple[int, int]] = {}
     merged: list[dict] = []
+    source_order = 0
     for sources in source_lists:
         for item in sources or []:
             url = (item or {}).get("url")
             if not isinstance(url, str) or not url.strip():
                 continue
             url = url.strip()
-            if url in seen:
-                continue
-            seen.add(url)
-            merged.append(item)
+            existing_entry = seen_entries.get(url)
+            if existing_entry is None:
+                seen_entries[url] = (len(merged), source_order)
+                merged.append(item)
+            else:
+                existing_item = merged[existing_entry[0]]
+                prefer_candidate = _should_replace_merged_source(
+                    existing_item,
+                    item,
+                    existing_order=existing_entry[1],
+                    candidate_order=source_order,
+                )
+                merged[existing_entry[0]] = _merge_duplicate_source_items(
+                    existing_item,
+                    item,
+                    prefer_candidate=prefer_candidate,
+                )
+            source_order += 1
     return merged
+
+
+def _merged_source_priority_key(item: Mapping[str, Any], order: int) -> tuple:
+    normalized_item = dict(item)
+    score = _normalize_score(normalized_item.get("score"))
+    title = _normalize_text(normalized_item.get("title"))
+    description = _normalize_text(normalized_item.get("description")) or _normalize_snippet(normalized_item)
+    return (
+        0 if score is not None else 1,
+        -(score if score is not None else 0.0),
+        0 if title else 1,
+        0 if description else 1,
+        order,
+    )
+
+
+def _should_replace_merged_source(
+    existing: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    *,
+    existing_order: int,
+    candidate_order: int,
+) -> bool:
+    return _merged_source_priority_key(candidate, candidate_order) < _merged_source_priority_key(existing, existing_order)
+
+
+def _merge_duplicate_source_items(
+    existing: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    *,
+    prefer_candidate: bool,
+) -> dict[str, Any]:
+    merged = dict(existing)
+
+    for key, candidate_value in dict(candidate).items():
+        if key == "contributors":
+            continue
+        if key == "url":
+            merged[key] = candidate_value if prefer_candidate else merged.get(key, candidate_value)
+            continue
+        if _should_take_merged_source_value(key, merged.get(key), candidate_value, prefer_candidate=prefer_candidate):
+            merged[key] = candidate_value
+
+    contributors = _merge_contributor_snapshots(existing, candidate)
+    if _should_publish_contributors(contributors):
+        merged["contributors"] = contributors
+    else:
+        merged.pop("contributors", None)
+
+    return merged
+
+
+def _should_take_merged_source_value(
+    key: str,
+    existing_value: Any,
+    candidate_value: Any,
+    *,
+    prefer_candidate: bool,
+) -> bool:
+    if key == "score":
+        candidate_score = _normalize_score(candidate_value)
+        if candidate_score is None:
+            return False
+        existing_score = _normalize_score(existing_value)
+        if existing_score is None:
+            return True
+        return candidate_score > existing_score or (prefer_candidate and candidate_score == existing_score)
+
+    if _is_empty_merged_source_value(candidate_value):
+        return False
+    if _is_empty_merged_source_value(existing_value):
+        return True
+    return prefer_candidate
+
+
+def _is_empty_merged_source_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    return False
 
 
 def standardize_sources(sources: list[dict], retrieved_at: str | None = None) -> list[dict]:
@@ -198,7 +310,10 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
 
         raw_item["title"] = _normalize_text(raw_item.get("title"))
         raw_item["url"] = url
-        raw_item["provider"] = _normalize_provider(raw_item.get("provider") or raw_item.get("source"))
+        provider_value = raw_item.get("provider")
+        if _is_empty_merged_source_value(provider_value) and _should_use_legacy_source_alias(raw_item):
+            provider_value = raw_item.get("source")
+        raw_item["provider"] = _normalize_provider(provider_value)
         raw_item["description"] = description
         raw_item["source_type"] = "web_page"
         raw_item["snippet"] = snippet
@@ -206,11 +321,24 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
         raw_item["score"] = _normalize_score(raw_item.get("score"))
         raw_item["published_at"] = _normalize_optional_text(raw_item.get("published_at") or raw_item.get("published_date"))
         raw_item["retrieved_at"] = _normalize_optional_text(raw_item.get("retrieved_at")) or timestamp
+        contributor_snapshots = _extract_contributor_snapshots(raw_item)
+        if _should_publish_contributors(contributor_snapshots):
+            raw_item["contributors"] = contributor_snapshots
+        else:
+            raw_item.pop("contributors", None)
         raw_item["_source_order"] = index
         canonical_key = _canonicalize_source_dedupe_key(url)
         existing = standardized_by_url.get(canonical_key)
-        if existing is None or _should_replace_standardized_source(existing, raw_item):
+        if existing is None:
             standardized_by_url[canonical_key] = raw_item
+            continue
+
+        prefer_candidate = _should_replace_standardized_source(existing, raw_item)
+        standardized_by_url[canonical_key] = _merge_duplicate_source_items(
+            existing,
+            raw_item,
+            prefer_candidate=prefer_candidate,
+        )
 
     standardized = list(standardized_by_url.values())
     standardized.sort(key=_source_priority_key)
@@ -236,6 +364,93 @@ def _source_priority_key(item: dict) -> tuple:
 
 def _should_replace_standardized_source(existing: dict, candidate: dict) -> bool:
     return _source_priority_key(candidate) < _source_priority_key(existing)
+
+
+def _merge_contributor_snapshots(*items: Mapping[str, Any]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
+    for item in items:
+        for snapshot in _extract_contributor_snapshots(item):
+            key = (
+                snapshot.get("url"),
+                snapshot.get("provider"),
+                snapshot.get("source"),
+                snapshot.get("origin_type"),
+                snapshot.get("title"),
+                snapshot.get("score"),
+                snapshot.get("published_at"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(snapshot)
+    return merged
+
+
+def _should_publish_contributors(contributors: list[dict[str, Any]]) -> bool:
+    if len(contributors) <= 1:
+        return False
+    identities = {
+        (
+            contributor.get("url"),
+            contributor.get("provider"),
+            contributor.get("source"),
+            contributor.get("origin_type"),
+        )
+        for contributor in contributors
+    }
+    return len(identities) > 1
+
+
+def _extract_contributor_snapshots(item: Mapping[str, Any]) -> list[dict[str, Any]]:
+    contributors = item.get("contributors")
+    if isinstance(contributors, list):
+        snapshots = [
+            snapshot
+            for contributor in contributors
+            if isinstance(contributor, Mapping)
+            for snapshot in [_build_contributor_snapshot(contributor)]
+            if snapshot
+        ]
+        if snapshots:
+            return snapshots
+
+    snapshot = _build_contributor_snapshot(item)
+    return [snapshot] if snapshot else []
+
+
+def _build_contributor_snapshot(item: Mapping[str, Any]) -> dict[str, Any]:
+    url = _normalize_url(item.get("url"))
+    if not url:
+        return {}
+
+    snapshot: dict[str, Any] = {"url": _canonicalize_source_dedupe_key(url)}
+    provider_value = item.get("provider")
+    if _is_empty_merged_source_value(provider_value) and _should_use_legacy_source_alias(item):
+        provider_value = item.get("source")
+    snapshot["provider"] = _normalize_provider(provider_value)
+
+    title = _normalize_text(item.get("title"))
+    if title:
+        snapshot["title"] = title
+
+    source = _normalize_optional_text(item.get("source"))
+    if source:
+        snapshot["source"] = source
+
+    origin_type = _normalize_optional_text(item.get("origin_type"))
+    if origin_type:
+        snapshot["origin_type"] = origin_type
+
+    score = _normalize_score(item.get("score"))
+    if score is not None:
+        snapshot["score"] = score
+
+    published_at = _normalize_optional_text(item.get("published_at") or item.get("published_date"))
+    if published_at:
+        snapshot["published_at"] = published_at
+
+    return snapshot
 
 
 def split_answer_and_sources(text: str) -> tuple[str, list[dict]]:
@@ -590,9 +805,26 @@ def _normalize_sources(data: Any) -> list[dict]:
             title = item.get("title") or item.get("name") or item.get("label")
             if isinstance(title, str) and title.strip():
                 out["title"] = title.strip()
-            desc = item.get("description") or item.get("snippet") or item.get("content")
-            if isinstance(desc, str) and desc.strip():
-                out["description"] = desc.strip()
+            description = item.get("description")
+            if isinstance(description, str) and description.strip():
+                out["description"] = description.strip()
+            else:
+                desc = item.get("snippet") or item.get("content")
+                if isinstance(desc, str) and desc.strip():
+                    out["description"] = desc.strip()
+
+            snippet = item.get("snippet")
+            if isinstance(snippet, str) and snippet.strip():
+                out["snippet"] = snippet.strip()
+
+            for key in ("origin_type", "published_at", "published_date", "provider", "source"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    out[key] = value.strip()
+
+            score = item.get("score")
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                out["score"] = score
             normalized.append(out)
             continue
 
@@ -668,6 +900,10 @@ def _normalize_optional_text(value: Any) -> str | None:
 def _normalize_provider(value: Any) -> str:
     provider = _normalize_text(value)
     return provider or "grok"
+
+
+def _should_use_legacy_source_alias(item: Mapping[str, Any]) -> bool:
+    return _is_empty_merged_source_value(item.get("origin_type"))
 
 
 def _normalize_snippet(item: dict[str, Any]) -> str:

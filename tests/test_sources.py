@@ -2,7 +2,14 @@ from collections import UserDict
 
 import pytest
 
-from grok_search.sources import SourcesCache, new_session_id, sanitize_answer_text, split_answer_and_sources, standardize_sources
+from grok_search.sources import (
+    SourcesCache,
+    merge_sources,
+    new_session_id,
+    sanitize_answer_text,
+    split_answer_and_sources,
+    standardize_sources,
+)
 from grok_search.utils import extract_unique_urls
 
 
@@ -57,6 +64,56 @@ sources([{"title": "OpenAI", "url": "https://openai.com/"}])
 
     assert answer == "OpenAI is an AI research and deployment company."
     assert sources == [{"title": "OpenAI", "url": "https://openai.com/"}]
+
+
+def test_split_answer_and_sources_preserves_richer_function_call_source_metadata():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+sources([{"title": "OpenAI", "url": "https://openai.com/", "description": "Official homepage", "snippet": "Latest company updates", "origin_type": "citation", "published_at": "2026-04-01", "score": 0.91, "provider": "grok", "source": "curated"}])
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert sources == [
+        {
+            "title": "OpenAI",
+            "url": "https://openai.com/",
+            "description": "Official homepage",
+            "snippet": "Latest company updates",
+            "origin_type": "citation",
+            "published_at": "2026-04-01",
+            "score": 0.91,
+            "provider": "grok",
+            "source": "curated",
+        }
+    ]
+
+
+def test_split_answer_and_sources_preserves_richer_legacy_wrapper_payload_metadata():
+    raw = """
+OpenAI is an AI research and deployment company.
+
+sources({"citations": [{"title": "OpenAI", "url": "https://openai.com/", "description": "Official homepage", "snippet": "Latest company updates", "origin_type": "citation", "published_date": "2026-04-01", "score": 0.91, "provider": "grok", "source": "curated"}]})
+"""
+
+    answer, sources = split_answer_and_sources(raw)
+
+    assert answer == "OpenAI is an AI research and deployment company."
+    assert sources == [
+        {
+            "title": "OpenAI",
+            "url": "https://openai.com/",
+            "description": "Official homepage",
+            "snippet": "Latest company updates",
+            "origin_type": "citation",
+            "published_date": "2026-04-01",
+            "score": 0.91,
+            "provider": "grok",
+            "source": "curated",
+        }
+    ]
 
 
 def test_split_answer_and_sources_extracts_details_block_sources():
@@ -304,6 +361,52 @@ def test_standardize_sources_deduplicates_mixed_case_scheme_and_host_variants():
             "score": 0.9,
             "published_at": None,
             "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
+def test_standardize_sources_merges_complementary_metadata_for_canonicalized_url_variants():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Readable Title",
+                "url": "HTTPS://Docs.example.com/Guide",
+                "description": "Guide content",
+            },
+            {
+                "url": "https://docs.example.com/Guide",
+                "provider": "tavily",
+                "score": 0.91,
+            },
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Readable Title",
+            "url": "https://docs.example.com/Guide",
+            "provider": "tavily",
+            "source_type": "web_page",
+            "description": "Guide content",
+            "snippet": "Guide content",
+            "domain": "docs.example.com",
+            "score": 0.91,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "contributors": [
+                {
+                    "url": "https://docs.example.com/Guide",
+                    "provider": "grok",
+                    "title": "Readable Title",
+                },
+                {
+                    "url": "https://docs.example.com/Guide",
+                    "provider": "tavily",
+                    "score": 0.91,
+                },
+            ],
             "rank": 1,
         }
     ]
@@ -676,6 +779,71 @@ def test_standardize_sources_maps_legacy_alias_fields():
     ]
 
 
+def test_standardize_sources_prefers_explicit_provider_over_source_alias():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Structured Source",
+                "url": "https://docs.example.com/guide",
+                "provider": "grok",
+                "source": "curated",
+                "origin_type": "citation",
+            }
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Structured Source",
+            "url": "https://docs.example.com/guide",
+            "provider": "grok",
+            "source": "curated",
+            "origin_type": "citation",
+            "description": "",
+            "source_type": "web_page",
+            "snippet": "",
+            "domain": "docs.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
+def test_standardize_sources_keeps_default_provider_when_legacy_source_alias_has_origin_type():
+    sources = standardize_sources(
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "source": "legacy-provider",
+                "origin_type": "citation",
+            }
+        ],
+        retrieved_at="2026-04-05T12:34:56Z",
+    )
+
+    assert sources == [
+        {
+            "title": "Legacy Source",
+            "url": "https://legacy.example.com/page",
+            "source": "legacy-provider",
+            "origin_type": "citation",
+            "provider": "grok",
+            "description": "",
+            "source_type": "web_page",
+            "snippet": "",
+            "domain": "legacy.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": "2026-04-05T12:34:56Z",
+            "rank": 1,
+        }
+    ]
+
+
 def test_standardize_sources_skips_malformed_legacy_items():
     sources = standardize_sources(
         [
@@ -778,6 +946,234 @@ def test_standardize_sources_deduplicates_urls_and_keeps_richer_item():
             "rank": 2,
         },
     ]
+
+
+def test_merge_sources_replaces_exact_duplicate_url_with_richer_item():
+    merged = merge_sources(
+        [
+            {"title": "Sparse", "url": "https://dup.example.com/page", "provider": "grok"},
+        ],
+        [
+            {
+                "title": "Richer",
+                "url": "https://dup.example.com/page",
+                "provider": "tavily",
+                "description": "More context",
+                "score": 0.9,
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "title": "Richer",
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "description": "More context",
+            "score": 0.9,
+            "contributors": [
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "grok",
+                    "title": "Sparse",
+                },
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "tavily",
+                    "title": "Richer",
+                    "score": 0.9,
+                },
+            ],
+        }
+    ]
+
+
+def test_merge_sources_preserves_readable_metadata_when_scored_duplicate_is_sparse():
+    merged = merge_sources(
+        [
+            {
+                "title": "Readable Title",
+                "url": "https://dup.example.com/page",
+                "provider": "grok",
+                "custom_field": "keep-me",
+            },
+        ],
+        [
+            {
+                "url": "https://dup.example.com/page",
+                "provider": "tavily",
+                "score": 0.91,
+                "published_at": "2026-04-05",
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "title": "Readable Title",
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "custom_field": "keep-me",
+            "score": 0.91,
+            "published_at": "2026-04-05",
+            "contributors": [
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "grok",
+                    "title": "Readable Title",
+                },
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "tavily",
+                    "score": 0.91,
+                    "published_at": "2026-04-05",
+                },
+            ],
+        }
+    ]
+
+
+def test_merge_sources_high_score_duplicate_keeps_existing_source_labels_when_provider_changes():
+    merged = merge_sources(
+        [
+            {
+                "title": "Primary Title",
+                "url": "https://dup.example.com/page",
+                "provider": "grok",
+                "source": "curated",
+                "origin_type": "citation",
+            },
+        ],
+        [
+            {
+                "url": "https://dup.example.com/page",
+                "provider": "tavily",
+                "score": 0.91,
+                "published_at": "2026-04-05",
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "title": "Primary Title",
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "source": "curated",
+            "origin_type": "citation",
+            "score": 0.91,
+            "published_at": "2026-04-05",
+            "contributors": [
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "grok",
+                    "source": "curated",
+                    "origin_type": "citation",
+                    "title": "Primary Title",
+                },
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "tavily",
+                    "score": 0.91,
+                    "published_at": "2026-04-05",
+                },
+            ],
+        }
+    ]
+
+
+def test_merge_sources_adds_contributors_for_duplicate_url_across_providers():
+    merged = merge_sources(
+        [
+            {
+                "title": "Primary Title",
+                "url": "https://dup.example.com/page",
+                "provider": "grok",
+                "source": "curated",
+                "origin_type": "citation",
+            },
+        ],
+        [
+            {
+                "url": "https://dup.example.com/page",
+                "provider": "tavily",
+                "score": 0.91,
+                "published_at": "2026-04-05",
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "title": "Primary Title",
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "source": "curated",
+            "origin_type": "citation",
+            "score": 0.91,
+            "published_at": "2026-04-05",
+            "contributors": [
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "grok",
+                    "source": "curated",
+                    "origin_type": "citation",
+                    "title": "Primary Title",
+                },
+                {
+                    "url": "https://dup.example.com/page",
+                    "provider": "tavily",
+                    "score": 0.91,
+                    "published_at": "2026-04-05",
+                },
+            ],
+        }
+    ]
+
+
+def test_merge_sources_same_provider_duplicate_does_not_publish_contributors_without_identity_change():
+    merged = merge_sources(
+        [
+            {
+                "title": "Primary Title",
+                "url": "https://dup.example.com/page",
+                "provider": "grok",
+            },
+        ],
+        [
+            {
+                "title": "Richer Title",
+                "url": "https://dup.example.com/page",
+                "provider": "grok",
+                "description": "Guide content",
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "title": "Richer Title",
+            "url": "https://dup.example.com/page",
+            "provider": "grok",
+            "description": "Guide content",
+        }
+    ]
+
+
+def test_standardize_sources_keeps_query_order_as_part_of_dedupe_contract():
+    sources = standardize_sources(
+        [
+            {"title": "First", "url": "https://example.com/guide?a=1&b=2"},
+            {"title": "Second", "url": "https://example.com/guide?b=2&a=1"},
+        ],
+        retrieved_at="2026-04-12T09:00:00Z",
+    )
+
+    assert [item["url"] for item in sources] == [
+        "https://example.com/guide?a=1&b=2",
+        "https://example.com/guide?b=2&a=1",
+    ]
+    assert [item["rank"] for item in sources] == [1, 2]
 
 
 @pytest.mark.asyncio

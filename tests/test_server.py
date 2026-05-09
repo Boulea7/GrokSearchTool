@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from grok_search import server
+from grok_search.providers.base import BaseSearchProvider
 from grok_search.sources import SourcesCache
 
 ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL = server._preflight_public_target_url
@@ -109,6 +110,11 @@ class ProgressContext:
         self.messages.append(message)
 
 
+class FailingProgressContext:
+    async def info(self, message: str):
+        raise RuntimeError("ctx boom")
+
+
 @pytest.mark.asyncio
 async def test_get_config_info_default_detail_keeps_full_payload(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
@@ -146,6 +152,7 @@ async def test_get_config_info_default_detail_keeps_full_payload(monkeypatch):
 async def test_get_config_info_summary_detail_returns_machine_readable_minimum(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
     responses = {
         ("GET", "https://api.example.com/v1/models"): httpx.Response(
             200,
@@ -174,6 +181,17 @@ async def test_get_config_info_summary_detail_returns_machine_readable_minimum(m
     assert "summary" in payload["doctor"]
     assert "checks" not in payload["doctor"]
     assert "recommendations_detail" not in payload["doctor"]
+    assert payload["feature_readiness"]["web_search"]["based_on_checks"] == [
+        "grok_config",
+        "grok_models",
+        "grok_model_selection",
+        "grok_model_runtime_fallback",
+        "grok_search_probe",
+    ]
+    assert payload["feature_readiness"]["web_search"]["probe_scope"] == "search_runtime"
+    assert payload["feature_readiness"]["web_search"]["degraded_by"] == []
+    assert payload["feature_readiness"]["web_search"]["runtime_override_active"] is True
+    assert payload["feature_readiness"]["web_search"]["runtime_model_source"] == "process_env"
 
 
 @pytest.mark.asyncio
@@ -212,6 +230,7 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_API_URL",
         "GROK_API_KEY",
         "GROK_MODEL",
+        "GROK_MODEL_SOURCE",
         "GROK_DEBUG",
         "GROK_OUTPUT_CLEANUP",
         "GROK_TIME_CONTEXT_MODE",
@@ -238,6 +257,7 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_API_URL",
         "GROK_API_KEY",
         "GROK_MODEL",
+        "GROK_MODEL_SOURCE",
         "GROK_DEBUG",
         "GROK_OUTPUT_CLEANUP",
         "GROK_TIME_CONTEXT_MODE",
@@ -251,6 +271,9 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "config_status",
     ):
         assert summary_payload[key] == default_payload[key]
+    assert summary_payload["doctor"]["status"] == default_payload["doctor"]["status"]
+    assert summary_payload["doctor"]["summary"] == default_payload["doctor"]["summary"]
+    assert summary_payload["doctor"]["recommendations"] == default_payload["doctor"]["recommendations"]
 
 
 @pytest.mark.asyncio
@@ -288,6 +311,39 @@ async def test_get_config_info_summary_includes_all_base_snapshot_keys(monkeypat
     payload = json.loads(await server.get_config_info("summary"))
 
     assert payload["EXPERIMENTAL_FLAG"] == "enabled"
+
+
+@pytest.mark.asyncio
+async def test_probe_json_endpoint_masks_cloud_signed_url_keys_in_http_error_text(monkeypatch):
+    presigned_url = (
+        "https://signed.example.com/path"
+        "?X-Amz-Credential=cred"
+        "&X-Goog-Credential=gcred"
+        "&GoogleAccessId=gid"
+        "&keep=ok"
+    )
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            403,
+            json={"error": {"message": presigned_url}},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    result = await server._probe_json_endpoint(
+        "connection_test",
+        "GET",
+        "https://api.example.com/v1/models",
+        {"Authorization": "Bearer test"},
+    )
+
+    assert result["status"] == "error"
+    assert "cred" not in result["message"]
+    assert "gcred" not in result["message"]
+    assert "gid" not in result["message"]
+    assert "X-Amz-Credential=***" in result["message"]
+    assert "X-Goog-Credential=***" in result["message"]
+    assert "GoogleAccessId=***" in result["message"]
 
 
 @pytest.mark.asyncio
@@ -369,6 +425,39 @@ async def test_web_search_tool_description_allows_clear_single_hop_direct_use():
 
 
 @pytest.mark.asyncio
+async def test_switch_model_tool_description_does_not_claim_immediate_runtime_effect():
+    tool = await server.mcp.get_tool("switch_model")
+    description = tool.description or ""
+
+    assert "Immediate Effect" not in description
+    assert "persisted" in description
+    assert "current process" in description
+
+
+@pytest.mark.asyncio
+async def test_switch_model_tool_description_does_not_claim_fetch_side_effects():
+    tool = await server.mcp.get_tool("switch_model")
+    description = (tool.description or "").lower()
+
+    assert "fetch operations" not in description
+    assert "content fetching" not in description
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_tool_schema_does_not_expose_ctx_parameter():
+    tool = await server.mcp.get_tool("web_fetch")
+
+    assert "ctx" not in tool.parameters["properties"]
+
+
+@pytest.mark.asyncio
+async def test_web_map_tool_schema_does_not_expose_ctx_parameter():
+    tool = await server.mcp.get_tool("web_map")
+
+    assert "ctx" not in tool.parameters["properties"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_surfaces_http_redirect(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
@@ -428,6 +517,7 @@ async def test_web_search_masks_sensitive_redirect_target_details(monkeypatch):
 async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
     monkeypatch.setenv("GROK_TIME_CONTEXT_MODE", "auto")
     monkeypatch.setattr(server, "_find_git_root", lambda start=None: Path("/tmp/demo-project"))
 
@@ -485,6 +575,25 @@ async def test_get_config_info_marks_missing_grok_config_as_not_ready(monkeypatc
     assert payload["doctor"]["status"] == "error"
     assert payload["feature_readiness"]["web_search"]["status"] == "not_ready"
     assert payload["feature_readiness"]["get_sources"]["status"] == "not_ready"
+    assert payload["feature_readiness"]["get_sources"]["based_on_checks"] == [
+        "grok_config",
+        "grok_models",
+        "grok_model_selection",
+        "grok_model_runtime_fallback",
+        "grok_search_probe",
+    ]
+    assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
+        {
+            "check_id": "source_cache_state",
+            "status": "degraded",
+            "reason_code": "empty_source_cache",
+        },
+        {
+            "check_id": "grok_config",
+            "status": "error",
+            "reason_code": "config_error",
+        },
+    ]
     assert payload["doctor"]["recommendations"]
 
 
@@ -506,6 +615,217 @@ async def test_get_config_info_get_sources_requires_readable_session_not_error_o
 
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
     assert "尚无可读取的 source session" in payload["feature_readiness"]["get_sources"]["message"]
+    assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
+        {
+            "check_id": "source_cache_state",
+            "status": "degraded",
+            "reason_code": "error_only_source_cache",
+        }
+    ]
+    assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
+        "total_sessions": 1,
+        "readable_sessions": 0,
+        "error_sessions": 1,
+        "partial_sessions": 0,
+        "unreadable_sessions": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_reports_get_sources_cache_summary(monkeypatch):
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    await server._SOURCES_CACHE.set(
+        "partial-session",
+        server._build_sources_cache_entry(
+            [{"title": "OpenAI", "url": "https://openai.com/"}],
+            search_status="partial",
+            search_error=None,
+        ),
+    )
+    await server._SOURCES_CACHE.set(
+        "ok-empty-session",
+        server._build_sources_cache_entry([],
+            search_status="ok",
+            search_error=None,
+        ),
+    )
+    await server._SOURCES_CACHE.set(
+        "error-session",
+        server._build_sources_cache_entry([],
+            search_status="error",
+            search_error="validation_error",
+        ),
+    )
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["get_sources"]["status"] == "ready"
+    assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
+        "total_sessions": 3,
+        "readable_sessions": 2,
+        "error_sessions": 1,
+        "partial_sessions": 1,
+        "unreadable_sessions": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_excludes_invalid_cached_source_rows_from_readable_sessions(monkeypatch):
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    await server._SOURCES_CACHE.set(
+        "invalid-source-session",
+        server._build_sources_cache_entry(
+            [{"title": "Broken", "url": "not-a-valid-url"}],
+            search_status="ok",
+            search_error=None,
+        ),
+    )
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
+    assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
+        {
+            "check_id": "source_cache_state",
+            "status": "degraded",
+            "reason_code": "unreadable_only_source_cache",
+        }
+    ]
+    assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
+        "total_sessions": 1,
+        "readable_sessions": 0,
+        "error_sessions": 0,
+        "partial_sessions": 0,
+        "unreadable_sessions": 1,
+    }
+
+
+def test_summarize_source_cache_entries_counts_unreadable_sessions():
+    summary = server._summarize_source_cache_entries(
+        [
+            server._build_sources_cache_entry(
+                [{"title": "OpenAI", "url": "https://openai.com/"}],
+                search_status="ok",
+                search_error=None,
+            ),
+            object(),
+        ]
+    )
+
+    assert summary == {
+        "total_sessions": 2,
+        "readable_sessions": 1,
+        "error_sessions": 0,
+        "partial_sessions": 0,
+        "unreadable_sessions": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("search_status", "input_sources", "expected_status", "expected_sources", "expected_source_state"),
+    [
+        ("ok", [], "ok", [], "empty"),
+        ("ok", [{"title": "OpenAI", "url": "https://openai.com/"}], "ok", [{"title": "OpenAI", "url": "https://openai.com/"}], "available"),
+        ("partial", [], "partial", [], "empty"),
+        ("partial", [{"title": "OpenAI", "url": "https://openai.com/"}], "partial", [{"title": "OpenAI", "url": "https://openai.com/"}], "available"),
+        ("error", [], "error", [], "unavailable_due_to_search_error"),
+        ("error", [{"title": "OpenAI", "url": "https://openai.com/"}], "error", [], "unavailable_due_to_search_error"),
+        ("mystery", [{"title": "OpenAI", "url": "https://openai.com/"}], "ok", [{"title": "OpenAI", "url": "https://openai.com/"}], "available"),
+    ],
+)
+def test_build_sources_cache_entry_normalizes_state_matrix(
+    search_status,
+    input_sources,
+    expected_status,
+    expected_sources,
+    expected_source_state,
+):
+    entry = server._build_sources_cache_entry(
+        input_sources,
+        search_status=search_status,
+        search_error="upstream_error" if search_status == "error" else None,
+        search_warnings=["body_probably_truncated", "body_probably_truncated", 123],
+    )
+
+    assert entry["search_status"] == expected_status
+    assert entry["sources"] == expected_sources
+    assert entry["source_state"] == expected_source_state
+    assert entry["search_warnings"] == ["body_probably_truncated"]
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected_kind"),
+    [
+        (
+            server._build_sources_cache_entry(
+                [],
+                search_status="error",
+                search_error="validation_error",
+            ),
+            "error",
+        ),
+        (
+            server._build_sources_cache_entry(
+                [],
+                search_status="partial",
+                search_error=None,
+            ),
+            "readable",
+        ),
+        (
+            server._build_sources_cache_entry(
+                [{"title": "OpenAI", "url": "https://openai.com/"}],
+                search_status="ok",
+                search_error=None,
+            ),
+            "readable",
+        ),
+        (
+            server._build_sources_cache_entry(
+                [{"title": "Broken", "url": "not-a-valid-url"}],
+                search_status="ok",
+                search_error=None,
+            ),
+            "unreadable",
+        ),
+    ],
+)
+def test_classify_sources_cache_entry_state_matrix(entry, expected_kind):
+    _, kind = server._classify_sources_cache_entry(entry)
+
+    assert kind == expected_kind
+
+
+def test_summarize_source_cache_entries_treats_invalid_source_rows_as_unreadable():
+    summary = server._summarize_source_cache_entries(
+        [
+            server._build_sources_cache_entry(
+                [{"title": "Broken", "url": "not-a-valid-url"}],
+                search_status="ok",
+                search_error=None,
+            ),
+        ]
+    )
+
+    assert summary == {
+        "total_sessions": 1,
+        "readable_sessions": 0,
+        "error_sessions": 0,
+        "partial_sessions": 0,
+        "unreadable_sessions": 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -596,10 +916,26 @@ async def test_get_config_info_skips_unconfigured_optional_providers(monkeypatch
         payload["feature_readiness"]["web_fetch"]["providers"]["tavily"]["skipped_reason"]
         == "TAVILY_API_KEY 未配置"
     )
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["tavily"]["check_id"] == "tavily_extract"
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["tavily"]["reason_code"] == "missing_api_key"
     assert (
         payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["skipped_reason"]
         == "FIRECRAWL_API_KEY 未配置"
     )
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["check_id"] == "firecrawl_scrape"
+    assert payload["feature_readiness"]["web_fetch"]["providers"]["firecrawl"]["reason_code"] == "missing_api_key"
+    assert payload["feature_readiness"]["web_map"]["degraded_by"] == [
+        {"check_id": "tavily_map", "status": "skipped", "reason_code": "missing_api_key"}
+    ]
+    assert payload["feature_readiness"]["web_fetch"]["degraded_by"] == [
+        {"check_id": "tavily_extract", "status": "skipped", "reason_code": "missing_api_key"},
+        {"check_id": "firecrawl_scrape", "status": "skipped", "reason_code": "missing_api_key"},
+        {
+            "check_id": "web_fetch_probe",
+            "status": "skipped",
+            "reason_code": "no_fetch_provider_configured",
+        },
+    ]
     assert payload["doctor"]["recommendations_detail"]
     assert {
         item["check_id"] for item in payload["doctor"]["recommendations_detail"]
@@ -629,6 +965,11 @@ async def test_get_config_info_marks_provider_probe_failures_as_degraded(monkeyp
     assert checks["tavily_map"]["status"] == "error"
     assert payload["feature_readiness"]["web_map"]["status"] == "degraded"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "degraded"
+    assert payload["feature_readiness"]["web_fetch"]["degraded_by"][-1] == {
+        "check_id": "web_fetch_probe",
+        "status": "error",
+        "reason_code": "probe_failed",
+    }
     assert payload["doctor"]["recommendations"]
 
 
@@ -694,6 +1035,33 @@ async def test_get_config_info_rejects_malformed_tavily_probe_shape(monkeypatch)
         ("tavily_extract", "web_fetch", "error"),
         ("tavily_map", "web_map", "error"),
     }
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_recommendations_detail_keeps_minimum_machine_shape(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"unexpected": []},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"wrong": []},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["doctor"]["recommendations_detail"]
+    for item in payload["doctor"]["recommendations_detail"]:
+        assert set(item) >= {"message", "severity"}
+        assert item["severity"] in {"warning", "error"}
 
 
 @pytest.mark.asyncio
@@ -859,6 +1227,7 @@ async def test_get_config_info_finds_claude_project_root_from_subdirectory(monke
 async def test_get_config_info_ignores_client_specific_toggle_in_overall_doctor_status(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
     monkeypatch.setattr(server, "_find_git_root", lambda start=None: None)
 
     responses = {
@@ -885,13 +1254,54 @@ async def test_get_config_info_ignores_client_specific_toggle_in_overall_doctor_
 
     assert payload["feature_readiness"]["toggle_builtin_tools"]["status"] == "not_ready"
     assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["based_on_checks"] == [
+        "claude_code_project"
+    ]
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["probe_scope"] == "client_context"
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["degraded_by"] == [
+        {
+            "check_id": "claude_code_project",
+            "status": "skipped",
+            "reason_code": "missing_git_context",
+        }
+    ]
     assert payload["doctor"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_get_sources_can_stay_ready_when_web_search_is_not_ready_but_cache_is_readable(
+    monkeypatch,
+):
+    monkeypatch.delenv("GROK_API_URL", raising=False)
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+    await server._SOURCES_CACHE.set(
+        "readable-session",
+        server._build_sources_cache_entry(
+            [{"title": "OpenAI", "url": "https://openai.com/"}],
+            search_status="ok",
+            search_error=None,
+        ),
+    )
+    patch_async_client(monkeypatch, {}, {})
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["web_search"]["status"] == "not_ready"
+    assert payload["feature_readiness"]["get_sources"]["status"] == "ready"
+    assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
+        {
+            "check_id": "grok_config",
+            "status": "error",
+            "reason_code": "config_error",
+        }
+    ]
 
 
 @pytest.mark.asyncio
 async def test_get_config_info_ignores_transient_get_sources_partial_ready_in_overall_doctor_status(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
     monkeypatch.setattr(server, "_SOURCES_CACHE", server.SourcesCache(max_size=32))
 
     responses = {
@@ -1086,6 +1496,26 @@ def test_mask_sensitive_text_redacts_oauth_style_secret_params():
     assert "password=***" in masked
 
 
+def test_mask_sensitive_text_redacts_cloud_signed_credential_keys():
+    masked = server._mask_sensitive_text(
+        (
+            "https://signed.example.com/path"
+            "?X-Amz-Credential=cred"
+            "&X-Goog-Credential=gcred"
+            "&GoogleAccessId=gid"
+            "&keep=ok"
+        )
+    )
+
+    assert "cred" not in masked
+    assert "gcred" not in masked
+    assert "gid" not in masked
+    assert "X-Amz-Credential=***" in masked
+    assert "X-Goog-Credential=***" in masked
+    assert "GoogleAccessId=***" in masked
+    assert "keep=ok" in masked
+
+
 def test_build_doctor_check_masks_sensitive_endpoint_url():
     check = server._build_doctor_check(
         "demo",
@@ -1168,12 +1598,102 @@ async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkey
 
     assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
     assert "persisted-model" in payload["feature_readiness"]["web_search"]["message"]
+    assert payload["feature_readiness"]["web_search"]["probe_scope"] == "search_runtime"
+    assert payload["feature_readiness"]["web_search"]["runtime_override_active"] is False
+    assert payload["feature_readiness"]["web_search"]["degraded_by"] == [
+        {
+            "check_id": "grok_model_selection",
+            "status": "warning",
+            "reason_code": "configured_model_unavailable",
+        }
+    ]
     assert any("persisted-model" in item for item in payload["doctor"]["recommendations"])
     grok_check = next(
         check for check in payload["doctor"]["checks"] if check.get("check_id") == "grok_model_selection"
     )
     assert grok_check["status"] == "warning"
     assert "persisted-model" in grok_check["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_reports_runtime_model_source_when_project_env_local_overrides_persisted(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "project-model"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["GROK_MODEL"] == "project-model"
+    assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_summary_exposes_runtime_override_machine_fields(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = json.loads(await server.get_config_info("summary"))
+    web_search = payload["feature_readiness"]["web_search"]
+
+    assert web_search["status"] == "degraded"
+    assert web_search["runtime_override_active"] is True
+    assert web_search["runtime_model_source"] == "project_env_local"
+    assert web_search["probe_scope"] == "search_runtime"
+    assert web_search["based_on_checks"] == [
+        "grok_config",
+        "grok_models",
+        "grok_model_selection",
+        "grok_model_runtime_fallback",
+        "grok_search_probe",
+    ]
+    assert web_search["degraded_by"] == [
+        {
+            "check_id": "grok_model_selection",
+            "status": "warning",
+            "reason_code": "configured_model_unavailable",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_recommendation_mentions_env_local_override_when_model_missing_from_models(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
+    assert any(".env.local" in item and "switch_model" in item for item in payload["doctor"]["recommendations"])
+    detail = next(
+        item for item in payload["doctor"]["recommendations_detail"] if item.get("check_id") == "grok_model_selection"
+    )
+    assert detail["runtime_model_source"] == "project_env_local"
 
 
 @pytest.mark.asyncio
@@ -1196,6 +1716,414 @@ async def test_get_config_info_marks_real_search_probe_failure_as_degraded(monke
     assert checks["grok_search_probe"]["status"] == "error"
     assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
     assert "真实搜索探针" in payload["feature_readiness"]["web_search"]["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("probe_content", "expected_fragment"),
+    [
+        (
+            """
+## Sources
+1. [OpenAI](https://openai.com/)
+2. [Wikipedia](https://en.wikipedia.org/wiki/OpenAI)
+""",
+            "只返回了信源列表",
+        ),
+        ("Partial answer [...]", "疑似截断"),
+    ],
+)
+async def test_get_config_info_marks_low_quality_probe_content_as_degraded(
+    monkeypatch,
+    probe_content,
+    expected_fragment,
+):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform=""):
+            return probe_content
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert checks["grok_search_probe"]["status"] == "warning"
+    assert expected_fragment in checks["grok_search_probe"]["message"]
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert expected_fragment in payload["feature_readiness"]["web_search"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_uses_fallback_grok_model_for_real_probe_when_compatible(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    captured = {}
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        captured["model"] = model
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309-reasoning"}, {"id": "grok-4.20-0309"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert captured["model"] == "grok-4.20-0309"
+    assert checks["grok_model_selection"]["fallback_model"] == "grok-4.20-0309"
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "grok-4.20-0309" in payload["feature_readiness"]["web_search"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_marks_runtime_probe_fallback_as_degraded(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    attempts = []
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        attempts.append(model)
+        if model == "grok-4.20-0309":
+            return server._build_doctor_check(
+                "grok_search_probe",
+                "error",
+                "真实搜索探针失败: 搜索失败: 上游返回 HTTP 503，摘要=No available channel for model grok-4.20-0309",
+                error_kind="probe_failed",
+            )
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309"}, {"id": "grok-4.20-0309-non-reasoning"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert attempts == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+    assert checks["grok_model_runtime_fallback"]["status"] == "warning"
+    assert checks["grok_model_runtime_fallback"]["fallback_model"] == "grok-4.20-0309-non-reasoning"
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "grok-4.20-0309-non-reasoning" in payload["feature_readiness"]["web_search"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_prefers_runtime_fallback_message_when_selection_and_runtime_fallback_both_apply(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    attempts = []
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        attempts.append(model)
+        if model == "grok-4.20-0309":
+            return server._build_doctor_check(
+                "grok_search_probe",
+                "error",
+                "真实搜索探针失败: 搜索失败: 上游返回 HTTP 503，摘要=No available channel for model grok-4.20-0309",
+                error_kind="probe_failed",
+            )
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309"}, {"id": "grok-4.20-0309-non-reasoning"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert attempts == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+    assert checks["grok_model_selection"]["fallback_model"] == "grok-4.20-0309"
+    assert checks["grok_model_runtime_fallback"]["fallback_model"] == "grok-4.20-0309-non-reasoning"
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert "grok-4.20-0309-non-reasoning" in payload["feature_readiness"]["web_search"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_runtime_probe_fallback_recommendation_mentions_project_env_override(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
+    (tmp_path / ".env.local").write_text("GROK_MODEL=grok-4.20-0309\n", encoding="utf-8")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        if model == "grok-4.20-0309":
+            return server._build_doctor_check(
+                "grok_search_probe",
+                "error",
+                "真实搜索探针失败: 搜索失败: 上游返回 HTTP 503，摘要=No available channel for model grok-4.20-0309",
+                error_kind="probe_failed",
+            )
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309"}, {"id": "grok-4.20-0309-non-reasoning"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+    detail = next(
+        item for item in payload["doctor"]["recommendations_detail"] if item.get("check_id") == "grok_model_runtime_fallback"
+    )
+
+    assert payload["GROK_MODEL_SOURCE"] == "project_env_local"
+    assert any(".env.local" in item and "switch_model" in item for item in payload["doctor"]["recommendations"])
+    assert detail["runtime_model_source"] == "project_env_local"
+
+
+@pytest.mark.asyncio
+async def test_probe_web_search_with_fallback_accepts_reason_code_without_english_marker(monkeypatch):
+    attempts = []
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        attempts.append(model)
+        if model == "grok-4.20-0309":
+            return server._build_doctor_check(
+                "grok_search_probe",
+                "error",
+                "模型当前不可用",
+                error_kind="probe_failed",
+                reason_code="model_unavailable",
+            )
+        return server._build_doctor_check("grok_search_probe", "ok", "ok")
+
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    result = await server._probe_web_search_with_fallback(
+        "https://api.example.com/v1",
+        "test-key",
+        "grok-4.20-0309",
+        ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"],
+    )
+
+    assert attempts == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+    assert result["status"] == "ok"
+    assert result["fallback_model"] == "grok-4.20-0309-non-reasoning"
+    assert result["requested_model"] == "grok-4.20-0309"
+
+
+@pytest.mark.asyncio
+async def test_probe_web_search_prefers_search_with_sources_when_available(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform=""):
+            return ""
+
+        async def search_with_sources(self, query, platform=""):
+            return "", [{"title": "Structured Guide", "url": "https://docs.example.com/guide"}]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server._probe_web_search("https://api.example.com/v1", "test-key", "grok-4.20-0309")
+
+    assert result["status"] == "warning"
+    assert result["warning_code"] == "body_missing_sources_only"
+    assert "信源列表" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_provider_search_with_sources_passes_full_supported_kwargs():
+    captured = {}
+
+    class DummyProvider:
+        async def search_with_sources(
+            self,
+            query,
+            platform="",
+            min_results=3,
+            max_results=10,
+            ctx=None,
+        ):
+            captured["call"] = {
+                "query": query,
+                "platform": platform,
+                "min_results": min_results,
+                "max_results": max_results,
+                "ctx": ctx,
+            }
+            return "Search answer", [{"title": "Guide", "url": "https://docs.example.com/guide"}]
+
+    ctx = object()
+    content, sources = await server._provider_search_with_sources(
+        DummyProvider(),
+        "test query",
+        platform="GitHub",
+        min_results=1,
+        max_results=2,
+        ctx=ctx,
+    )
+
+    assert content == "Search answer"
+    assert sources == [{"title": "Guide", "url": "https://docs.example.com/guide"}]
+    assert captured["call"] == {
+        "query": "test query",
+        "platform": "GitHub",
+        "min_results": 1,
+        "max_results": 2,
+        "ctx": ctx,
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_search_with_sources_passes_full_kwargs_to_variadic_duck_typed_provider():
+    captured = {}
+
+    class DummyProvider:
+        async def search_with_sources(self, query, **kwargs):
+            captured["query"] = query
+            captured["kwargs"] = kwargs
+            return "Search answer", [{"title": "Guide", "url": "https://docs.example.com/guide"}]
+
+    ctx = object()
+    content, sources = await server._provider_search_with_sources(
+        DummyProvider(),
+        "test query",
+        platform="GitHub",
+        min_results=1,
+        max_results=2,
+        ctx=ctx,
+    )
+
+    assert content == "Search answer"
+    assert sources == [{"title": "Guide", "url": "https://docs.example.com/guide"}]
+    assert captured == {
+        "query": "test query",
+        "kwargs": {
+            "platform": "GitHub",
+            "min_results": 1,
+            "max_results": 2,
+            "ctx": ctx,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_search_with_sources_supports_legacy_narrow_base_provider_signature():
+    class NarrowProvider(BaseSearchProvider):
+        async def search(self, query: str, platform: str = "") -> str:
+            return f"answer:{query}:{platform}"
+
+        def get_provider_name(self) -> str:
+            return "narrow"
+
+    content, sources = await server._provider_search_with_sources(
+        NarrowProvider("https://api.example.com", "test-key"),
+        "test query",
+        platform="GitHub",
+        min_results=1,
+        max_results=2,
+    )
+
+    assert content == "answer:test query:GitHub"
+    assert sources == []
+
+
+@pytest.mark.asyncio
+async def test_provider_search_with_sources_rejects_invalid_return_shape():
+    class DummyProvider:
+        async def search_with_sources(self, query, platform=""):
+            return "Search answer"
+
+    with pytest.raises(TypeError, match="search_with_sources"):
+        await server._provider_search_with_sources(DummyProvider(), "test query")
 
 
 @pytest.mark.asyncio
@@ -1245,21 +2173,53 @@ async def test_get_available_models_cached_reuses_cached_results(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_available_models_cached_caches_empty_result_after_failure(monkeypatch):
+async def test_get_available_models_cached_retries_after_failure_ttl_expires(monkeypatch):
     calls = {"count": 0}
+    now = [1000.0]
 
     async def failing_fetch(api_url, api_key):
         calls["count"] += 1
         raise RuntimeError("boom")
 
     monkeypatch.setattr(server, "_fetch_available_models", failing_fetch)
+    monkeypatch.setattr(server, "_available_models_cache_now", lambda: now[0])
+    monkeypatch.setattr(server, "_AVAILABLE_MODELS_CACHE_FAILURE_TTL_SECONDS", 5.0)
+
+    first = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+    second = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+    now[0] += 6.0
+    third = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+
+    assert first == []
+    assert second == []
+    assert third == []
+    assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_cached_refetches_after_ttl_expiry(monkeypatch):
+    calls = {"count": 0}
+    now = [1000.0]
+
+    async def fake_fetch(api_url, api_key):
+        calls["count"] += 1
+        return [f"model-{calls['count']}"]
+
+    monkeypatch.setattr(server, "_fetch_available_models", fake_fetch)
+    monkeypatch.setattr(server, "_available_models_cache_now", lambda: now[0])
+    monkeypatch.setattr(server, "_AVAILABLE_MODELS_CACHE_TTL_SECONDS", 5.0)
 
     first = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
     second = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
 
-    assert first == []
-    assert second == []
-    assert calls["count"] == 1
+    now[0] += 6.0
+
+    third = await server._get_available_models_cached("https://api.example.com/v1", "test-key")
+
+    assert first == ["model-1"]
+    assert second == ["model-1"]
+    assert third == ["model-2"]
+    assert calls["count"] == 2
 
 
 @pytest.mark.asyncio
@@ -1586,6 +2546,184 @@ async def test_web_search_rejects_unknown_explicit_model(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_falls_back_to_preferred_available_grok_model_for_compatible_explicit_model(monkeypatch):
+    captured = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            captured["model"] = model
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309-reasoning", "grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query", model="grok-4.20-beta")
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-0309"
+    assert "model_fallback_applied" in result["warnings"]
+    assert captured["model"] == "grok-4.20-0309"
+
+
+@pytest.mark.asyncio
+async def test_web_search_falls_back_to_preferred_available_grok_model_for_implicit_default(monkeypatch):
+    captured = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            captured["model"] = model
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309-reasoning", "grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query")
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-0309"
+    assert "model_fallback_applied" in result["warnings"]
+    assert captured["model"] == "grok-4.20-0309"
+
+
+@pytest.mark.asyncio
+async def test_web_search_retries_with_alternate_available_grok_model_after_runtime_model_unavailable(monkeypatch):
+    captured = {"models": []}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            self.model = model
+            captured["models"].append(model)
+
+        async def search(self, query, platform):
+            if self.model == "grok-4.20-0309":
+                request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+                response = httpx.Response(
+                    503,
+                    request=request,
+                    json={"error": {"message": "No available channel for model grok-4.20-0309"}},
+                )
+                raise httpx.HTTPStatusError("unavailable", request=request, response=response)
+            return "Search answer"
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query")
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-0309-non-reasoning"
+    assert "model_fallback_applied" in result["warnings"]
+    assert captured["models"] == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_runtime_fallback_preserves_structured_sources_from_typed_path(monkeypatch):
+    captured = {"models": []}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            self.model = model
+            captured["models"].append(model)
+
+        async def search_with_sources(self, query, platform="", min_results=3, max_results=10, ctx=None):
+            if self.model == "grok-4.20-0309":
+                request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+                response = httpx.Response(
+                    503,
+                    request=request,
+                    json={"error": {"message": "No available channel for model grok-4.20-0309"}},
+                )
+                raise httpx.HTTPStatusError("unavailable", request=request, response=response)
+            return "Search answer", [{"title": "Structured Guide", "url": "https://docs.example.com/guide"}]
+
+        async def search(self, query, platform=""):
+            return "unused fallback path"
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-0309-non-reasoning"
+    assert "model_fallback_applied" in result["warnings"]
+    assert captured["models"] == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+    assert cached["sources"] == [
+        {
+            "title": "Structured Guide",
+            "url": "https://docs.example.com/guide",
+            "provider": "grok",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "docs.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_web_search_does_not_report_model_fallback_when_all_runtime_candidates_fail(monkeypatch):
+    captured = {"models": []}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            self.model = model
+            captured["models"].append(model)
+
+        async def search(self, query, platform):
+            request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+            response = httpx.Response(
+                503,
+                request=request,
+                json={"error": {"message": f"No available channel for model {self.model}"}},
+            )
+            raise httpx.HTTPStatusError("unavailable", request=request, response=response)
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query")
+
+    assert result["status"] == "error"
+    assert result["error"] is not None
+    assert result["effective_params"]["model"] == "grok-4.20-0309"
+    assert "model_fallback_applied" not in result["warnings"]
+    assert captured["models"] == ["grok-4.20-0309", "grok-4.20-0309-non-reasoning"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_normalizes_openrouter_explicit_model_before_validation(monkeypatch):
     captured = {}
 
@@ -1698,6 +2836,21 @@ async def test_get_sources_returns_missing_error_after_session_ttl_expires(monke
 
 
 @pytest.mark.asyncio
+async def test_get_sources_treats_unreadable_cache_entry_as_missing():
+    session_id = "unreadable-session"
+    await server._SOURCES_CACHE.set(session_id, {"sources": "not-a-list"})
+
+    cached = await server.get_sources(session_id)
+
+    assert cached == {
+        "session_id": session_id,
+        "sources": [],
+        "sources_count": 0,
+        "error": "session_id_not_found_or_expired",
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_sources_marks_failed_search_session_as_unavailable():
     result = await server.web_search("   ")
 
@@ -1708,6 +2861,7 @@ async def test_get_sources_marks_failed_search_session_as_unavailable():
     assert cached["search_status"] == "error"
     assert cached["search_error"] == "validation_error"
     assert cached["source_state"] == "unavailable_due_to_search_error"
+    assert cached["search_warnings"] == []
 
 
 @pytest.mark.asyncio
@@ -1728,6 +2882,30 @@ async def test_get_sources_distinguishes_successful_empty_source_sessions(monkey
     assert cached["sources_count"] == 0
     assert cached["search_status"] == "ok"
     assert cached["search_error"] is None
+    assert cached["source_state"] == "empty"
+    assert cached["search_warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_sources_keeps_partial_status_for_empty_sessions():
+    session_id = "partial-empty-session"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [],
+            "search_status": "partial",
+            "search_error": None,
+            "search_warnings": ["body_probably_truncated"],
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == []
+    assert cached["sources_count"] == 0
+    assert cached["search_status"] == "partial"
+    assert cached["search_error"] is None
+    assert cached["search_warnings"] == ["body_probably_truncated"]
     assert cached["source_state"] == "empty"
 
 
@@ -1926,6 +3104,227 @@ async def test_get_sources_returns_standardized_metadata_for_inline_links(monkey
 
 
 @pytest.mark.asyncio
+async def test_web_search_preserves_structured_provider_source_metadata_in_cache(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+        async def search_with_sources(self, query, platform):
+            return (
+                "Search answer",
+                [
+                    {
+                        "title": "Structured Guide",
+                        "url": "https://docs.example.com/guide",
+                        "description": "Structured description",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["content"] == "Search answer"
+    assert result["sources_count"] == 1
+    assert cached["sources"][0]["title"] == "Structured Guide"
+    assert cached["sources"][0]["description"] == "Structured description"
+    assert cached["sources"][0]["snippet"] == "Structured description"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_preserves_provider_origin_type_and_published_metadata(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+        async def search_with_sources(self, query, platform):
+            return (
+                "Search answer",
+                [
+                    {
+                        "title": "Structured Guide",
+                        "url": "https://docs.example.com/guide",
+                        "snippet": "Structured snippet",
+                        "published_date": "2025-04-01",
+                        "origin_type": "annotation",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"][0]["origin_type"] == "annotation"
+    assert cached["sources"][0]["snippet"] == "Structured snippet"
+    assert cached["sources"][0]["published_at"] == "2025-04-01"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_keeps_backend_provider_when_structured_source_includes_source_label(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+        async def search_with_sources(self, query, platform):
+            return (
+                "Search answer",
+                [
+                    {
+                        "title": "Structured Guide",
+                        "url": "https://docs.example.com/guide",
+                        "source": "curated",
+                        "origin_type": "citation",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"][0]["provider"] == "grok"
+    assert cached["sources"][0]["source"] == "curated"
+    assert cached["sources"][0]["origin_type"] == "citation"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_exact_duplicate_url_across_providers_exposes_contributors(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+        async def search_with_sources(self, query, platform):
+            return (
+                "Search answer",
+                [
+                    {
+                        "title": "Primary Title",
+                        "url": "https://dup.example.com/page",
+                        "source": "curated",
+                        "origin_type": "citation",
+                    }
+                ],
+            )
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "url": "https://dup.example.com/page",
+                "content": "Latest updates",
+                "score": 0.91,
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search("test query", extra_sources=1)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"][0]["provider"] == "tavily"
+    assert cached["sources"][0]["source"] == "curated"
+    assert cached["sources"][0]["origin_type"] == "citation"
+    assert cached["sources"][0]["contributors"] == [
+        {
+            "url": "https://dup.example.com/page",
+            "provider": "grok",
+            "source": "curated",
+            "origin_type": "citation",
+            "title": "Primary Title",
+        },
+        {
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "score": 0.91,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_web_search_keeps_provider_sources_when_structured_path_returns_sources_only(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return ""
+
+        async def search_with_sources(self, query, platform):
+            return (
+                "",
+                [
+                    {
+                        "title": "Structured Guide",
+                        "url": "https://docs.example.com/guide",
+                        "description": "Structured description",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["status"] == "partial"
+    assert result["sources_count"] == 1
+    assert "body_missing_sources_only" in result["warnings"]
+    assert cached["sources"][0]["description"] == "Structured description"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_preserves_tavily_published_date_metadata(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "title": "OpenAI Blog",
+                "url": "https://openai.com/blog",
+                "content": "Latest updates",
+                "score": 0.91,
+                "published_date": "2025-04-01",
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search("test query", extra_sources=1)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"][0]["published_at"] == "2025-04-01"
+
+
+@pytest.mark.asyncio
 async def test_web_search_splits_extra_sources_across_providers(monkeypatch):
     calls = {"tavily": 0, "firecrawl": 0}
 
@@ -2060,6 +3459,139 @@ async def test_get_sources_standardizes_merged_provider_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_sources_merges_richer_supplemental_metadata_for_duplicate_url(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "title": "Canonical Guide",
+                "url": "https://docs.example.com/guide",
+                "content": "Canonical guide content",
+                "score": 0.91,
+            }
+        ]
+
+    async def fake_firecrawl(query, limit):
+        return [
+            {
+                "title": "Example Docs",
+                "url": "https://docs.example.com/guide",
+                "description": "Guide content",
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_search", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_search("test query", extra_sources=2)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"] == [
+        {
+            "title": "Canonical Guide",
+            "url": "https://docs.example.com/guide",
+            "provider": "tavily",
+            "source_type": "web_page",
+            "description": "Canonical guide content",
+            "snippet": "Canonical guide content",
+            "domain": "docs.example.com",
+            "score": 0.91,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "contributors": [
+                {
+                    "url": "https://docs.example.com/guide",
+                    "provider": "firecrawl",
+                    "title": "Example Docs",
+                },
+                {
+                    "url": "https://docs.example.com/guide",
+                    "provider": "tavily",
+                    "title": "Canonical Guide",
+                    "score": 0.91,
+                },
+            ],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_merges_canonicalized_supplemental_duplicate_urls(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Search answer"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "url": "https://docs.example.com/Guide",
+                "score": 0.91,
+            }
+        ]
+
+    async def fake_firecrawl(query, limit):
+        return [
+            {
+                "title": "Readable Title",
+                "url": "HTTPS://Docs.example.com/Guide",
+                "description": "Guide content",
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_search", fake_firecrawl)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_search("test query", extra_sources=2)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"] == [
+        {
+            "title": "Readable Title",
+            "url": "https://docs.example.com/Guide",
+            "provider": "tavily",
+            "source_type": "web_page",
+            "description": "Guide content",
+            "snippet": "Guide content",
+            "domain": "docs.example.com",
+            "score": 0.91,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+            "contributors": [
+                {
+                    "url": "https://docs.example.com/Guide",
+                    "provider": "firecrawl",
+                    "title": "Readable Title",
+                },
+                {
+                    "url": "https://docs.example.com/Guide",
+                    "provider": "tavily",
+                    "score": 0.91,
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_web_search_sources_count_matches_cached_deduped_sources(monkeypatch):
     class DummyProvider:
         def __init__(self, api_url, api_key, model):
@@ -2090,6 +3622,117 @@ async def test_web_search_sources_count_matches_cached_deduped_sources(monkeypat
     assert len(cached["sources"]) == 1
     assert cached["sources"][0]["url"] == "https://example.com/Guide"
     assert cached["sources"][0]["provider"] == "tavily"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_keeps_richer_metadata_for_exact_duplicate_url_across_providers(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Primary citation: [OpenAI Blog](https://openai.com/blog)"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "title": "OpenAI Blog",
+                "url": "https://openai.com/blog",
+                "content": "Latest updates",
+                "score": 0.91,
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search("test query", extra_sources=1)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"] == [
+        {
+            "title": "OpenAI Blog",
+            "url": "https://openai.com/blog",
+            "provider": "tavily",
+            "source_type": "web_page",
+            "description": "Latest updates",
+            "snippet": "Latest updates",
+            "domain": "openai.com",
+            "score": 0.91,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "contributors": [
+                {
+                    "url": "https://openai.com/blog",
+                    "provider": "grok",
+                    "title": "OpenAI Blog",
+                },
+                {
+                    "url": "https://openai.com/blog",
+                    "provider": "tavily",
+                    "title": "OpenAI Blog",
+                    "score": 0.91,
+                },
+            ],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_preserves_readable_title_when_exact_duplicate_provider_only_adds_score(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Primary citation: [Primary Source](https://primary.example.com/guide)"
+
+    async def fake_tavily(query, max_results, **kwargs):
+        return [
+            {
+                "url": "https://primary.example.com/guide",
+                "score": 0.91,
+            }
+        ]
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_call_tavily_search", fake_tavily)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    result = await server.web_search("test query", extra_sources=1)
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["sources_count"] == 1
+    assert cached["sources"] == [
+        {
+            "title": "Primary Source",
+            "url": "https://primary.example.com/guide",
+            "provider": "tavily",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "primary.example.com",
+            "score": 0.91,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "contributors": [
+                {
+                    "url": "https://primary.example.com/guide",
+                    "provider": "grok",
+                    "title": "Primary Source",
+                },
+                {
+                    "url": "https://primary.example.com/guide",
+                    "provider": "tavily",
+                    "score": 0.91,
+                },
+            ],
+            "rank": 1,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -2160,6 +3803,76 @@ async def test_get_sources_standardizes_legacy_cached_sources_on_read():
 
 
 @pytest.mark.asyncio
+async def test_get_sources_legacy_cache_with_source_and_origin_type_keeps_overloaded_contract():
+    session_id = "legacy-overloaded-source"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "source": "curated",
+                "origin_type": "citation",
+            }
+        ],
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == [
+        {
+            "title": "Legacy Source",
+            "url": "https://legacy.example.com/page",
+            "provider": "grok",
+            "source": "curated",
+            "origin_type": "citation",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "legacy.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_legacy_cache_uses_source_as_provider_alias_when_origin_type_missing():
+    session_id = "legacy-provider-alias"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "source": "legacy-provider",
+            }
+        ],
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == [
+        {
+            "title": "Legacy Source",
+            "url": "https://legacy.example.com/page",
+            "provider": "legacy-provider",
+            "source": "legacy-provider",
+            "source_type": "web_page",
+            "description": "",
+            "snippet": "",
+            "domain": "legacy.example.com",
+            "score": None,
+            "published_at": None,
+            "retrieved_at": cached["sources"][0]["retrieved_at"],
+            "rank": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_sources_standardizes_mapping_like_legacy_cached_sources_on_read():
     session_id = "legacy-mapping-session"
     await server._SOURCES_CACHE.set(
@@ -2220,6 +3933,48 @@ async def test_get_sources_reuses_standardized_timestamp_for_legacy_cache():
 
 
 @pytest.mark.asyncio
+async def test_get_sources_legacy_duplicate_rows_write_back_stable_contributors():
+    session_id = "legacy-duplicate-contributors"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        [
+            {
+                "title": "Primary Title",
+                "url": "https://dup.example.com/page",
+                "source": "curated",
+                "origin_type": "citation",
+            },
+            {
+                "url": "https://dup.example.com/page",
+                "provider": "tavily",
+                "score": 0.91,
+            },
+        ],
+    )
+
+    first = await server.get_sources(session_id)
+    migrated = await server._SOURCES_CACHE.get(session_id)
+    second = await server.get_sources(session_id)
+
+    assert first["sources"] == second["sources"]
+    assert migrated == first["sources"]
+    assert first["sources"][0]["contributors"] == [
+        {
+            "url": "https://dup.example.com/page",
+            "provider": "grok",
+            "source": "curated",
+            "origin_type": "citation",
+            "title": "Primary Title",
+        },
+        {
+            "url": "https://dup.example.com/page",
+            "provider": "tavily",
+            "score": 0.91,
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_sources_migrates_legacy_error_cache_to_unavailable_state():
     session_id = "legacy-error-session"
     await server._SOURCES_CACHE.set(
@@ -2237,6 +3992,54 @@ async def test_get_sources_migrates_legacy_error_cache_to_unavailable_state():
     assert cached["sources_count"] == 0
     assert cached["search_status"] == "error"
     assert cached["search_error"] == "validation_error"
+    assert cached["source_state"] == "unavailable_due_to_search_error"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_normalizes_unknown_legacy_search_status_to_ok():
+    session_id = "legacy-unknown-search-status"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [{"title": "Legacy Source", "url": "https://legacy.example.com/page"}],
+            "search_status": "mystery",
+            "search_error": None,
+            "search_warnings": ["body_missing_sources_only"],
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["search_status"] == "ok"
+    assert cached["search_error"] is None
+    assert cached["search_warnings"] == ["body_missing_sources_only"]
+    assert cached["source_state"] == "available"
+
+
+@pytest.mark.asyncio
+async def test_get_sources_clears_sources_for_error_cache_entries_even_if_rows_are_readable():
+    session_id = "legacy-error-with-sources"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [
+                {
+                    "title": "Readable Source",
+                    "url": "https://docs.example.com/guide",
+                    "description": "Guide content",
+                }
+            ],
+            "search_status": "error",
+            "search_error": "upstream_request_failed",
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["sources"] == []
+    assert cached["sources_count"] == 0
+    assert cached["search_status"] == "error"
+    assert cached["search_error"] == "upstream_request_failed"
     assert cached["source_state"] == "unavailable_due_to_search_error"
 
 
@@ -2291,9 +4094,149 @@ async def test_web_search_surfaces_sources_only_response_without_empty_content(m
     monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
 
     result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
 
     assert "只返回了信源列表" in result["content"]
     assert result["sources_count"] == 2
+    assert result["status"] == "partial"
+    assert "body_missing_sources_only" in result["warnings"]
+    assert cached["search_status"] == "partial"
+    assert cached["search_warnings"] == ["body_missing_sources_only"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_marks_probably_truncated_body_as_partial(monkeypatch):
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            pass
+
+        async def search(self, query, platform):
+            return "Partial answer [...]"
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+
+    result = await server.web_search("test query")
+    cached = await server.get_sources(result["session_id"])
+
+    assert result["status"] == "partial"
+    assert "body_probably_truncated" in result["warnings"]
+    assert cached["search_status"] == "partial"
+    assert cached["search_warnings"] == ["body_probably_truncated"]
+
+
+@pytest.mark.asyncio
+async def test_get_sources_defaults_search_warnings_for_legacy_cache_entries():
+    session_id = "legacy-no-warning-session"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [{"title": "OpenAI", "url": "https://openai.com/"}],
+            "search_status": "partial",
+            "search_error": None,
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+
+    assert cached["search_status"] == "partial"
+    assert cached["search_warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_sources_legacy_list_migration_does_not_extend_ttl(monkeypatch):
+    current_time = {"value": 1000.0}
+    cache = server.SourcesCache(max_size=32, ttl_seconds=10, now_fn=lambda: current_time["value"])
+    monkeypatch.setattr(server, "_SOURCES_CACHE", cache)
+    session_id = "legacy-list-ttl"
+
+    await cache.set(
+        session_id,
+        [
+            {
+                "title": "Legacy Source",
+                "url": "https://legacy.example.com/page",
+                "description": "Legacy description",
+            }
+        ],
+    )
+
+    current_time["value"] = 1009.0
+    first = await server.get_sources(session_id)
+    assert first["sources_count"] == 1
+
+    current_time["value"] = 1011.0
+    expired = await server.get_sources(session_id)
+
+    assert expired == {
+        "session_id": session_id,
+        "sources": [],
+        "sources_count": 0,
+        "error": "session_id_not_found_or_expired",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_sources_legacy_dict_migration_preserves_unknown_additive_fields():
+    session_id = "legacy-dict-extra-fields"
+    await server._SOURCES_CACHE.set(
+        session_id,
+        {
+            "sources": [{"title": "OpenAI", "url": "https://openai.com/"}],
+            "search_status": "ok",
+            "search_error": None,
+            "source_state": "available",
+            "future_flag": {"enabled": True},
+            "provenance": {"mode": "legacy"},
+        },
+    )
+
+    cached = await server.get_sources(session_id)
+    migrated = await server._SOURCES_CACHE.get(session_id)
+
+    assert cached["sources_count"] == 1
+    assert migrated["future_flag"] == {"enabled": True}
+    assert migrated["provenance"] == {"mode": "legacy"}
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_get_sources_uses_no_readable_source_session_for_mixed_unreadable_cache(monkeypatch):
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+    await server._SOURCES_CACHE.set(
+        "error-session",
+        server._build_sources_cache_entry([], search_status="error", search_error="validation_error"),
+    )
+    await server._SOURCES_CACHE.set(
+        "invalid-session",
+        server._build_sources_cache_entry(
+            [{"title": "Broken", "url": "not-a-valid-url"}],
+            search_status="ok",
+            search_error=None,
+        ),
+    )
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
+    assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
+        {
+            "check_id": "source_cache_state",
+            "status": "degraded",
+            "reason_code": "no_readable_source_session",
+        }
+    ]
+    assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
+        "total_sessions": 2,
+        "readable_sessions": 0,
+        "error_sessions": 1,
+        "partial_sessions": 0,
+        "unreadable_sessions": 1,
+    }
 
 
 def test_configure_windows_event_loop_policy(monkeypatch):
@@ -2382,6 +4325,26 @@ async def test_switch_model_tool_keeps_env_model_active_in_current_process(monke
     assert payload["status"] == "成功"
     assert payload["previous_model"] == "env-model"
     assert payload["current_model"] == "env-model"
+    assert json.loads(config_file.read_text(encoding="utf-8"))["model"] == "persisted-model"
+
+
+@pytest.mark.asyncio
+async def test_switch_model_reports_runtime_model_still_overridden_by_project_env_local(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text("GROK_MODEL=project-model\n", encoding="utf-8")
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr(server.config, "_config_file", config_file, raising=False)
+    server.config.reset_runtime_state()
+
+    payload = json.loads(await server.switch_model("persisted-model"))
+
+    assert payload["status"] == "成功"
+    assert payload["previous_model"] == "project-model"
+    assert payload["current_model"] == "project-model"
+    assert payload["runtime_model_source"] == "project_env_local"
+    assert ".env.local" in payload["message"]
+    assert "switch_model" in payload["message"]
     assert json.loads(config_file.read_text(encoding="utf-8"))["model"] == "persisted-model"
 
 
@@ -3275,6 +5238,44 @@ async def test_web_fetch_continues_when_redirect_preflight_is_skipped(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_continues_when_redirect_preflight_times_out(monkeypatch):
+    calls = {"tavily": 0, "firecrawl": 0}
+
+    async def fake_tavily(url):
+        calls["tavily"] += 1
+        return "# Tavily", None
+
+    async def fake_firecrawl(url, ctx):
+        calls["firecrawl"] += 1
+        return "# Firecrawl", None
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            raise httpx.TimeoutException("slow")
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    result = await server.web_fetch("https://public.example.com/start")
+
+    assert result == "# Tavily"
+    assert calls == {"tavily": 1, "firecrawl": 0}
+
+
+@pytest.mark.asyncio
 async def test_web_map_continues_when_redirect_preflight_is_skipped(monkeypatch):
     calls = {"map": 0}
 
@@ -3309,8 +5310,42 @@ async def test_web_map_continues_when_redirect_preflight_is_skipped(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_web_map_continues_when_redirect_preflight_times_out(monkeypatch):
+    calls = {"map": 0}
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        calls["map"] += 1
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            raise httpx.TimeoutException("slow")
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+
+    result = await server.web_map("https://public.example.com/start")
+
+    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
+    assert calls == {"map": 1}
+
+
+@pytest.mark.asyncio
 async def test_web_map_reports_skipped_preflight_progress_when_debug_enabled(monkeypatch):
     messages = []
+    ctx = ProgressContext()
 
     async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
         return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
@@ -3341,10 +5376,192 @@ async def test_web_map_reports_skipped_preflight_progress_when_debug_enabled(mon
     monkeypatch.setenv("GROK_DEBUG", "true")
     server.config.reset_runtime_state()
 
-    result = await server.web_map("https://public.example.com/start")
+    result = await server.web_map("https://public.example.com/start", ctx=ctx)
 
     assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
-    assert messages == [(None, "Redirect preflight skipped: 目标 URL 重定向预检失败", True)]
+    assert any(
+        context is ctx and is_debug and message.startswith("Redirect preflight skipped: ")
+        for context, message, is_debug in messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_reports_skipped_preflight_progress_when_debug_enabled(monkeypatch):
+    messages = []
+    ctx = ProgressContext()
+
+    async def fake_tavily(url):
+        return "# Tavily", None
+
+    async def fake_log_info(context, message, is_debug=False):
+        messages.append((context, message, is_debug))
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            request = httpx.Request("GET", url, headers=headers)
+            raise httpx.RequestError("boom", request=request)
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(server, "log_info", fake_log_info)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_DEBUG", "true")
+    server.config.reset_runtime_state()
+
+    result = await server.web_fetch("https://public.example.com/start", ctx=ctx)
+
+    assert result == "# Tavily"
+    assert any(
+        context is ctx and is_debug and message.startswith("Redirect preflight skipped: ")
+        for context, message, is_debug in messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_reports_skipped_preflight_warning_to_ctx_even_when_debug_disabled(monkeypatch):
+    ctx = ProgressContext()
+
+    async def fake_tavily(url):
+        return "# Tavily", None
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            request = httpx.Request("GET", url, headers=headers)
+            raise httpx.RequestError("boom", request=request)
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_DEBUG", "false")
+    server.config.reset_runtime_state()
+
+    result = await server.web_fetch("https://public.example.com/start", ctx=ctx)
+
+    assert result == "# Tavily"
+    assert any(message.startswith("Warning: Redirect preflight skipped: ") for message in ctx.messages)
+
+
+@pytest.mark.asyncio
+async def test_web_map_reports_skipped_preflight_warning_to_ctx_even_when_debug_disabled(monkeypatch):
+    ctx = ProgressContext()
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            raise httpx.TimeoutException("slow")
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    monkeypatch.setenv("GROK_DEBUG", "false")
+    server.config.reset_runtime_state()
+
+    result = await server.web_map("https://public.example.com/start", ctx=ctx)
+
+    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
+    assert any(message.startswith("Warning: Redirect preflight skipped: ") for message in ctx.messages)
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_keeps_success_payload_when_warning_ctx_delivery_fails(monkeypatch):
+    ctx = FailingProgressContext()
+
+    async def fake_tavily(url):
+        return "# Tavily", None
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            request = httpx.Request("GET", url, headers=headers)
+            raise httpx.RequestError("boom", request=request)
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_DEBUG", "false")
+    server.config.reset_runtime_state()
+
+    result = await server.web_fetch("https://public.example.com/start", ctx=ctx)
+
+    assert result == "# Tavily"
+
+
+@pytest.mark.asyncio
+async def test_web_map_keeps_success_payload_when_warning_ctx_delivery_fails(monkeypatch):
+    ctx = FailingProgressContext()
+
+    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
+        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
+
+    class RedirectingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            raise httpx.TimeoutException("slow")
+
+    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
+    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
+    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    monkeypatch.setenv("GROK_DEBUG", "false")
+    server.config.reset_runtime_state()
+
+    result = await server.web_map("https://public.example.com/start", ctx=ctx)
+
+    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
 
 
 @pytest.mark.asyncio

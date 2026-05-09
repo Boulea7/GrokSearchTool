@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
+from grok_search.providers.base import BaseSearchProvider
 from grok_search.providers.grok import (
     GrokSearchProvider,
     _WaitWithRetryAfter,
@@ -24,6 +25,14 @@ class DummyResponse:
         return self._json_data
 
 
+class DummyBaseProvider(BaseSearchProvider):
+    async def search(self, query: str, platform: str = "", min_results: int = 3, max_results: int = 10, ctx=None) -> str:
+        return f"answer:{query}:{platform}:{min_results}:{max_results}"
+
+    def get_provider_name(self) -> str:
+        return "dummy"
+
+
 def test_provider_httpx_client_kwargs_disable_env_proxies_for_dotted_loopback():
     local = _httpx_client_kwargs_for_url("http://localhost:18080/extract", timeout=httpx.Timeout(10.0))
     dotted_local = _httpx_client_kwargs_for_url("http://localhost.:18080/extract", timeout=httpx.Timeout(10.0))
@@ -34,6 +43,53 @@ def test_provider_httpx_client_kwargs_disable_env_proxies_for_dotted_loopback():
     assert dotted_local["trust_env"] is False
     assert loopback["trust_env"] is False
     assert "trust_env" not in remote
+
+
+@pytest.mark.asyncio
+async def test_base_provider_search_with_sources_bridges_to_search():
+    provider = DummyBaseProvider("https://api.example.com", "test-key")
+
+    content, sources = await provider.search_with_sources("probe", platform="GitHub", min_results=1, max_results=2)
+
+    assert content == "answer:probe:GitHub:1:2"
+    assert sources == []
+
+
+@pytest.mark.asyncio
+async def test_base_provider_search_with_sources_passes_full_kwargs_to_variadic_search():
+    captured = {}
+
+    class VariadicProvider(BaseSearchProvider):
+        async def search(self, query: str, **kwargs) -> str:
+            captured["query"] = query
+            captured["kwargs"] = kwargs
+            return "ok"
+
+        def get_provider_name(self) -> str:
+            return "variadic"
+
+    ctx = object()
+    provider = VariadicProvider("https://api.example.com", "test-key")
+
+    content, sources = await provider.search_with_sources(
+        "probe",
+        platform="GitHub",
+        min_results=1,
+        max_results=2,
+        ctx=ctx,
+    )
+
+    assert content == "ok"
+    assert sources == []
+    assert captured == {
+        "query": "probe",
+        "kwargs": {
+            "platform": "GitHub",
+            "min_results": 1,
+            "max_results": 2,
+            "ctx": ctx,
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -370,6 +426,84 @@ async def test_parse_completion_response_appends_structured_citations():
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_result_allows_sources_only_json_when_render_sources_disabled():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":"","citations":[{"title":"OpenAI","url":"https://openai.com/"}]}}]}',
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "citations": [
+                            {"title": "OpenAI", "url": "https://openai.com/"},
+                        ],
+                    }
+                }
+            ]
+        },
+    )
+
+    content, sources = await provider._parse_completion_response_result(response, render_sources=False)
+
+    assert content == ""
+    assert sources == [{"title": "OpenAI", "url": "https://openai.com/", "provider": "grok", "origin_type": "citation"}]
+
+
+@pytest.mark.asyncio
+async def test_extract_structured_sources_preserves_richer_metadata_and_origin_type():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    sources = provider._extract_structured_sources(
+        {
+            "citations": [
+                {
+                    "title": "OpenAI",
+                    "url": "https://openai.com/",
+                    "snippet": "Structured snippet",
+                    "score": 0.91,
+                    "published_date": "2025-04-01",
+                    "source": "curated",
+                }
+            ]
+        }
+    )
+
+    assert sources == [
+        {
+            "title": "OpenAI",
+            "url": "https://openai.com/",
+            "provider": "grok",
+            "description": "Structured snippet",
+            "snippet": "Structured snippet",
+            "score": 0.91,
+            "published_date": "2025-04-01",
+            "source": "curated",
+            "origin_type": "citation",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_with_sources_uses_execute_completion_with_retry_override(monkeypatch):
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    captured = {}
+
+    async def fake_execute(headers, payload, ctx, render_sources=True):
+        captured["render_sources"] = render_sources
+        return "Search answer", [{"title": "Structured Guide", "url": "https://docs.example.com/guide"}]
+
+    provider._last_completion_sources = [{"title": "stale", "url": "https://stale.example.com"}]
+    monkeypatch.setattr(provider, "_execute_completion_with_retry_result", fake_execute)
+
+    content, sources = await provider.search_with_sources("test query")
+
+    assert captured["render_sources"] is False
+    assert content == "Search answer"
+    assert sources == [{"title": "Structured Guide", "url": "https://docs.example.com/guide"}]
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_accepts_mixed_case_structured_citations():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(
@@ -534,6 +668,44 @@ async def test_parse_completion_response_deduplicates_nested_structured_sources(
 
     assert result.startswith("hello world")
     assert result.count("https://docs.example.com/guide") == 1
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_response_prefers_richer_exact_duplicate_structured_source():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text='{"choices":[{"message":{"content":[{"type":"output_text","text":"hello world","annotations":[{"title":"Docs","url":"https://docs.example.com/guide"}],"references":[{"title":"Richer Docs","url":"https://docs.example.com/guide","snippet":"Guide content"}]}]}}]}',
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "hello world",
+                                "annotations": [
+                                    {"title": "Docs", "url": "https://docs.example.com/guide"},
+                                ],
+                                "references": [
+                                    {
+                                        "title": "Richer Docs",
+                                        "url": "https://docs.example.com/guide",
+                                        "snippet": "Guide content",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert result.count("https://docs.example.com/guide") == 1
+    assert "[Richer Docs](https://docs.example.com/guide)" in result
 
 
 @pytest.mark.asyncio
