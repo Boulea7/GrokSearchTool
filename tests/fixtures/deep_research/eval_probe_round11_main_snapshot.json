@@ -1,0 +1,49 @@
+{
+  "sample": "probe-round11-main-snapshot",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: filled_search_query:u1"
+    }
+  },
+  "report": {
+    "status": "degraded",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "planner_fallback_used"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "domain": "docs.aws.amazon.com",
+      "title": "Change processing tuning settings",
+      "quality_tier": "official"
+    }
+  ],
+  "golden": {
+    "planner_boundary": {
+      "verdict": "fail",
+      "score": 0.6,
+      "reason_tags": [
+        "planner_fallback_used",
+        "unsafe_plan_fallback"
+      ]
+    },
+    "ranking_noise_suppression": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

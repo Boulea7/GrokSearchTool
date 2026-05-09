@@ -6,6 +6,7 @@ from grok_search.deep_research_types import (
     DeepResearchCheckpoint,
     DeepResearchEvent,
     DeepResearchJob,
+    utc_now_iso,
 )
 
 
@@ -149,11 +150,58 @@ def test_store_reuses_active_or_recent_job_by_request_fingerprint(tmp_path):
         status="completed",
         phase="finalizing",
         progress_pct=100.0,
-        finished_at="2026-04-12T14:00:00Z",
+        finished_at=utc_now_iso(),
     )
     completed = store.get_job(active.job_id)
 
     assert store.find_reusable_job("fp-reuse", recent_reuse_seconds=1800) == completed
+
+
+def test_store_reuses_matching_draft_job(tmp_path):
+    store = make_store(tmp_path)
+    draft = store.create_job(
+        query="Draft reuse",
+        request_fingerprint="fp-draft-reuse",
+        status="draft",
+        phase="planning",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=True,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    assert store.find_reusable_job("fp-draft-reuse", recent_reuse_seconds=1800) == draft
+
+
+def test_store_does_not_reuse_expired_completed_job(tmp_path):
+    store = make_store(tmp_path)
+    completed = store.create_job(
+        query="Research expired reuse window",
+        request_fingerprint="fp-expired-reuse",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    store.update_job(
+        completed.job_id,
+        status="completed",
+        phase="finalizing",
+        progress_pct=100.0,
+        finished_at="2020-01-01T00:00:00Z",
+    )
+
+    assert store.find_reusable_job("fp-expired-reuse", recent_reuse_seconds=1800) is None
 
 
 def test_store_marks_inflight_jobs_as_interrupted_during_recovery(tmp_path):
@@ -202,8 +250,86 @@ def test_store_marks_inflight_jobs_as_interrupted_during_recovery(tmp_path):
     )
 
     recovered = store.reconcile_incomplete_jobs()
+    running_events = store.list_events(running.job_id)
+    queued_events = store.list_events(queued.job_id)
 
     assert {job.job_id for job in recovered} == {running.job_id, queued.job_id}
     assert store.get_job(running.job_id).status == "interrupted"
     assert store.get_job(queued.job_id).status == "interrupted"
+    assert store.get_job(running.job_id).last_error == "worker_restarted"
+    assert store.get_job(queued.job_id).finished_at
+    assert running_events[-1].type == "job_interrupted"
+    assert queued_events[-1].data["reason"] == "worker_restarted"
     assert store.get_job(draft.job_id).status == "draft"
+
+
+def test_store_reconcile_cancel_requested_jobs_as_canceled(tmp_path):
+    store = make_store(tmp_path)
+    running = store.create_job(
+        query="Cancel requested recovery",
+        request_fingerprint="fp-recover-cancel-requested",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    store.update_job(running.job_id, cancel_requested=True)
+
+    recovered = store.reconcile_incomplete_jobs()
+    events = store.list_events(running.job_id)
+
+    assert [job.job_id for job in recovered] == [running.job_id]
+    assert store.get_job(running.job_id).status == "canceled"
+    assert store.get_job(running.job_id).last_error == ""
+    assert events[-1].type == "job_canceled"
+    assert events[-1].data["reason"] == "cancel_requested_during_recovery"
+
+
+def test_store_reconcile_incomplete_jobs_skips_recent_heartbeats_when_threshold_applies(tmp_path):
+    store = make_store(tmp_path)
+    running = store.create_job(
+        query="Fresh running job",
+        request_fingerprint="fp-fresh-running",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    stale = store.create_job(
+        query="Stale running job",
+        request_fingerprint="fp-stale-running",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    store.update_job(running.job_id, heartbeat_at=utc_now_iso())
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET heartbeat_at = ?, updated_at = ?, started_at = ?, created_at = ? WHERE job_id = ?",
+            ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", stale.job_id),
+        )
+
+    recovered = store.reconcile_incomplete_jobs(stale_after_seconds=30)
+
+    assert [job.job_id for job in recovered] == [stale.job_id]
+    assert store.get_job(running.job_id).status == "running"
+    assert store.get_job(stale.job_id).status == "interrupted"

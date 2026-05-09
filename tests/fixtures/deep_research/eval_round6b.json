@@ -1,0 +1,64 @@
+{
+  "sample": "round6b",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "report": {
+    "sections": [
+      {
+        "section_id": "executive-summary",
+        "title": "Executive Summary",
+        "claims": [
+          {
+            "claim_id": "executive-summary-claim-1",
+            "text": "AWS DMS distinguishes checkpoint resume and restart semantics primarily through the StartReplicationTask API and related start-replication task controls.",
+            "citations": [
+              "R1",
+              "R2"
+            ]
+          },
+          {
+            "claim_id": "executive-summary-claim-2",
+            "text": "In AWS DMS, resume-processing enables recovery from the last cached checkpoint while restart semantics reload work from the beginning when needed.",
+            "citations": [
+              "R1",
+              "R3"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "citations": {
+    "source_registry": {
+      "R1": {
+        "source_id": "R1",
+        "title": "API StartReplicationTask",
+        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+        "source_type": "official_docs",
+        "quality_tier": "official"
+      },
+      "R2": {
+        "source_id": "R2",
+        "title": "Start replication task",
+        "url": "https://docs.aws.amazon.com/cli/latest/reference/dms/start-replication-task.html",
+        "source_type": "official_docs",
+        "quality_tier": "official"
+      },
+      "R3": {
+        "source_id": "R3",
+        "title": "CHAP Task.CDC",
+        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+        "source_type": "official_docs",
+        "quality_tier": "official"
+      }
+    }
+  },
+  "golden": {
+    "citation_faithfulness": {
+      "verdict": "pass",
+      "score": 0.6,
+      "reason_tags": [
+        "weak_source_alignment"
+      ]
+    }
+  }
+}

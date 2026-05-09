@@ -1,0 +1,36 @@
+{
+  "job_id": "5e08590808849d323e959b64",
+  "mode": "continue",
+  "source_job_id": "a903e0a800679dbbf8ef7c68",
+  "source_job_status": "completed",
+  "continuation_goal": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "source_count": 5,
+  "checkpoint_key": "finalizing",
+  "previous_summary": "High confidence: In AWS Database Migration Service (AWS DMS), checkpoint, resume, and restart semantics primarily apply to replication tasks involving Change Data Capture (CDC) or full-load plus CDC.",
+  "carry_forward_sources": [
+    {
+      "source_id": "R1",
+      "domain": "docs.aws.amazon.com",
+      "source_type": "official_docs",
+      "citation_count": 3,
+      "section_count": 2
+    },
+    {
+      "source_id": "R2",
+      "domain": "docs.aws.amazon.com",
+      "source_type": "official_docs",
+      "citation_count": 2,
+      "section_count": 2
+    }
+  ],
+  "carry_forward_sections": [
+    {
+      "section_id": "executive-summary",
+      "title": "Executive Summary"
+    },
+    {
+      "section_id": "key-findings",
+      "title": "Key Findings"
+    }
+  ]
+}

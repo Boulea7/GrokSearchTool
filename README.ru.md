@@ -4,7 +4,7 @@
 
 GrokSearch — это независимо поддерживаемый MCP-сервер для ассистентов и клиентов, которым нужен быстрый, надёжный и подтверждаемый источниками веб-контекст.
 
-Он объединяет поиск через `Grok` и извлечение контента через `Tavily` / `Firecrawl`, предоставляя лёгкий MCP-набор инструментов для поиска, проверки источников, выборочного извлечения страниц и рекомендуемого основного маршрута `plan_* -> web_search` для сложных запросов. Для ясных одношаговых запросов с низкой неоднозначностью также допустим прямой вызов `web_search`. Для более тяжёлых задач в будущем будет развиваться отдельное направление `deep research`.
+Он объединяет поиск через `Grok` и извлечение контента через `Tavily` / `Firecrawl`, предоставляя лёгкий MCP-набор инструментов для поиска, проверки источников, выборочного извлечения страниц и рекомендуемого основного маршрута `plan_* -> web_search` для сложных запросов. Для ясных одношаговых запросов с низкой неоднозначностью также допустим прямой вызов `web_search`. Для более тяжёлых задач теперь доступен отдельный продвинутый слой `deep research`.
 
 Публичный package import contract сейчас имеет две границы: `grok_search.mcp` — это access-time lazy export, поэтому `fastmcp` требуется только при фактическом обращении к этому экспорту; `grok_search.providers.GrokSearchProvider` тоже является access-time lazy export, поэтому обычные non-provider импорты не должны падать заранее только из-за отсутствия зависимостей Grok provider. Это лишь сужает import-time поведение, не меняет декларацию зависимостей на этапе установки и не должно читаться как превращение package dependencies в optional extras.
 
@@ -15,11 +15,12 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `web_fetch`: сначала Tavily, затем Firecrawl как fallback
 - `web_map`: карта структуры сайта
 - `plan_*`: поэтапное планирование для сложных или неоднозначных запросов
+- `deep_research_*`: асинхронные job-инструменты для продвинутого глубинного исследования
 - `get_config_info`: проверка конфигурации, `/models` и лёгкий doctor
 - `switch_model`: смена модели Grok по умолчанию
 - `toggle_builtin_tools`: переключение встроенных WebSearch / WebFetch в Claude Code
 
-Сейчас опубликовано `13` MCP-инструментов.
+Сейчас опубликовано `20` MCP-инструментов.
 
 - `web_search`
 - `get_sources`
@@ -34,6 +35,13 @@ GrokSearch — это независимо поддерживаемый MCP-се
 - `plan_search_term`
 - `plan_tool_mapping`
 - `plan_execution`
+- `deep_research_start`
+- `deep_research_status`
+- `deep_research_events`
+- `deep_research_result`
+- `deep_research_resume`
+- `deep_research_cancel`
+- `deep_research_list`
 
 `plan_search_term` задаёт `approach` / `fallback_plan` при первом создании `search_strategy`; последующие вызовы без `is_revision` только добавляют `search_terms` и не переписывают существующие strategy metadata неявно.
 planning `session_id` — это in-process transient handle с TTL около 1 часа и LRU-лимитом 256 сессий; после рестарта процесса, истечения TTL или eviction нужно начинать заново с нового `plan_intent`.
@@ -173,8 +181,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - После статической проверки URL `web_fetch` / `web_map` также перепроверяют видимые redirect-цели до вызова provider.
 - Сейчас эта видимая redirect-проверка использует `GET`, а не `HEAD`; для presigned URL, one-shot token или ссылок, где даже чтение может иметь побочный эффект, это означает возможный дополнительный preflight-read и должно рассматриваться как известная граница.
 - Сейчас видимая redirect-проверка выполняется не более `5` раз; если на `5`-й проверке всё ещё появляется новый видимый redirect, запрос жёстко отклоняется с текущим контрактом `目标 URL 重定向次数过多`, и до downstream provider дело не доходит.
-- Если redirect-preflight завершается timeout'ом или request-level ошибкой, текущая реализация помечает этот шаг как `skipped_due_to_error`; `web_fetch` / `web_map` сейчас всё ещё продолжают downstream-вызов provider.
-- Эту границу сейчас следует понимать как `best-effort safety boundary`, а не как hard-stop гарантию против split-horizon или локально отравленного DNS, который резолвит публично выглядящий hostname в приватную цель.
+- Если redirect-preflight завершается timeout'ом или request-level ошибкой, текущая реализация теперь fail-closed и останавливает downstream-вызов provider для `web_fetch` / `web_map`; `skipped_due_to_error` остаётся только внутренним diagnostic reason code.
+- Эта граница по-прежнему не даёт hard-stop гарантии против split-horizon или локально отравленного DNS, который резолвит публично выглядящий hostname в приватную цель, но для видимых redirect-ошибок путь теперь закрывается жёстко.
 
 ### Минимальный smoke check
 

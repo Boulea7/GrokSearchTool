@@ -4,7 +4,7 @@ English | [简体中文](README.md) | [繁體中文](README.zh-TW.md) | [日本�
 
 GrokSearch is an independently maintained MCP server for assistants and clients that need fast, reliable, source-backed web context.
 
-It combines `Grok` search with `Tavily` and `Firecrawl` extraction, then exposes a stable MCP tool surface for lightweight lookups, source verification, focused page fetching, a recommended `plan_* -> web_search` workflow for complex searches, and a future `deep research` direction for heavier exploration tasks. For clear, low-ambiguity single-hop lookups where planning adds little value, direct `web_search` is still acceptable.
+It combines `Grok` search with `Tavily` and `Firecrawl` extraction, then exposes a stable MCP tool surface for lightweight lookups, source verification, focused page fetching, a recommended `plan_* -> web_search` workflow for complex searches, and an advanced `deep research` layer for heavier exploration tasks. For clear, low-ambiguity single-hop lookups where planning adds little value, direct `web_search` is still acceptable.
 
 The public package import contract currently has two boundaries: `grok_search.mcp` is an access-time lazy export, so `fastmcp` is only required when that export is actually accessed; `grok_search.providers.GrokSearchProvider` is also an access-time lazy export, so ordinary non-provider imports should not fail early just because Grok-provider dependencies are missing. This only narrows import-time behavior, does not change the install-time dependency declaration, and should not be read as turning package dependencies into optional extras.
 
@@ -17,11 +17,12 @@ Public `stdio` installation snippets currently use the maintained release repo `
 - `web_fetch`: Tavily-first page extraction with Firecrawl fallback
 - `web_map`: website structure mapping
 - `plan_*`: phased planning tools for complex or ambiguous searches
+- `deep_research_*`: asynchronous job tools for advanced report-style research
 - `get_config_info`: inspect configuration and test `/models`
 - `switch_model`: change the default Grok model
 - `toggle_builtin_tools`: toggle Claude Code built-in WebSearch / WebFetch
 
-The public MCP surface currently includes `13` tools:
+The public MCP surface currently includes `20` tools:
 
 - `web_search`
 - `get_sources`
@@ -36,10 +37,19 @@ The public MCP surface currently includes `13` tools:
 - `plan_search_term`
 - `plan_tool_mapping`
 - `plan_execution`
+- `deep_research_start`
+- `deep_research_status`
+- `deep_research_events`
+- `deep_research_result`
+- `deep_research_resume`
+- `deep_research_cancel`
+- `deep_research_list`
 
 `plan_search_term` sets `approach` / `fallback_plan` when `search_strategy` is first created; later non-revision calls append `search_terms` only and do not implicitly rewrite existing strategy metadata.
 planning `session_id` values are in-process transient handles with about a 1-hour TTL and a 256-session LRU cap, so restart / expiry / eviction requires starting again from a fresh `plan_intent`.
 The wrappers intentionally keep scalar shim inputs such as CSV `depends_on`, semicolon-grouped `parallel_groups`, and stringified `params_json`; the first `plan_search_term` call must provide `approach`.
+`plan_*` now returns structured objects directly rather than JSON strings, so callers should not wrap the result in an extra `json.loads(...)`.
+`plan_sub_query.boundary` now enforces a minimum machine-checkable exclusion contract; vague “focus on X” wording without an explicit exclusion boundary is rejected.
 
 ## Installation
 
@@ -139,6 +149,12 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint; using an explicit `/v1` suffix is recommended, the current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
 | `GROK_API_KEY` | Yes | Grok API key |
 | `GROK_MODEL` | No | Default model; see the precedence notes below |
+| `GROK_MODEL_PROFILE` | No | `balanced_auto` | When `GROK_MODEL` is not explicitly set, resolve a provider-aware default model for official xAI, OpenRouter, and common OpenAI-compatible relays / grok2api-like proxies |
+| `GROK_DEEP_RESEARCH_STANDARD_PROFILE` | No | `reasoning` | Default deep research profile for `standard` effort; automatically downgrades when unavailable |
+| `GROK_DEEP_RESEARCH_DEEP_PROFILE` | No | `multi_agent` | Default deep research profile for `deep` effort; automatically downgrades to single-agent when multi-agent is unavailable |
+| `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | No | The second Grok provider; real requests automatically fail over to it when the primary provider fails |
+| `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | No | Additional Grok providers, tried in numeric order as the fallback chain |
+| `GROK_MODEL_FALLBACKS` | No | Built-in downgrade chain | A comma-separated model fallback order used when a provider explicitly reports that the requested model is unavailable; this can explicitly include `grok-4.1-fast` |
 | `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |
 | `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | No | Tavily endpoint |
@@ -153,20 +169,32 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `GROK_RETRY_MAX_ATTEMPTS` | No | Max retry attempts |
 | `GROK_RETRY_MULTIPLIER` | No | Retry backoff multiplier |
 | `GROK_RETRY_MAX_WAIT` | No | Max retry wait |
+| `GROK_DEEP_RESEARCH_DIR` | No | Root directory for deep research SQLite state and artifacts |
+| `GROK_DEEP_RESEARCH_DEFAULT_BUDGET_SECONDS` | No | Default target budget for deep research jobs |
+| `GROK_DEEP_RESEARCH_HARD_TIMEOUT_SECONDS` | No | Hard upper timeout for a deep research job |
+| `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | No | Max concurrently executed ready research units in the default runtime |
+| `GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS` | No | Reuse window for completed deep research jobs, evaluated against `finished_at` |
 
 Notes:
 
 - model resolution order is process `GROK_MODEL` env -> project `.env.local` -> project `.env` -> persisted `~/.config/grok-search/config.json` value from `switch_model` -> code default `grok-4.20-0309`
 - process env presence wins over project `.env.local` / `.env`, even when the env value is explicitly empty
+- when `GROK_API_URL_2` / `GROK_API_KEY_2` and higher-numbered siblings are configured, runtime Grok requests treat them as an ordered provider chain and automatically fail over to the next provider when the current one fails
+- when `GROK_MODEL_FALLBACKS` is configured, runtime requests use that explicit model downgrade order on the same provider after a model-unavailable error; otherwise the built-in chain still includes options such as `grok-4.1-fast`
 - the base `get_config_info` snapshot now includes `GROK_MODEL_SOURCE`, which tells you which layer currently supplies the active model (`process_env`, `project_env_local`, `project_env`, `persisted_config`, or `default`)
 - the preferred built-in default is now `grok-4.20-0309`; runtime selection stays flexible for Grok 4.1+ models and can fall back to a compatible available Grok model instead of failing just because a suffix differs
+- when no explicit `GROK_MODEL` is present, runtime can now derive a provider-aware default from `GROK_MODEL_PROFILE`; the base config snapshot also includes additive `GROK_MODEL_PROFILE`, `GROK_DEEP_RESEARCH_STANDARD_PROFILE`, `GROK_DEEP_RESEARCH_DEEP_PROFILE`, and `GROK_PROVIDER_FAMILY`
+- the base config snapshot now also includes `GROK_ROUTING_DIAGNOSTICS`, which summarizes the active provider, numbered provider chain, profile-derived default models, the expected `/chat/completions` vs `/responses` path, and multi-agent routing signals for official xAI, OpenRouter, generic relays, and grok2api-like proxies
+- Grok routing now supports both `/chat/completions` and `/responses`; multi-agent families and response-only relay models prefer `/responses`, while OpenRouter and most relays remain primarily `chat/completions`
+- deep research now defaults to single-agent for `standard` effort and multi-agent-first for `deep` effort, with automatic downgrade back to single-agent when the current provider, account, relay, or single-model setup cannot serve multi-agent requests
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
 - `GROK_TIME_CONTEXT_MODE` defaults to `always`, which preserves the current behavior of always injecting local time context
 - `GROK_DEBUG=false` suppresses these helper progress logs entirely, including `ctx.info()` forwarding; they are intentionally debug-only progress/debug signals
-- when redirect preflight falls back to `skipped_due_to_error`, the implementation now emits a caller-visible warning through MCP context, but does not rewrite successful return payloads
+- when redirect preflight hits a timeout or request-level error, `web_fetch` / `web_map` now fail closed before downstream provider dispatch; `skipped_due_to_error` remains an internal diagnostic reason code rather than a continue-execution path
 - the recommended core path is `plan_* -> web_search`
 - direct `web_search` is still allowed for clear single-hop lookups when planning adds little value
-- interactive `deep research` workflows are planned CLI-first rather than as conversational MCP/skill interactions
+- advanced `deep research` is now exposed as a non-interactive MCP job surface plus a richer CLI workflow
+- interactive `deep research` workflows remain CLI-first rather than as conversational MCP/skill interactions
 - `web_fetch` still works with Firecrawl only.
 - `web_map` requires Tavily and `TAVILY_ENABLED=true`.
 - `web_search` injects local time context according to `GROK_TIME_CONTEXT_MODE` (`always` by default)
@@ -175,8 +203,7 @@ Notes:
 - after the static URL check passes, `web_fetch` and `web_map` also re-check visible redirect targets before dispatching the provider call
 - visible redirect re-checks currently use `GET` rather than `HEAD`, so presigned URLs, one-shot tokens, or read-side-effect links may incur an extra preflight read
 - redirect preflight currently makes at most 5 visible preflight requests; if the fifth preflight still encounters a new redirect, it returns the current hard-reject contract (`目标 URL 重定向次数过多`) before any downstream provider call
-- if redirect preflight times out or hits a request-level error, the current implementation marks that step as `skipped_due_to_error`; `web_fetch` / `web_map` currently still continue to the downstream provider call
-- that `skipped_due_to_error` path also emits a caller-visible warning through MCP context, but does not rewrite successful return payloads
+- if redirect preflight times out or hits a request-level error, the current implementation now hard-stops the request before downstream provider dispatch; `skipped_due_to_error` remains available as an internal diagnostic reason code only
 - this boundary intentionally does not hard-block ordinary public-looking hostnames based only on local DNS answers, so it should not be treated as a strong guarantee against split-horizon or locally poisoned DNS resolution
 - `get_config_info` now combines the base config snapshot with doctor checks, readiness summaries, and minimal real `search/fetch` probes, but it is still not a full end-to-end compatibility guarantee.
 - `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search` expose a curated subset of provider options rather than the providers' full native API surfaces.
@@ -198,9 +225,11 @@ For any local `stdio` host, start with this lightweight verification flow:
 
 - optional `detail="full" | "summary"` output levels; `full` remains the default and preserves the current payload shape
 - `doctor`: overall doctor status, structured checks, and repair recommendations
-- `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, and `toggle_builtin_tools`
+- `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, `toggle_builtin_tools`, `deep_research_planner`, and `deep_research_runtime`
 - `doctor.recommendations_detail`: additive structured repair hints linked to `check_id` and feature scope
 - `feature_readiness.web_fetch.providers`: provider-level readiness details with stable `check_id`; `verified_path` shows which real fetch probe succeeded, and degraded or skipped providers include `reason_code` when it can be derived and may also include `skipped_reason`
+- `grok_provider_chain`: a structured summary of the currently resolved Grok provider count, provider names, and each provider's family / resolved model / expected endpoint path
+- `GROK_ROUTING_DIAGNOSTICS` in the base snapshot: active provider details, provider-chain routing hints, profile-derived defaults, endpoint-path visibility, and multi-agent routing signals
 - `GROK_MODEL_SOURCE` in the base snapshot: the active model source, so callers can tell whether runtime behavior comes from process env, project env files, persisted config, or code defaults
 - minimal real `web_search` / `web_fetch` probe results
 
@@ -211,9 +240,11 @@ The `/models` connection test uses a 10-second timeout; additional real `web_sea
 `connection_test` only reflects `/models` reachability; if `web_search` is degraded, combine `doctor`, `feature_readiness`, `GROK_MODEL_SOURCE`, and the `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` checks before concluding the root cause.
 `grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage, while `grok_model_runtime_fallback` means the real `/chat/completions` path only succeeded after a runtime retry against another Grok candidate; both checks may appear in the same diagnostic run.
 `grok_search_probe` may now return a body-quality `warning` as well as `ok` or `error`; for example, a sources-only probe or a probably truncated probe body degrades `feature_readiness.web_search` even though the endpoint itself still responded successfully.
+Successful `grok_search_probe` results now also report the actual `provider_name` / `provider_model` that satisfied the probe, and the reported endpoint path now follows that winner model's routing rules, so diagnostics can distinguish primary success, numbered-provider failover, and multi-agent `/responses` routing.
 `feature_readiness.get_sources` only reports `ready` when the current process already holds at least one readable non-error source session; error-only cached sessions keep it at `partial_ready`. Even if `web_search` is currently not ready, `get_sources` can still report `ready` when the running process still holds a readable session, while surfacing the upstream config problem through `degraded_by`.
 `feature_readiness.get_sources` now also includes an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, `partial_sessions`, and `unreadable_sessions`.
 `feature_readiness` now also carries summary-safe machine fields: `based_on_checks`, `probe_scope`, and `degraded_by`. For `web_search`, it additionally returns `runtime_override_active` and `runtime_model_source` so callers can tell when a higher-priority runtime override is still in effect.
+`feature_readiness.deep_research_planner` and `feature_readiness.deep_research_runtime` now mirror the shared Grok provider-chain readiness used by deep research planner/runtime calls.
 `ready` means the capability is verified, `degraded` means it exists but probes or partial dependencies are unhealthy, `not_ready` means prerequisites are missing, and `partial_ready` means the interface exists but still depends on transient runtime state; `transient` and `client_specific` items do not lower the overall doctor status on their own.
 
 If `GROK_MODEL_SOURCE` comes back as `process_env`, `project_env_local`, or `project_env`, calling `switch_model` alone does not change the current process; update or remove that higher-priority override first.
@@ -268,6 +299,7 @@ Use it when you want a structured workflow for:
 - phased planning before searching
 - source verification after `web_search`
 - choosing between `web_search`, `get_sources`, `web_fetch`, and `web_map`
+- routing heavier, multi-minute report jobs into `deep_research_*` instead of overloading the lightweight path
 
 ### Install the skill
 
@@ -282,6 +314,26 @@ ln -s /absolute/path/to/GrokSearch/skills/research-with-grok-search ~/.codex/ski
 
 ```bash
 PYTHONPATH=src uv run python -m grok_search.server
+```
+
+### Deep Research CLI
+
+Use `grok-search-research` when you want richer local interaction around the advanced deep research job layer.
+
+The current deep research runtime now centers on a structured `plan.json` with `brief`, `sub_questions`, `search_strategy`, `report_outline`, and `research_units`. In continuation mode, the `continuation` object inside `plan.json` now stays compact, while the full carry-forward state is written separately to `continuation.json`. `resume` continues the same job from its latest completed checkpoint boundary, while `continue` opens a new follow-up job that consumes the previous job's artifacts and findings.
+
+The `force_new` flag controls whether `deep_research_start` must create a brand-new job.
+When `force_new=false`, `deep_research_start` may reuse a matching in-flight job or a recently completed job and will surface that via the `reused` field. That reuse rule now also applies to follow-up jobs keyed by `continue_from_job_id`. Set `force_new=true` when you require a brand-new job. Completed jobs are only reusable when the final artifact bundle is readable and the four final artifacts come from a consistent shared `batch_id`. Completed final artifacts are published with a shared `batch_id`, `deep_research_result.citations` now uses the same structure as `citations.json`, and unreadable JSON artifacts are surfaced through `artifact_errors` instead of failing the whole result read. For `completed` jobs, missing final artifacts now surface through `artifact_errors`; for `failed`, `canceled`, and `interrupted` jobs, callers should treat the latest checkpoint and partial artifacts as the authoritative state.
+
+`sources.json` now carries additive source-quality metadata such as `source_key`, `quality_score`, `quality_tier`, `source_type`, and `ranking_reasons` alongside `source_id`. Source rows may also expose additive `winner_provider`, `citation_count`, and `section_count` fields. Sections inside `citations.json` and `report.json` may also include additive `summary`, `confidence`, `claim_cluster_count`, `supporting_source_count`, and `supporting_domain_count` fields, and claims may include additive `unit_id`, `evidence_ids`, `cluster_type`, `supporting_source_count`, `supporting_domain_count`, and `confidence` provenance/quality fields. Continuation rebuilds now prefer `sources.json`, but can fall back to `citations.json.source_registry` when the sources artifact is missing or unreadable. When the current artifact pointers for a completed job are mixed or incomplete, continuation first falls back to the latest complete final artifact batch before falling back again to checkpoints or partial artifacts. Jobs recovered from in-flight `queued` or `running` state are now reconciled into `interrupted` with an explicit recovery reason. `resume` now starts a new attempt time window instead of replaying the previous terminal timestamps.
+
+When reading a single artifact through the CLI, `grok-search-research result --artifact <kind>` now follows the same resolved-final-batch preference as `deep_research_result`, instead of blindly reading the current artifact pointer for completed jobs.
+
+```bash
+grok-search-research start "Compare open-source deep research frameworks" --watch
+grok-search-research list
+grok-search-research result JOB_ID --artifact final_report.md
+grok-search-research continue JOB_ID "Focus on resume and checkpoint trade-offs" --watch
 ```
 
 ### Verification

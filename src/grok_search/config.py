@@ -3,6 +3,7 @@ import json
 import re
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from typing import Any
 
 _SENSITIVE_URL_PARAM_KEYS = {
     "api_key",
@@ -35,6 +36,23 @@ class Config:
         '"env":{"GROK_API_URL":"https://api.example.com/v1","GROK_API_KEY":"your-api-key"}}\''
     )
     _DEFAULT_MODEL = "grok-4.20-0309"
+    _DEFAULT_MODEL_PROFILE = "balanced_auto"
+    _DEFAULT_DEEP_RESEARCH_STANDARD_PROFILE = "reasoning"
+    _DEFAULT_DEEP_RESEARCH_DEEP_PROFILE = "multi_agent"
+    _DEFAULT_DEEP_RESEARCH_ULTRA_PROFILE = "ultra"
+    _ALLOWED_MODEL_PROFILES = {"balanced_auto", "reasoning", "multi_agent", "ultra", "fast", "exact"}
+    _KNOWN_PROVIDER_FAMILIES = {
+        "official_xai",
+        "openrouter",
+        "openai_compatible_relay",
+        "grok2api_like",
+    }
+    _RESPONSES_ONLY_RELAY_MODELS = {
+        "grok-4.20-reasoning",
+        "grok-4.20-multi-agent",
+        "grok-4.20-expert-4-agent",
+        "grok-4.20-heavy-16-agent",
+    }
 
     def __new__(cls):
         if cls._instance is None:
@@ -43,6 +61,7 @@ class Config:
             cls._instance._cached_model = None
             cls._instance._project_env_cache = None
             cls._instance._project_env_source_cache = None
+            cls._instance._project_env_layers_cache = None
         return cls._instance
 
     def _project_root(self) -> Path:
@@ -115,6 +134,18 @@ class Config:
         self._project_env_source_cache = sources
         return merged, sources
 
+    def _load_project_env_layers(self) -> list[tuple[str, dict[str, str]]]:
+        if self._project_env_layers_cache is not None:
+            return self._project_env_layers_cache
+
+        project_root = self._project_root()
+        layers = [
+            ("project_env_local", self._parse_env_file(project_root / ".env.local")),
+            ("project_env", self._parse_env_file(project_root / ".env")),
+        ]
+        self._project_env_layers_cache = layers
+        return layers
+
     def _load_project_env(self) -> dict[str, str]:
         merged, _ = self._load_project_env_with_sources()
         return merged
@@ -132,6 +163,332 @@ class Config:
             return "process_env"
         _, project_sources = self._load_project_env_with_sources()
         return project_sources.get(key)
+
+    @staticmethod
+    def _provider_env_keys(suffix: int | None = None) -> tuple[str, str, str]:
+        suffix_text = f"_{suffix}" if suffix is not None else ""
+        return (
+            f"GROK_API_URL{suffix_text}",
+            f"GROK_API_KEY{suffix_text}",
+            f"GROK_MODEL{suffix_text}",
+        )
+
+    @staticmethod
+    def _provider_family_env_key(suffix: int | None = None) -> str:
+        suffix_text = f"_{suffix}" if suffix is not None else ""
+        return f"GROK_PROVIDER_FAMILY{suffix_text}"
+
+    def _resolve_provider_credentials(self, suffix: int | None = None) -> dict[str, str] | None:
+        url_key, key_key, _ = self._provider_env_keys(suffix)
+        if url_key in os.environ or key_key in os.environ:
+            return {
+                "source": "process_env",
+                "api_url": os.environ.get(url_key, ""),
+                "api_key": os.environ.get(key_key, ""),
+            }
+
+        for source, values in self._load_project_env_layers():
+            if url_key in values or key_key in values:
+                return {
+                    "source": source,
+                    "api_url": values.get(url_key, ""),
+                    "api_key": values.get(key_key, ""),
+                }
+        return None
+
+    def _provider_family_override(self, suffix: int | None = None) -> str:
+        raw = self._get_env_value(self._provider_family_env_key(suffix), "") or ""
+        family = raw.strip().lower()
+        return family if family in self._KNOWN_PROVIDER_FAMILIES else ""
+
+    @staticmethod
+    def _normalize_host(host: str) -> str:
+        return (host or "").strip().lower().rstrip(".")
+
+    def provider_family_for_url(self, api_url: str, *, suffix: int | None = None) -> str:
+        override = self._provider_family_override(suffix)
+        if override:
+            return override
+        try:
+            host = self._normalize_host(urlsplit((api_url or "").strip()).hostname or "")
+        except ValueError:
+            host = ""
+        if not host:
+            return "openai_compatible_relay"
+        if "openrouter.ai" in host:
+            return "openrouter"
+        if host == "api.x.ai" or host.endswith(".x.ai"):
+            return "official_xai"
+        if any(marker in host for marker in ("grok2api", "oneapi", "newapi", "example-provider")):
+            return "grok2api_like"
+        return "openai_compatible_relay"
+
+    @staticmethod
+    def _model_core(model: str) -> str:
+        text = (model or "").strip().lower()
+        if "/" in text:
+            text = text.split("/", 1)[1]
+        if ":" in text:
+            text = text.split(":", 1)[0]
+        return text
+
+    def grok_model_is_multi_agent_family(self, model: str) -> bool:
+        core = self._model_core(model)
+        return any(token in core for token in ("multi-agent", "heavy-16-agent", "expert-4-agent"))
+
+    def _prefers_responses_endpoint_for_family(self, provider_family: str, model: str) -> bool:
+        core = self._model_core(model)
+        if provider_family == "openrouter":
+            return False
+        if provider_family == "official_xai" and self.grok_model_is_multi_agent_family(core):
+            return True
+        if provider_family in {"openai_compatible_relay", "grok2api_like"} and core in self._RESPONSES_ONLY_RELAY_MODELS:
+            return True
+        return False
+
+    def grok_prefers_responses_endpoint(self, api_url: str, model: str) -> bool:
+        provider_family = self.provider_family_for_url(api_url)
+        return self._prefers_responses_endpoint_for_family(provider_family, model)
+
+    def grok_preferred_endpoint_path(self, api_url: str, model: str) -> str:
+        return "/responses" if self.grok_prefers_responses_endpoint(api_url, model) else "/chat/completions"
+
+    @staticmethod
+    def _routing_path_visibility(api_url: str) -> dict[str, str]:
+        base_url = (api_url or "").rstrip("/")
+        return {
+            "chat_completions": f"{base_url}/chat/completions" if base_url else "",
+            "responses": f"{base_url}/responses" if base_url else "",
+        }
+
+    def _routing_signals(
+        self,
+        provider_family: str,
+        model: str,
+        *,
+        profile: str | None = None,
+    ) -> list[str]:
+        signals: list[str] = []
+        if profile:
+            if profile == "multi_agent":
+                signals.append("profile_requests_multi_agent")
+            else:
+                signals.append("profile_requests_single_agent")
+
+        multi_agent_family = self.grok_model_is_multi_agent_family(model)
+        prefers_responses = self._prefers_responses_endpoint_for_family(provider_family, model)
+        signals.append("model_family:multi_agent" if multi_agent_family else "model_family:single_agent")
+        signals.append("routing_path:responses" if prefers_responses else "routing_path:chat_completions")
+
+        if provider_family == "official_xai":
+            signals.append(
+                "official_xai_multi_agent_prefers_responses"
+                if prefers_responses
+                else "official_xai_chat_completions_default"
+            )
+        elif provider_family == "openrouter":
+            signals.append("openrouter_chat_completions_default")
+        elif provider_family == "grok2api_like":
+            signals.append(
+                "grok2api_like_responses_family"
+                if prefers_responses
+                else "grok2api_like_chat_completions_default"
+            )
+        else:
+            signals.append(
+                "relay_responses_family"
+                if prefers_responses
+                else "relay_chat_completions_default"
+            )
+        return signals
+
+    def _provider_chain_routing_entry(self, provider: dict[str, Any]) -> dict[str, Any]:
+        api_url = provider["api_url"]
+        model = provider["model"]
+        provider_family = provider["provider_family"]
+        return {
+            "name": provider["name"],
+            "source": provider["source"],
+            "provider_family": provider_family,
+            "resolved_model": model,
+            "preferred_endpoint_path": self.grok_preferred_endpoint_path(api_url, model),
+            "multi_agent_family": self.grok_model_is_multi_agent_family(model),
+            "routing_signals": self._routing_signals(provider_family, model),
+        }
+
+    def _profile_default_routing_entry(
+        self,
+        api_url: str,
+        *,
+        profile: str,
+        resolved_model: str,
+    ) -> dict[str, Any]:
+        provider_family = self.provider_family_for_url(api_url)
+        return {
+            "profile": profile,
+            "resolved_model": resolved_model,
+            "preferred_endpoint_path": self.grok_preferred_endpoint_path(api_url, resolved_model),
+            "path_visibility": self._routing_path_visibility(api_url),
+            "multi_agent_requested": profile in {"multi_agent", "ultra"},
+            "multi_agent_family": self.grok_model_is_multi_agent_family(resolved_model),
+            "routing_signals": self._routing_signals(provider_family, resolved_model, profile=profile),
+        }
+
+    def grok_routing_diagnostics(self) -> dict[str, Any]:
+        try:
+            provider_chain = self.grok_provider_chain()
+        except ValueError:
+            provider_chain = []
+
+        active_provider: dict[str, Any] | None = None
+        if provider_chain:
+            primary = provider_chain[0]
+            active_provider = {
+                **self._provider_chain_routing_entry(primary),
+                "path_visibility": self._routing_path_visibility(primary["api_url"]),
+            }
+
+        try:
+            api_url = self.grok_api_url
+        except ValueError:
+            api_url = ""
+
+        profile_defaults: dict[str, Any] = {}
+        if api_url:
+            web_profile = self.grok_model_profile()
+            standard_profile = self.grok_deep_research_standard_profile()
+            deep_profile = self.grok_deep_research_deep_profile()
+            ultra_profile = self.grok_deep_research_ultra_profile()
+            profile_defaults = {
+                "web_search": self._profile_default_routing_entry(
+                    api_url,
+                    profile=web_profile,
+                    resolved_model=self.resolve_default_grok_model_for_url(api_url, profile=web_profile),
+                ),
+                "deep_research_standard": self._profile_default_routing_entry(
+                    api_url,
+                    profile=standard_profile,
+                    resolved_model=self.resolve_default_grok_model_for_url(api_url, profile=standard_profile),
+                ),
+                "deep_research_deep": self._profile_default_routing_entry(
+                    api_url,
+                    profile=deep_profile,
+                    resolved_model=self.resolve_default_grok_model_for_url(api_url, profile=deep_profile),
+                ),
+                "deep_research_ultra": self._profile_default_routing_entry(
+                    api_url,
+                    profile=ultra_profile,
+                    resolved_model=self.resolve_default_grok_model_for_url(api_url, profile=ultra_profile),
+                ),
+            }
+
+        return {
+            "active_provider": active_provider,
+            "provider_chain": [self._provider_chain_routing_entry(item) for item in provider_chain],
+            "profile_defaults": profile_defaults,
+        }
+
+    def grok_model_profile(self) -> str:
+        raw = (self._get_env_value("GROK_MODEL_PROFILE", self._DEFAULT_MODEL_PROFILE) or "").strip().lower()
+        return raw if raw in self._ALLOWED_MODEL_PROFILES else self._DEFAULT_MODEL_PROFILE
+
+    def grok_deep_research_standard_profile(self) -> str:
+        raw = (
+            self._get_env_value(
+                "GROK_DEEP_RESEARCH_STANDARD_PROFILE",
+                self._DEFAULT_DEEP_RESEARCH_STANDARD_PROFILE,
+            )
+            or ""
+        ).strip().lower()
+        return raw if raw in self._ALLOWED_MODEL_PROFILES else self._DEFAULT_DEEP_RESEARCH_STANDARD_PROFILE
+
+    def grok_deep_research_deep_profile(self) -> str:
+        raw = (
+            self._get_env_value(
+                "GROK_DEEP_RESEARCH_DEEP_PROFILE",
+                self._DEFAULT_DEEP_RESEARCH_DEEP_PROFILE,
+            )
+            or ""
+        ).strip().lower()
+        return raw if raw in self._ALLOWED_MODEL_PROFILES else self._DEFAULT_DEEP_RESEARCH_DEEP_PROFILE
+
+    def grok_deep_research_ultra_profile(self) -> str:
+        raw = (
+            self._get_env_value(
+                "GROK_DEEP_RESEARCH_ULTRA_PROFILE",
+                self._DEFAULT_DEEP_RESEARCH_ULTRA_PROFILE,
+            )
+            or ""
+        ).strip().lower()
+        return raw if raw in self._ALLOWED_MODEL_PROFILES else self._DEFAULT_DEEP_RESEARCH_ULTRA_PROFILE
+
+    def _resolved_default_model_for_family(self, provider_family: str, *, profile: str) -> str:
+        family_defaults = {
+            "official_xai": {
+                "balanced_auto": "grok-4.20-0309-non-reasoning",
+                "reasoning": "grok-4.20-0309-reasoning",
+                "multi_agent": "grok-4.20-multi-agent-0309",
+                "ultra": "grok-4.20-heavy-16-agent",
+                "fast": "grok-4-1-fast-non-reasoning",
+                "exact": self._DEFAULT_MODEL,
+            },
+            "openrouter": {
+                "balanced_auto": "x-ai/grok-4.1-fast",
+                "reasoning": "x-ai/grok-4.20",
+                "multi_agent": "x-ai/grok-4.20-multi-agent",
+                "ultra": "x-ai/grok-4.20-multi-agent",
+                "fast": "x-ai/grok-4.1-fast",
+                "exact": "x-ai/grok-4.20",
+            },
+            "openai_compatible_relay": {
+                "balanced_auto": "grok-4.20-auto",
+                "reasoning": "grok-4.20-reasoning",
+                "multi_agent": "grok-4.20-multi-agent",
+                "ultra": "grok-4.20-heavy-16-agent",
+                "fast": "grok-4.20-fast",
+                "exact": self._DEFAULT_MODEL,
+            },
+            "grok2api_like": {
+                "balanced_auto": "grok-4.20-auto",
+                "reasoning": "grok-4.20-reasoning",
+                "multi_agent": "grok-4.20-multi-agent",
+                "ultra": "grok-4.20-heavy-16-agent",
+                "fast": "grok-4.20-fast",
+                "exact": self._DEFAULT_MODEL,
+            },
+        }
+        selected_family = family_defaults.get(provider_family, family_defaults["openai_compatible_relay"])
+        return selected_family.get(profile, selected_family["balanced_auto"])
+
+    def resolve_default_grok_model_for_url(
+        self,
+        api_url: str,
+        *,
+        profile: str | None = None,
+        suffix: int | None = None,
+    ) -> str:
+        selected_profile = (profile or self.grok_model_profile()).strip().lower()
+        if selected_profile == "exact":
+            model = self._DEFAULT_MODEL
+        else:
+            provider_family = self.provider_family_for_url(api_url, suffix=suffix)
+            model = self._resolved_default_model_for_family(provider_family, profile=selected_profile)
+        return self._apply_model_suffix_for_url(model, api_url)
+
+    def _has_explicit_runtime_model(self) -> bool:
+        if self._get_env_value("GROK_MODEL") is not None:
+            return True
+        return bool(self._load_config_file().get("model"))
+
+    def resolve_deep_research_model_for_url(self, api_url: str, *, effort: str) -> str:
+        normalized_effort = (effort or "").strip().lower()
+        if normalized_effort == "ultra":
+            selected_profile = self.grok_deep_research_ultra_profile()
+        elif normalized_effort == "deep":
+            selected_profile = self.grok_deep_research_deep_profile()
+        else:
+            selected_profile = self.grok_deep_research_standard_profile()
+        return self.resolve_default_grok_model_for_url(api_url, profile=selected_profile)
 
     @property
     def config_file(self) -> Path:
@@ -178,6 +535,45 @@ class Config:
         return int(self._get_env_value("GROK_RETRY_MAX_WAIT", "10") or "10")
 
     @property
+    def deep_research_dir(self) -> Path:
+        raw = self._get_env_value("GROK_DEEP_RESEARCH_DIR")
+        if raw:
+            return Path(raw).expanduser()
+        return Path.home() / ".config" / "grok-search" / "deep-research"
+
+    @property
+    def deep_research_default_budget_seconds(self) -> int:
+        raw = self._get_env_value("GROK_DEEP_RESEARCH_DEFAULT_BUDGET_SECONDS", "240") or "240"
+        try:
+            return max(60, int(raw))
+        except ValueError:
+            return 240
+
+    @property
+    def deep_research_hard_timeout_seconds(self) -> int:
+        raw = self._get_env_value("GROK_DEEP_RESEARCH_HARD_TIMEOUT_SECONDS", "600") or "600"
+        try:
+            return max(120, int(raw))
+        except ValueError:
+            return 600
+
+    @property
+    def deep_research_max_concurrency(self) -> int:
+        raw = self._get_env_value("GROK_DEEP_RESEARCH_MAX_CONCURRENCY", "3") or "3"
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return 3
+
+    @property
+    def deep_research_recent_reuse_seconds(self) -> int:
+        raw = self._get_env_value("GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS", "1800") or "1800"
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return 1800
+
+    @property
     def output_cleanup_enabled(self) -> bool:
         raw = self._get_env_value("GROK_OUTPUT_CLEANUP")
         if raw is None:
@@ -191,7 +587,8 @@ class Config:
 
     @property
     def grok_api_url(self) -> str:
-        url = self._get_env_value("GROK_API_URL")
+        provider = self._resolve_provider_credentials()
+        url = provider["api_url"] if provider is not None else None
         if not url:
             raise ValueError(
                 f"Grok API URL 未配置！\n"
@@ -201,7 +598,8 @@ class Config:
 
     @property
     def grok_api_key(self) -> str:
-        key = self._get_env_value("GROK_API_KEY")
+        provider = self._resolve_provider_credentials()
+        key = provider["api_key"] if provider is not None else None
         if not key:
             raise ValueError(
                 f"Grok API Key 未配置！\n"
@@ -281,9 +679,76 @@ class Config:
             url = self.grok_api_url
         except ValueError:
             return model
-        if "openrouter" in url.lower() and ":online" not in model:
+        return self._apply_model_suffix_for_url(model, url)
+
+    @staticmethod
+    def _apply_model_suffix_for_url(model: str, api_url: str) -> str:
+        if not model:
+            return model
+        if "openrouter" in api_url.lower() and ":online" not in model:
             return f"{model}:online"
         return model
+
+    def _raw_env_keys(self) -> set[str]:
+        project_env = self._load_project_env()
+        return set(os.environ) | set(project_env)
+
+    def grok_provider_chain(self, model_override: str | None = None) -> list[dict[str, Any]]:
+        primary_url = self.grok_api_url
+        primary_key = self.grok_api_key
+        explicit_runtime_model = self._has_explicit_runtime_model()
+        if model_override is None:
+            base_model = self.grok_model
+        else:
+            base_model = model_override
+        chain: list[dict[str, Any]] = [
+            {
+                "name": "primary",
+                "api_url": primary_url,
+                "api_key": primary_key,
+                "model": self._apply_model_suffix_for_url(base_model, primary_url),
+                "provider_family": self.provider_family_for_url(primary_url),
+                "source": "primary",
+            }
+        ]
+        seen: set[tuple[str, str, str]] = {
+            (chain[0]["api_url"], chain[0]["api_key"], chain[0]["model"])
+        }
+        suffixes = sorted(
+            {
+                int(match.group(1))
+                for key in self._raw_env_keys()
+                if (match := re.fullmatch(r"GROK_API_URL_(\d+)", key))
+            }
+        )
+        for suffix in suffixes:
+            provider = self._resolve_provider_credentials(suffix)
+            provider_url = provider["api_url"] if provider is not None else None
+            provider_key = provider["api_key"] if provider is not None else None
+            if not provider_url or not provider_key:
+                continue
+            provider_model = self._get_env_value(f"GROK_MODEL_{suffix}")
+            if provider_model is not None:
+                resolved_model = self._apply_model_suffix_for_url(provider_model, provider_url)
+            elif model_override is not None or explicit_runtime_model:
+                resolved_model = self._apply_model_suffix_for_url(base_model, provider_url)
+            else:
+                resolved_model = self.resolve_default_grok_model_for_url(provider_url, suffix=suffix)
+            identity = (provider_url, provider_key, resolved_model)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            chain.append(
+                {
+                    "name": f"provider_{suffix}",
+                    "api_url": provider_url,
+                    "api_key": provider_key,
+                    "model": resolved_model,
+                    "provider_family": self.provider_family_for_url(provider_url, suffix=suffix),
+                    "source": provider["source"],
+                }
+            )
+        return chain
 
     @property
     def grok_model(self) -> str:
@@ -294,7 +759,14 @@ class Config:
         if env_model is not None:
             model = env_model
         else:
-            model = self._load_config_file().get("model") or self._DEFAULT_MODEL
+            persisted_model = self._load_config_file().get("model")
+            if persisted_model:
+                model = persisted_model
+            else:
+                try:
+                    model = self.resolve_default_grok_model_for_url(self.grok_api_url)
+                except ValueError:
+                    model = self._DEFAULT_MODEL
         self._cached_model = self._apply_model_suffix(model)
         return self._cached_model
 
@@ -317,6 +789,7 @@ class Config:
         self._cached_model = None
         self._project_env_cache = None
         self._project_env_source_cache = None
+        self._project_env_layers_cache = None
 
     @staticmethod
     def _mask_api_key(key: str) -> str:
@@ -398,6 +871,14 @@ class Config:
             "GROK_API_KEY": api_key_masked,
             "GROK_MODEL": self.grok_model,
             "GROK_MODEL_SOURCE": self.grok_model_source,
+            "GROK_MODEL_PROFILE": self.grok_model_profile(),
+            "GROK_DEEP_RESEARCH_STANDARD_PROFILE": self.grok_deep_research_standard_profile(),
+            "GROK_DEEP_RESEARCH_DEEP_PROFILE": self.grok_deep_research_deep_profile(),
+            "GROK_DEEP_RESEARCH_ULTRA_PROFILE": self.grok_deep_research_ultra_profile(),
+            "GROK_PROVIDER_FAMILY": (
+                self.provider_family_for_url(api_url) if api_url != "未配置" else "未配置"
+            ),
+            "GROK_ROUTING_DIAGNOSTICS": self.grok_routing_diagnostics(),
             "GROK_DEBUG": self.debug_enabled,
             "GROK_OUTPUT_CLEANUP": self.output_cleanup_enabled,
             "GROK_TIME_CONTEXT_MODE": self.time_context_mode,

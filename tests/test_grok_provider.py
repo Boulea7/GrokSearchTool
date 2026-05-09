@@ -1306,6 +1306,212 @@ async def test_execute_completion_does_not_retry_non_retryable_status(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_execute_completion_fails_over_to_next_provider(monkeypatch):
+    provider = GrokSearchProvider(
+        "https://primary.example.com/v1",
+        "primary-key",
+        "grok-4.20-0309",
+        fallback_providers=[
+            {
+                "name": "provider_2",
+                "api_url": "https://secondary.example.com/v1",
+                "api_key": "secondary-key",
+                "model": "grok-4.20-0309",
+            }
+        ],
+    )
+    monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "0")
+    monkeypatch.setenv("GROK_RETRY_MULTIPLIER", "0")
+    monkeypatch.setenv("GROK_RETRY_MAX_WAIT", "0")
+    calls = []
+
+    class FallbackAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            calls.append((url, headers.get("Authorization"), json.get("model")))
+            request = httpx.Request("POST", url, headers=headers, json=json)
+            if "primary.example.com" in url:
+                response = httpx.Response(503, json={"error": {"message": "upstream unavailable"}}, request=request)
+                raise httpx.HTTPStatusError("503", request=request, response=response)
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok from fallback"}}]}, request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", FallbackAsyncClient)
+
+    result = await provider._execute_completion_with_retry(
+        provider._build_api_headers(),
+        {"model": "grok-4.20-0309", "messages": [], "stream": False},
+    )
+
+    assert result == "ok from fallback"
+    assert calls == [
+        ("https://primary.example.com/v1/chat/completions", "Bearer primary-key", "grok-4.20-0309"),
+        ("https://secondary.example.com/v1/chat/completions", "Bearer secondary-key", "grok-4.20-0309"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_completion_falls_back_to_lower_grok_model_on_same_provider(monkeypatch):
+    provider = GrokSearchProvider("https://primary.example.com/v1", "primary-key", "grok-4.20-0309")
+    monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "0")
+    monkeypatch.setenv("GROK_RETRY_MULTIPLIER", "0")
+    monkeypatch.setenv("GROK_RETRY_MAX_WAIT", "0")
+    calls = []
+
+    class ModelFallbackAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            calls.append(json.get("model"))
+            request = httpx.Request("POST", url, headers=headers, json=json)
+            if json.get("model") == "grok-4.20-0309":
+                response = httpx.Response(
+                    503,
+                    json={"error": {"message": "No available channel for model grok-4.20-0309"}},
+                    request=request,
+                )
+                raise httpx.HTTPStatusError("503", request=request, response=response)
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok after model fallback"}}]}, request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", ModelFallbackAsyncClient)
+
+    result = await provider._execute_completion_with_retry(
+        provider._build_api_headers(),
+        {"model": "grok-4.20-0309", "messages": [], "stream": False},
+    )
+
+    assert result == "ok after model fallback"
+    assert calls[:2] == ["grok-4.20-0309", "grok-4.20-fast"]
+
+
+@pytest.mark.asyncio
+async def test_execute_completion_uses_responses_endpoint_for_multi_agent_models(monkeypatch):
+    provider = GrokSearchProvider("https://api.x.ai/v1", "primary-key", "grok-4.20-multi-agent-0309")
+    monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "0")
+    monkeypatch.setenv("GROK_RETRY_MULTIPLIER", "0")
+    monkeypatch.setenv("GROK_RETRY_MAX_WAIT", "0")
+    calls = []
+
+    class ResponsesAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            calls.append({"url": url, "json": json})
+            request = httpx.Request("POST", url, headers=headers, json=json)
+            return httpx.Response(200, json={"output_text": "ok from responses"}, request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", ResponsesAsyncClient)
+
+    result = await provider._execute_completion_with_retry(
+        provider._build_api_headers(),
+        {"model": "grok-4.20-multi-agent-0309", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+    )
+
+    assert result == "ok from responses"
+    assert calls == [
+        {
+            "url": "https://api.x.ai/v1/responses",
+            "json": {
+                "model": "grok-4.20-multi-agent-0309",
+                "input": [{"role": "user", "content": "hello"}],
+                "stream": False,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_completion_uses_responses_endpoint_for_response_only_relay_models(monkeypatch):
+    provider = GrokSearchProvider("https://grok2api.example.com/v1", "primary-key", "grok-4.20-reasoning")
+    monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "0")
+    monkeypatch.setenv("GROK_RETRY_MULTIPLIER", "0")
+    monkeypatch.setenv("GROK_RETRY_MAX_WAIT", "0")
+    calls = []
+
+    class RelayResponsesAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            calls.append({"url": url, "json": json})
+            request = httpx.Request("POST", url, headers=headers, json=json)
+            return httpx.Response(200, json={"output_text": "relay responses ok"}, request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", RelayResponsesAsyncClient)
+
+    result = await provider._execute_completion_with_retry(
+        provider._build_api_headers(),
+        {"model": "grok-4.20-reasoning", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+    )
+
+    assert result == "relay responses ok"
+    assert calls[0]["url"] == "https://grok2api.example.com/v1/responses"
+
+
+@pytest.mark.asyncio
+async def test_execute_completion_uses_responses_endpoint_for_dated_multi_agent_relay_models(monkeypatch):
+    provider = GrokSearchProvider("https://relay.example.com/v1", "primary-key", "grok-4.20-multi-agent-0309")
+    monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "0")
+    monkeypatch.setenv("GROK_RETRY_MULTIPLIER", "0")
+    monkeypatch.setenv("GROK_RETRY_MAX_WAIT", "0")
+    calls = []
+
+    class RelayResponsesAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            calls.append({"url": url, "json": json})
+            request = httpx.Request("POST", url, headers=headers, json=json)
+            return httpx.Response(200, json={"output_text": "relay responses ok"}, request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", RelayResponsesAsyncClient)
+
+    result = await provider._execute_completion_with_retry(
+        provider._build_api_headers(),
+        {"model": "grok-4.20-multi-agent-0309", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+    )
+
+    assert result == "relay responses ok"
+    assert calls[0]["url"] == "https://relay.example.com/v1/responses"
+    assert calls[0]["json"]["input"] == [{"role": "user", "content": "hello"}]
+    assert "messages" not in calls[0]["json"]
+
+
+@pytest.mark.asyncio
 async def test_execute_stream_retries_remote_protocol_error_then_succeeds(monkeypatch):
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     monkeypatch.setenv("GROK_RETRY_MAX_ATTEMPTS", "1")

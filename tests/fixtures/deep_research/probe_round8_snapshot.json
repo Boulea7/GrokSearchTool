@@ -1,0 +1,51 @@
+{
+  "job_id": "d137b8d16dac62191d8e69f8",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "summary": "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: databases. If you have opened an AWS Support case, your support engineer might identify a potential issue with one of your endpoint database configurations.",
+  "coverage": {
+    "planned_section_ids": [
+      "executive-summary",
+      "key-findings",
+      "open-questions"
+    ],
+    "answered_section_ids": [
+      "executive-summary"
+    ],
+    "unanswered_sections": [
+      "Key Findings",
+      "Open Questions"
+    ],
+    "planned_sub_question_ids": [
+      "sq1"
+    ],
+    "covered_sub_question_ids": [],
+    "uncovered_sub_questions": [
+      "Compare checkpoint resume and restart semantics in AWS DMS with official docs only"
+    ]
+  },
+  "sections": [
+    {
+      "section_id": "executive-summary",
+      "title": "Executive Summary",
+      "summary": "Medium confidence: Key point: databases. If you have opened an AWS Support case, your support engineer might identify a potential issue with one of your endpoint database configurations.",
+      "claims": [
+        {
+          "claim_id": "executive-summary-claim-1",
+          "text": "databases. If you have opened an AWS Support case, your support engineer might identify a potential issue with one of your endpoint database configurations.",
+          "citations": [
+            "R1"
+          ]
+        }
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Troubleshooting.html",
+      "title": "Troubleshooting migration tasks in AWS Database Migration Service",
+      "source_type": "official_docs",
+      "quality_tier": "official"
+    }
+  ]
+}

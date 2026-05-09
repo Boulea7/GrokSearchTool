@@ -1,6 +1,7 @@
 import json
 import secrets
 import sqlite3
+import datetime as dt
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,17 @@ def _json_loads(value: str | None) -> Any:
     if not value:
         return None
     return json.loads(value)
+
+
+def _parse_utc_iso(value: str) -> dt.datetime | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        normalized = text.replace("Z", "+00:00")
+        return dt.datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
 
 
 class DeepResearchStore:
@@ -282,6 +294,18 @@ class DeepResearchStore:
             for row in rows
         ]
 
+    def list_jobs(self, *, status: str = "", limit: int = 50) -> list[DeepResearchJob]:
+        query = "SELECT * FROM jobs"
+        params: list[Any] = []
+        if status:
+            query += " WHERE status = ?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return [self._row_to_job(row) for row in rows]
+
     def save_checkpoint(
         self,
         job_id: str,
@@ -360,6 +384,43 @@ class DeepResearchStore:
             metadata=metadata or {},
         )
 
+    def upsert_artifact_batch(
+        self,
+        job_id: str,
+        *,
+        artifacts: list[dict[str, Any]],
+    ) -> list[DeepResearchArtifact]:
+        existing_by_kind = {artifact.kind: artifact for artifact in self.list_artifacts(job_id)}
+        now = utc_now_iso()
+        persisted: list[DeepResearchArtifact] = []
+        with self._connect() as connection:
+            for item in artifacts:
+                kind = str(item["kind"])
+                path = str(item["path"])
+                content_type = str(item["content_type"])
+                metadata = dict(item.get("metadata") or {})
+                created_at = existing_by_kind[kind].created_at if kind in existing_by_kind else now
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO job_artifacts (
+                        job_id, kind, path, content_type, created_at, updated_at, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (job_id, kind, path, content_type, created_at, now, _json_dumps(metadata)),
+                )
+                persisted.append(
+                    DeepResearchArtifact(
+                        job_id=job_id,
+                        kind=kind,
+                        path=path,
+                        content_type=content_type,
+                        created_at=created_at,
+                        updated_at=now,
+                        metadata=metadata,
+                    )
+                )
+        return persisted
+
     def list_artifacts(self, job_id: str) -> list[DeepResearchArtifact]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -383,6 +444,18 @@ class DeepResearchStore:
             for row in rows
         ]
 
+    def artifact_abspath(self, job_id: str, kind: str) -> Path:
+        return self._artifacts_dir / job_id / kind
+
+    def read_artifact_text(self, job_id: str, kind: str) -> str | None:
+        artifact = self._get_artifact(job_id, kind)
+        if artifact is None:
+            return None
+        path = self._root_dir / artifact.path
+        if not path.exists():
+            return None
+        return path.read_text(encoding="utf-8")
+
     def find_reusable_job(self, request_fingerprint: str, *, recent_reuse_seconds: int) -> DeepResearchJob | None:
         with self._connect() as connection:
             rows = connection.execute(
@@ -395,13 +468,22 @@ class DeepResearchStore:
             ).fetchall()
         for row in rows:
             job = self._row_to_job(row)
-            if job.status in {"queued", "running"}:
+            if job.status in {"draft", "queued", "running"}:
+                return job
+            if job.status == "interrupted" and (job.phase == "finalizing" or job.current_checkpoint == "finalizing"):
                 return job
             if job.status == "completed" and recent_reuse_seconds > 0:
-                return job
+                finished_at = _parse_utc_iso(job.finished_at)
+                if finished_at is None:
+                    continue
+                age_seconds = (dt.datetime.now(dt.UTC) - finished_at.astimezone(dt.UTC)).total_seconds()
+                if age_seconds <= recent_reuse_seconds:
+                    return job
         return None
 
-    def reconcile_incomplete_jobs(self) -> list[DeepResearchJob]:
+    def reconcile_incomplete_jobs(self, *, stale_after_seconds: int = 0) -> list[DeepResearchJob]:
+        interrupted_at = utc_now_iso()
+        now = dt.datetime.now(dt.UTC)
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -412,7 +494,49 @@ class DeepResearchStore:
             ).fetchall()
         recovered: list[DeepResearchJob] = []
         for row in rows:
-            job = self.update_job(row["job_id"], status="interrupted")
+            if stale_after_seconds > 0:
+                candidate_times = [
+                    _parse_utc_iso(row["heartbeat_at"]),
+                    _parse_utc_iso(row["updated_at"]),
+                    _parse_utc_iso(row["started_at"]),
+                    _parse_utc_iso(row["created_at"]),
+                ]
+                visible_times = [item.astimezone(dt.UTC) for item in candidate_times if item is not None]
+                if visible_times:
+                    newest = max(visible_times)
+                    age_seconds = (now - newest).total_seconds()
+                    if age_seconds < stale_after_seconds:
+                        continue
+            if bool(row["cancel_requested"]):
+                job = self.update_job(
+                    row["job_id"],
+                    status="canceled",
+                    last_error="",
+                    finished_at=interrupted_at,
+                    heartbeat_at=interrupted_at,
+                )
+                self.append_event(
+                    row["job_id"],
+                    type="job_canceled",
+                    phase=row["phase"],
+                    message="Deep research canceled during worker recovery.",
+                    data={"reason": "cancel_requested_during_recovery"},
+                )
+            else:
+                job = self.update_job(
+                    row["job_id"],
+                    status="interrupted",
+                    last_error="worker_restarted",
+                    finished_at=interrupted_at,
+                    heartbeat_at=interrupted_at,
+                )
+                self.append_event(
+                    row["job_id"],
+                    type="job_interrupted",
+                    phase=row["phase"],
+                    message="Deep research interrupted during worker recovery.",
+                    data={"reason": "worker_restarted"},
+                )
             recovered.append(job)
         return recovered
 

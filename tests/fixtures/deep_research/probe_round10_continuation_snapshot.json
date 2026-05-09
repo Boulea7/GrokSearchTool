@@ -1,0 +1,66 @@
+{
+  "job_id": "ab006a2c597178a664903d41",
+  "query": "Continue from previous findings with focus on restart risk, instance reboot behavior, recovery timeout, CDC edge cases, and resume failure recovery",
+  "continued_from_job_id": "39f06508eeb45dba278a3101",
+  "attempt_count": 2,
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: filled_search_query:unit-search-continue-1"
+    }
+  },
+  "continuation": {
+    "mode": "continue",
+    "source_job_id": "39f06508eeb45dba278a3101",
+    "source_job_status": "completed",
+    "checkpoint_key": "finalizing",
+    "source_count": 1,
+    "previous_summary": "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: operations. For more information, see [Endpoint settings when using Amazon S3 as a target for AWS DMS](./CHAP_Target…",
+    "continuation_focus": [
+      "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+      "Medium confidence: Compare checkpoint resume and restart semantics in AWS DMS with official docs only: operations. For more information, see [Endpoint settings when using Amazon S3 as a target for AWS DMS](./CHAP_Target…"
+    ]
+  },
+  "report": {
+    "status": "degraded",
+    "coverage": {
+      "answered_section_ids": [
+        "executive-summary",
+        "follow-up-findings"
+      ],
+      "unanswered_sections": [
+        "Remaining Gaps"
+      ],
+      "covered_sub_question_ids": [
+        "sq1",
+        "sq2",
+        "sq3"
+      ],
+      "uncovered_sub_questions": []
+    },
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "source_id": "R2",
+      "domain": "nightlies.apache.org",
+      "title": "Task Failure Recovery [#](#task-failure-recovery)"
+    },
+    {
+      "source_id": "R4",
+      "domain": "docs.aws.amazon.com",
+      "title": "CHAP ReplicationInstance.Rebooting"
+    },
+    {
+      "source_id": "R3",
+      "domain": "nightlies.apache.org",
+      "title": "Batch jobs progress recovery from job master failures [#](#batch-jobs-progress-recovery-from-job-master-failures)"
+    }
+  ]
+}

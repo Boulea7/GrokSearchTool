@@ -62,7 +62,7 @@ class StubAsyncClient:
         key = ("POST", url)
         if key in self._exc:
             raise self._take(self._exc, key)
-        if key not in self._responses and url.endswith("/chat/completions"):
+        if key not in self._responses and (url.endswith("/chat/completions") or url.endswith("/responses")):
             response = httpx.Response(
                 200,
                 json={"choices": [{"message": {"content": "probe ok"}}]},
@@ -83,7 +83,7 @@ def patch_async_client(monkeypatch, responses=None, exceptions=None):
 
 
 async def load_config_info():
-    return json.loads(await server.get_config_info())
+    return await server.get_config_info()
 
 
 def doctor_checks(payload):
@@ -139,7 +139,7 @@ async def test_get_config_info_default_detail_keeps_full_payload(monkeypatch):
     }
     patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info())
+    payload = await server.get_config_info()
 
     assert "connection_test" in payload
     assert "feature_readiness" in payload
@@ -173,7 +173,7 @@ async def test_get_config_info_summary_detail_returns_machine_readable_minimum(m
     }
     patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info("summary"))
+    payload = await server.get_config_info("summary")
 
     assert "connection_test" in payload
     assert "feature_readiness" in payload
@@ -218,11 +218,11 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
     }
     patch_async_client(monkeypatch, responses)
 
-    default_payload = json.loads(await server.get_config_info())
+    default_payload = await server.get_config_info()
     patch_async_client(monkeypatch, responses)
-    explicit_full_payload = json.loads(await server.get_config_info(" Full "))
+    explicit_full_payload = await server.get_config_info(" Full ")
     patch_async_client(monkeypatch, responses)
-    summary_payload = json.loads(await server.get_config_info(" Summary "))
+    summary_payload = await server.get_config_info(" Summary ")
 
     assert set(default_payload) == set(explicit_full_payload)
     assert strip_response_times(default_payload) == strip_response_times(explicit_full_payload)
@@ -231,6 +231,12 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_API_KEY",
         "GROK_MODEL",
         "GROK_MODEL_SOURCE",
+        "GROK_MODEL_PROFILE",
+        "GROK_DEEP_RESEARCH_STANDARD_PROFILE",
+        "GROK_DEEP_RESEARCH_DEEP_PROFILE",
+        "GROK_DEEP_RESEARCH_ULTRA_PROFILE",
+        "GROK_PROVIDER_FAMILY",
+        "GROK_ROUTING_DIAGNOSTICS",
         "GROK_DEBUG",
         "GROK_OUTPUT_CLEANUP",
         "GROK_TIME_CONTEXT_MODE",
@@ -258,6 +264,8 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_API_KEY",
         "GROK_MODEL",
         "GROK_MODEL_SOURCE",
+        "GROK_DEEP_RESEARCH_ULTRA_PROFILE",
+        "GROK_ROUTING_DIAGNOSTICS",
         "GROK_DEBUG",
         "GROK_OUTPUT_CLEANUP",
         "GROK_TIME_CONTEXT_MODE",
@@ -308,7 +316,7 @@ async def test_get_config_info_summary_includes_all_base_snapshot_keys(monkeypat
     monkeypatch.setattr(server.config, "get_config_info", wrapped_get_config_info)
     patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info("summary"))
+    payload = await server.get_config_info("summary")
 
     assert payload["EXPERIMENTAL_FLAG"] == "enabled"
 
@@ -408,7 +416,7 @@ async def test_get_config_info_summary_and_full_run_the_same_probe_set(monkeypat
 
 @pytest.mark.asyncio
 async def test_get_config_info_rejects_unknown_detail_mode():
-    payload = json.loads(await server.get_config_info("verbose"))
+    payload = await server.get_config_info("verbose")
 
     assert payload["error"] == "invalid_detail"
     assert "detail" in payload["message"]
@@ -550,8 +558,18 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     assert payload["doctor"]["status"] == "ok"
     assert payload["doctor"]["checks"]
     assert checks["grok_search_probe"]["status"] == "ok"
+    assert checks["grok_provider_chain"]["status"] == "ok"
+    assert checks["grok_provider_chain"]["provider_count"] == 1
+    assert checks["grok_provider_capabilities"]["provider_family"] == "openai_compatible_relay"
+    assert checks["grok_provider_capabilities"]["responses_supported"] is False
+    assert checks["grok_provider_capabilities"]["multi_agent_supported"] is False
     assert checks["web_fetch_probe"]["status"] == "ok"
     assert payload["feature_readiness"]["web_search"]["status"] == "ready"
+    assert payload["feature_readiness"]["web_search"]["provider_family"] == "openai_compatible_relay"
+    assert payload["feature_readiness"]["web_search"]["responses_supported"] is False
+    assert payload["feature_readiness"]["web_search"]["multi_agent_supported"] is False
+    assert payload["feature_readiness"]["deep_research_planner"]["status"] == "ready"
+    assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "ready"
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
     assert payload["feature_readiness"]["web_fetch"]["status"] == "ready"
     assert payload["feature_readiness"]["web_fetch"]["providers"]["verified_path"] == "tavily"
@@ -614,18 +632,64 @@ async def test_get_config_info_get_sources_requires_readable_session_not_error_o
     payload = await load_config_info()
 
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_deep_research_runtime_degrades_on_body_quality_warning_but_planner_can_stay_ready(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        return server._build_doctor_check(
+            "grok_search_probe",
+            "warning",
+            "真实搜索探针成功，但正文只有来源列表。",
+            warning_code="body_missing_sources_only",
+        )
+
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["deep_research_planner"]["status"] == "ready"
+    assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_deep_research_runtime_and_planner_degrade_when_models_probe_unhealthy(monkeypatch):
+    async def fake_fetch_available_models(api_url, api_key):
+        return []
+
+    async def fake_probe_web_search(api_url, api_key, model):
+        return server._build_doctor_check("grok_search_probe", "ok", "真实搜索探针成功。")
+
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_fetch_available_models)
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe_web_search)
+    patch_async_client(monkeypatch, {})
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["web_search"]["status"] == "degraded"
+    assert payload["feature_readiness"]["deep_research_planner"]["status"] == "degraded"
+    assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "degraded"
     assert "尚无可读取的 source session" in payload["feature_readiness"]["get_sources"]["message"]
     assert payload["feature_readiness"]["get_sources"]["degraded_by"] == [
         {
             "check_id": "source_cache_state",
             "status": "degraded",
-            "reason_code": "error_only_source_cache",
+            "reason_code": "empty_source_cache",
         }
     ]
     assert payload["feature_readiness"]["get_sources"]["cache_summary"] == {
-        "total_sessions": 1,
+        "total_sessions": 0,
         "readable_sessions": 0,
-        "error_sessions": 1,
+        "error_sessions": 0,
         "partial_sessions": 0,
         "unreadable_sessions": 0,
     }
@@ -1582,6 +1646,29 @@ async def test_get_config_info_marks_configured_model_mismatch_as_degraded(monke
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_reports_official_xai_multi_agent_capability(monkeypatch):
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    responses = {
+        ("GET", "https://api.x.ai/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-multi-agent-0309"}, {"id": "grok-4.20-0309-reasoning"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert checks["grok_provider_capabilities"]["provider_family"] == "official_xai"
+    assert checks["grok_provider_capabilities"]["responses_supported"] is True
+    assert checks["grok_provider_capabilities"]["multi_agent_supported"] is True
+    assert payload["feature_readiness"]["deep_research_runtime"]["provider_family"] == "official_xai"
+    assert payload["feature_readiness"]["deep_research_runtime"]["responses_supported"] is True
+    assert payload["feature_readiness"]["deep_research_runtime"]["multi_agent_supported"] is True
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_marks_persisted_model_mismatch_as_degraded(monkeypatch):
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.setattr(server.config, "_load_config_file", lambda: {"model": "persisted-model"})
@@ -1636,6 +1723,159 @@ async def test_get_config_info_reports_runtime_model_source_when_project_env_loc
 
 
 @pytest.mark.asyncio
+async def test_get_config_info_exposes_routing_diagnostics_and_provider_chain_details(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_API_URL_2", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("GROK_API_KEY_2", "secondary-key")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-auto"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+    diagnostics = payload["GROK_ROUTING_DIAGNOSTICS"]
+    chain_check = doctor_checks(payload)["grok_provider_chain"]
+
+    assert diagnostics["active_provider"]["provider_family"] == "openai_compatible_relay"
+    assert diagnostics["profile_defaults"]["deep_research_deep"]["preferred_endpoint_path"] == "/responses"
+    assert diagnostics["profile_defaults"]["deep_research_deep"]["multi_agent_requested"] is True
+    assert "relay_responses_family" in diagnostics["profile_defaults"]["deep_research_deep"]["routing_signals"]
+    assert chain_check["provider_count"] == 2
+    assert chain_check["providers"] == [
+        {
+            "name": "primary",
+            "source": "primary",
+            "provider_family": "openai_compatible_relay",
+            "resolved_model": "grok-4.20-auto",
+            "preferred_endpoint_path": "/chat/completions",
+            "multi_agent_family": False,
+            "routing_signals": [
+                "model_family:single_agent",
+                "routing_path:chat_completions",
+                "relay_chat_completions_default",
+            ],
+        },
+        {
+            "name": "provider_2",
+            "source": "process_env",
+            "provider_family": "openrouter",
+            "resolved_model": "x-ai/grok-4.1-fast:online",
+            "preferred_endpoint_path": "/chat/completions",
+            "multi_agent_family": False,
+            "routing_signals": [
+                "model_family:single_agent",
+                "routing_path:chat_completions",
+                "openrouter_chat_completions_default",
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_marks_multi_agent_probe_path_as_responses(monkeypatch):
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-multi-agent")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-multi-agent"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert checks["grok_search_probe"]["endpoint"] == "https://api.example.com/v1/responses"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_exposes_ultra_profile_probe_readiness(monkeypatch):
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    responses = {
+        ("GET", "https://api.x.ai/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-heavy-16-agent"}, {"id": "grok-4.20-multi-agent-0309"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["deep_research_runtime"]["profile_probes"]["ultra"]["status"] == "ready"
+    assert payload["feature_readiness"]["deep_research_runtime"]["profile_probes"]["ultra"]["winning_model"] == "grok-4.20-heavy-16-agent"
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_exposes_winning_provider_in_web_search_readiness(monkeypatch):
+    async def fake_probe_web_search_with_fallback(api_url, api_key, requested_model, available_models):
+        return server._build_doctor_check(
+            "grok_search_probe",
+            "ok",
+            "真实搜索探针成功。",
+            provider_name="provider_2",
+            provider_model="grok-4.20-0309-non-reasoning",
+            endpoint="https://secondary.example.com/v1/chat/completions",
+        )
+
+    async def fake_probe_deep_research_profile(api_url, api_key, *, effort):
+        return server._build_doctor_check(
+            server._deep_research_probe_check_id(effort),
+            "ok",
+            f"Deep research {effort} 探针成功。",
+            provider_name="provider_2",
+            provider_model="grok-4.20-0309-non-reasoning",
+            endpoint="https://secondary.example.com/v1/chat/completions",
+        )
+
+    monkeypatch.setattr(server, "_probe_web_search_with_fallback", fake_probe_web_search_with_fallback)
+    monkeypatch.setattr(server, "_probe_deep_research_profile", fake_probe_deep_research_profile)
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.20-0309-non-reasoning"}]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+
+    assert payload["feature_readiness"]["web_search"]["winning_provider"] == "provider_2"
+    assert payload["feature_readiness"]["web_search"]["winning_model"] == "grok-4.20-0309-non-reasoning"
+    assert payload["feature_readiness"]["web_search"]["winning_endpoint"] == "https://secondary.example.com/v1/chat/completions"
+
+
+@pytest.mark.asyncio
 async def test_get_config_info_summary_exposes_runtime_override_machine_fields(monkeypatch, tmp_path):
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.setattr(server.config, "_project_root", lambda: tmp_path)
@@ -1649,7 +1889,7 @@ async def test_get_config_info_summary_exposes_runtime_override_machine_fields(m
     }
     patch_async_client(monkeypatch, responses)
 
-    payload = json.loads(await server.get_config_info("summary"))
+    payload = await server.get_config_info("summary")
     web_search = payload["feature_readiness"]["web_search"]
 
     assert web_search["status"] == "degraded"
@@ -2546,6 +2786,40 @@ async def test_web_search_rejects_unknown_explicit_model(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_accepts_explicit_model_when_it_is_available_on_fallback_provider(monkeypatch):
+    monkeypatch.setenv("GROK_API_URL_2", "https://secondary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY_2", "secondary-key")
+    observed = {}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model, fallback_providers=None):
+            observed["api_url"] = api_url
+            observed["model"] = model
+            observed["fallback_providers"] = fallback_providers or []
+
+        async def search_with_sources(self, query, **kwargs):
+            return "Search answer", [{"url": "https://docs.example.com/runtime", "title": "Runtime docs"}]
+
+    async def fake_models(api_url, api_key):
+        if api_url == "https://api.example.com/v1":
+            return ["grok-4.20-0309"]
+        if api_url == "https://secondary.example.com/v1":
+            return ["grok-4.20-heavy-16-agent"]
+        return []
+
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query", model="grok-4.20-heavy-16-agent")
+
+    assert result["status"] == "ok"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-heavy-16-agent"
+    assert observed["model"] == "grok-4.20-heavy-16-agent"
+    assert observed["fallback_providers"][0]["api_url"] == "https://secondary.example.com/v1"
+
+
+@pytest.mark.asyncio
 async def test_web_search_falls_back_to_preferred_available_grok_model_for_compatible_explicit_model(monkeypatch):
     captured = {}
 
@@ -2635,6 +2909,36 @@ async def test_web_search_retries_with_alternate_available_grok_model_after_runt
 
 
 @pytest.mark.asyncio
+async def test_web_search_runtime_fallback_accepts_localized_model_unavailable_message(monkeypatch):
+    captured = {"models": []}
+
+    class DummyProvider:
+        def __init__(self, api_url, api_key, model):
+            self.model = model
+            captured["models"].append(model)
+
+        async def search(self, query, platform):
+            if self.model == "grok-4.20-0309":
+                raise ValueError("模型当前不可用")
+            return "Search answer"
+
+    async def fake_models(api_url, api_key):
+        return ["grok-4.20-0309", "grok-4.20-fast"]
+
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(server, "GrokSearchProvider", DummyProvider)
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+
+    result = await server.web_search("test query")
+
+    assert result["status"] == "partial"
+    assert result["error"] is None
+    assert result["effective_params"]["model"] == "grok-4.20-fast"
+    assert "model_fallback_applied" in result["warnings"]
+    assert captured["models"] == ["grok-4.20-0309", "grok-4.20-fast"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_runtime_fallback_preserves_structured_sources_from_typed_path(monkeypatch):
     captured = {"models": []}
 
@@ -2687,6 +2991,36 @@ async def test_web_search_runtime_fallback_preserves_structured_sources_from_typ
             "rank": 1,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_web_search_fails_over_to_numbered_grok_provider(monkeypatch):
+    async def fake_models(api_url, api_key):
+        return []
+
+    patch_async_client(
+        monkeypatch,
+        responses={
+            ("POST", "https://secondary.example.com/v1/chat/completions"): httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "fallback provider ok"}}]},
+            )
+        },
+        exceptions={
+            ("POST", "https://api.example.com/v1/chat/completions"): httpx.ConnectError("primary down"),
+        },
+    )
+    monkeypatch.setattr(server, "_get_available_models_cached", fake_models)
+    monkeypatch.setenv("GROK_API_URL_2", "https://secondary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY_2", "secondary-key")
+    monkeypatch.setenv("GROK_MODEL_2", "grok-4.20-0309")
+    server.config.reset_runtime_state()
+
+    result = await server.web_search("fallback provider test", extra_sources=0)
+
+    assert result["status"] == "ok"
+    assert result["error"] is None
+    assert "fallback provider ok" in result["content"]
 
 
 @pytest.mark.asyncio
@@ -5199,7 +5533,7 @@ async def test_preflight_redirect_targets_passes_expected_transport_settings(mon
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_continues_when_redirect_preflight_is_skipped(monkeypatch):
+async def test_web_fetch_rejects_when_redirect_preflight_request_errors(monkeypatch):
     calls = {"tavily": 0, "firecrawl": 0}
 
     async def fake_tavily(url):
@@ -5233,12 +5567,12 @@ async def test_web_fetch_continues_when_redirect_preflight_is_skipped(monkeypatc
 
     result = await server.web_fetch("https://public.example.com/start")
 
-    assert result == "# Tavily"
-    assert calls == {"tavily": 1, "firecrawl": 0}
+    assert result == "提取失败: 目标 URL 重定向预检失败"
+    assert calls == {"tavily": 0, "firecrawl": 0}
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_continues_when_redirect_preflight_times_out(monkeypatch):
+async def test_web_fetch_rejects_when_redirect_preflight_times_out(monkeypatch):
     calls = {"tavily": 0, "firecrawl": 0}
 
     async def fake_tavily(url):
@@ -5271,12 +5605,12 @@ async def test_web_fetch_continues_when_redirect_preflight_times_out(monkeypatch
 
     result = await server.web_fetch("https://public.example.com/start")
 
-    assert result == "# Tavily"
-    assert calls == {"tavily": 1, "firecrawl": 0}
+    assert result == "提取失败: 目标 URL 重定向预检超时"
+    assert calls == {"tavily": 0, "firecrawl": 0}
 
 
 @pytest.mark.asyncio
-async def test_web_map_continues_when_redirect_preflight_is_skipped(monkeypatch):
+async def test_web_map_rejects_when_redirect_preflight_request_errors(monkeypatch):
     calls = {"map": 0}
 
     async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
@@ -5305,12 +5639,12 @@ async def test_web_map_continues_when_redirect_preflight_is_skipped(monkeypatch)
 
     result = await server.web_map("https://public.example.com/start")
 
-    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
-    assert calls == {"map": 1}
+    assert result == "映射失败: 目标 URL 重定向预检失败"
+    assert calls == {"map": 0}
 
 
 @pytest.mark.asyncio
-async def test_web_map_continues_when_redirect_preflight_times_out(monkeypatch):
+async def test_web_map_rejects_when_redirect_preflight_times_out(monkeypatch):
     calls = {"map": 0}
 
     async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
@@ -5338,20 +5672,13 @@ async def test_web_map_continues_when_redirect_preflight_times_out(monkeypatch):
 
     result = await server.web_map("https://public.example.com/start")
 
-    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
-    assert calls == {"map": 1}
+    assert result == "映射失败: 目标 URL 重定向预检超时"
+    assert calls == {"map": 0}
 
 
 @pytest.mark.asyncio
-async def test_web_map_reports_skipped_preflight_progress_when_debug_enabled(monkeypatch):
-    messages = []
+async def test_web_fetch_does_not_emit_ctx_messages_when_preflight_blocks(monkeypatch):
     ctx = ProgressContext()
-
-    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
-        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
-
-    async def fake_log_info(ctx, message, is_debug=False):
-        messages.append((ctx, message, is_debug))
 
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
@@ -5367,108 +5694,18 @@ async def test_web_map_reports_skipped_preflight_progress_when_debug_enabled(mon
             request = httpx.Request("GET", url, headers=headers)
             raise httpx.RequestError("boom", request=request)
 
-    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(server, "log_info", fake_log_info)
     monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("TAVILY_ENABLED", "true")
-    monkeypatch.setenv("GROK_DEBUG", "true")
-    server.config.reset_runtime_state()
-
-    result = await server.web_map("https://public.example.com/start", ctx=ctx)
-
-    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
-    assert any(
-        context is ctx and is_debug and message.startswith("Redirect preflight skipped: ")
-        for context, message, is_debug in messages
-    )
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_reports_skipped_preflight_progress_when_debug_enabled(monkeypatch):
-    messages = []
-    ctx = ProgressContext()
-
-    async def fake_tavily(url):
-        return "# Tavily", None
-
-    async def fake_log_info(context, message, is_debug=False):
-        messages.append((context, message, is_debug))
-
-    class RedirectingAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url, headers=None):
-            request = httpx.Request("GET", url, headers=headers)
-            raise httpx.RequestError("boom", request=request)
-
-    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
-    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(server, "log_info", fake_log_info)
-    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
-    monkeypatch.setenv("GROK_DEBUG", "true")
-    server.config.reset_runtime_state()
 
     result = await server.web_fetch("https://public.example.com/start", ctx=ctx)
 
-    assert result == "# Tavily"
-    assert any(
-        context is ctx and is_debug and message.startswith("Redirect preflight skipped: ")
-        for context, message, is_debug in messages
-    )
+    assert result == "提取失败: 目标 URL 重定向预检失败"
+    assert ctx.messages == []
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_reports_skipped_preflight_warning_to_ctx_even_when_debug_disabled(monkeypatch):
+async def test_web_map_does_not_emit_ctx_messages_when_preflight_blocks(monkeypatch):
     ctx = ProgressContext()
-
-    async def fake_tavily(url):
-        return "# Tavily", None
-
-    class RedirectingAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url, headers=None):
-            request = httpx.Request("GET", url, headers=headers)
-            raise httpx.RequestError("boom", request=request)
-
-    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
-    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
-    monkeypatch.setenv("GROK_DEBUG", "false")
-    server.config.reset_runtime_state()
-
-    result = await server.web_fetch("https://public.example.com/start", ctx=ctx)
-
-    assert result == "# Tavily"
-    assert any(message.startswith("Warning: Redirect preflight skipped: ") for message in ctx.messages)
-
-
-@pytest.mark.asyncio
-async def test_web_map_reports_skipped_preflight_warning_to_ctx_even_when_debug_disabled(monkeypatch):
-    ctx = ProgressContext()
-
-    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
-        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
 
     class RedirectingAsyncClient:
         def __init__(self, *args, **kwargs):
@@ -5483,85 +5720,13 @@ async def test_web_map_reports_skipped_preflight_warning_to_ctx_even_when_debug_
         async def get(self, url, headers=None):
             raise httpx.TimeoutException("slow")
 
-    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
     monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
     monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("TAVILY_ENABLED", "true")
-    monkeypatch.setenv("GROK_DEBUG", "false")
-    server.config.reset_runtime_state()
 
     result = await server.web_map("https://public.example.com/start", ctx=ctx)
 
-    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
-    assert any(message.startswith("Warning: Redirect preflight skipped: ") for message in ctx.messages)
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_keeps_success_payload_when_warning_ctx_delivery_fails(monkeypatch):
-    ctx = FailingProgressContext()
-
-    async def fake_tavily(url):
-        return "# Tavily", None
-
-    class RedirectingAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url, headers=None):
-            request = httpx.Request("GET", url, headers=headers)
-            raise httpx.RequestError("boom", request=request)
-
-    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily)
-    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
-    monkeypatch.setenv("GROK_DEBUG", "false")
-    server.config.reset_runtime_state()
-
-    result = await server.web_fetch("https://public.example.com/start", ctx=ctx)
-
-    assert result == "# Tavily"
-
-
-@pytest.mark.asyncio
-async def test_web_map_keeps_success_payload_when_warning_ctx_delivery_fails(monkeypatch):
-    ctx = FailingProgressContext()
-
-    async def fake_tavily_map(url, instructions=None, max_depth=1, max_breadth=20, limit=50, timeout=150):
-        return json.dumps({"base_url": url, "results": []}, ensure_ascii=False)
-
-    class RedirectingAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url, headers=None):
-            raise httpx.TimeoutException("slow")
-
-    monkeypatch.setattr(server, "_call_tavily_map", fake_tavily_map)
-    monkeypatch.setattr(server, "_preflight_public_target_url", ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL)
-    monkeypatch.setattr(httpx, "AsyncClient", RedirectingAsyncClient)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("TAVILY_ENABLED", "true")
-    monkeypatch.setenv("GROK_DEBUG", "false")
-    server.config.reset_runtime_state()
-
-    result = await server.web_map("https://public.example.com/start", ctx=ctx)
-
-    assert result == json.dumps({"base_url": "https://public.example.com/start", "results": []}, ensure_ascii=False)
+    assert result == "映射失败: 目标 URL 重定向预检超时"
+    assert ctx.messages == []
 
 
 @pytest.mark.asyncio
@@ -5980,6 +6145,32 @@ async def test_call_firecrawl_scrape_retries_empty_markdown_then_succeeds(monkey
         httpx,
         "AsyncClient",
         lambda *args, **kwargs: StubAsyncClient(responses, {}, *args, **kwargs),
+    )
+
+    content, error = await server._call_firecrawl_scrape("https://example.com")
+
+    assert error is None
+    assert content == "# recovered"
+
+
+@pytest.mark.asyncio
+async def test_call_firecrawl_scrape_retries_request_error_then_succeeds(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    request = httpx.Request("POST", "https://api.firecrawl.dev/v2/scrape")
+    responses = {
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): [
+            httpx.Response(200, json={"data": {"markdown": "# recovered"}}),
+        ],
+    }
+    exceptions = {
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): [
+            httpx.RequestError("boom", request=request),
+        ],
+    }
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: StubAsyncClient(responses, exceptions, *args, **kwargs),
     )
 
     content, error = await server._call_firecrawl_scrape("https://example.com")

@@ -1,0 +1,87 @@
+{
+  "sample": "probe-final",
+  "query": "Compare checkpoint resume and restart semantics in AWS DMS with official docs only",
+  "report": {
+    "coverage": {
+      "planned_section_ids": [
+        "overview-of-aws-dms-task-lifecycle-and-migration-types",
+        "checkpoint-concepts-and-usage-in-dms",
+        "resume-semantics-resume-processing",
+        "restart-reload-semantics-reload-target-and-full-restarts",
+        "key-differences-and-scenarios-full-load-vs-cdc-failure-recovery-instance-reboot",
+        "relevant-task-settings-and-best-practices",
+        "summary-comparison-table"
+      ],
+      "answered_section_ids": [
+        "overview-of-aws-dms-task-lifecycle-and-migration-types",
+        "checkpoint-concepts-and-usage-in-dms",
+        "resume-semantics-resume-processing"
+      ],
+      "unanswered_sections": [
+        "Restart/Reload Semantics (reload-target and full restarts)",
+        "Key Differences and Scenarios (full-load vs. CDC, failure recovery, instance reboot)",
+        "Relevant Task Settings and Best Practices",
+        "Summary Comparison Table"
+      ],
+      "planned_sub_question_ids": [
+        "sq1",
+        "sq2",
+        "sq3",
+        "sq4",
+        "sq5",
+        "sq6"
+      ],
+      "covered_sub_question_ids": [
+        "sq1",
+        "sq2",
+        "sq3",
+        "sq4",
+        "sq5",
+        "sq6"
+      ],
+      "uncovered_sub_questions": []
+    },
+    "sections": [
+      {
+        "section_id": "checkpoint-concepts-and-usage-in-dms",
+        "title": "Checkpoint Concepts and Usage in DMS",
+        "claims": [
+          {
+            "claim_id": "checkpoint-concepts-and-usage-in-dms-claim-2",
+            "text": "Real-world analogy: Think of StartReplicationTaskType as choosing start a new journey, resume-processing, or reload-target.",
+            "citations": [
+              "R1"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "citations": {
+    "source_registry": {
+      "R1": {
+        "source_id": "R1",
+        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+        "title": "StartReplicationTask",
+        "source_type": "official_docs",
+        "quality_tier": "official"
+      }
+    }
+  },
+  "golden": {
+    "citation_faithfulness": {
+      "verdict": "fail",
+      "score": 0.3,
+      "reason_tags": [
+        "ungrounded_analogy"
+      ]
+    },
+    "coverage_completeness": {
+      "verdict": "fail",
+      "score": 0.714,
+      "reason_tags": [
+        "unanswered_sections"
+      ]
+    }
+  }
+}

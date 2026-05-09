@@ -1,3 +1,5 @@
+import pytest
+
 from grok_search.config import Config
 
 
@@ -12,6 +14,74 @@ def test_default_grok_model_prefers_grok_4_20_0309():
     config = Config()
 
     assert config._DEFAULT_MODEL == "grok-4.20-0309"
+
+
+def test_default_grok_model_uses_provider_aware_balanced_default_for_official_xai(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.grok_model == "grok-4.20-0309-non-reasoning"
+
+
+def test_default_grok_model_uses_provider_aware_balanced_default_for_openrouter(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.grok_model == "x-ai/grok-4.1-fast:online"
+
+
+def test_default_grok_model_uses_provider_aware_balanced_default_for_relay(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://grok2api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.grok_model == "grok-4.20-auto"
+
+
+def test_grok_provider_chain_uses_provider_specific_defaults_when_runtime_model_is_implicit(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://grok2api.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+    (tmp_path / ".env.local").write_text(
+        (
+            "GROK_API_URL_2=https://openrouter.ai/api/v1\n"
+            "GROK_API_KEY_2=secondary-key\n"
+            "GROK_API_URL_3=https://api.x.ai/v1\n"
+            "GROK_API_KEY_3=third-key\n"
+        ),
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    chain = config.grok_provider_chain()
+
+    assert [item["model"] for item in chain] == [
+        "grok-4.20-auto",
+        "x-ai/grok-4.1-fast:online",
+        "grok-4.20-0309-non-reasoning",
+    ]
+    assert [item["provider_family"] for item in chain] == [
+        "grok2api_like",
+        "openrouter",
+        "official_xai",
+    ]
 
 
 def test_time_context_mode_defaults_to_always(monkeypatch):
@@ -145,6 +215,234 @@ def test_process_env_takes_precedence_over_project_env_files(monkeypatch, tmp_pa
     config.reset_runtime_state()
 
     assert config.grok_api_url == "https://env.example.com/v1"
+
+
+def test_primary_provider_does_not_mix_env_url_with_project_key(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("GROK_API_URL", "https://env.example.com/v1")
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text("GROK_API_KEY=project-key\n", encoding="utf-8")
+    config.reset_runtime_state()
+
+    with pytest.raises(ValueError, match="Grok API Key 未配置"):
+        _ = config.grok_api_key
+
+
+def test_primary_provider_does_not_mix_env_key_with_project_url(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("GROK_API_URL", raising=False)
+    monkeypatch.setenv("GROK_API_KEY", "env-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text("GROK_API_URL=https://project.example.com/v1\n", encoding="utf-8")
+    config.reset_runtime_state()
+
+    with pytest.raises(ValueError, match="Grok API URL 未配置"):
+        _ = config.grok_api_url
+
+
+def test_grok_provider_chain_includes_numbered_fallback_providers(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.20-0309")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text(
+        (
+            "GROK_API_URL_2=https://secondary.example.com/v1\n"
+            "GROK_API_KEY_2=secondary-key\n"
+            "GROK_MODEL_2=grok-4.20-0309\n"
+            "GROK_API_URL_3=https://third.example.com/v1\n"
+            "GROK_API_KEY_3=third-key\n"
+        ),
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    chain = config.grok_provider_chain()
+
+    assert [item["api_url"] for item in chain] == [
+        "https://primary.example.com/v1",
+        "https://secondary.example.com/v1",
+        "https://third.example.com/v1",
+    ]
+    assert [item["model"] for item in chain] == [
+        "grok-4.20-0309",
+        "grok-4.20-0309",
+        "grok-4.20-0309",
+    ]
+    assert chain[1]["name"] == "provider_2"
+
+
+def test_grok_provider_chain_skips_numbered_provider_when_url_and_key_cross_layers(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setenv("GROK_API_URL_2", "https://secondary.example.com/v1")
+    monkeypatch.delenv("GROK_API_KEY_2", raising=False)
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text("GROK_API_KEY_2=secondary-key\n", encoding="utf-8")
+    config.reset_runtime_state()
+
+    chain = config.grok_provider_chain()
+
+    assert [item["name"] for item in chain] == ["primary"]
+
+
+def test_grok_provider_chain_does_not_change_base_config_snapshot(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.setenv("GROK_API_URL", "https://primary.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    (tmp_path / ".env.local").write_text(
+        "GROK_API_URL_2=https://secondary.example.com/v1\nGROK_API_KEY_2=secondary-key\n",
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    info = config.get_config_info()
+
+    assert "GROK_PROVIDER_COUNT" not in info
+    assert "GROK_PROVIDER_CHAIN" not in info
+
+
+def test_get_config_info_includes_routing_diagnostics_for_profile_defaults(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    info = config.get_config_info()
+    diagnostics = info["GROK_ROUTING_DIAGNOSTICS"]
+
+    assert diagnostics["active_provider"]["provider_family"] == "official_xai"
+    assert diagnostics["active_provider"]["resolved_model"] == "grok-4.20-0309-non-reasoning"
+    assert diagnostics["active_provider"]["preferred_endpoint_path"] == "/chat/completions"
+    assert diagnostics["active_provider"]["path_visibility"] == {
+        "chat_completions": "https://api.x.ai/v1/chat/completions",
+        "responses": "https://api.x.ai/v1/responses",
+    }
+    assert diagnostics["profile_defaults"]["web_search"] == {
+        "profile": "balanced_auto",
+        "resolved_model": "grok-4.20-0309-non-reasoning",
+        "preferred_endpoint_path": "/chat/completions",
+        "path_visibility": {
+            "chat_completions": "https://api.x.ai/v1/chat/completions",
+            "responses": "https://api.x.ai/v1/responses",
+        },
+        "multi_agent_requested": False,
+        "multi_agent_family": False,
+        "routing_signals": [
+            "profile_requests_single_agent",
+            "model_family:single_agent",
+            "routing_path:chat_completions",
+            "official_xai_chat_completions_default",
+        ],
+    }
+    assert diagnostics["profile_defaults"]["deep_research_deep"] == {
+        "profile": "multi_agent",
+        "resolved_model": "grok-4.20-multi-agent-0309",
+        "preferred_endpoint_path": "/responses",
+        "path_visibility": {
+            "chat_completions": "https://api.x.ai/v1/chat/completions",
+            "responses": "https://api.x.ai/v1/responses",
+        },
+        "multi_agent_requested": True,
+        "multi_agent_family": True,
+        "routing_signals": [
+            "profile_requests_multi_agent",
+            "model_family:multi_agent",
+            "routing_path:responses",
+            "official_xai_multi_agent_prefers_responses",
+        ],
+    }
+
+
+def test_get_config_info_routing_diagnostics_summarize_provider_chain_families_and_paths(monkeypatch, tmp_path):
+    config = Config()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://relay.example.com/v1")
+    monkeypatch.setenv("GROK_API_KEY", "primary-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+    (tmp_path / ".env.local").write_text(
+        (
+            "GROK_API_URL_2=https://openrouter.ai/api/v1\n"
+            "GROK_API_KEY_2=secondary-key\n"
+            "GROK_API_URL_3=https://api.x.ai/v1\n"
+            "GROK_API_KEY_3=third-key\n"
+        ),
+        encoding="utf-8",
+    )
+    config.reset_runtime_state()
+
+    info = config.get_config_info()
+    provider_chain = info["GROK_ROUTING_DIAGNOSTICS"]["provider_chain"]
+
+    assert provider_chain == [
+        {
+            "name": "primary",
+            "source": "primary",
+            "provider_family": "openai_compatible_relay",
+            "resolved_model": "grok-4.20-auto",
+            "preferred_endpoint_path": "/chat/completions",
+            "multi_agent_family": False,
+            "routing_signals": [
+                "model_family:single_agent",
+                "routing_path:chat_completions",
+                "relay_chat_completions_default",
+            ],
+        },
+        {
+            "name": "provider_2",
+            "source": "project_env_local",
+            "provider_family": "openrouter",
+            "resolved_model": "x-ai/grok-4.1-fast:online",
+            "preferred_endpoint_path": "/chat/completions",
+            "multi_agent_family": False,
+            "routing_signals": [
+                "model_family:single_agent",
+                "routing_path:chat_completions",
+                "openrouter_chat_completions_default",
+            ],
+        },
+        {
+            "name": "provider_3",
+            "source": "project_env_local",
+            "provider_family": "official_xai",
+            "resolved_model": "grok-4.20-0309-non-reasoning",
+            "preferred_endpoint_path": "/chat/completions",
+            "multi_agent_family": False,
+            "routing_signals": [
+                "model_family:single_agent",
+                "routing_path:chat_completions",
+                "official_xai_chat_completions_default",
+            ],
+        },
+    ]
+
+
+def test_deep_research_ultra_profile_defaults_to_ultra(monkeypatch):
+    monkeypatch.delenv("GROK_DEEP_RESEARCH_ULTRA_PROFILE", raising=False)
+    config = Config()
+    config.reset_runtime_state()
+
+    assert config.grok_deep_research_ultra_profile() == "ultra"
+
+
+def test_resolve_deep_research_model_for_ultra_prefers_heavy_16_agent_on_official_xai(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.resolve_deep_research_model_for_url("https://api.x.ai/v1", effort="ultra") == "grok-4.20-heavy-16-agent"
 
 
 def test_empty_process_env_still_blocks_project_env_fallback(monkeypatch, tmp_path):

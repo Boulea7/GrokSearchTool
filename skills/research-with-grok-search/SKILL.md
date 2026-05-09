@@ -49,6 +49,22 @@ Stop early based on complexity:
 - `get_sources`: inspect cached sources for a prior search
 - `web_fetch`: read the content of a specific page
 - `web_map`: discover pages in a site section
+- `deep_research_*`: start, inspect, resume, cancel, and retrieve advanced report-style research jobs when the task is multi-minute, open-ended, or needs resumable artifacts
+
+Use `deep_research_*` instead of overloading the lightweight path when the task needs:
+
+- multi-phase progress
+- resumable or cancelable execution
+- partial reports or exported artifacts
+- a report-oriented result rather than a single direct answer
+
+For deep research control flows:
+
+- prefer `grok-search-research` for long-running watch loops, targeted artifact reads, and continuation-heavy local workflows
+- use `deep_research_resume` when resuming the same job from its latest checkpoint boundary
+- use `deep_research_start(...continue_from_job_id=...)` or CLI `continue` when opening a new follow-up job that should consume previous artifacts and findings
+- remember that `deep_research_start` may return `reused=true` unless you explicitly force a brand-new job
+- treat `sources.json` / `citations.json` as the canonical source registry surfaces; prefer the enriched source metadata and claim provenance fields over raw source counts when judging evidence quality
 
 ### 4. Verify sources before making strong claims
 

@@ -1,11 +1,12 @@
 import asyncio
+import json
 import re
 import sys
 import time
 from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
 from fastmcp import FastMCP, Context
@@ -20,7 +21,7 @@ if str(src_dir) not in sys.path:
 try:
     from grok_search.providers.grok import GrokSearchProvider
     from grok_search.providers.base import _filter_supported_search_kwargs
-    from grok_search.logger import log_info, log_warning
+    from grok_search.logger import log_info
     from grok_search.config import config
     from grok_search.sources import (
         SourcesCache,
@@ -43,10 +44,11 @@ try:
         engine as planning_engine,
         _split_csv,
     )
+    from grok_search.deep_research_runtime import DeepResearchRuntime
 except ImportError:
     from .providers.grok import GrokSearchProvider
     from .providers.base import _filter_supported_search_kwargs
-    from .logger import log_info, log_warning
+    from .logger import log_info
     from .config import config
     from .sources import (
         SourcesCache,
@@ -69,6 +71,7 @@ except ImportError:
         engine as planning_engine,
         _split_csv,
     )
+    from .deep_research_runtime import DeepResearchRuntime
 
 mcp = FastMCP("grok-search")
 
@@ -83,10 +86,31 @@ _PREFERRED_GROK_MODEL = "grok-4.20-0309"
 _MODEL_FALLBACK_WARNING = "model_fallback_applied"
 _BODY_MISSING_SOURCES_ONLY_WARNING = "body_missing_sources_only"
 _BODY_PROBABLY_TRUNCATED_WARNING = "body_probably_truncated"
+_DEEP_RESEARCH_RUNTIME = DeepResearchRuntime(config.deep_research_dir)
 
 
 def _available_models_cache_now() -> float:
     return time.monotonic()
+
+
+def _instantiate_grok_provider(current_model: str):
+    provider_chain = config.grok_provider_chain(model_override=current_model)
+    provider_cls = GrokSearchProvider
+    try:
+        return provider_cls(
+            provider_chain[0]["api_url"],
+            provider_chain[0]["api_key"],
+            provider_chain[0]["model"],
+            fallback_providers=provider_chain[1:],
+        )
+    except TypeError as exc:
+        if "fallback_providers" not in str(exc):
+            raise
+        return provider_cls(
+            provider_chain[0]["api_url"],
+            provider_chain[0]["api_key"],
+            provider_chain[0]["model"],
+        )
 
 
 def _available_models_cache_expires_at() -> float | None:
@@ -145,14 +169,35 @@ async def _get_available_models_cached(api_url: str, api_key: str) -> list[str]:
     return models
 
 
+async def _get_provider_chain_available_models(provider_chain: list[dict[str, Any]]) -> tuple[list[str], dict[str, list[str]]]:
+    available_by_provider: dict[str, list[str]] = {}
+    merged: list[str] = []
+    for provider in provider_chain:
+        api_url = str(provider.get("api_url", "") or "")
+        api_key = str(provider.get("api_key", "") or "")
+        if not api_url or not api_key:
+            continue
+        provider_name = str(provider.get("name", "") or api_url)
+        models = await _get_available_models_cached(api_url, api_key)
+        available_by_provider[provider_name] = models
+        for model in models:
+            if model not in merged:
+                merged.append(model)
+    return merged, available_by_provider
+
+
 def _parse_grok_model_parts(model: str) -> tuple[int, int, tuple[int, ...], str] | None:
     text = (model or "").strip().lower()
-    match = re.match(r"^grok-(\d+)\.(\d+)(?:-(.*))?$", text)
+    if "/" in text:
+        text = text.split("/", 1)[1]
+    if ":" in text:
+        text = text.split(":", 1)[0]
+    match = re.match(r"^grok-(\d+)(?:[.-](\d+))?(?:-(.*))?$", text)
     if not match:
         return None
 
     major = int(match.group(1))
-    minor = int(match.group(2))
+    minor = int(match.group(2) or 0)
     remainder = (match.group(3) or "").strip()
     numeric_parts: list[int] = []
     semantic_parts: list[str] = []
@@ -165,6 +210,105 @@ def _parse_grok_model_parts(model: str) -> tuple[int, int, tuple[int, ...], str]
                 semantic_parts.append(part)
 
     return major, minor, tuple(numeric_parts), "-".join(semantic_parts)
+
+
+def _normalized_grok_model_core(model: str) -> str:
+    text = (model or "").strip().lower()
+    if "/" in text:
+        text = text.split("/", 1)[1]
+    if ":" in text:
+        text = text.split(":", 1)[0]
+    return text
+
+
+def _supports_multi_agent_family(model: str) -> bool:
+    core = _normalized_grok_model_core(model)
+    return any(token in core for token in ("multi-agent", "heavy-16-agent", "expert-4-agent"))
+
+
+def _preferred_endpoint_path(provider_family: str, model: str) -> str:
+    core = _normalized_grok_model_core(model)
+    if provider_family == "openrouter":
+        return "/chat/completions"
+    if provider_family == "official_xai" and _supports_multi_agent_family(core):
+        return "/responses"
+    if provider_family in {"openai_compatible_relay", "grok2api_like"} and (
+        _supports_multi_agent_family(core)
+        or core in {
+            "grok-4.20-reasoning",
+            "grok-4.20-multi-agent",
+            "grok-4.20-expert-4-agent",
+            "grok-4.20-heavy-16-agent",
+        }
+    ):
+        return "/responses"
+    return "/chat/completions"
+
+
+def _routing_signals(provider_family: str, model: str) -> list[str]:
+    multi_agent_family = _supports_multi_agent_family(model)
+    endpoint_path = _preferred_endpoint_path(provider_family, model)
+    signals = [
+        f"model_family:{'multi_agent' if multi_agent_family else 'single_agent'}",
+        f"routing_path:{'responses' if endpoint_path == '/responses' else 'chat_completions'}",
+    ]
+    if provider_family == "openrouter":
+        signals.append("openrouter_chat_completions_default")
+    elif endpoint_path == "/responses":
+        signals.append("relay_responses_family" if provider_family != "official_xai" else "official_responses_family")
+    else:
+        signals.append("relay_chat_completions_default")
+    return signals
+
+
+def _routing_profile_summary(api_url: str, model: str) -> dict[str, Any]:
+    provider_family = config.provider_family_for_url(api_url)
+    return {
+        "provider_family": provider_family,
+        "resolved_model": model,
+        "preferred_endpoint_path": _preferred_endpoint_path(provider_family, model),
+        "multi_agent_family": _supports_multi_agent_family(model),
+        "routing_signals": _routing_signals(provider_family, model),
+    }
+
+
+def _profile_default_summary(api_url: str, *, profile: str, effort: str | None = None) -> dict[str, Any]:
+    if effort is None:
+        resolved_model = config.resolve_default_grok_model_for_url(api_url, profile=profile)
+    else:
+        resolved_model = config.resolve_deep_research_model_for_url(api_url, effort=effort)
+    summary = _routing_profile_summary(api_url, resolved_model)
+    summary["selected_profile"] = profile
+    summary["multi_agent_requested"] = profile in {"multi_agent", "ultra"} or (effort or "").strip().lower() in {"deep", "ultra"}
+    return summary
+
+
+def _build_routing_diagnostics(provider_chain: list[dict[str, Any]]) -> dict[str, Any]:
+    if not provider_chain:
+        return {"active_provider": {}, "profile_defaults": {}}
+    primary = provider_chain[0]
+    api_url = primary["api_url"]
+    return {
+        "active_provider": _routing_profile_summary(api_url, primary["model"]),
+        "profile_defaults": {
+            "general": _profile_default_summary(api_url, profile=config.grok_model_profile()),
+            "deep_research_standard": _profile_default_summary(
+                api_url,
+                profile=config.grok_deep_research_standard_profile(),
+                effort="standard",
+            ),
+            "deep_research_deep": _profile_default_summary(
+                api_url,
+                profile=config.grok_deep_research_deep_profile(),
+                effort="deep",
+            ),
+            "deep_research_ultra": _profile_default_summary(
+                api_url,
+                profile=config.grok_deep_research_ultra_profile(),
+                effort="ultra",
+            ),
+        },
+    }
 
 
 def _is_flexible_grok_model(model: str) -> bool:
@@ -183,9 +327,15 @@ def _grok_model_preference_key(model: str) -> tuple:
     major, minor, numeric_parts, semantic_suffix = parts
     padded_numeric = numeric_parts + (0, 0, 0)
     semantic_preference = {
-        "": 3,
-        "non-reasoning": 2,
-        "reasoning": 1,
+        "auto": 7,
+        "": 6,
+        "fast": 5,
+        "non-reasoning": 4,
+        "expert": 3,
+        "reasoning": 2,
+        "multi-agent": 1,
+        "expert-4-agent": 0,
+        "heavy-16-agent": -1,
     }.get(semantic_suffix, 0)
     return (major, minor, padded_numeric[:3], semantic_preference)
 
@@ -239,6 +389,9 @@ def _is_grok_model_unavailable_message(message: str) -> bool:
         "model is not available",
         "model unavailable",
         "no model named",
+        "model_unavailable",
+        "模型当前不可用",
+        "模型不可用",
     )
     return any(marker in normalized for marker in markers)
 
@@ -249,35 +402,27 @@ def _is_model_unavailable_check(check: dict) -> bool:
     )
 
 
-def _planning_session_error(session_id: str) -> str:
-    import json
-
-    return json.dumps(
-        {
-            "error": "session_not_found",
-            "message": f"Session '{session_id}' not found. Call plan_intent first.",
-            "expected_phase_order": [
-                "intent_analysis",
-                "complexity_assessment",
-                "query_decomposition",
-                "search_strategy",
-                "tool_selection",
-                "execution_order",
-            ],
-            "restart_from_intent_analysis": True,
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
+def _planning_session_error(session_id: str) -> dict:
+    return {
+        "error": "session_not_found",
+        "message": f"Session '{session_id}' not found. Call plan_intent first.",
+        "expected_phase_order": [
+            "intent_analysis",
+            "complexity_assessment",
+            "query_decomposition",
+            "search_strategy",
+            "tool_selection",
+            "execution_order",
+        ],
+        "restart_from_intent_analysis": True,
+    }
 
 
-def _planning_validation_error(code: str, message: str, details: list | None = None) -> str:
-    import json
-
+def _planning_validation_error(code: str, message: str, details: list | None = None) -> dict:
     payload = {"error": code, "message": message}
     if details:
         payload["details"] = details
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return payload
 
 
 def _format_validation_details(exc: ValidationError) -> list[dict]:
@@ -499,6 +644,13 @@ def _search_probe_quality_message(warning_code: str) -> str:
     if warning_code == _BODY_PROBABLY_TRUNCATED_WARNING:
         return "真实搜索探针返回成功，但正文疑似截断。"
     return "真实搜索探针返回成功，但正文质量存在疑点。"
+
+
+def _deep_research_probe_check_id(effort: str) -> str:
+    normalized_effort = (effort or "standard").strip().lower() or "standard"
+    if normalized_effort not in {"standard", "deep", "ultra"}:
+        normalized_effort = "standard"
+    return f"deep_research_{normalized_effort}_probe"
 
 
 async def _provider_search_with_sources(
@@ -1135,7 +1287,8 @@ async def web_search(
             error="config_error",
         )
 
-    available_models = await _get_available_models_cached(api_url, api_key)
+    provider_chain = config.grok_provider_chain()
+    available_models, _ = await _get_provider_chain_available_models(provider_chain)
     requested_model = config.grok_model
     effective_model = requested_model
     warnings: list[str] = []
@@ -1210,7 +1363,7 @@ async def web_search(
                 warnings.append("time_range_not_applied_without_tavily_search")
 
     async def _run_grok_with_model(current_model: str) -> tuple[str, list[dict], str | None, str | None]:
-        grok_provider = GrokSearchProvider(api_url, api_key, current_model)
+        grok_provider = _instantiate_grok_provider(current_model)
         grok_provider.time_context_required = bool(
             effective_params["topic"] != "general" or effective_params["time_range"]
         )
@@ -1536,6 +1689,18 @@ async def _call_firecrawl_scrape(
         except Exception as e:
             last_error = _format_fetch_error("Firecrawl", e)
             await log_info(ctx, f"Firecrawl scrape failed: {last_error}", config.debug_enabled)
+            retryable = False
+            if isinstance(e, (httpx.TimeoutException, httpx.RequestError)):
+                retryable = True
+            elif isinstance(e, httpx.HTTPStatusError):
+                retryable = e.response.status_code in {408, 429, 500, 502, 503, 504}
+            if retryable and attempt + 1 < max_retries:
+                await log_info(
+                    ctx,
+                    f"Firecrawl: request error, retry {attempt + 1}/{max_retries}",
+                    config.debug_enabled,
+                )
+                continue
             return None, last_error
     return None, last_error
 
@@ -1563,11 +1728,8 @@ async def web_fetch(
     ctx: Context = None
 ) -> str:
     preflight = await _preflight_public_target_url(url)
-    if preflight.status == "reject":
+    if preflight.status != "allow":
         return f"提取失败: {preflight.message}"
-    if preflight.status == "skipped_due_to_error":
-        await log_warning(ctx, f"Warning: Redirect preflight skipped: {preflight.message}")
-        await log_info(ctx, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     await log_info(ctx, "Begin Fetch request", config.debug_enabled)
 
@@ -1678,11 +1840,8 @@ async def web_map(
     ctx: Context = None,
 ) -> str:
     preflight = await _preflight_public_target_url(url)
-    if preflight.status == "reject":
+    if preflight.status != "allow":
         return f"映射失败: {preflight.message}"
-    if preflight.status == "skipped_due_to_error":
-        await log_warning(ctx, f"Warning: Redirect preflight skipped: {preflight.message}")
-        await log_info(ctx, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     result = await _call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
     return result
@@ -1811,6 +1970,11 @@ def _runtime_model_source_label(source: str) -> str:
         "default": "代码默认值",
     }
     return labels.get(source, source or "未知来源")
+
+
+def _grok_endpoint_for_model(api_url: str, model: str) -> str:
+    path = config.grok_preferred_endpoint_path(api_url, model)
+    return f"{api_url.rstrip('/')}{path}"
 
 
 def _httpx_client_kwargs_for_url(url: str, *, timeout: float) -> dict:
@@ -1985,7 +2149,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
     import time
 
     start_time = time.perf_counter()
-    provider = GrokSearchProvider(api_url, api_key, model)
+    provider = _instantiate_grok_provider(model)
     try:
         content, structured_sources = await _provider_search_with_sources(provider, _SEARCH_PROBE_QUERY)
     except Exception as exc:
@@ -1993,7 +2157,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
             "grok_search_probe",
             "error",
             f"真实搜索探针失败: {_format_grok_error(exc)}",
-            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            endpoint=_grok_endpoint_for_model(api_url, model),
             response_time_ms=(time.perf_counter() - start_time) * 1000,
             error_kind="probe_failed",
         )
@@ -2011,7 +2175,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
             "grok_search_probe",
             "warning",
             _search_probe_quality_message(body_quality_warning),
-            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            endpoint=_grok_endpoint_for_model(api_url, model),
             response_time_ms=(time.perf_counter() - start_time) * 1000,
             warning_code=body_quality_warning,
         )
@@ -2021,7 +2185,7 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
             "grok_search_probe",
             "error",
             "真实搜索探针失败: 上游未返回可用正文。",
-            endpoint=f"{api_url.rstrip('/')}/chat/completions",
+            endpoint=_grok_endpoint_for_model(api_url, model),
             response_time_ms=(time.perf_counter() - start_time) * 1000,
             error_kind="empty_probe_response",
         )
@@ -2030,8 +2194,81 @@ async def _probe_web_search(api_url: str, api_key: str, model: str) -> dict:
         "grok_search_probe",
         "ok",
         "真实搜索探针成功。",
-        endpoint=f"{api_url.rstrip('/')}/chat/completions",
+        endpoint=_grok_endpoint_for_model(
+            provider._last_success_provider_api_url,
+            provider._last_success_provider_model,
+        ),
         response_time_ms=(time.perf_counter() - start_time) * 1000,
+        provider_name=provider._last_success_provider_name,
+        provider_model=provider._last_success_provider_model,
+    )
+
+
+async def _probe_deep_research_profile(api_url: str, api_key: str, *, effort: str) -> dict:
+    import time
+
+    from . import deep_research_runtime as deep_research_runtime_module
+
+    start_time = time.perf_counter()
+    check_id = _deep_research_probe_check_id(effort)
+    try:
+        result = await deep_research_runtime_module._search_query_with_details(_SEARCH_PROBE_QUERY, effort=effort)
+    except Exception as exc:
+        check = _build_doctor_check(
+            check_id,
+            "error",
+            f"Deep research {effort} 探针失败: {_format_grok_error(exc)}",
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            error_kind="probe_failed",
+        )
+        if _is_grok_model_unavailable_message(check["message"]):
+            check["reason_code"] = "model_unavailable"
+        return check
+
+    endpoint = _grok_endpoint_for_model(
+        result.get("provider_api_url") or api_url,
+        result.get("provider_model") or result.get("effective_model") or result.get("requested_model") or "",
+    )
+    extra = {
+        "requested_model": result.get("requested_model", ""),
+        "effective_model": result.get("effective_model", ""),
+        "provider_name": result.get("provider_name", ""),
+        "provider_model": result.get("provider_model", ""),
+        "provider_api_url": result.get("provider_api_url", ""),
+        "winning_provider": result.get("provider_name", ""),
+        "winning_model": result.get("provider_model") or result.get("effective_model") or result.get("requested_model", ""),
+    }
+    body_quality_warning = result.get("warning_code") or _assess_search_body_quality(
+        result.get("answer", ""),
+        result.get("sources", []) or [],
+    )
+    if body_quality_warning:
+        return _build_doctor_check(
+            check_id,
+            "warning",
+            f"Deep research {effort} 探针返回质量警告: {_search_probe_quality_message(body_quality_warning)}",
+            endpoint=endpoint,
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            warning_code=body_quality_warning,
+            **extra,
+        )
+    if not sanitize_answer_text(result.get("answer", "")).strip() and not (result.get("sources") or []):
+        return _build_doctor_check(
+            check_id,
+            "error",
+            f"Deep research {effort} 探针失败: 上游未返回可用正文或来源。",
+            endpoint=endpoint,
+            response_time_ms=(time.perf_counter() - start_time) * 1000,
+            error_kind="empty_probe_response",
+            **extra,
+        )
+    return _build_doctor_check(
+        check_id,
+        "ok",
+        f"Deep research {effort} 探针成功。",
+        endpoint=endpoint,
+        response_time_ms=(time.perf_counter() - start_time) * 1000,
+        **extra,
     )
 
 
@@ -2138,6 +2375,25 @@ def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> di
     return item
 
 
+def _build_profile_probe_item(check: dict | None, *, default_message: str) -> dict:
+    if not check:
+        return {"status": "not_ready", "message": default_message}
+    item = {
+        "status": "ready" if check["status"] == "ok" else ("not_ready" if check["status"] == "skipped" else "degraded"),
+        "message": check["message"],
+        "check_id": check["check_id"],
+        "requested_model": check.get("requested_model", ""),
+        "effective_model": check.get("effective_model", ""),
+        "winning_provider": check.get("winning_provider", ""),
+        "winning_model": check.get("winning_model", ""),
+        "endpoint": check.get("endpoint", ""),
+    }
+    reason_code = _check_reason_code(check)
+    if reason_code:
+        item["reason_code"] = reason_code
+    return item
+
+
 def _build_cache_state_cause(reason_code: str, *, status: str = "degraded") -> dict:
     return {
         "check_id": "source_cache_state",
@@ -2230,10 +2486,15 @@ def _build_feature_readiness(
 ) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
+    grok_provider_chain = checks_by_id.get("grok_provider_chain")
+    grok_provider_capabilities = checks_by_id.get("grok_provider_capabilities")
     grok_models = checks_by_id["grok_models"]
     grok_model_selection = checks_by_id.get("grok_model_selection")
     grok_model_runtime_fallback = checks_by_id.get("grok_model_runtime_fallback")
     grok_search_probe = checks_by_id["grok_search_probe"]
+    deep_research_standard_probe = checks_by_id.get("deep_research_standard_probe")
+    deep_research_deep_probe = checks_by_id.get("deep_research_deep_probe")
+    deep_research_ultra_probe = checks_by_id.get("deep_research_ultra_probe")
     tavily_extract = checks_by_id["tavily_extract"]
     firecrawl_scrape = checks_by_id["firecrawl_scrape"]
     web_fetch_probe = checks_by_id["web_fetch_probe"]
@@ -2352,6 +2613,106 @@ def _build_feature_readiness(
         if toggle_status != "ready"
         else []
     )
+    deep_research_planner_check_ids = [
+        "grok_config",
+        "grok_provider_chain",
+        "grok_models",
+        "grok_model_selection",
+        "grok_model_runtime_fallback",
+    ]
+    deep_research_runtime_check_ids = [
+        *deep_research_planner_check_ids,
+        "grok_search_probe",
+        "deep_research_standard_probe",
+        "deep_research_deep_probe",
+        "deep_research_ultra_probe",
+    ]
+    deep_research_planner_degraded_by = [
+        _readiness_cause_from_check(check)
+        for check in (
+            grok_config,
+            grok_provider_chain,
+            grok_models,
+            grok_model_selection,
+            grok_model_runtime_fallback,
+        )
+        if check and check["status"] in {"warning", "error"}
+    ]
+    deep_research_runtime_degraded_by = [
+        _readiness_cause_from_check(check)
+        for check in (
+            grok_config,
+            grok_provider_chain,
+            grok_models,
+            grok_model_selection,
+            grok_model_runtime_fallback,
+            grok_search_probe,
+            deep_research_standard_probe,
+            deep_research_deep_probe,
+            deep_research_ultra_probe,
+        )
+        if check and check["status"] in {"warning", "error"}
+    ]
+    profile_probes = {
+        "standard": _build_profile_probe_item(
+            deep_research_standard_probe,
+            default_message="Deep research standard probe unavailable.",
+        ),
+        "deep": _build_profile_probe_item(
+            deep_research_deep_probe,
+            default_message="Deep research deep probe unavailable.",
+        ),
+        "ultra": _build_profile_probe_item(
+            deep_research_ultra_probe,
+            default_message="Deep research ultra probe unavailable.",
+        ),
+    }
+    if grok_config["status"] != "ok":
+        deep_research_planner_status = "not_ready"
+        deep_research_planner_message = grok_config["message"]
+    elif grok_models["status"] != "ok":
+        deep_research_planner_status = "degraded"
+        deep_research_planner_message = "Deep research planner 依赖的 /models 或模型可见性探测存在问题。"
+    elif (
+        grok_model_runtime_fallback
+        and grok_model_runtime_fallback["status"] == "warning"
+    ):
+        deep_research_planner_status = "degraded"
+        deep_research_planner_message = grok_model_runtime_fallback["message"]
+    elif (
+        grok_model_selection
+        and grok_model_selection["status"] == "warning"
+    ):
+        deep_research_planner_status = "degraded"
+        deep_research_planner_message = grok_model_selection["message"]
+    else:
+        deep_research_planner_status = "ready"
+        deep_research_planner_message = "Deep research planner 共享 Grok provider chain readiness。"
+
+    if grok_config["status"] != "ok":
+        deep_research_runtime_status = "not_ready"
+        deep_research_runtime_message = grok_config["message"]
+    elif grok_models["status"] != "ok":
+        deep_research_runtime_status = "degraded"
+        deep_research_runtime_message = "Deep research runtime 依赖的 /models 或模型可见性探测存在问题。"
+    elif (
+        grok_model_runtime_fallback
+        and grok_model_runtime_fallback["status"] == "warning"
+    ):
+        deep_research_runtime_status = "degraded"
+        deep_research_runtime_message = grok_model_runtime_fallback["message"]
+    elif (
+        grok_model_selection
+        and grok_model_selection["status"] == "warning"
+    ):
+        deep_research_runtime_status = "degraded"
+        deep_research_runtime_message = grok_model_selection["message"]
+    elif grok_search_probe["status"] == "ok":
+        deep_research_runtime_status = "ready"
+        deep_research_runtime_message = "Deep research runtime 已共享 Grok provider chain readiness。"
+    else:
+        deep_research_runtime_status = "degraded"
+        deep_research_runtime_message = grok_search_probe["message"]
 
     return {
         "web_search": {
@@ -2362,6 +2723,12 @@ def _build_feature_readiness(
             "degraded_by": web_search_degraded_by,
             "runtime_override_active": _runtime_override_active(runtime_model_source),
             "runtime_model_source": runtime_model_source,
+            "provider_family": grok_provider_capabilities.get("provider_family", "") if grok_provider_capabilities else "",
+            "responses_supported": bool(grok_provider_capabilities.get("responses_supported", False)) if grok_provider_capabilities else False,
+            "multi_agent_supported": bool(grok_provider_capabilities.get("multi_agent_supported", False)) if grok_provider_capabilities else False,
+            "winning_provider": grok_search_probe.get("provider_name", ""),
+            "winning_model": grok_search_probe.get("provider_model", ""),
+            "winning_endpoint": grok_search_probe.get("endpoint", ""),
         },
         "get_sources": _build_get_sources_readiness(
             web_search_status=web_search_status,
@@ -2392,6 +2759,38 @@ def _build_feature_readiness(
             "based_on_checks": ["claude_code_project"],
             "probe_scope": "client_context",
             "degraded_by": toggle_degraded_by,
+        },
+        "deep_research_planner": {
+            "status": deep_research_planner_status,
+            "message": deep_research_planner_message,
+            "based_on_checks": deep_research_planner_check_ids,
+            "probe_scope": "deep_research_planner",
+            "degraded_by": deep_research_planner_degraded_by,
+            "runtime_override_active": _runtime_override_active(runtime_model_source),
+            "runtime_model_source": runtime_model_source,
+            "provider_family": grok_provider_capabilities.get("provider_family", "") if grok_provider_capabilities else "",
+            "responses_supported": bool(grok_provider_capabilities.get("responses_supported", False)) if grok_provider_capabilities else False,
+            "multi_agent_supported": bool(grok_provider_capabilities.get("multi_agent_supported", False)) if grok_provider_capabilities else False,
+            "profile_probes": profile_probes,
+            "winning_provider": deep_research_standard_probe.get("provider_name", "") if deep_research_standard_probe else "",
+            "winning_model": deep_research_standard_probe.get("provider_model", "") if deep_research_standard_probe else "",
+            "winning_endpoint": deep_research_standard_probe.get("endpoint", "") if deep_research_standard_probe else "",
+        },
+        "deep_research_runtime": {
+            "status": deep_research_runtime_status,
+            "message": deep_research_runtime_message,
+            "based_on_checks": deep_research_runtime_check_ids,
+            "probe_scope": "deep_research_runtime",
+            "degraded_by": deep_research_runtime_degraded_by,
+            "runtime_override_active": _runtime_override_active(runtime_model_source),
+            "runtime_model_source": runtime_model_source,
+            "provider_family": grok_provider_capabilities.get("provider_family", "") if grok_provider_capabilities else "",
+            "responses_supported": bool(grok_provider_capabilities.get("responses_supported", False)) if grok_provider_capabilities else False,
+            "multi_agent_supported": bool(grok_provider_capabilities.get("multi_agent_supported", False)) if grok_provider_capabilities else False,
+            "profile_probes": profile_probes,
+            "winning_provider": deep_research_deep_probe.get("provider_name", "") if deep_research_deep_probe else "",
+            "winning_model": deep_research_deep_probe.get("provider_model", "") if deep_research_deep_probe else "",
+            "winning_endpoint": deep_research_deep_probe.get("endpoint", "") if deep_research_deep_probe else "",
         },
     }
 
@@ -2482,21 +2881,16 @@ def _render_config_info_payload(config_info: dict, *, detail: str) -> dict:
 )
 async def get_config_info(
     detail: Annotated[str, "Response detail level: full | summary. Defaults to full."] = "full",
-) -> str:
-    import json
-
+) -> dict:
     normalized_detail = (detail or "full").strip().lower() or "full"
     if normalized_detail not in {"full", "summary"}:
-        return json.dumps(
-            {
-                "error": "invalid_detail",
-                "message": "Invalid detail value. Supported values are 'full' and 'summary'.",
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+        return {
+            "error": "invalid_detail",
+            "message": "Invalid detail value. Supported values are 'full' and 'summary'.",
+        }
 
     config_info = config.get_config_info()
+    routing_diagnostics = config_info.get("GROK_ROUTING_DIAGNOSTICS") or {}
     checks: list[dict] = []
     recommendations: list[str] = []
     recommendation_details: list[dict] = []
@@ -2505,9 +2899,41 @@ async def get_config_info(
         api_url = config.grok_api_url
         api_key = config.grok_api_key
         checks.append(_build_doctor_check("grok_config", "ok", "Grok 核心配置已提供。"))
+        provider_chain = config.grok_provider_chain()
+        routing_diagnostics = config_info.get("GROK_ROUTING_DIAGNOSTICS") or config.grok_routing_diagnostics()
+        config_info["GROK_ROUTING_DIAGNOSTICS"] = routing_diagnostics
+        provider_family = config.provider_family_for_url(api_url)
+        checks.append(
+            _build_doctor_check(
+                "grok_provider_chain",
+                "ok",
+                f"已检测到 {len(provider_chain)} 个 Grok provider。",
+                provider_count=len(provider_chain),
+                provider_names=[item["name"] for item in provider_chain],
+                providers=routing_diagnostics.get("provider_chain"),
+                active_provider=routing_diagnostics.get("active_provider"),
+                profile_defaults=routing_diagnostics.get("profile_defaults"),
+            )
+        )
+        checks.append(
+            _build_doctor_check(
+                "grok_provider_capabilities",
+                "ok",
+                f"当前 primary provider family 为 {provider_family}。",
+                provider_family=provider_family,
+                responses_supported=provider_family == "official_xai",
+                multi_agent_supported=False,
+                model_profile=config.grok_model_profile(),
+                deep_research_standard_profile=config.grok_deep_research_standard_profile(),
+                deep_research_deep_profile=config.grok_deep_research_deep_profile(),
+                deep_research_ultra_profile=config.grok_deep_research_ultra_profile(),
+            )
+        )
     except ValueError as exc:
         api_url = ""
         api_key = ""
+        provider_chain = []
+        provider_family = ""
         checks.append(_build_doctor_check("grok_config", "error", str(exc), error_kind="config_error"))
         _append_recommendation(
             recommendations,
@@ -2575,6 +3001,25 @@ async def get_config_info(
         runtime_model_source = config.grok_model_source
         runtime_model_source_label = _runtime_model_source_label(runtime_model_source)
         available_models = grok_models.get("available_models") or []
+        if provider_chain:
+            provider_chain_models, available_models_by_provider = await _get_provider_chain_available_models(provider_chain)
+            if provider_chain_models:
+                available_models = provider_chain_models
+                grok_models["available_models"] = available_models
+            chain_check = next((check for check in checks if check.get("check_id") == "grok_provider_chain"), None)
+            if chain_check is not None:
+                chain_check["available_models_by_provider"] = available_models_by_provider
+        multi_agent_supported = any(_supports_multi_agent_family(model) for model in available_models)
+        responses_supported = provider_family == "official_xai" or multi_agent_supported or any(
+            _normalized_grok_model_core(model) == "grok-4.20-reasoning"
+            for model in available_models
+        )
+        for check in checks:
+            if check.get("check_id") == "grok_provider_capabilities":
+                check["responses_supported"] = responses_supported
+                check["multi_agent_supported"] = multi_agent_supported
+                check["available_model_count"] = len(available_models)
+                break
         resolved_model, resolution = _resolve_model_against_available_models(configured_model, available_models)
         fallback_model = resolved_model if resolution == _MODEL_FALLBACK_WARNING else None
         if configured_model and available_models and configured_model not in available_models:
@@ -2695,6 +3140,19 @@ async def get_config_info(
             skipped_reason="missing_grok_config",
         )
     checks.append(grok_search_probe)
+    if api_url and api_key:
+        for effort in ("standard", "deep", "ultra"):
+            checks.append(await _probe_deep_research_profile(api_url, api_key, effort=effort))
+    else:
+        for effort in ("standard", "deep", "ultra"):
+            checks.append(
+                _build_doctor_check(
+                    _deep_research_probe_check_id(effort),
+                    "skipped",
+                    f"未执行 deep research {effort} 探针。",
+                    skipped_reason="missing_grok_config",
+                )
+            )
 
     if config.tavily_enabled and config.tavily_api_key:
         tavily_extract = await _probe_json_endpoint(
@@ -2891,11 +3349,7 @@ async def get_config_info(
     config_info["doctor"] = doctor
     config_info["feature_readiness"] = feature_readiness
 
-    return json.dumps(
-        _render_config_info_payload(config_info, detail=normalized_detail),
-        ensure_ascii=False,
-        indent=2,
-    )
+    return _render_config_info_payload(config_info, detail=normalized_detail)
 
 
 @mcp.tool(
@@ -3111,14 +3565,33 @@ def _get_planning_sub_query_ids(session) -> set[str]:
     }
 
 
-def _planning_validation_message(message: str, field: str | None = None) -> str:
+def _planning_validation_message(message: str, field: str | None = None) -> dict:
     details = None
     if field:
         details = [{"field": field, "message": message, "type": "value_error"}]
     return _planning_validation_error("validation_error", message, details)
 
 
-def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | None:
+def _boundary_has_explicit_exclusion_language(boundary: str, goal: str) -> bool:
+    normalized_boundary = re.sub(r"\s+", " ", (boundary or "").strip()).lower()
+    normalized_goal = re.sub(r"\s+", " ", (goal or "").strip()).lower()
+    if not normalized_boundary or normalized_boundary == normalized_goal:
+        return False
+
+    exclusion_markers = (
+        "exclude",
+        "excluding",
+        "except",
+        "without",
+        "not ",
+        "omit",
+        "outside",
+        "ignore",
+    )
+    return any(marker in normalized_boundary for marker in exclusion_markers)
+
+
+def _validate_sub_query_item(session, item: dict, is_revision: bool) -> dict | None:
     existing_ids = _get_planning_sub_query_ids(session)
     sub_query_id = item["id"].strip()
     valid_dependency_ids = {sub_query_id} if is_revision else existing_ids
@@ -3133,6 +3606,15 @@ def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | No
         return _planning_validation_message(
             f"Duplicate sub-query id: {sub_query_id}",
             "id",
+        )
+
+    if not _boundary_has_explicit_exclusion_language(
+        str(item.get("boundary", "")),
+        str(item.get("goal", "")),
+    ):
+        return _planning_validation_message(
+            "boundary must explicitly state what this sub-query excludes.",
+            "boundary",
         )
 
     dependencies = item.get("depends_on") or []
@@ -3158,7 +3640,7 @@ def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | No
     return None
 
 
-def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -> str | None:
+def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -> dict | None:
     existing_ids = _get_planning_sub_query_ids(session)
     normalized_sub_query_id = sub_query_id.strip()
     if normalized_sub_query_id not in existing_ids:
@@ -3169,7 +3651,7 @@ def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -
     return None
 
 
-def _validate_search_strategy_coverage(session) -> str | None:
+def _validate_search_strategy_coverage(session) -> dict | None:
     missing_ids = sorted(session.missing_search_term_ids())
     if missing_ids:
         return _planning_validation_message(
@@ -3179,7 +3661,7 @@ def _validate_search_strategy_coverage(session) -> str | None:
     return None
 
 
-def _validate_tool_mapping_item(session, sub_query_id: str, is_revision: bool = False) -> str | None:
+def _validate_tool_mapping_item(session, sub_query_id: str, is_revision: bool = False) -> dict | None:
     if not is_revision and sub_query_id in session.tool_mapping_ids():
         return _planning_validation_message(
             f"Duplicate tool mapping for sub-query id: {sub_query_id}",
@@ -3188,7 +3670,7 @@ def _validate_tool_mapping_item(session, sub_query_id: str, is_revision: bool = 
     return None
 
 
-def _validate_tool_mapping_coverage(session) -> str | None:
+def _validate_tool_mapping_coverage(session) -> dict | None:
     missing_ids = sorted(session.missing_tool_mapping_ids())
     if missing_ids:
         return _planning_validation_message(
@@ -3198,7 +3680,7 @@ def _validate_tool_mapping_coverage(session) -> str | None:
     return None
 
 
-def _validate_execution_plan(session, parallel: list[list[str]], sequential: list[str]) -> str | None:
+def _validate_execution_plan(session, parallel: list[list[str]], sequential: list[str]) -> dict | None:
     existing_ids = _get_planning_sub_query_ids(session)
     placement_stage: dict[str, int] = {}
     seen_ids: set[str] = set()
@@ -3258,7 +3740,7 @@ def _validate_execution_plan(session, parallel: list[list[str]], sequential: lis
     return None
 
 
-def _validate_upstream_phase_revision(session, phase: str) -> str | None:
+def _validate_upstream_phase_revision(session, phase: str) -> dict | None:
     try:
         phase_index = PHASE_NAMES.index(phase)
     except ValueError:
@@ -3272,7 +3754,7 @@ def _validate_upstream_phase_revision(session, phase: str) -> str | None:
     return None
 
 
-def _validate_singleton_phase_overwrite(session, phase: str, is_revision: bool) -> str | None:
+def _validate_singleton_phase_overwrite(session, phase: str, is_revision: bool) -> dict | None:
     if is_revision or phase not in session.phases:
         return None
     return _planning_validation_message(
@@ -3304,8 +3786,7 @@ async def plan_intent(
     ambiguities: Annotated[str, "Comma-separated unresolved ambiguities"] = "",
     unverified_terms: Annotated[str, "Comma-separated external terms to verify"] = "",
     is_revision: Annotated[bool, "True to overwrite existing intent"] = False,
-) -> str:
-    import json
+) -> dict:
     session = planning_engine.get_session(session_id) if session_id else None
     if is_revision and not session:
         return _planning_session_error(session_id)
@@ -3330,10 +3811,10 @@ async def plan_intent(
         IntentOutput(**data)
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid intent input.", _format_validation_details(exc))
-    return json.dumps(planning_engine.process_phase(
+    return planning_engine.process_phase(
         phase="intent_analysis", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=data,
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
@@ -3350,8 +3831,7 @@ async def plan_complexity(
     justification: Annotated[str, "Why this complexity level"],
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
     is_revision: Annotated[bool, "True to overwrite"] = False,
-) -> str:
-    import json
+) -> dict:
     session = planning_engine.get_session(session_id)
     if not session:
         return _planning_session_error(session_id)
@@ -3371,12 +3851,12 @@ async def plan_complexity(
         )
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid complexity input.", _format_validation_details(exc))
-    return json.dumps(planning_engine.process_phase(
+    return planning_engine.process_phase(
         phase="complexity_assessment", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence,
         phase_data={"level": level, "estimated_sub_queries": estimated_sub_queries,
                      "estimated_tool_calls": estimated_tool_calls, "justification": justification},
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
@@ -3395,9 +3875,9 @@ async def plan_sub_query(
     depends_on: Annotated[str, "Comma-separated prerequisite IDs"] = "",
     tool_hint: Annotated[Optional[Literal["web_search", "web_fetch", "web_map"]], "web_search | web_fetch | web_map"] = None,
     is_revision: Annotated[bool, "True to replace all sub-queries"] = False,
-) -> str:
-    import json
-    if not planning_engine.get_session(session_id):
+) -> dict:
+    session = planning_engine.get_session(session_id)
+    if not session:
         return _planning_session_error(session_id)
     normalized_id = id.strip()
     item = {"id": normalized_id, "goal": goal, "expected_output": expected_output, "boundary": boundary}
@@ -3409,13 +3889,14 @@ async def plan_sub_query(
         SubQuery(**item)
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid sub-query input.", _format_validation_details(exc))
-    validation_error = _validate_sub_query_item(planning_engine.get_session(session_id), item, is_revision)
-    if validation_error:
-        return validation_error
-    return json.dumps(planning_engine.process_phase(
+    if "complexity_assessment" in session.phases:
+        validation_error = _validate_sub_query_item(session, item, is_revision)
+        if validation_error:
+            return validation_error
+    return planning_engine.process_phase(
         phase="query_decomposition", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=item,
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
@@ -3433,8 +3914,7 @@ async def plan_search_term(
     approach: Annotated[str, "broad_first | narrow_first | targeted (required on first call)"] = "",
     fallback_plan: Annotated[str, "Fallback if primary searches fail"] = "",
     is_revision: Annotated[bool, "True to replace all search terms"] = False,
-) -> str:
-    import json
+) -> dict:
     session = planning_engine.get_session(session_id)
     if not session:
         return _planning_session_error(session_id)
@@ -3465,10 +3945,10 @@ async def plan_search_term(
     validation_error = _validate_sub_query_reference(session, normalized_purpose, "purpose")
     if validation_error:
         return validation_error
-    return json.dumps(planning_engine.process_phase(
+    return planning_engine.process_phase(
         phase="search_strategy", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=data,
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
@@ -3485,8 +3965,7 @@ async def plan_tool_mapping(
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
     params_json: Annotated[str, "Optional JSON string for tool-specific params"] = "",
     is_revision: Annotated[bool, "True to replace all mappings"] = False,
-) -> str:
-    import json
+) -> dict:
     session = planning_engine.get_session(session_id)
     if not session:
         return _planning_session_error(session_id)
@@ -3528,10 +4007,10 @@ async def plan_tool_mapping(
     validation_error = _validate_tool_mapping_item(session, normalized_sub_query_id, is_revision=is_revision)
     if validation_error:
         return validation_error
-    return json.dumps(planning_engine.process_phase(
+    return planning_engine.process_phase(
         phase="tool_selection", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence, phase_data=item,
-    ), ensure_ascii=False, indent=2)
+    )
 
 
 @mcp.tool(
@@ -3547,8 +4026,7 @@ async def plan_execution(
     estimated_rounds: Annotated[int, "Estimated execution rounds"],
     confidence: Annotated[float, "Confidence 0.0-1.0"] = 1.0,
     is_revision: Annotated[bool, "True to overwrite"] = False,
-) -> str:
-    import json
+) -> dict:
     if not planning_engine.get_session(session_id):
         return _planning_session_error(session_id)
     parallel = [_split_csv(g) for g in parallel_groups.split(";") if g.strip()] if parallel_groups else []
@@ -3571,11 +4049,116 @@ async def plan_execution(
         validation_error = _validate_execution_plan(session, parallel, seq)
         if validation_error:
             return validation_error
-    return json.dumps(planning_engine.process_phase(
+    return planning_engine.process_phase(
         phase="execution_order", thought=thought, session_id=session_id,
         is_revision=is_revision, confidence=confidence,
         phase_data={"parallel": parallel, "sequential": seq, "estimated_rounds": estimated_rounds},
-    ), ensure_ascii=False, indent=2)
+    )
+
+
+@mcp.tool(
+    name="deep_research_start",
+    output_schema=None,
+    description="""
+    Start an advanced deep research job that runs asynchronously and produces progress events,
+    partial artifacts, and a final report. This is the heavyweight research path and should not
+    replace the default lightweight `plan_* -> web_search` flow for simple lookups.
+    """,
+)
+async def deep_research_start(
+    query: Annotated[str, "Primary research question."],
+    context: Annotated[str, "Optional additional context or constraints."] = "",
+    effort: Annotated[str, "Research effort profile. Recommended values: standard | deep."] = "standard",
+    time_budget_seconds: Annotated[int, "Optional target time budget in seconds."] = 0,
+    include_domains: Annotated[Optional[list[str]], "Optional domain allowlist."] = None,
+    exclude_domains: Annotated[Optional[list[str]], "Optional domain denylist."] = None,
+    continue_from_job_id: Annotated[str, "Optional prior job to continue from."] = "",
+    plan_only: Annotated[bool, "Create a draft plan without running the research job."] = False,
+    force_new: Annotated[bool, "Force creation of a new job even if a reusable job exists."] = False,
+) -> dict:
+    if not query.strip():
+        return {"error": "validation_error", "message": "query 不能为空"}
+    return await _DEEP_RESEARCH_RUNTIME.start(
+        query=query,
+        context=context,
+        effort=effort,
+        time_budget_seconds=time_budget_seconds or None,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+        continue_from_job_id=continue_from_job_id,
+        plan_only=plan_only,
+        force_new=force_new,
+    )
+
+
+@mcp.tool(
+    name="deep_research_status",
+    output_schema=None,
+    description="Get the current status, phase, progress, and artifact summary for a deep research job.",
+)
+async def deep_research_status(
+    job_id: Annotated[str, "Deep research job ID."]
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.status(job_id)
+
+
+@mcp.tool(
+    name="deep_research_events",
+    output_schema=None,
+    description="Fetch ordered deep research events, optionally starting after a known sequence number.",
+)
+async def deep_research_events(
+    job_id: Annotated[str, "Deep research job ID."],
+    after_seq: Annotated[int, "Return only events with seq greater than this value."] = 0,
+    limit: Annotated[int, "Maximum number of events to return."] = 100,
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.events(job_id, after_seq=after_seq, limit=limit)
+
+
+@mcp.tool(
+    name="deep_research_result",
+    output_schema=None,
+    description="Return the current deep research result, including plan, partial report, final report, and citations when available.",
+)
+async def deep_research_result(
+    job_id: Annotated[str, "Deep research job ID."],
+    include_partial: Annotated[bool, "Include partial artifacts when the job is incomplete."] = True,
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.result(job_id, include_partial=include_partial)
+
+
+@mcp.tool(
+    name="deep_research_resume",
+    output_schema=None,
+    description="Resume a draft, failed, or interrupted deep research job from its latest checkpoint.",
+)
+async def deep_research_resume(
+    job_id: Annotated[str, "Deep research job ID."]
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.resume(job_id)
+
+
+@mcp.tool(
+    name="deep_research_cancel",
+    output_schema=None,
+    description="Request cancellation for a deep research job.",
+)
+async def deep_research_cancel(
+    job_id: Annotated[str, "Deep research job ID."]
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.cancel(job_id)
+
+
+@mcp.tool(
+    name="deep_research_list",
+    output_schema=None,
+    description="List recent deep research jobs, optionally filtered by status.",
+)
+async def deep_research_list(
+    status: Annotated[str, "Optional status filter."] = "",
+    limit: Annotated[int, "Maximum number of jobs to return."] = 50,
+) -> dict:
+    return await _DEEP_RESEARCH_RUNTIME.list_jobs(status=status, limit=limit)
 
 
 def _configure_windows_event_loop_policy() -> None:

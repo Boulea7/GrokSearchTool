@@ -4,7 +4,7 @@
 
 GrokSearch は、素早く信頼できるソース付き Web コンテキストを必要とするアシスタントや汎用クライアント向けに独立運用されている MCP サーバーです。
 
-`Grok` の検索能力と `Tavily` / `Firecrawl` の抽出能力を組み合わせ、軽量な検索、ソース確認、対象ページ取得、そして複雑な検索に対する推奨コア経路 `plan_* -> web_search` を支える MCP ツール群を提供します。計画の価値が低い明確な単発検索では、直接 `web_search` を呼ぶこともできます。より重い探索タスクについては、今後 `deep research` 方向へ拡張します。
+`Grok` の検索能力と `Tavily` / `Firecrawl` の抽出能力を組み合わせ、軽量な検索、ソース確認、対象ページ取得、そして複雑な検索に対する推奨コア経路 `plan_* -> web_search` を支える MCP ツール群を提供します。計画の価値が低い明確な単発検索では、直接 `web_search` を呼ぶこともできます。より重い探索タスクについては、進階 `deep research` レイヤーも利用できます。
 
 公開されている package import contract には現在 2 つの境界があります。`grok_search.mcp` は access-time lazy export なので、その導出に実際にアクセスしたときだけ `fastmcp` が必要です。`grok_search.providers.GrokSearchProvider` も access-time lazy export なので、通常の非 provider import は Grok provider 関連依存が欠けているだけで早期に失敗すべきではありません。これは import-time の挙動を狭めるだけで、インストール時の依存宣言は変わりませんし、依存が optional extras になったことを意味しません。
 
@@ -15,11 +15,12 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 - `web_fetch`: Tavily 優先、失敗時は Firecrawl にフォールバック
 - `web_map`: サイト構造をマッピング
 - `plan_*`: 複雑または曖昧な検索のための段階的プランニング
+- `deep_research_*`: 非対話・再開可能な高度調査ジョブ
 - `get_config_info`: 設定確認、`/models` 接続性、軽量 doctor
 - `switch_model`: デフォルト Grok モデルを切り替え
 - `toggle_builtin_tools`: Claude Code の組み込み WebSearch / WebFetch を切り替え
 
-公開 MCP ツールは現在 `13` 個です。
+公開 MCP ツールは現在 `20` 個です。
 
 - `web_search`
 - `get_sources`
@@ -34,6 +35,13 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 - `plan_search_term`
 - `plan_tool_mapping`
 - `plan_execution`
+- `deep_research_start`
+- `deep_research_status`
+- `deep_research_events`
+- `deep_research_result`
+- `deep_research_resume`
+- `deep_research_cancel`
+- `deep_research_list`
 
 `plan_search_term` は `search_strategy` の初回作成時に `approach` / `fallback_plan` を設定します。以後の非 `is_revision` 呼び出しは `search_terms` の追加だけを行い、既存の strategy metadata を暗黙に上書きしません。
 planning `session_id` は現在のプロセス内だけで有効な transient handle であり、既定 TTL は約 1 時間、LRU 上限は 256 です。プロセス再起動、TTL 切れ、eviction 後は新しい `plan_intent` からやり直してください。
@@ -173,8 +181,8 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - 静的な URL 検査を通過した後も、`web_fetch` / `web_map` は provider 呼び出し前に可視な redirect 先を再検査します。
 - 現在この可視 redirect 再検査は `HEAD` ではなく `GET` を使います。presigned URL、one-shot token、読み取り自体に副作用があるリンクでは、追加の事前取得が起き得る点を既知の境界として扱ってください。
 - 現在の可視 redirect 再検査は最大 `5` 回までです。第 `5` 回の事前検査時点でも新しい可視 redirect が続く場合は、`目標 URL 重定向次数过多` として hard reject され、下流 provider 呼び出しへは進みません。
-- redirect の事前検査で timeout または request-level error が起きた場合、現在の実装はその段階を `skipped_due_to_error` として扱います。`web_fetch` / `web_map` は現状では下流 provider 呼び出しを継続します。
-- この境界は、ローカル DNS が公開ホスト風の名前を私用アドレスへ解決した場合まで強制的には拒否しないため、`best-effort safety boundary` として理解すべきであり、split-horizon やローカル DNS 汚染に対する hard-stop 保証ではありません。
+- redirect の事前検査で timeout または request-level error が起きた場合、現在の実装は fail-closed し、`web_fetch` / `web_map` の下流 provider 呼び出しを止めます。`skipped_due_to_error` は内部診断用 reason code としてのみ残ります。
+- この境界は、ローカル DNS が公開ホスト風の名前を私用アドレスへ解決した場合まで強制的には拒否しないため、split-horizon やローカル DNS 汚染に対する hard-stop 保証そのものではありません。ただし可視 redirect の失敗経路は hard-stop になりました。
 
 ### 最小 smoke check
 

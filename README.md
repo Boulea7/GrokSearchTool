@@ -25,6 +25,7 @@ GrokSearch MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构�
 - `Tavily` 负责搜索控制、网页提取与站点映射
 - `Firecrawl` 负责抓取托底与补充信源
 - `plan_*` 负责复杂问题的轻量规划
+- `deep_research_*` 负责高级、异步、报告型深度研究任务
 - `get_sources` 负责把来源从“答案里的链接”升级成结构化可读取的信源数据
 
 当前推荐主路径是 `plan_* -> web_search`，并在需要来源核对时按需调用 `get_sources`；对明确单跳、低歧义、规划收益很低的查询，也允许直接调用 `web_search`。更重的深度探索能力继续收口到 `deep research`，并优先在 CLI 落地。
@@ -36,6 +37,7 @@ Client / Assistant
   └─ MCP / companion skill
       └─ GrokSearch Server
           ├─ plan_*      -> 轻量规划层
+          ├─ deep_research_* -> 异步 job 层
           ├─ web_search  -> Grok 主答案
           │                + Tavily supplemental search
           │                + Firecrawl supplemental search
@@ -52,13 +54,14 @@ Client / Assistant
 - `plan_* -> web_search`：默认轻量研究路径；需要结构化来源时再调用 `get_sources`
 - `web_fetch`：抓单页正文
 - `web_map`：看站点结构
-- `deep research`：更长时间、更强编排的高级研究层，当前优先在 CLI 里承接
+- `deep research`：更长时间、更强编排的高级研究层，当前提供非交互 MCP job surface，并由 CLI 承接更完整交互
 
 ### 核心价值
 
 - **答案与来源分离**：`web_search` 返回正文，`get_sources` 返回结构化来源，便于后续核验、排序和复用
 - **多 provider 协作**：Grok 负责主回答，Tavily 负责搜索控制 / 抓取 / 映射，Firecrawl 负责托底和补充
 - **轻量规划优先**：复杂任务先走 `plan_*`，简单任务直接搜，避免无意义的重编排
+- **深度研究独立分层**：高级研究走 `deep_research_*` 与 `grok-search-research`，不挤占默认轻路径
 - **面向真实运维**：内置 `get_config_info`、feature readiness、最小真实探针、稳定错误契约
 - **运行时安全边界**：对抓取/映射目标做 URL 边界收口，对诊断输出和来源 URL 做敏感信息遮罩
 - **兼容 OpenAI 风格接入**：可对接 Grok-compatible 中转与镜像站，但实际兼容性仍取决于上游对 `/models` 与 `/chat/completions` 的实现
@@ -220,6 +223,12 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_API_URL` | 是 | - | Grok API 地址（OpenAI 兼容格式，推荐显式包含 `/v1` 后缀；代码层不会仅因省略 `/v1` 就预先拦截，但多数 OpenAI 兼容端点仍可能因此在运行时失败，并通常伴随兼容性 warning） |
 | `GROK_API_KEY` | 是 | - | Grok API 密钥 |
 | `GROK_MODEL` | 否 | `grok-4.20-0309` | 默认模型；优先级见下方说明（进程 env > 项目 `.env.local` > 项目 `.env` > 持久化 config > 代码默认值） |
+| `GROK_MODEL_PROFILE` | 否 | `balanced_auto` | 当未显式设置 `GROK_MODEL` 时，按 provider family 解析默认模型；当前优先兼容官方 xAI、OpenRouter、常见 OpenAI-compatible relay 与 `grok2api` 风格反代 |
+| `GROK_DEEP_RESEARCH_STANDARD_PROFILE` | 否 | `reasoning` | `deep research` 的 `standard` 档默认 profile；不可用时会自动回落 |
+| `GROK_DEEP_RESEARCH_DEEP_PROFILE` | 否 | `multi_agent` | `deep research` 的 `deep` 档默认 profile；若当前 provider / relay / 账户不支持多 agent，会自动回落到单 agent |
+| `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | 否 | - | 第 2 个 Grok 供应商；当主供应商失败时会自动切到该供应商继续重试 |
+| `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | 否 | - | 更多 Grok 供应商，按编号升序依次作为 failover provider chain |
+| `GROK_MODEL_FALLBACKS` | 否 | 内建降级链 | 逗号分隔的模型自动降级顺序；当当前供应商明确返回“模型不可用”时，会在同一供应商内按该顺序继续尝试，例如可显式包含 `grok-4.1-fast` |
 | `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
@@ -234,6 +243,11 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_RETRY_MAX_ATTEMPTS` | 否 | `3` | 最大重试次数 |
 | `GROK_RETRY_MULTIPLIER` | 否 | `1` | 重试退避乘数 |
 | `GROK_RETRY_MAX_WAIT` | 否 | `10` | 重试最大等待秒数 |
+| `GROK_DEEP_RESEARCH_DIR` | 否 | `~/.config/grok-search/deep-research` | deep research SQLite 状态与 artifacts 根目录 |
+| `GROK_DEEP_RESEARCH_DEFAULT_BUDGET_SECONDS` | 否 | `240` | deep research 默认目标预算秒数 |
+| `GROK_DEEP_RESEARCH_HARD_TIMEOUT_SECONDS` | 否 | `600` | deep research 硬超时上限 |
+| `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | 否 | `3` | 默认 deep research runtime 同一轮 ready research unit 的最大并发执行数 |
+| `GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS` | 否 | `1800` | 已完成 deep research job 按 `finished_at` 参与复用的时间窗口 |
 | `PYTHONIOENCODING` | 否 | `utf-8` | 建议显式设为 UTF-8，减少 Windows / 中转站日志乱码 |
 | `PYTHONUNBUFFERED` | 否 | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
 | `PYTHONUTF8` | 否 | `1` | 强制 Python UTF-8 模式 |
@@ -241,10 +255,22 @@ claude mcp add-json grok-search --scope user '{
 > 模型解析优先级为：进程里的 `GROK_MODEL` > 项目 `.env.local` > 项目 `.env` > `~/.config/grok-search/config.json` 中由 `switch_model` 持久化的值 > 代码默认值 `grok-4.20-0309`。如使用 OpenRouter 兼容地址，运行时还会自动补齐 `:online` 后缀。
 
 > 环境变量优先级按“是否存在”判断：只要进程环境里显式设置了某个键，即使值为空字符串，也不会再回落到项目 `.env.local` / `.env`。
+>
+> 若配置了 `GROK_API_URL_2` / `GROK_API_KEY_2` 及更高编号的同名变量，运行时会把它们视为备用 Grok 供应商链路：当前一个供应商在真实请求阶段失败时，会自动按编号顺序切换到下一个继续尝试，直到命中可用供应商或全部失败为止。
+>
+> 若配置了 `GROK_MODEL_FALLBACKS`，当某个供应商明确返回“模型不可用”时，运行时会在同一供应商内按你给出的模型顺序继续尝试；未显式配置时，会使用内建的 Grok 4.20 -> `grok-4.1-fast` 等降级链。
 
 > `get_config_info` 的基础配置快照当前会额外返回 `GROK_MODEL_SOURCE`，用于标识当前活动模型来自哪一层（如 `process_env`、`project_env_local`、`project_env`、`persisted_config`、`default`）。如果这里显示的是 `process_env` 或 `project_env_local` / `project_env`，单独调用 `switch_model` 不会改变当前进程，需先修改对应覆盖层。
 
 > 当前默认首选模型是 `grok-4.20-0309`。运行时模型选择对 Grok 4.1+ 族会保持弹性：如果显式或隐式请求的模型不在 `/models` 返回列表里，但列表中存在兼容的 Grok 4.1+ 可用模型，系统会优先回退到更合适的可用模型，而不是仅因后缀不匹配而直接失败。
+
+> 当没有显式 `GROK_MODEL` 时，运行时当前会按 `GROK_MODEL_PROFILE` 做 provider-aware 默认解析；`get_config_info` 基础快照会额外返回 `GROK_MODEL_PROFILE`、`GROK_DEEP_RESEARCH_STANDARD_PROFILE`、`GROK_DEEP_RESEARCH_DEEP_PROFILE` 与 `GROK_PROVIDER_FAMILY`，便于排查官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代的差异。
+
+> `get_config_info` 的基础快照现在还会返回 `GROK_ROUTING_DIAGNOSTICS`。其中会列出当前 active provider、编号 provider chain、各 profile 解析出的默认模型、预期会走 `/chat/completions` 还是 `/responses`，以及 multi-agent 相关 routing signals，方便判断官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代在当前配置下到底会怎么走。
+
+> 当前 Grok 路由已支持 `/chat/completions` 与 `/responses` 双通道。多 agent 家族与部分 response-only relay 模型会优先走 `/responses`；OpenRouter 与多数兼容 relay 仍优先 `chat/completions`。
+
+> `deep research` 当前默认采用 `standard` 单 agent、`deep` 多 agent 优先的策略；若当前 provider、relay、账户套餐或单模型配置不支持多 agent，会自动回落到单 agent。多 agent 通常会带来更高时延，单次大约可能在 `10` 秒到 `2` 分钟之间。
 
 > `GROK_TIME_CONTEXT_MODE` 默认是 `always`，保持当前“全量注入本地时间上下文”的行为；如需节省上下文，可改为 `auto` 或 `never`。
 
@@ -254,7 +280,7 @@ claude mcp add-json grok-search --scope user '{
 - `web_search` 调用时若没有用户明确指定模型，尽量不要传 `model` 参数，否则会覆盖默认的 `GROK_MODEL`
 - 如需更省上下文，可将 `GROK_TIME_CONTEXT_MODE` 设为 `auto`（只在明显时效查询或显式时效控制下注入）或 `never`
 - `GROK_DEBUG=false` 时，`log_info()` 不会写入这类 helper 日志，也不会通过 `ctx.info()` 暴露中间进度；仅在 `GROK_DEBUG=true` 时转发 debug-only progress
-- redirect preflight 若因超时或请求级错误被标记为 `skipped_due_to_error`，当前实现还会通过 MCP context 发出 caller-visible warning，但不会改写成功返回体
+- redirect preflight 若因超时或请求级错误失败，`web_fetch` / `web_map` 当前会直接 fail-closed 并阻断下游 provider 调用；`skipped_due_to_error` 仅保留为内部诊断 / 兼容性 reason code，不再作为继续执行路径
 - 若 `content` 为空，先检查中转站是否真的返回了正文；若 `sources_count=0`，再检查是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
 - 若上游 endpoint 指向 `localhost` / `127.x` 等 loopback 地址，运行时会对该请求强制 `trust_env=False`，因此会一并绕过 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 以及 `SSL_CERT_FILE` / `SSL_CERT_DIR`
 
@@ -363,8 +389,8 @@ claude mcp list
 - 对通过静态校验的目标，`web_fetch` / `web_map` 还会在真正调用 provider 前继续复检可见的 redirect 目标。
 - 当前可见 redirect 复检使用 `GET` 请求而不是 `HEAD`；对 presigned URL、one-shot token 或有副作用的读取型链接，这意味着可能存在额外一次预检读取，应视为已知边界。
 - 当前可见 redirect 复检最多会发起 `5` 次预检请求；如果到第 `5` 次预检时仍然看到新的可见重定向，就会直接返回“目标 URL 重定向次数过多”并拒绝继续调用下游 provider。
-- 若 redirect 预检发生超时或请求级错误，当前实现会把该步骤标记为 `skipped_due_to_error`；`web_fetch` / `web_map` 目前仍会继续执行下游 provider 调用，因此这条边界当前应视为 best-effort safety boundary，而不是 hard-stop guarantee。
-- 上述 `skipped_due_to_error` 当前还会通过 MCP context 发出 caller-visible warning，但不会改写成功返回体；因此宿主若订阅上下文消息，可能在正文成功返回之外额外看到 warning 事件。
+- 若 redirect 预检发生超时或请求级错误，当前实现会直接返回失败并阻断下游 provider 调用；`skipped_due_to_error` 仅作为内部诊断 reason code 保留，不再代表“继续执行下游 provider”。
+- 当前这层边界依然不会仅因本机 DNS 把某个看似公网的 hostname 解析到私网就直接拒绝请求，因此它仍不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证；但对可见 redirect 失败路径已经收紧为 hard-stop。
 - 当前实现为了避免误杀普通公网 hostname，不会因为本机 DNS 把某个公网域名解析到私网结果就直接拒绝请求；因此这层边界不应被理解为对 split-horizon / 本地 DNS 私有解析的强保证。
 
 | 参数 | 类型 | 必填 | 说明 |
@@ -379,7 +405,7 @@ claude mcp list
 - Tavily Map 默认可能返回外部域名链接；若你需要更接近站内 sitemap 的结果，请结合 `instructions` 收紧范围，并按返回结果自行过滤。当前文档中的这条说明对应 Tavily 文档中 `allow_external=true` 的默认行为，本封装暂未直接暴露该开关。
 - 默认会拒绝非 `http/https`、loopback、明显私有网络目标、单标签主机名、常见私网后缀主机、常见 loopback helper 域名（如 `localtest.me` / `lvh.me`），以及常见把私网 IP 编进公网 DNS 名的 alias 形态，并在调用 Tavily 前继续做可见 redirect 目标复检。
 - 上述边界同样覆盖明显的 private / 私有网络目标；当前策略优先阻断这类目标，再决定是否继续调用下游 provider。
-- 可见 redirect 复检当前使用 `GET` 而不是 `HEAD`；最多会发起 `5` 次预检请求，如果到第 `5` 次预检时仍然看到新的可见重定向，就会返回“目标 URL 重定向次数过多”并拒绝继续执行下游 provider。若预检超时或发生请求级错误，则会标记为 `skipped_due_to_error`，并继续执行下游 provider；因此该边界当前应被理解为 best-effort safety boundary，而不是对 split-horizon / 本地 DNS 私有解析的强保证。
+- 可见 redirect 复检当前使用 `GET` 而不是 `HEAD`；最多会发起 `5` 次预检请求，如果到第 `5` 次预检时仍然看到新的可见重定向，就会返回“目标 URL 重定向次数过多”并拒绝继续执行下游 provider。若预检超时或发生请求级错误，当前也会直接 fail-closed；`skipped_due_to_error` 仅保留为内部 reason code，不再继续执行下游 provider。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -403,10 +429,12 @@ claude mcp list
 - Grok `/models` 连通性与可用模型
 - Tavily / Firecrawl 的只读探测结果（仅在已配置时执行）
 - 默认最小真实 `web_search` / `web_fetch` 探针结果
-- `web_search` / `get_sources` / `web_fetch` / `web_map` / `toggle_builtin_tools` 的 readiness 汇总
+- `web_search` / `get_sources` / `web_fetch` / `web_map` / `toggle_builtin_tools` / `deep_research_planner` / `deep_research_runtime` 的 readiness 汇总
 - 修复建议列表（API Key 自动脱敏）
 - `doctor.recommendations_detail`：与 `check_id` / `feature` 关联的结构化修复建议
 - `feature_readiness.web_fetch.providers`：provider 级状态，稳定包含 `check_id`；`verified_path` 表示真实抓取探针实际打通的后端；未执行或退化的 provider 会在可判定时附带 `reason_code`，并可能补充 `skipped_reason`
+- `grok_provider_chain`：当前解析到的 Grok provider 数量、命名摘要，以及每个 provider 的 family / resolved model / 预期 endpoint path
+- 基础快照里的 `GROK_ROUTING_DIAGNOSTICS`：当前 active provider、provider chain、按 profile 推导出的默认模型、`/chat/completions` 与 `/responses` 路径可见性，以及 multi-agent routing signals
 - 基础快照里的 `GROK_MODEL_SOURCE`：当前活动模型的来源层，便于区分是进程 env、项目 `.env.local` / `.env`、持久化配置还是代码默认值在生效
 
 注意：
@@ -415,10 +443,12 @@ claude mcp list
 - `connection_test` 当前只反映 `/models` 连通性，不代表当前活动模型一定能通过真实 `chat/completions` 路径；判断 `web_search` 是否真可用时，应结合 `doctor`、`feature_readiness`、`GROK_MODEL_SOURCE` 与 `grok_model_selection` / `grok_model_runtime_fallback` / `grok_search_probe` 结果一起看。
 - `grok_model_selection` 表示 `/models` 列表阶段就已发现当前模型不可直接使用，并会在运行前预选到更合适的 Grok 候选模型；`grok_model_runtime_fallback` 表示当前 probe model 在真实 `chat/completions` 路径上仍只能靠运行时二次回退才成功。这两个 check 可能同时出现。
 - `grok_search_probe` 当前除了 `ok` / `error` 之外，也可能返回正文质量降级类 `warning`；例如探针只拿到信源列表、没有可用正文，或正文疑似截断时，`feature_readiness.web_search` 会相应显示为 `degraded`。
+- `grok_search_probe` 当前在成功时还会附带实际命中的 `provider_name` / `provider_model`，并按该模型的真实 routing 规则回显 endpoint path；当 secondary provider 接住请求或 multi-agent 模型改走 `/responses` 时，diagnostics 会按真实 winner 回显，而不是只停留在 primary 静态配置层。
 - 运行时模型回退当前属于 best-effort 兼容路径：它依赖 `/models` 能返回可选候选列表，且上游错误摘要命中“模型不可用”类文案；如果 `/models` 不可用，或错误类型不属于该类信号，就不保证会自动继续回退。
 - `feature_readiness.get_sources` 只有在当前进程内至少存在一个非 error 的可读取 source session 时才会显示 `ready`；如果只有失败搜索留下的 session，状态会保持 `partial_ready`。即使 `web_search` 当前尚未 ready，只要当前进程里仍保有可读取 session，`get_sources` 也会继续显示 `ready`，同时通过 `degraded_by` 暴露上游配置问题。
 - `feature_readiness.get_sources` 当前会附带 `cache_summary`，至少包含 `total_sessions`、`readable_sessions`、`error_sessions`、`partial_sessions`、`unreadable_sessions`，用于快速判断当前 source cache 的可读性与退化面。
 - `feature_readiness` 当前还会提供一组 summary-safe 机器字段：`based_on_checks` 表示该能力主要参考了哪些 doctor checks，`probe_scope` 表示结论属于哪类探针/状态面，`degraded_by` 用 `check_id/status/reason_code` 描述当前退化来源。对 `get_sources`，cache 侧退化当前会使用 synthetic cause `source_cache_state`；对 `web_search` 还会额外返回 `runtime_override_active` 与 `runtime_model_source`，用于标记当前退化是否受进程 env / 项目 `.env.local` / `.env` 覆盖层影响。
+- `feature_readiness.deep_research_planner` 与 `feature_readiness.deep_research_runtime` 当前共享 Grok provider chain 与真实搜索探针的 readiness 结论，用于区分“默认轻路径正常”与“deep research 也能在相同运行时下工作”。
 - `feature_readiness` / `doctor` 的状态语义当前可按以下方式理解：`ready`=当前能力已验证可用，`degraded`=能力存在但探针或局部依赖异常，`not_ready`=配置或前置条件不足，`partial_ready`=接口存在但仍缺少运行中瞬时条件；其中 `transient` 和 `client_specific` 项默认不拉低 overall doctor。
 - 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query、常见 OAuth/OIDC credential 参数，以及高置信度 cloud-signed credential 键（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）也会做遮罩。但诊断结果仍可能包含本机绝对路径、endpoint/主机名或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
 
@@ -455,9 +485,33 @@ claude mcp list
 - 推荐阶段顺序为 `plan_intent -> plan_complexity -> plan_sub_query -> plan_search_term -> plan_tool_mapping -> plan_execution`。
 - Level 1 planning 在 `query_decomposition` 后结束，Level 2 planning 在 `tool_selection` 后结束，Level 3 才会继续到 `execution_order`。
 - `plan_*` wrapper 当前采用标量输入形态，例如 `depends_on` 使用 CSV、`parallel_groups` 使用分号分组的 CSV、`params_json` 使用字符串化 JSON；返回值会提供 `plan_complete`、`phases_remaining` 与 `executable_plan`，便于调用方直接承接下一步执行。
+- `plan_*` 当前直接返回结构化对象，而不是 JSON 字符串；调用方不应再对工具返回值额外做一次 `json.loads(...)`。
+- `plan_sub_query.boundary` 当前除了必填外，还会做最小机器校验：必须显式写出排除/不包含的边界语义，纯空泛描述不会通过。
 - planning `session_id` 当前是进程内的 transient handle，默认 TTL 约 1 小时、LRU 上限 256；进程重启、TTL 到期或缓存淘汰后，应从新的 `plan_intent` session 重新开始。
 - 首次建立 `search_strategy` 时必须提供 `approach`；只有在 strategy 已建立后，后续非 `is_revision` 调用才允许只追加 `search_terms`。
 - 当 session 缺失、阶段顺序错误，或 revision 会破坏下游阶段时，当前会返回结构化错误，并明确要求从新 session 重新开始相应 planning 流程。
+
+### `deep_research_start` / `deep_research_status` / `deep_research_events` / `deep_research_result` / `deep_research_resume` / `deep_research_cancel` / `deep_research_list`
+
+高级深度研究 job 层，适合多分钟、可恢复、可查询中间进度与 artifacts 的报告型任务。
+
+说明：
+- 这是高于 `plan_* -> web_search` 的高级层，不替代默认轻路径。
+- `deep_research_start` 会创建 job，并立即生成结构化 `plan.json`；其中至少包含 `brief`、`sub_questions`、`search_strategy`、`report_outline`、`research_units`。在 continuation 场景下，`plan.json` 里的 `continuation` 当前只保留 compact 摘要视图，完整 carry-forward state 会额外写到 `continuation.json`。非 `plan_only` 场景下，任务会异步推进并逐步产出 `partial_report.md`、`final_report.md`、`sources.json`、`citations.json`、`report.json`。
+- `force_new` 用于控制 `deep_research_start` 是否必须创建全新 job。
+- 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；这条规则当前同样适用于带 `continue_from_job_id` 的 follow-up job，返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。当前 request fingerprint 也会区分 `plan_only`；`plan_only=true` 不应再复用 execution job，execution start 也不应复用 plan-only draft。对 `completed` job，当前只有在最终四件套可读且来自一致 `batch_id` 时才应继续被视为可复用结果。
+- 若 `deep_research_start(force_new=false)` 命中的是 `interrupted` 且已存在可读 final artifact batch 的 job，当前也会先把它解析成 `completed` 再作为 reusable result 返回，避免与 `deep_research_resume` 对同一 job 给出不同终态语义。
+- `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要；对 `completed` job，还会额外返回当前是否正在读取 resolved final batch 的 additive 诊断字段，如 `artifact_fallback_used`、`resolved_artifact_batch_id`。对 `interrupted` 且 `current_checkpoint/phase` 已到 `finalizing` 的 job，只要存在一致且可读的 final artifact batch，当前也应暴露同一批 resolved final artifacts。CLI `grok-search-research result --artifact <kind>` 当前也应优先读取同一批 resolved final artifacts，而不是盲读当前指针。
+- `deep_research_events` 返回有序事件流，支持 `after_seq` 增量读取；空 fetch/map 等显式 unit 失败当前会通过 `research_unit_failed` 暴露，而不应再静默计作 completed。
+- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化；若某个 JSON artifact 不可读，结果会在 `artifact_errors` 里返回稳定错误码，而不是直接让整次读取失败。对 `completed` job，若最终四件套缺失，当前会通过 `artifact_errors` 暴露缺失项；对 `failed` / `canceled` / `interrupted` job，则以当前已落盘的 partial artifacts 与 checkpoint 为准。若当前 artifact 指针混批或不可读，`artifact_fallback_used` 会标记结果是否回退到了最近一批可读且 schema 合法的 final artifacts。continuation context 在 artifact 可解析但 shape 非法时，也会继续按 `sources.json -> citations.json.source_registry -> checkpoint -> partial/runtime carry-forward` 的顺序回退，而不是直接让 follow-up job 构建失败。
+- continuation context 当前对 `sources.json`、`citations.json`、`report.json` 逐项判断是否仍可读；某个当前 artifact shape 非法时，不应把仍然可读的其他当前 artifacts 一起降级到 checkpoint。
+- `deep_research_resume` 目前支持从 `draft`、`failed`、`interrupted` job 继续，并优先从最新的 completed research-unit checkpoint 续跑，而不是整 job 从头执行。恢复后的新 attempt 会清理上一轮的终态时间戳，并重新使用新的 attempt 时间窗口。
+- `deep_research_cancel` 只负责发起取消请求；运行中的 job 会在阶段边界或下一次检查点更新时收口。
+- `deep_research_list` 提供最近 job 列表，适合 CLI 或宿主做结果检索。
+- 最终 artifacts 当前按同一 `batch_id` 原子发布；调用方如需确认 `sources.json`、`citations.json`、`report.json`、`final_report.md` 来自同一批结果，可读取 artifact metadata 里的 `batch_id`。`sources.json` 当前还可能附带 `topic_match_score` 与 `ranking_penalties`；unused source 若与同域中已被 grounding 的页面相比明显更 off-topic，当前可被直接从最终 source registry 压掉，并带 `same_domain_off_topic` penalty。`report.json.runtime` 当前除 `warnings` 外，也可能附带 `failed_units`。
+- `report.json.runtime.warnings` 当前也会在 coverage 明显不完整时附带 `coverage_incomplete`；当 `unanswered_sections` 或 `uncovered_sub_questions` 非空时，`report.status` 当前至少应降级为 `degraded`。
+- `sources.json` 当前除 `source_id` 外，还会附带 additive `source_key`、`quality_score`、`quality_tier`、`source_type`、`ranking_reasons` 一类来源质量与排序解释元数据；来源条目还可能带 `winner_provider`、`citation_count`、`section_count` 这类更直接的 provenance / usage 字段。`citations.json` 与 `report.json` 的 section 当前也可能带 `summary`、`confidence`、`claim_cluster_count`、`supporting_source_count`、`supporting_domain_count`；claim 当前也可能附带 additive `unit_id`、`evidence_ids`、`cluster_type`、`supporting_source_count`、`supporting_domain_count`、`confidence`，用于回溯 claim 来自哪个 research unit / evidence，以及它当前是单来源、同域共识还是更强跨域 corroboration 型证据。
+- continuation context 当前会优先复用 `sources.json`；若该 artifact 缺失或不可读，会回退到 `citations.json.source_registry` 重建 carry-forward sources。若已完成 job 的当前 artifact 指针混批或缺件，则会优先回退到最近的完整 final artifact batch，再回退到 checkpoint / partial artifacts。运行中的 `queued` / `running` job 在新进程启动时会被回收成 `interrupted`，并带上恢复原因。
 </details>
 
 ## 四、常见问题
@@ -510,6 +564,21 @@ A: 当前版本已经尽量把错误显性化，你可以按以下方式理解�
 - [发布说明](./docs/RELEASING.md)
 - [更新记录](./CHANGELOG.md)
 - [Companion Skill](./skills/research-with-grok-search/SKILL.md)
+
+## 六、Deep Research CLI
+
+```bash
+grok-search-research start "Compare open-source deep research frameworks" --watch
+grok-search-research list
+grok-search-research result JOB_ID --artifact final_report.md
+grok-search-research continue JOB_ID "Focus on resume and checkpoint trade-offs" --watch
+```
+
+CLI 当前优先承接：
+- 持续 watch 事件流
+- 读取指定 artifact
+- 从已有研究结果和 artifacts 继续开新 job
+- 对 draft / interrupted / failed job 按 checkpoint 做 resume
 
 ## 许可证
 

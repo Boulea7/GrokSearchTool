@@ -1,0 +1,831 @@
+import json
+from pathlib import Path
+
+from grok_search import deep_research_cli
+from grok_search.deep_research_runtime import DeepResearchRuntime
+from grok_search.deep_research_types import utc_now_iso
+
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
+
+
+def build_runtime(tmp_path):
+    return DeepResearchRuntime(tmp_path / "deep-research")
+
+
+def summary_lines(text: str) -> list[str]:
+    return [line for line in text.splitlines() if line.startswith("summary:")]
+
+
+def load_deep_research_fixture(name: str) -> dict:
+    return json.loads((FIXTURE_DIR / name).read_text())
+
+
+def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
+    continuation_snapshot = load_deep_research_fixture("probe_round11_interrupted_continue_snapshot.json")
+    report_snapshot = load_deep_research_fixture("probe_round11_main_snapshot.json")
+    source = {
+        **report_snapshot["sources"][0],
+        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+    }
+    plan_payload = {
+        "query": continuation_snapshot["query"],
+        "include_domains": continuation_snapshot["include_domains"],
+        "exclude_domains": continuation_snapshot["exclude_domains"],
+        "continuation": continuation_snapshot["continuation"],
+        "brief": {
+            "continuation_focus": continuation_snapshot["continuation"]["continuation_focus"],
+        },
+        "search_strategy": continuation_snapshot["plan"]["search_strategy"],
+        "planner_metadata": continuation_snapshot["planner"],
+    }
+    report_payload = report_snapshot["report"]
+    citations_payload = {
+        "source_registry": {
+            source["source_id"]: source,
+        },
+        "sections": [],
+    }
+    job = runtime.store.create_job(
+        query=continuation_snapshot["query"],
+        request_fingerprint="fp-cli-round11-interrupted-parity",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=continuation_snapshot["include_domains"],
+        exclude_domains=continuation_snapshot["exclude_domains"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id=continuation_snapshot["continued_from_job_id"],
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=2,
+        current_checkpoint="finalizing",
+        finished_at=utc_now_iso(),
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps(plan_payload), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([source]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(citations_payload),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps(report_payload),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": f"# Final Report\n\n{report_payload['summary']}\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "report.json",
+        json.dumps({"summary": "stale current report", "runtime": {"warnings": [], "constraint_violations": []}}),
+        "application/json",
+    )
+    runtime.store.append_event(
+        job.job_id,
+        type="phase_started",
+        phase="finalizing",
+        message="Finalizing interrupted round11 snapshot.",
+        data={"resolved_artifact_batch_id": persisted[0]["metadata"]["batch_id"]},
+    )
+    runtime.store.append_event(
+        job.job_id,
+        type="job_interrupted",
+        phase="finalizing",
+        message="Interrupted after resolved final batch was written.",
+        data={"checkpoint": "finalizing"},
+    )
+    return {
+        "job": job,
+        "batch_id": persisted[0]["metadata"]["batch_id"],
+        "source": source,
+        "plan_payload": plan_payload,
+        "report_payload": report_payload,
+    }
+
+
+def test_cli_plan_only_start_prints_draft_job(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+
+    exit_code = deep_research_cli.main(
+        ["start", "Plan a deep research run", "--context", "Need the plan first.", "--plan-only"]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["status"] == "draft"
+    assert payload["plan"]["context"] == "Need the plan first."
+
+
+def test_cli_result_artifact_prints_artifact_content(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    response = runtime.store.create_job(
+        query="Artifact job",
+        request_fingerprint="fp-artifact",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(response.job_id, "final_report.md", "# Final Report\n\nArtifact body.", "text/markdown")
+
+    exit_code = deep_research_cli.main(["result", response.job_id, "--artifact", "final_report.md"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out == "# Final Report\n\nArtifact body.\n"
+    assert summary_lines(captured.err) == [
+        f"summary: job={response.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false artifact=final_report.md bytes=30"
+    ]
+
+
+def test_cli_result_artifact_missing_file_returns_nonzero(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="Missing artifact job",
+        request_fingerprint="fp-missing-artifact",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--artifact", "missing.md"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "artifact_not_found: missing.md" in captured.err
+
+
+def test_cli_result_artifact_prefers_resolved_final_batch(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="Artifact batch job",
+        request_fingerprint="fp-artifact-batch",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Artifact batch job"}), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Good report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nGood report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]),
+        "application/json",
+    )
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--artifact", "sources.json"])
+    captured = capsys.readouterr()
+    batch_id = persisted[0]["metadata"]["batch_id"]
+    artifact_content = '[{"source_id": "R1", "url": "https://good.example.com"}]'
+
+    assert exit_code == 0
+    assert captured.out == artifact_content + "\n"
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch={batch_id} artifact_fallback=true artifact=sources.json bytes={len(artifact_content.encode('utf-8'))}"
+    ]
+
+
+def test_cli_result_artifact_reads_resolved_final_batch_for_interrupted_finalizing_job(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="Interrupted artifact batch job",
+        request_fingerprint="fp-interrupted-artifact-batch",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Interrupted artifact batch job"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "final_report.md",
+        "# Final Report\n\nStale current report.\n",
+        "text/markdown",
+    )
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--artifact", "final_report.md"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "# Final Report\n\nRecovered report.\n\n"
+
+
+def test_cli_status_surfaces_resolved_artifact_batch_id(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="CLI status resolved batch",
+        request_fingerprint="fp-cli-status-resolved-batch",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "CLI status resolved batch"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Good report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nGood report.\n",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "sources.json",
+        json.dumps([{"source_id": "R9", "url": "https://stale.example.com"}]),
+        "application/json",
+    )
+
+    exit_code = deep_research_cli.main(["status", job.job_id])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["resolved_artifact_batch_id"]
+    assert payload["artifact_fallback_used"] is True
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch={payload['resolved_artifact_batch_id']} artifact_fallback=true"
+    ]
+
+
+def test_cli_status_summary_surfaces_planner_fallback_and_warning_counts(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="CLI diagnostics job",
+        request_fingerprint="fp-cli-diagnostics",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "query": "CLI diagnostics job",
+                "planner_metadata": {
+                    "planner": "fallback",
+                    "used_fallback": True,
+                    "fallback_reason": {"stage": "unsafe_plan", "error": "filled_search_query:u1"},
+                },
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "report.json",
+        json.dumps(
+            {
+                "summary": "Checkpoint resume summary.",
+                "sections": [],
+                "unit_results": {},
+                "runtime": {
+                    "warnings": ["planner_fallback_used", "domain_constraints_applied"],
+                    "constraint_violations": [{"unit_id": "unit-search-1", "removed_source_count": 1}],
+                },
+            }
+        ),
+        "application/json",
+    )
+
+    exit_code = deep_research_cli.main(["status", job.job_id])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=false planner_fallback=true warnings=2 constraint_violations=1"
+    ]
+
+
+def test_cli_start_spawns_worker_for_background_job(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    spawned = []
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    monkeypatch.setattr(deep_research_cli, "_spawn_worker", lambda job_id: spawned.append(job_id))
+
+    exit_code = deep_research_cli.main(["start", "Run in background"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert spawned == [payload["job_id"]]
+
+
+def test_cli_continue_creates_follow_up_job(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    spawned = []
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    monkeypatch.setattr(deep_research_cli, "_spawn_worker", lambda job_id: spawned.append(job_id))
+
+    original = runtime.store.create_job(
+        query="Original job",
+        request_fingerprint="fp-original",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=["docs.aws.amazon.com"],
+        exclude_domains=["repost.aws"],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    exit_code = deep_research_cli.main(["continue", original.job_id, "Continue from previous findings"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["continued_from_job_id"] == original.job_id
+    assert payload["include_domains"] == ["docs.aws.amazon.com"]
+    assert payload["exclude_domains"] == ["repost.aws"]
+    assert spawned == [payload["job_id"]]
+
+
+def test_cli_start_does_not_spawn_worker_for_reused_completed_job(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    spawned = []
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    monkeypatch.setattr(deep_research_cli, "_spawn_worker", lambda job_id: spawned.append(job_id))
+
+    fingerprint = runtime._request_fingerprint(
+        query="Reuse me",
+        context="",
+        effort="standard",
+        include_domains=[],
+        exclude_domains=[],
+        continue_from_job_id="",
+        plan_only=False,
+    )
+    job = runtime.store.create_job(
+        query="Reuse me",
+        request_fingerprint=fingerprint,
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Reuse me"}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://docs.example.com/runtime/checkpoints"}}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Checkpoint resume summary.", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nCheckpoint resume summary.",
+                "content_type": "text/markdown",
+            },
+        ],
+    )
+
+    exit_code = deep_research_cli.main(["start", "Reuse me"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["reused"] is True
+    assert payload["status"] == "completed"
+    assert spawned == []
+
+
+def test_cli_list_filters_jobs_by_status(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    completed = runtime.store.create_job(
+        query="Completed job",
+        request_fingerprint="fp-cli-list-completed",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.create_job(
+        query="Failed job",
+        request_fingerprint="fp-cli-list-failed",
+        status="failed",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+
+    exit_code = deep_research_cli.main(["list", "--status", "completed"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert [job["job_id"] for job in payload["jobs"]] == [completed.job_id]
+    assert summary_lines(captured.err) == [
+        "summary: jobs=1 status_filter=completed limit=50",
+        f'summary: job={completed.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=- query="Completed job"',
+    ]
+
+
+def test_cli_watch_prints_events_until_terminal_status(monkeypatch, tmp_path, capsys):
+    class FakeRuntime:
+        def __init__(self):
+            self.status_calls = 0
+
+        async def status(self, job_id):
+            self.status_calls += 1
+            if self.status_calls == 1:
+                return {
+                    "job_id": job_id,
+                    "status": "running",
+                    "phase": "researching",
+                    "progress_pct": 35.0,
+                    "attempt_count": 1,
+                    "current_checkpoint": "researching",
+                    "cancel_requested": False,
+                    "continued_from_job_id": "",
+                    "resolved_artifact_batch_id": "",
+                }
+            return {
+                "job_id": job_id,
+                "status": "completed",
+                "phase": "finalizing",
+                "progress_pct": 100.0,
+                "attempt_count": 1,
+                "current_checkpoint": "finalizing",
+                "cancel_requested": False,
+                "continued_from_job_id": "",
+                "resolved_artifact_batch_id": "batch-1",
+                "artifact_fallback_used": True,
+            }
+
+        async def events(self, job_id, after_seq=0, limit=100):
+            if after_seq == 0:
+                return {
+                    "events": [{"seq": 1, "phase": "researching", "type": "phase_started", "message": "Researching."}],
+                    "next_after_seq": 1,
+                }
+            return {"events": [], "next_after_seq": after_seq}
+
+    async def fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FakeRuntime())
+    monkeypatch.setattr(deep_research_cli.asyncio, "sleep", fake_sleep)
+
+    exit_code = deep_research_cli.main(["watch", "job-123", "--interval-seconds", "0.01"])
+    captured = capsys.readouterr()
+    output = captured.err
+
+    assert exit_code == 0
+    assert "[1] researching phase_started: Researching." in output
+    assert "summary: job=job-123 status=running phase=researching progress=35.0% checkpoint=researching attempts=1 cancel_requested=false continued_from=- resolved_batch=- artifact_fallback=-" in output
+    assert "summary: job=job-123 status=completed phase=finalizing progress=100.0% checkpoint=finalizing attempts=1 cancel_requested=false continued_from=- resolved_batch=batch-1 artifact_fallback=true" in output
+
+
+def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+
+    job = runtime.store.create_job(
+        query="Resume me",
+        request_fingerprint="fp-cli-resume",
+        status="interrupted",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="seed-job",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        progress_pct=45.0,
+        attempt_count=2,
+        current_checkpoint="researching",
+        cancel_requested=True,
+        finished_at=utc_now_iso(),
+    )
+
+    exit_code = deep_research_cli.main(["resume", job.job_id])
+    resume_captured = capsys.readouterr()
+    resume_payload = json.loads(resume_captured.out)
+
+    assert exit_code == 0
+    assert resume_payload["status"] == "queued"
+    assert summary_lines(resume_captured.err) == [
+        f"summary: job={job.job_id} status=queued phase=researching progress=0.0% checkpoint=researching attempts=2 cancel_requested=false continued_from=seed-job resolved_batch=- artifact_fallback=false"
+    ]
+
+    exit_code = deep_research_cli.main(["cancel", job.job_id])
+    cancel_captured = capsys.readouterr()
+    cancel_payload = json.loads(cancel_captured.out)
+
+    assert exit_code == 0
+    assert cancel_payload == {
+        "job_id": job.job_id,
+        "cancel_requested": True,
+        "status": "canceled",
+    }
+    assert summary_lines(cancel_captured.err) == [
+        f"summary: job={job.job_id} status=canceled phase=researching progress=0.0% checkpoint=researching attempts=2 cancel_requested=true continued_from=seed-job resolved_batch=- artifact_fallback=false"
+    ]
+
+
+def test_cli_events_prints_operator_batch_summary(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+
+    job = runtime.store.create_job(
+        query="Eventful job",
+        request_fingerprint="fp-cli-events",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.append_event(job.job_id, type="phase_started", phase="researching", message="Researching.", data={})
+    runtime.store.append_event(job.job_id, type="job_completed", phase="finalizing", message="Done.", data={})
+
+    exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "0", "--limit", "10"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert [event["type"] for event in payload["events"]] == ["phase_started", "job_completed"]
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} events=2 after_seq=0 next_after_seq=2 last_event=job_completed terminal=false"
+    ]
+
+
+def test_cli_round11_interrupted_status_events_and_result_remain_consistent(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    seeded = seed_round11_interrupted_finalizing_job(runtime)
+    job = seeded["job"]
+
+    exit_code = deep_research_cli.main(["status", job.job_id])
+    status_captured = capsys.readouterr()
+    status_payload = json.loads(status_captured.out)
+
+    assert exit_code == 0
+    assert status_payload["status"] == "interrupted"
+    assert status_payload["phase"] == "finalizing"
+    assert status_payload["current_checkpoint"] == "finalizing"
+    assert status_payload["attempt_count"] == 2
+    assert status_payload["continued_from_job_id"] == job.continued_from_job_id
+    assert status_payload["resolved_artifact_batch_id"] == seeded["batch_id"]
+    assert status_payload["artifact_fallback_used"] is True
+    assert status_payload["planner_fallback_used"] is True
+    assert status_payload["runtime_warnings"] == ["coverage_incomplete", "planner_fallback_used"]
+    assert status_payload["constraint_violations"] == []
+    assert summary_lines(status_captured.err) == [
+        f"summary: job={job.job_id} status=interrupted phase=finalizing progress=0.0% checkpoint=finalizing attempts=2 cancel_requested=false continued_from={job.continued_from_job_id} resolved_batch={seeded['batch_id']} artifact_fallback=true planner_fallback=true warnings=2"
+    ]
+
+    exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "0", "--limit", "10"])
+    events_captured = capsys.readouterr()
+    events_payload = json.loads(events_captured.out)
+
+    assert exit_code == 0
+    assert [event["type"] for event in events_payload["events"]] == ["phase_started", "job_interrupted"]
+    assert summary_lines(events_captured.err) == [
+        f"summary: job={job.job_id} events=2 after_seq=0 next_after_seq=2 last_event=job_interrupted terminal=true"
+    ]
+
+    exit_code = deep_research_cli.main(["result", job.job_id])
+    result_captured = capsys.readouterr()
+    result_payload = json.loads(result_captured.out)
+
+    assert exit_code == 0
+    assert result_payload["status"] == "interrupted"
+    assert result_payload["phase"] == "finalizing"
+    assert result_payload["artifact_fallback_used"] is True
+    assert result_payload["resolved_artifact_batch_id"] == seeded["batch_id"]
+    assert result_payload["plan"]["continuation"]["mode"] == "continue"
+    assert result_payload["plan"]["continuation"]["checkpoint_key"] == "finalizing"
+    assert result_payload["plan"]["planner_metadata"]["used_fallback"] is True
+    assert result_payload["report"]["status"] == "degraded"
+    assert result_payload["report"]["summary"] == seeded["report_payload"]["summary"]
+    assert result_payload["sources"] == [seeded["source"]]
+    assert result_payload["final_report"] == f"# Final Report\n\n{seeded['report_payload']['summary']}\n"
+
+
+def test_spawn_worker_writes_logs_to_worker_log_dir(monkeypatch, tmp_path):
+    captured = {}
+    runtime_dir = tmp_path / "deep-research"
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_DIR", str(runtime_dir))
+
+    def fake_popen(cmd, stdout=None, stderr=None, start_new_session=None):
+        captured["cmd"] = cmd
+        captured["stdout"] = stdout
+        captured["stderr"] = stderr
+        captured["start_new_session"] = start_new_session
+        return object()
+
+    monkeypatch.setattr(deep_research_cli.subprocess, "Popen", fake_popen)
+
+    deep_research_cli._spawn_worker("job-123")
+
+    assert captured["cmd"][-2:] == ["_worker", "job-123"]
+    assert captured["start_new_session"] is True
+    assert Path(captured["stdout"].name).name == "job-123.stdout.log"
+    assert Path(captured["stderr"].name).name == "job-123.stderr.log"
+    assert Path(captured["stdout"].name).parent == runtime_dir / "worker-logs"
+    captured["stdout"].close()
+    captured["stderr"].close()
+
+
+def test_cli_worker_returns_nonzero_when_job_fails(monkeypatch, tmp_path):
+    class FailingRuntime:
+        async def run_job(self, job_id):
+            return {"status": "failed"}
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: FailingRuntime())
+
+    exit_code = deep_research_cli.main(["_worker", "job-123"])
+
+    assert exit_code == 1
+
+
+def test_cli_worker_returns_nonzero_when_job_is_interrupted(monkeypatch, tmp_path):
+    class InterruptedRuntime:
+        async def run_job(self, job_id):
+            return {"status": "interrupted"}
+
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: InterruptedRuntime())
+
+    exit_code = deep_research_cli.main(["_worker", "job-123"])
+
+    assert exit_code == 1

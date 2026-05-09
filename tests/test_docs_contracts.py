@@ -228,14 +228,14 @@ def test_readme_does_not_treat_uv_tool_install_as_public_release_contract():
     assert 'uv tool install "git+https://github.com/Boulea7/GrokSearchTool.git@main"' not in text
 
 
-def test_security_policy_mentions_redirect_preflight_degraded_boundary():
+def test_security_policy_mentions_redirect_preflight_fail_closed_boundary():
     text = SECURITY.read_text(encoding="utf-8")
 
     assert "redirect preflight" in text
     assert "skipped_due_to_error" in text
     assert "timeout" in text
-    assert "continue downstream provider calls" in text
-    assert "best-effort safety boundary" in text
+    assert "fail closed" in text
+    assert "internal diagnostic reason code" in text
 
 
 def test_docs_pin_release_repo_and_stdio_first_host_story():
@@ -255,7 +255,7 @@ def test_roadmap_keeps_stdio_first_positioning_without_relisting_already_aligned
     roadmap = ROADMAP.read_text(encoding="utf-8")
 
     assert "lightweight MCP plus companion skill" in roadmap
-    assert "Long-running `deep research` remains a separate advanced capability direction" in roadmap
+    assert "Long-running `deep research` is now an implemented advanced capability direction" in roadmap
     assert "officially tested, community-tested, and planned integrations" in roadmap
     assert "local `stdio` usage first" in roadmap
     assert "companion-skill guidance" in roadmap
@@ -275,10 +275,18 @@ def test_packaging_workflow_enforces_distribution_and_contract_checks():
     assert "uv build --wheel --sdist" in text
     assert "tests/test_package_imports.py" in text
     assert "tests/test_docs_contracts.py" in text
+    assert "tests/test_deep_research_runtime.py" in text
+    assert "tests/test_deep_research_store.py" in text
+    assert "tests/test_deep_research_server.py" in text
+    assert "tests/test_deep_research_cli.py" in text
     assert "dist/*.tar.gz" in text
     assert "import grok_search.planning" in text
     assert "import grok_search.server" in text
+    assert "import grok_search.deep_research_runtime" in text
+    assert "import grok_search.deep_research_store" in text
     assert "from grok_search.server import main" in text
+    assert "python -m grok_search.deep_research_cli --help" in text
+    assert "grok-search-research --help" in text
 
 
 def test_releasing_doc_covers_version_tag_changelog_and_artifact_verification():
@@ -431,6 +439,105 @@ def test_docs_keep_planning_first_and_cli_first_research_story():
     assert "CLI-first" in compatibility
     assert "`plan_* -> web_search`" in agents
     assert "deep research" in agents
+
+
+def test_docs_explain_deep_research_job_surface_and_cli():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
+    skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "`deep_research_start`" in readme
+    assert "`grok-search-research`" in readme
+    assert "`deep_research_start`" in readme_en
+    assert "`grok-search-research`" in readme_en
+    assert "`deep_research_*`" in compatibility
+    assert "`deep_research_resume`" in agents
+    assert "`deep_research_*`" in skill
+
+
+def test_docs_explain_checkpoint_resume_continuation_and_structured_artifacts():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
+    skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "`sources.json`" in readme
+    assert "`brief`" in readme
+    assert "`research_units`" in readme
+    assert "artifact 摘要" in readme
+    assert "最新的 completed research-unit checkpoint" in readme
+    assert "consumes the previous job's artifacts and findings" in readme_en
+    assert "`sources.json`" in agents
+    assert "`continue_from_job_id`" in agents
+    assert "latest checkpoint boundary" in skill
+    assert "previous artifacts and findings" in skill
+
+
+def test_docs_explain_deep_research_reuse_batch_and_citations_contract():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
+
+    assert "`reused`" in readme
+    assert "`force_new`" in readme
+    assert "`batch_id`" in readme
+    assert "`citations.json`" in readme
+    assert "完全同构" in readme
+    assert "`reused`" in readme_en
+    assert "`force_new`" in readme_en
+    assert "`batch_id`" in readme_en
+    assert "`citations.json`" in readme_en
+    assert "same structure" in readme_en
+    assert "`reused`" in agents
+    assert "`batch_id`" in agents
+
+
+def test_docs_explain_deep_research_lifecycle_and_source_quality_contracts():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
+    skill = (ROOT_DIR / "skills" / "research-with-grok-search" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "`failed` / `canceled` / `interrupted`" in readme
+    assert "`artifact_errors`" in readme
+    assert "`source_key`" in readme
+    assert "`quality_score`" in readme
+    assert "`unit_id`" in readme
+    assert "`evidence_ids`" in readme
+    assert "`failed`, `canceled`, and `interrupted` jobs" in readme_en
+    assert "`source_key`" in readme_en
+    assert "`quality_tier`" in readme_en
+    assert "`unit_id`" in readme_en
+    assert "`evidence_ids`" in readme_en
+    assert "`quality_score`" in agents
+    assert "`quality_tier`" in agents
+    assert "`evidence_ids`" in agents
+    assert "claim provenance fields" in skill
+
+
+def test_docs_explain_continuation_source_fallback_and_resume_attempt_reset():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
+
+    assert "`citations.json.source_registry`" in readme
+    assert "新的 attempt 时间窗口" in readme
+    assert "`citations.json.source_registry`" in agents
+    assert "新的 attempt 时间窗口" in agents
+    assert "`citations.json.source_registry`" in readme_en
+    assert "new attempt time window" in readme_en
+
+
+def test_docs_explain_runtime_concurrency_as_ready_unit_parallelism():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
+
+    assert "同一轮 ready research unit 的最大并发执行数" in readme
+    assert "ready research units" in readme_en
+    assert "最大并发执行数" in agents
 
 
 def test_docs_lock_finance_topic_and_diagnostic_detail_contracts():
@@ -724,20 +831,20 @@ def test_docs_explain_redirect_preflight_timeout_and_redirect_limit_contract():
     assert "fifth preflight still encounters a new redirect" in security
 
 
-def test_docs_explain_preflight_warning_side_channel_without_payload_shape_change():
+def test_docs_explain_preflight_fail_closed_contract():
     readme = README.read_text(encoding="utf-8")
     readme_en = README_EN.read_text(encoding="utf-8")
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
     agents = _read_private_agents_contract_text()
 
-    assert "caller-visible warning" in readme
-    assert "不会改写成功返回体" in readme
-    assert "caller-visible warning" in readme_en
-    assert "does not rewrite successful return payloads" in readme_en
-    assert "caller-visible warning" in compatibility
-    assert "does not change successful tool payloads" in compatibility
-    assert "caller-visible warning" in agents
-    assert "不会改写成功返回体" in agents
+    assert "fail-closed" in readme
+    assert "不再代表“继续执行下游 provider”" in readme
+    assert "fail closed" in readme_en
+    assert "continue-execution path" in readme_en
+    assert "hard-stop" in compatibility
+    assert "diagnostic reason code" in compatibility
+    assert "fail-closed" in agents
+    assert "不再作为继续执行路径" in agents
 
 
 def test_docs_explain_web_fetch_and_web_map_preflight_contract():
@@ -746,12 +853,12 @@ def test_docs_explain_web_fetch_and_web_map_preflight_contract():
 
     assert "`GET` 而不是 `HEAD`" in readme
     assert "`5` 次预检请求" in readme
-    assert "skipped_due_to_error" in readme
+    assert "fail-closed" in readme
     assert "loopback" in readme
     assert "private" in readme
     assert "GET rather than `HEAD`" in compatibility
     assert "fifth preflight still encounters a new redirect" in compatibility
-    assert "skipped_due_to_error" in compatibility
+    assert "hard-stop" in compatibility
 
 
 def test_docs_explain_toggle_builtin_tools_stable_error_contract():
@@ -768,9 +875,9 @@ def test_docs_explain_toggle_builtin_tools_stable_error_contract():
 
 def test_localized_readmes_explain_redirect_preflight_contract():
     localized_expectations = {
-        README_ZH_TW: ["第 `5` 次預檢", "skipped_due_to_error", "best-effort safety boundary"],
-        README_JA: ["`5` 回", "skipped_due_to_error", "best-effort safety boundary"],
-        README_RU: ["`5`", "skipped_due_to_error", "best-effort safety boundary"],
+        README_ZH_TW: ["第 `5` 次預檢", "skipped_due_to_error", "fail-closed"],
+        README_JA: ["`5` 回", "skipped_due_to_error", "fail-closed"],
+        README_RU: ["`5`", "skipped_due_to_error", "fail-closed"],
     }
 
     for path, expected_fragments in localized_expectations.items():
@@ -787,3 +894,21 @@ def test_ja_and_ru_readmes_enumerate_public_tool_surface():
         assert "- `plan_intent`" in text
         assert "- `plan_execution`" in text
         assert "- `web_search`" in text
+
+
+def test_docs_explain_compact_continuation_and_artifact_error_contract():
+    readme = README.read_text(encoding="utf-8")
+    readme_en = README_EN.read_text(encoding="utf-8")
+    agents = _read_private_agents_contract_text()
+
+    assert "compact 摘要视图" in readme
+    assert "`continuation.json`" in readme
+    assert "`artifact_errors`" in readme
+    assert "follow-up job" in readme
+    assert "the `continuation` object inside `plan.json` now stays compact" in readme_en
+    assert "full carry-forward state is written separately to `continuation.json`" in readme_en
+    assert "`artifact_errors`" in readme_en
+    assert "follow-up jobs keyed by `continue_from_job_id`" in readme_en
+    assert "compact 摘要视图" in agents
+    assert "`continuation.json`" in agents
+    assert "`artifact_errors`" in agents
