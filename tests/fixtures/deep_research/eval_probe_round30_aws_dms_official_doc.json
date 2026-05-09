@@ -1,0 +1,313 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing",
+    "runtime_warnings": [
+      "coverage_incomplete",
+      "domain_constraints_applied",
+      "medium_single_source_search_only",
+      "selected_evidence_unused"
+    ]
+  },
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
+  "planner": {
+    "continuation_mode": "fresh",
+    "domain_constraints": "docs.aws.amazon.com only; exclude repost.aws",
+    "effort_level": "deep",
+    "key_focus_areas": "recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC, Postgres restart",
+    "time_budget_seconds": 180,
+    "total_units": 7,
+    "trace": {
+      "requested_model": "",
+      "effective_model": "",
+      "model_resolution": null,
+      "available_model_count": 0,
+      "repair_attempted": false,
+      "repair_succeeded": false,
+      "normalize_actions": [],
+      "validation_issues": [],
+      "blocked_reasons": [],
+      "fallback_used": false,
+      "final_status": "normalized",
+      "fallback_reason": null,
+      "unsafe_plan": false
+    },
+    "validation": {
+      "issues": [
+        "string_sub_question_items",
+        "string_report_outline_items",
+        "duplicate_research_units",
+        "missing_search_query",
+        "missing_sub_question_unit_coverage"
+      ],
+      "repaired": true
+    }
+  },
+  "plan": {
+    "brief": {
+      "objective": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior",
+      "deliverable": "A structured deep research report with citations.",
+      "success_criteria": [
+        "Answer the query with source-backed sections."
+      ],
+      "must_cover": [
+        "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior"
+      ],
+      "out_of_scope": [],
+      "preferred_sources": [
+        "docs.aws.amazon.com"
+      ],
+      "scope": {
+        "allowed_sources": [
+          "docs.aws.amazon.com"
+        ],
+        "continuation_mode": "fresh",
+        "exclude_domains": [
+          "repost.aws"
+        ],
+        "include_domains": [
+          "docs.aws.amazon.com"
+        ]
+      },
+      "coverage_checklist": [
+        "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on recovery timeout, awsdms_txn_state, DescribeReplicationTasks, console CDC checkpoint, and Postgres-specific restart behavior"
+      ],
+      "stop_policy": {
+        "max_runtime_seconds": 180,
+        "max_search_queries": 4,
+        "max_urls_per_search": 1,
+        "stop_on_sufficient_coverage": true
+      },
+      "continuation_focus": []
+    },
+    "search_strategy": {
+      "approach": "targeted",
+      "search_queries": [
+        "Targeted browse of high-relevance official DMS documentation pages identified via domain-restricted search (docs.aws.amazon.com only). Prioritize CHAP_Task.CDC.html, CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html, API references for DescribeReplicationTasks/StartReplicationTask/ReplicationTask, PostgreSQL source/target chapters, and release notes for checkpoint fixes. Chain to linked sections on task settings, troubleshooting, and monitoring. Avoid repost.aws and non-DMS pages. Use precise instructions for extraction of semantics, parameters, examples, defaults, and Postgres distinctions.",
+        "Extract core semantics of DMS checkpoints, resume vs. start-replication, and recovery concepts from official docs.",
+        "How does the awsdms_txn_state table function for checkpoint persistence, including creation via TaskRecoveryTableEnabled and limitations (e.g., lost on task delete)?",
+        "What is RecoveryTimeout in change processing tuning settings, including default behavior (indefinite wait) and failure conditions when resuming CDC tasks?"
+      ],
+      "selective_fetch": {
+        "max_urls_per_search": 1,
+        "prefer_titles_matching_outline": true
+      }
+    },
+    "sub_questions": [
+      {
+        "id": "sq1",
+        "question": "What is the exact role and format of CDC recovery checkpoints in DMS tasks, and how are they used with CdcStartPosition?",
+        "reason": "Cover the primary question."
+      },
+      {
+        "id": "sq2",
+        "question": "How does the awsdms_txn_state table function for checkpoint persistence, including creation via TaskRecoveryTableEnabled and limitations (e.g., lost on task delete)?",
+        "reason": "Cover the primary question."
+      },
+      {
+        "id": "sq3",
+        "question": "What does DescribeReplicationTasks return regarding RecoveryCheckpoint, and how is it accessed via console/CLI/API?",
+        "reason": "Cover the primary question."
+      },
+      {
+        "id": "sq4",
+        "question": "What is RecoveryTimeout in change processing tuning settings, including default behavior (indefinite wait) and failure conditions when resuming CDC tasks?",
+        "reason": "Cover the primary question."
+      },
+      {
+        "id": "sq5",
+        "question": "How does the AWS DMS console display CDC start position, recovery checkpoint, and related fields?",
+        "reason": "Cover the primary question."
+      },
+      {
+        "id": "sq6",
+        "question": "What are Postgres-specific behaviors for CDC restart (slot recreation) vs. resume, including native logical replication slot handling and custom CDC start points?",
+        "reason": "Cover the primary question."
+      },
+      {
+        "id": "sq7",
+        "question": "How do recovery timeouts, checkpoint consistency issues (e.g., console vs. target datastore), and task stop/resume semantics interact in error/recovery scenarios?",
+        "reason": "Cover the primary question."
+      }
+    ]
+  },
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+      "title": "StartReplicationTask",
+      "domain": "docs.aws.amazon.com",
+      "source_type": "official_docs"
+    },
+    {
+      "source_id": "R7",
+      "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+      "title": "Change processing tuning settings",
+      "domain": "docs.aws.amazon.com",
+      "source_type": "official_docs"
+    },
+    {
+      "source_id": "R5",
+      "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+      "title": "Creating tasks for ongoing replication using AWS DMS - AWS Database Migration Service",
+      "domain": "docs.aws.amazon.com",
+      "source_type": "official_docs"
+    }
+  ],
+  "coverage": {
+    "planned_section_ids": [
+      "overview-of-dms-cdc-checkpoints-and-resume-semantics",
+      "checkpoint-retrieval-and-usage-describereplicationtasks-console-awsdms-txn-state",
+      "recovery-timeout-and-resume-behavior-recoverytimeout-setting",
+      "postgres-specific-restart-vs-resume-mechanics",
+      "task-settings-error-handling-and-consistency-notes",
+      "key-examples-formats-and-best-practices-from-docs"
+    ],
+    "answered_section_ids": [
+      "overview-of-dms-cdc-checkpoints-and-resume-semantics",
+      "checkpoint-retrieval-and-usage-describereplicationtasks-console-awsdms-txn-state",
+      "recovery-timeout-and-resume-behavior-recoverytimeout-setting",
+      "postgres-specific-restart-vs-resume-mechanics"
+    ],
+    "unanswered_sections": [
+      "Task Settings, Error Handling, and Consistency Notes",
+      "Key Examples, Formats, and Best Practices from Docs"
+    ],
+    "planned_sub_question_ids": [
+      "sq1",
+      "sq2",
+      "sq3",
+      "sq4",
+      "sq5",
+      "sq6",
+      "sq7"
+    ],
+    "covered_sub_question_ids": [
+      "sq1",
+      "sq2",
+      "sq4",
+      "sq5",
+      "sq6",
+      "sq7"
+    ],
+    "uncovered_sub_questions": [
+      "What does DescribeReplicationTasks return regarding RecoveryCheckpoint, and how is it accessed via console/CLI/API?"
+    ]
+  },
+  "resolved_artifact_batch_id": "20260418T191320-42aa22bc",
+  "artifacts": [
+    {
+      "kind": "sources.json",
+      "metadata": {
+        "batch_id": "20260418T191320-42aa22bc"
+      }
+    },
+    {
+      "kind": "citations.json",
+      "metadata": {
+        "batch_id": "20260418T191320-42aa22bc"
+      }
+    },
+    {
+      "kind": "report.json",
+      "metadata": {
+        "batch_id": "20260418T191320-42aa22bc"
+      }
+    },
+    {
+      "kind": "final_report.md",
+      "metadata": {
+        "batch_id": "20260418T191320-42aa22bc"
+      }
+    },
+    {
+      "kind": "evidence_items.json",
+      "metadata": {
+        "batch_id": "20260418T191320-42aa22bc"
+      }
+    },
+    {
+      "kind": "coverage.json",
+      "metadata": {
+        "batch_id": "20260418T191320-42aa22bc"
+      }
+    },
+    {
+      "kind": "grounding.json",
+      "metadata": {
+        "batch_id": "20260418T191320-42aa22bc"
+      }
+    },
+    {
+      "kind": "verifier.json",
+      "metadata": {
+        "batch_id": "20260418T191320-42aa22bc"
+      }
+    }
+  ],
+  "report": {
+    "status": "degraded",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied",
+        "medium_single_source_search_only",
+        "selected_evidence_unused"
+      ],
+      "verifier": {
+        "passed": false,
+        "reason_codes": [
+          "selected_evidence_unused",
+          "medium_single_source_search_only"
+        ]
+      },
+      "release_gate": {
+        "passed": true,
+        "reason_codes": [],
+        "all_reason_codes": [
+          "selected_evidence_unused",
+          "medium_single_source_search_only"
+        ],
+        "soft_reason_codes": [
+          "selected_evidence_unused",
+          "medium_single_source_search_only"
+        ]
+      }
+    }
+  },
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "fail",
+      "score": 0.762,
+      "reason_tags": [
+        "unanswered_sections",
+        "uncovered_sub_questions"
+      ]
+    },
+    "planner_boundary": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "ranking_noise_suppression": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

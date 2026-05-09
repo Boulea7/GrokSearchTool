@@ -8,9 +8,15 @@ from grok_search import server
 from grok_search import deep_research_runtime
 from grok_search.deep_research_runtime import DeepResearchRuntime
 from grok_search.deep_research_types import utc_now_iso
+from deep_research_test_helpers import (
+    RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES,
+    assert_fixture_public_surface as assert_recent_probe_fixture_public_surface,
+    seed_live_probe_fixture_job,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
+_SEEDED_BATCH_ID_PLACEHOLDER = "$seeded_batch_id"
 
 
 def build_runtime(tmp_path, runner):
@@ -19,6 +25,41 @@ def build_runtime(tmp_path, runner):
 
 def load_deep_research_fixture(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text())
+
+
+def _materialize_fixture_surface(value, *, seeded_batch_id: str):
+    if isinstance(value, dict):
+        return {
+            key: _materialize_fixture_surface(item, seeded_batch_id=seeded_batch_id)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_materialize_fixture_surface(item, seeded_batch_id=seeded_batch_id) for item in value]
+    if value == _SEEDED_BATCH_ID_PLACEHOLDER:
+        return seeded_batch_id
+    return value
+
+
+def assert_public_surface_subset(actual: dict, expected: dict, *, seeded_batch_id: str) -> None:
+    for key, expected_value in expected.items():
+        assert key in actual
+        materialized = _materialize_fixture_surface(expected_value, seeded_batch_id=seeded_batch_id)
+        actual_value = actual[key]
+        if isinstance(materialized, dict):
+            assert isinstance(actual_value, dict)
+            assert_public_surface_subset(actual_value, materialized, seeded_batch_id=seeded_batch_id)
+            continue
+        assert actual_value == materialized
+
+
+def assert_fixture_public_surface(snapshot: dict, *, status: dict, result: dict, seeded_batch_id: str) -> None:
+    public_surface = snapshot.get("public_surface") or {}
+    status_surface = public_surface.get("status") or {}
+    result_surface = public_surface.get("result") or {}
+    if status_surface:
+        assert_public_surface_subset(status, status_surface, seeded_batch_id=seeded_batch_id)
+    if result_surface:
+        assert_public_surface_subset(result, result_surface, seeded_batch_id=seeded_batch_id)
 
 
 def with_minimal_provenance_artifacts(
@@ -79,6 +120,32 @@ def with_minimal_provenance_artifacts(
             "unbound_evidence_ids": 0,
         },
     }
+    verification_payload = {
+        "supported_claims": [],
+        "single_source_claims": [],
+        "conflicted_claims": [],
+        "unmapped_evidence_ids": [],
+        "confidence_by_section": {},
+        "unresolved_sections": [],
+        "packet_to_prose_fidelity": {
+            "passed": True,
+            "checked_packet_count": 0,
+            "missing_selected_packet_ids": [],
+            "reason_codes": [],
+        },
+    }
+    coverage_gaps_payload = {
+        "query": query,
+        "unanswered_sections": [],
+        "uncovered_sub_questions": [],
+        "hard_uncovered_targets": [],
+        "coverage_gate_passed": True,
+        "hard_coverage_gate_passed": True,
+        "blocking_gap_count": 0,
+        "hard_gap_count": 0,
+        "total_gap_count": 0,
+        "gaps": [],
+    }
     for item in payload:
         if item.get("kind") != "report.json":
             continue
@@ -126,6 +193,12 @@ def with_minimal_provenance_artifacts(
                 verifier_report["summary"] = dict(verifier_payload["summary"])
         else:
             runtime_payload["verifier"] = json.loads(json.dumps(verifier_payload))
+        runtime_verification = runtime_payload.setdefault("verification", {})
+        if isinstance(runtime_verification, dict):
+            for key, value in verification_payload.items():
+                runtime_verification.setdefault(key, value)
+        else:
+            runtime_payload["verification"] = json.loads(json.dumps(verification_payload))
         item["content"] = json.dumps(report_payload)
     payload.extend(
         [
@@ -144,6 +217,26 @@ def with_minimal_provenance_artifacts(
                 "content": json.dumps(verifier_payload),
                 "content_type": "application/json",
             },
+            {
+                "kind": "selected_bank.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "evidence_bank.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "verification.json",
+                "content": json.dumps(verification_payload),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "coverage_gaps.json",
+                "content": json.dumps(coverage_gaps_payload),
+                "content_type": "application/json",
+            },
         ]
     )
     if not any(item.get("kind") == "evidence_items.json" for item in payload):
@@ -155,6 +248,29 @@ def with_minimal_provenance_artifacts(
             }
         )
     return payload
+
+
+@pytest.mark.asyncio
+async def test_deep_research_result_surfaces_resolved_final_batch_sidecars(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, runner=None)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        "probe_round36_lifecycle_public_surface.json",
+        request_fingerprint="fp-server-resolved-final-sidecars",
+    )
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+
+    status = await server.deep_research_status(seeded["job"].job_id)
+    result = await server.deep_research_result(seeded["job"].job_id)
+
+    assert "selected_bank.json" in status["artifact_kinds"]
+    assert "evidence_bank.json" in status["artifact_kinds"]
+    assert "verification.json" in status["artifact_kinds"]
+    assert "coverage_gaps.json" in status["artifact_kinds"]
+    assert result["selected_bank"] == seeded["snapshot"]["selected_bank"]
+    assert result["evidence_bank"] == seeded["snapshot"]["artifact_payload"]["evidence_bank"]
+    assert result["verification"] == seeded["snapshot"]["artifact_payload"]["verification"]
+    assert result["coverage_gaps"]["total_gap_count"] == 0
 
 
 def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
@@ -260,11 +376,11 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
     }
 
 
-def seed_round20_lifecycle_resume_replay_job(runtime: DeepResearchRuntime):
-    snapshot = load_deep_research_fixture("probe_round20_lifecycle_resume_replay.json")
+def seed_round21_stale_worker_reconnect_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round21_stale_worker_reconnect.json")
     job = runtime.store.create_job(
         query=snapshot["query"],
-        request_fingerprint="fp-server-round20-lifecycle-replay",
+        request_fingerprint="fp-server-round21-stale-worker-reconnect",
         status=snapshot["resume_run"]["status"],
         phase=snapshot["resume_run"]["phase"],
         effort="deep",
@@ -290,8 +406,319 @@ def seed_round20_lifecycle_resume_replay_job(runtime: DeepResearchRuntime):
             phase=event["phase"],
             message=event.get("message") or event["type"],
             data=event.get("data") or {},
+    )
+    return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot}
+
+
+def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round24_worker_restart_live.json")
+    final_status = snapshot["final_status"]
+    release_gate = snapshot["resume_events_after_seq_16"][-1]["data"]["release_gate"]
+    coverage_payload = {
+        "query": snapshot["query"],
+        "planned_section_ids": [],
+        "answered_section_ids": [],
+        "unanswered_sections": ["Open Questions"],
+        "planned_sub_question_ids": [],
+        "covered_sub_question_ids": [],
+        "uncovered_sub_questions": ["Coverage incomplete"],
+        "hard_coverage_targets": [],
+        "hard_uncovered_targets": [],
+        "coverage_gate_passed": False,
+        "hard_coverage_gate_passed": True,
+    }
+    grounding_payload = {
+        "total_claims": 0,
+        "grounded_claims": 0,
+        "ungrounded_claims": 0,
+        "single_source_claims": 0,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0,
+        "total_evidence_bindings": 0,
+        "source_backed_binding_count": 0,
+        "search_only_binding_count": 0,
+        "null_span_binding_count": 0,
+        "grounded_claims_without_source_backed_binding": 0,
+        "sections": [],
+        "sources": [],
+    }
+    verifier_payload = {
+        "passed": False,
+        "reason_codes": ["medium_single_source_search_only"],
+        "flagged_claim_ids": [],
+        "summary": {
+            "section_count": 0,
+            "total_claims": 0,
+            "low_confidence_claims": 0,
+            "single_source_claims": 0,
+            "source_backed_binding_count": 0,
+            "search_only_binding_count": 0,
+            "null_span_binding_count": 0,
+            "missing_evidence_items": 0,
+            "mismatched_binding_source": 0,
+            "mismatched_binding_evidence": 0,
+            "invalid_source_backed_span": 0,
+            "duplicate_claims": 0,
+            "low_value_claims": 0,
+            "medium_single_source_search_only": 1,
+            "same_domain_off_topic_dominance": 0,
+            "unbound_citation_sources": 0,
+            "unbound_evidence_ids": 0,
+        },
+    }
+    source = {
+        "source_id": "R1",
+        "url": "https://docs.temporal.io/workflow-execution/continue-as-new",
+        "title": "Continue-As-New",
+        "domain": "docs.temporal.io",
+        "source_type": "official_docs",
+    }
+    report_payload = {
+        "query": snapshot["query"],
+        "summary": "Round24 worker restart lifecycle summary.",
+        "status": final_status["report_status"],
+        "sections": [],
+        "coverage": coverage_payload,
+        "unit_results": {},
+        "runtime": {
+            "warnings": list(final_status["runtime_warnings"]),
+            "constraint_violations": list(final_status["constraint_violations"]),
+            "release_gate": release_gate,
+            "verifier": verifier_payload,
+            "grounding": grounding_payload,
+        },
+    }
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-server-round24-worker-restart-live",
+        status=final_status["status"],
+        phase=final_status["phase"],
+        effort="deep",
+        context="",
+        include_domains=["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=1,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=final_status["attempt_count"],
+        current_checkpoint=final_status["current_checkpoint"],
+        finished_at=utc_now_iso(),
+        last_error=final_status["last_error"],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps({"query": snapshot["query"], "planner_metadata": {"planner": "model", "used_fallback": False}}),
+        "application/json",
+    )
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {"kind": "sources.json", "content": json.dumps([source]), "content_type": "application/json"},
+            {"kind": "citations.json", "content": json.dumps({"source_registry": {"R1": source}, "sections": []}), "content_type": "application/json"},
+            {"kind": "report.json", "content": json.dumps(report_payload), "content_type": "application/json"},
+            {"kind": "final_report.md", "content": "# Final Report\n\nRound24 worker restart lifecycle summary.\n", "content_type": "text/markdown"},
+            {"kind": "evidence_items.json", "content": "[]", "content_type": "application/json"},
+            {"kind": "coverage.json", "content": json.dumps(coverage_payload), "content_type": "application/json"},
+            {"kind": "grounding.json", "content": json.dumps(grounding_payload), "content_type": "application/json"},
+            {"kind": "verifier.json", "content": json.dumps(verifier_payload), "content_type": "application/json"},
+        ],
+    )
+    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_16"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event["type"],
+            phase=event["phase"],
+            message=event.get("message") or event["type"],
+            data=event.get("data") or {},
+        )
+    return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot, "batch_id": persisted[0]["metadata"]["batch_id"]}
+
+
+def seed_round26_worker_restart_dispatch_runtime_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round26_worker_restart_dispatch_runtime.json")
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-server-round26-worker-restart-dispatch-runtime",
+        status=snapshot["resume_run"]["status"],
+        phase=snapshot["resume_run"]["phase"],
+        effort="deep",
+        context="",
+        include_domains=["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=1,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=snapshot["resume_run"]["attempt_count"],
+        current_checkpoint=snapshot["resume_run"]["current_checkpoint"],
+        finished_at=utc_now_iso(),
+        last_error=snapshot["resume_run"]["last_error"],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps(
+            {
+                "query": snapshot["query"],
+                "include_domains": ["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+                "exclude_domains": [],
+                "continuation": {"mode": "fresh"},
+                "brief": {"objective": snapshot["query"]},
+                "planner_metadata": {"planner": "probe", "used_fallback": False},
+            }
+        ),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "planner_trace.json",
+        json.dumps({"provider_name": "probe", "fallback_used": False}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "outline_state.json",
+        json.dumps({"version": 1, "root_section_ids": [], "nodes": []}),
+        "application/json",
+    )
+    runtime.write_artifact(job.job_id, "evidence_ledger.json", "[]", "application/json")
+    runtime.write_artifact(job.job_id, "section_banks.json", "[]", "application/json")
+    runtime.write_artifact(
+        job.job_id,
+        "partial_report.md",
+        "# Partial Report\n\nResume attempt in progress.\n",
+        "text/markdown",
+    )
+    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_4"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event["type"],
+            phase=event["phase"],
+            message=event.get("message") or event["type"],
+            data=event.get("data") or {},
         )
     return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot}
+
+
+def seed_round30_worker_restart_live_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round30_worker_restart_live.json")
+    final_status = snapshot["final_status"]
+    source = {
+        "source_id": "R11",
+        "url": "https://docs.aws.amazon.com/sagemaker/latest/dg/model-checkpoints-resume.html",
+        "title": "Resume training from a checkpoint",
+        "domain": "docs.aws.amazon.com",
+        "source_type": "official_docs",
+    }
+    report_payload = {
+        "query": snapshot["query"],
+        "summary": "Round30 worker restart replay summary.",
+        "status": final_status["report_status"],
+        "sections": [],
+        "unit_results": {},
+        "runtime": {
+            "warnings": list(final_status["runtime_warnings"]),
+            "verifier": {"passed": False, "reason_codes": ["coverage_incomplete"]},
+            "release_gate": {
+                "passed": False,
+                "reason_codes": ["coverage_incomplete"],
+                "all_reason_codes": ["coverage_incomplete"],
+                "soft_reason_codes": [],
+            },
+        },
+    }
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-server-round30-worker-restart-live",
+        status=final_status["status"],
+        phase=final_status["phase"],
+        effort="ultra",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=600,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=final_status["attempt_count"],
+        current_checkpoint=final_status["current_checkpoint"],
+        finished_at=utc_now_iso(),
+        last_error=final_status["last_error"],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "plan.json",
+        json.dumps({"query": snapshot["query"], "planner_metadata": {"planner": "fallback", "used_fallback": True}}),
+        "application/json",
+    )
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {"kind": "sources.json", "content": json.dumps([source]), "content_type": "application/json"},
+            {
+                "kind": "citations.json",
+                "content": json.dumps({"source_registry": {source["source_id"]: source}, "sections": []}),
+                "content_type": "application/json",
+            },
+            {"kind": "report.json", "content": json.dumps(report_payload), "content_type": "application/json"},
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRound30 worker restart replay summary.\n",
+                "content_type": "text/markdown",
+            },
+            {"kind": "evidence_items.json", "content": "[]", "content_type": "application/json"},
+            {
+                "kind": "coverage.json",
+                "content": json.dumps(
+                    {
+                        "query": snapshot["query"],
+                        "planned_section_ids": [],
+                        "answered_section_ids": [],
+                        "unanswered_sections": ["Open Questions"],
+                        "planned_sub_question_ids": [],
+                        "covered_sub_question_ids": [],
+                        "uncovered_sub_questions": ["Coverage incomplete"],
+                        "coverage_gate_passed": True,
+                        "hard_coverage_gate_passed": False,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "grounding.json",
+                "content": json.dumps(
+                    {
+                        "total_claims": 0,
+                        "ungrounded_claims": 0,
+                        "single_source_claims": 0,
+                        "missing_evidence_binding_claims": 0,
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {"kind": "verifier.json", "content": json.dumps(report_payload["runtime"]["verifier"]), "content_type": "application/json"},
+        ],
+    )
+    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_5"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event["type"],
+            phase=event["phase"],
+            message=event.get("message") or event["type"],
+            data=event.get("data") or {},
+        )
+    return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot, "batch_id": persisted[0]["metadata"]["batch_id"]}
 
 
 def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
@@ -535,6 +962,7 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
 
     status = await server.deep_research_status(response["job_id"])
     events = await server.deep_research_events(response["job_id"])
+    empty_events = await server.deep_research_events(response["job_id"], after_seq=-5, limit=0)
     result = await server.deep_research_result(response["job_id"])
     listing = await server.deep_research_list()
 
@@ -550,9 +978,15 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
     assert [event["seq"] for event in events["events"]] == list(range(1, len(events["events"]) + 1))
     assert events["events"][0]["type"] == "job_created"
     assert events["events"][-1]["type"] == "job_completed"
+    assert empty_events["events"] == []
+    assert empty_events["next_after_seq"] == 0
     assert result["final_report"].startswith("# Final Report")
     assert result["partial_report"].startswith("# Partial Report")
     assert result["citations"]["source_registry"]["R1"]["url"] == "https://example.com"
+    assert status["operator_summary"]["current_checkpoint_kind"] == status["current_checkpoint_kind"]
+    assert result["operator_summary"]["current_checkpoint_kind"] == result["current_checkpoint_kind"]
+    assert status["operator_summary"]["artifact_visibility_reason"] == status["artifact_visibility_reason"]
+    assert result["operator_summary"]["artifact_visibility_reason"] == result["artifact_visibility_reason"]
     assert listing["jobs"][0]["job_id"] == response["job_id"]
 
 
@@ -574,16 +1008,59 @@ async def test_deep_research_cancel_updates_job_state(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_deep_research_events_after_seq_matches_round20_resume_replay_fixture(monkeypatch, tmp_path):
+async def test_deep_research_cancel_returns_full_status_shape_for_running_job(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path, complete_runner)
     monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
-    seeded = seed_round20_lifecycle_resume_replay_job(runtime)
+    job = runtime.store.create_job(
+        query="Server running cancel payload",
+        request_fingerprint="fp-server-running-cancel-payload",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        current_checkpoint="researching-u1",
+        attempt_count=2,
+        progress_pct=40.0,
+    )
+
+    canceled = await server.deep_research_cancel(job.job_id)
+
+    assert canceled["job_id"] == job.job_id
+    assert canceled["status"] == "running"
+    assert canceled["phase"] == "researching"
+    assert canceled["current_checkpoint"] == "researching-u1"
+    assert canceled["attempt_count"] == 2
+    assert canceled["cancel_requested"] is True
+    assert canceled["artifact_kinds"] == []
+    assert canceled["planner_fallback_used"] is False
+    assert canceled["runtime_warnings"] == []
+    assert canceled["constraint_violations"] == []
+
+
+@pytest.mark.asyncio
+async def test_deep_research_events_after_seq_matches_round21_stale_worker_reconnect_fixture(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round21_stale_worker_reconnect_job(runtime)
     job = seeded["job"]
     snapshot = seeded["snapshot"]
 
-    payload = await server.deep_research_events(job.job_id, after_seq=7, limit=20)
+    payload = await server.deep_research_events(
+        job.job_id,
+        after_seq=snapshot["resume_window"]["after_seq"],
+        limit=20,
+    )
 
-    assert payload["next_after_seq"] == 13
+    assert payload["next_after_seq"] == snapshot["resume_window"]["next_after_seq"]
     assert [
         (event["seq"], event["type"], event["phase"])
         for event in payload["events"]
@@ -591,10 +1068,405 @@ async def test_deep_research_events_after_seq_matches_round20_resume_replay_fixt
         (event["seq"], event["type"], event["phase"])
         for event in snapshot["resume_events_after_seq_7"]
     ]
+    assert payload["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
+    assert payload["events"][0]["data"]["checkpoint_kind"] == snapshot["expected"]["checkpoint_kind"]
+    assert payload["events"][1]["type"] == "checkpoint_restored"
+    assert payload["events"][1]["data"]["checkpoint_kind"] == snapshot["expected"]["checkpoint_kind"]
     assert not any(
         event["type"] == "phase_started" and event["phase"] == "planning"
         for event in payload["events"]
     )
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round21_stale_worker_status_and_result_match_fixture(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round21_stale_worker_reconnect_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == snapshot["resume_run"]["status"]
+    assert status["phase"] == snapshot["resume_run"]["phase"]
+    assert status["current_checkpoint"] == snapshot["resume_run"]["current_checkpoint"]
+    assert status["current_checkpoint_kind"] == snapshot["resume_run"]["current_checkpoint_kind"]
+    assert status["attempt_count"] == snapshot["resume_run"]["attempt_count"]
+    assert status["last_error"] == snapshot["resume_run"]["last_error"]
+    assert result["status"] == snapshot["resume_run"]["status"]
+    assert result["phase"] == snapshot["resume_run"]["phase"]
+    assert_fixture_public_surface(snapshot, status=status, result=result, seeded_batch_id="")
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round24_worker_restart_events_after_seq_match_fixture(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round24_worker_restart_live_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    payload = await server.deep_research_events(
+        job.job_id,
+        after_seq=snapshot["resume_window"]["after_seq"],
+        limit=20,
+    )
+
+    assert payload["next_after_seq"] == snapshot["resume_window"]["next_after_seq"]
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in payload["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["resume_events_after_seq_16"]
+    ]
+    assert payload["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
+    assert payload["events"][1]["type"] == "checkpoint_restored"
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round24_worker_restart_status_and_result_match_fixture(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round24_worker_restart_live_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == snapshot["final_status"]["status"]
+    assert status["phase"] == snapshot["final_status"]["phase"]
+    assert status["attempt_count"] == snapshot["final_status"]["attempt_count"]
+    assert result["status"] == snapshot["final_status"]["status"]
+    assert result["phase"] == snapshot["final_status"]["phase"]
+    assert_fixture_public_surface(snapshot, status=status, result=result, seeded_batch_id=seeded["batch_id"])
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round26_worker_restart_dispatch_runtime_events_after_seq_match_fixture(
+    monkeypatch, tmp_path
+):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round26_worker_restart_dispatch_runtime_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    payload = await server.deep_research_events(
+        job.job_id,
+        after_seq=snapshot["resume_window"]["after_seq"],
+        limit=20,
+    )
+
+    assert payload["next_after_seq"] == snapshot["resume_window"]["next_after_seq"]
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in payload["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["resume_events_after_seq_4"]
+    ]
+    assert payload["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
+    assert payload["events"][1]["type"] == "checkpoint_restored"
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round26_worker_restart_dispatch_runtime_status_and_result_match_fixture(
+    monkeypatch, tmp_path
+):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round26_worker_restart_dispatch_runtime_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == snapshot["resume_run"]["status"]
+    assert status["phase"] == snapshot["resume_run"]["phase"]
+    assert status["attempt_count"] == snapshot["resume_run"]["attempt_count"]
+    assert status["current_checkpoint"] == snapshot["resume_run"]["current_checkpoint"]
+    assert status["current_checkpoint_kind"] == snapshot["resume_run"]["current_checkpoint_kind"]
+    assert status["last_error"] == snapshot["resume_run"]["last_error"]
+    assert result["status"] == snapshot["resume_run"]["status"]
+    assert result["phase"] == snapshot["resume_run"]["phase"]
+    assert result["partial_report"].startswith("# Partial Report")
+    assert result["final_report"] is None
+    assert result["sources"] is None
+    assert result["report"] is None
+    assert_fixture_public_surface(snapshot, status=status, result=result, seeded_batch_id="")
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round30_worker_restart_events_after_seq_match_fixture(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round30_worker_restart_live_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    payload = await server.deep_research_events(
+        job.job_id,
+        after_seq=snapshot["resume_window"]["after_seq"],
+        limit=20,
+    )
+
+    assert payload["next_after_seq"] == snapshot["resume_window"]["next_after_seq"]
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in payload["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["resume_events_after_seq_5"]
+    ]
+    assert payload["returned_count"] == snapshot["events_public_surface"]["returned_count"]
+    assert payload["last_event_type"] == snapshot["events_public_surface"]["last_event_type"]
+    assert payload["window_has_terminal_event"] is snapshot["events_public_surface"]["window_has_terminal_event"]
+    assert payload["job_terminal"] is snapshot["events_public_surface"]["job_terminal"]
+    assert payload["events"][0]["data"]["resume_source"] == snapshot["expected"]["resume_source"]
+    assert payload["events"][1]["data"]["checkpoint_kind"] == snapshot["expected"]["checkpoint_kind"]
+
+
+@pytest.mark.asyncio
+async def test_deep_research_events_after_seq_marks_resolved_final_batch_window_as_terminal(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    job = runtime.store.create_job(
+        query="Server resolved final batch events window",
+        request_fingerprint="fp-server-resolved-final-batch-events-window",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps({"summary": "Recovered final report", "sections": [], "unit_results": {}}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nRecovered final report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query=job.query,
+        ),
+    )
+
+    before_resume = await server.deep_research_events(job.job_id)
+    resumed = await server.deep_research_resume(job.job_id)
+    replay = await server.deep_research_events(job.job_id, after_seq=before_resume["next_after_seq"])
+
+    assert resumed["status"] == "completed"
+    assert [event["type"] for event in replay["events"]] == ["job_resolved_from_final_batch"]
+    assert replay["job_terminal"] is True
+    assert replay["window_has_terminal_event"] is True
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round30_worker_restart_status_and_result_match_fixture(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round30_worker_restart_live_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == snapshot["final_status"]["status"]
+    assert status["phase"] == snapshot["final_status"]["phase"]
+    assert status["attempt_count"] == snapshot["final_status"]["attempt_count"]
+    assert status["current_checkpoint"] == snapshot["final_status"]["current_checkpoint"]
+    assert status["current_checkpoint_kind"] == snapshot["final_status"]["current_checkpoint_kind"]
+    assert status["last_error"] == snapshot["final_status"]["last_error"]
+    assert result["status"] == snapshot["final_status"]["status"]
+    assert result["phase"] == snapshot["final_status"]["phase"]
+    assert result["report"] is None
+    assert result["final_report"] is None
+    assert result["sources"] is None
+    assert_fixture_public_surface(snapshot, status=status, result=result, seeded_batch_id=seeded["batch_id"])
+
+
+@pytest.mark.asyncio
+async def test_deep_research_result_hidden_final_artifacts_use_visibility_reason(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    job = runtime.store.create_job(
+        query="Server hidden vs missing parity",
+        request_fingerprint="fp-server-hidden-vs-missing-parity",
+        status="interrupted",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(job.job_id, current_checkpoint="finalizing", finished_at=utc_now_iso())
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": job.query}), "application/json")
+    runtime.write_artifact_batch(
+        job.job_id,
+        [
+            {
+                "kind": "sources.json",
+                "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}]),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "citations.json",
+                "content": json.dumps(
+                    {
+                        "source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com/runtime/recovery"}},
+                        "sections": [],
+                    }
+                ),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "report.json",
+                "content": json.dumps({"summary": "Recovered final batch report", "sections": [], "unit_results": {}}),
+                "content_type": "application/json",
+            },
+            {
+                "kind": "final_report.md",
+                "content": "# Final Report\n\nRecovered final batch report.\n",
+                "content_type": "text/markdown",
+            },
+            {
+                "kind": "evidence_items.json",
+                "content": json.dumps([]),
+                "content_type": "application/json",
+            },
+        ],
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "coverage.json",
+        json.dumps({"query": job.query, "planned_section_ids": ["s1"], "answered_section_ids": []}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "grounding.json",
+        json.dumps({"total_claims": 99, "ungrounded_claims": 99}),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "verifier.json",
+        json.dumps({"passed": False, "reason_codes": ["stale_current_only"]}),
+        "application/json",
+    )
+
+    result = await server.deep_research_result(job.job_id)
+
+    assert result["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["artifact_errors"]["report.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert result["artifact_errors"]["coverage.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fixture_name", RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES)
+async def test_deep_research_recent_probe_status_and_result_match_fixture(monkeypatch, tmp_path, fixture_name):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        fixture_name,
+        request_fingerprint=f"fp-server-{fixture_name.removesuffix('.json')}",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == snapshot["job"]["status"]
+    assert status["phase"] == snapshot["job"]["phase"]
+    assert status["attempt_count"] == snapshot["job"]["attempt_count"]
+    assert status["current_checkpoint"] == snapshot["job"]["current_checkpoint"]
+    assert status["current_checkpoint_kind"] == snapshot["job"]["current_checkpoint_kind"]
+    assert result["status"] == snapshot["job"]["status"]
+    assert result["phase"] == snapshot["job"]["phase"]
+    if snapshot.get("strict_public_surface"):
+        assert_recent_probe_fixture_public_surface(
+            snapshot,
+            status=status,
+            result=result,
+            seeded_batch_id=seeded["batch_id"],
+        )
+    else:
+        assert status["runtime_warnings"] == snapshot["public_surface"]["status"]["runtime_warnings"]
+        result_surface = snapshot["public_surface"].get("result") or {}
+        if result_surface:
+            assert result["runtime_warnings"] == result_surface["runtime_warnings"]
+            assert result["report"]["status"] == result_surface["report"]["status"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fixture_name", RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES)
+async def test_deep_research_recent_probe_events_after_seq_match_fixture(monkeypatch, tmp_path, fixture_name):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        fixture_name,
+        request_fingerprint=f"fp-server-events-{fixture_name.removesuffix('.json')}",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+    event_window = snapshot["event_window"]
+
+    payload = await server.deep_research_events(
+        job.job_id,
+        after_seq=event_window["after_seq"],
+        limit=20,
+    )
+
+    assert payload["next_after_seq"] == event_window["next_after_seq"]
+    assert payload["returned_count"] == event_window["returned_count"]
+    assert payload["last_event_type"] == event_window["last_event_type"]
+    assert payload["window_has_terminal_event"] is event_window["window_has_terminal_event"]
+    assert payload["job_terminal"] is event_window["job_terminal"]
+    if snapshot.get("strict_public_surface"):
+        assert [
+            (event["seq"], event["type"], event["phase"])
+            for event in payload["events"]
+        ] == [
+            (event["seq"], event["type"], event["phase"])
+            for event in snapshot["events_after_seq"]
+        ]
 
 
 @pytest.mark.asyncio
@@ -619,6 +1491,30 @@ async def test_deep_research_resume_from_draft_preserves_plan_only_job(tmp_path)
     assert resumed["status"] == "draft"
     assert status["status"] == "draft"
     assert any(event["type"] == "plan_only_execution_blocked" for event in events["events"])
+
+
+@pytest.mark.asyncio
+async def test_deep_research_resume_returns_status_shaped_payload(tmp_path):
+    response = await server.deep_research_start(
+        query="Resume status payload",
+        context="Need status-shaped resume output.",
+        plan_only=False,
+        force_new=True,
+    )
+    runtime = server._DEEP_RESEARCH_RUNTIME
+    runtime.store.update_job(
+        response["job_id"],
+        status="interrupted",
+        phase="researching",
+        current_checkpoint="researching-unit-search-1",
+    )
+
+    resumed = await server.deep_research_resume(response["job_id"])
+
+    assert resumed["status"] == "queued"
+    assert "artifact_kinds" in resumed
+    assert "artifacts" in resumed
+    assert "plan.json" in resumed["artifact_kinds"]
 
 
 @pytest.mark.asyncio
@@ -766,6 +1662,9 @@ async def test_deep_research_round11_interrupted_status_events_and_result_remain
     assert result["phase"] == "finalizing"
     assert result["artifact_fallback_used"] is False
     assert result["resolved_artifact_batch_id"] == seeded["batch_id"]
+    assert result["planner_fallback_used"] is True
+    assert result["runtime_warnings"] == ["coverage_incomplete", "planner_fallback_used"]
+    assert result["constraint_violations"] == []
     assert result["plan"]["continuation"]["mode"] == "continue"
     assert result["plan"]["continuation"]["checkpoint_key"] == "finalizing"
     assert result["plan"]["planner_metadata"]["used_fallback"] is True

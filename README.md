@@ -89,6 +89,8 @@ Client / Assistant
 - `Community-tested`：Codex 风格 MCP 客户端、Cherry Studio
 - `Planned`：Dify、n8n、Coze
 
+更广义的 MCP 宿主适配资产与宿主原生规则 / preset / skill 映射，统一收口在 [docs/HOSTS.md](./docs/HOSTS.md)。这些资产用于帮助 Cursor、Cline、Continue、Windsurf、Cherry Studio 等宿主更稳定地接入本项目，但不单独改变上面的 support level 声明。
+
 说明：
 
 - 公开安装文档当前只承诺本地 `stdio` 路径
@@ -420,6 +422,9 @@ claude mcp list
 | `max_breadth` | int | 否 | `20` | 每页最大跟踪链接数（1-500） |
 | `limit` | int | 否 | `50` | 总链接处理数上限（1-500） |
 | `timeout` | int | 否 | `150` | 超时秒数（10-150） |
+| `response_format` | string | 否 | `"json_string"` | 返回格式：`"json_string"` 保持 legacy JSON 字符串 / 文本错误契约，`"object"` 则优先返回结构化对象 |
+
+推荐新调用方显式传 `response_format="object"`，也就是使用 `object` 模式，这样成功结果可直接拿到对象；默认仍保持 legacy JSON 字符串兼容模式。对 `web_map` 来说，object 模式会把原来的 JSON 字符串结果直接解成对象；若命中旧式纯文本错误，则会返回带 `status="error"` 和 `message` 的对象。
 
 ### `get_config_info` — 配置诊断
 
@@ -462,18 +467,22 @@ claude mcp list
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `model` | string | 是 | 模型 ID（如 `"grok-4-fast"`, `"grok-2-latest"`） |
+| `response_format` | string | 否 | 返回格式：`"json_string"` 保持 legacy JSON 字符串契约，`"object"` 直接返回原本 JSON payload 对应的结构化对象 |
 
 切换后配置持久化到 `~/.config/grok-search/config.json`，跨会话保持。
 若当前进程或项目 `.env.local` / `.env` 已显式设置 `GROK_MODEL`，`switch_model` 仍会写入持久化配置，但当前进程的实际生效模型不会立刻改变。
 当返回里 `runtime_model_source` 显示为 `process_env`、`project_env_local` 或 `project_env` 时，应先修改对应覆盖层；单独调用 `switch_model` 不会改变当前进程。
+建议新调用方显式传 `response_format="object"`，也就是使用 `object` 模式，避免再做一次 `json.loads(...)`；默认仍保持 legacy JSON 字符串兼容模式。
 
 ### `toggle_builtin_tools` — 工具路由控制
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `action` | string | 否 | `"status"` | `"on"` 禁用官方工具 / `"off"` 启用官方工具 / `"status"` 查看状态 |
+| `response_format` | string | 否 | `"json_string"` | 返回格式：`"json_string"` 保持 legacy JSON 字符串契约，`"object"` 直接返回结构化对象 |
 
 通过修改项目级 `.claude/settings.json` 的 `permissions.deny`，为 Claude Code 添加或移除内建网页工具的 deny 规则。
+建议新调用方显式传 `response_format="object"`，也就是使用 `object` 模式；默认仍保持 legacy JSON 字符串兼容模式。
 
 稳定错误码：
 - `git_root_not_found`：当前目录不在可识别的 Git 项目里，无法定位项目级 `.claude/settings.json`
@@ -507,9 +516,9 @@ claude mcp list
 - `force_new` 用于控制 `deep_research_start` 是否必须创建全新 job。
 - 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；这条规则当前同样适用于带 `continue_from_job_id` 的 follow-up job，返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。当前 request fingerprint 也会区分 `plan_only`；`plan_only=true` 不应再复用 execution job，execution start 也不应复用 plan-only draft。对 `completed` job，当前只有在最终四件套可读且来自一致 `batch_id` 时才应继续被视为可复用结果。
 - 若 `deep_research_start(force_new=false)` 命中的是 `interrupted` 且已存在可读 final artifact batch 的 job，当前也会先把它解析成 `completed` 再作为 reusable result 返回，避免与 `deep_research_resume` 对同一 job 给出不同终态语义。
-- `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要；对 `completed` job，还会额外返回当前是否正在读取 resolved final batch 的 additive 诊断字段，如 `artifact_fallback_used`、`resolved_artifact_batch_id`。对 `interrupted` / `failed` / `canceled` 且 `current_checkpoint/phase` 已到 `finalizing` 的 job，只要存在一致且可读的 final artifact batch，当前也应暴露同一批 resolved final artifacts。`evidence_items.json` 现在也会跟着 resolved final batch 一起出现在 `artifact_kinds` / `artifacts` 中。CLI `grok-search-research result --artifact <kind>` 当前也应优先读取同一批 resolved final artifacts，而不是盲读当前指针。
+- `deep_research_status` 返回 job、阶段、进度，以及带 `kind` / `path` / `content_type` / `updated_at` / `metadata.bytes` 的 artifact 摘要；对 `completed` job，还会额外返回当前是否正在读取 resolved final batch 的 additive 诊断字段，如 `artifact_fallback_used`、`resolved_artifact_batch_id`、`artifact_visibility_reason`。对 `interrupted` / `failed` / `canceled` 且 `current_checkpoint/phase` 已到 `finalizing` 的 job，只要存在一致且可读的 final provenance bundle，当前也应暴露同一批 resolved final artifacts。`evidence_items.json` 现在也会跟着 resolved final batch 一起出现在 `artifact_kinds` / `artifacts` 中；`evidence_bank.json` 与 `verification.json` 目前仍是 additive artifact，不参与 resolved batch 的硬门槛。CLI `grok-search-research result --artifact <kind>` 当前也应优先读取同一批 resolved final artifacts，而不是盲读当前指针。
 - `deep_research_events` 返回有序事件流，支持 `after_seq` 增量读取；空 fetch/map 等显式 unit 失败当前会通过 `research_unit_failed` 暴露，而不应再静默计作 completed。
-- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化；`evidence_items` 也会作为独立字段一起返回。若某个 JSON artifact 不可读，结果会在 `artifact_errors` 里返回稳定错误码，而不是直接让整次读取失败。对 `completed` job，若最终四件套缺失，当前会通过 `artifact_errors` 暴露缺失项；对 `failed` / `canceled` / `interrupted` job，则优先读取当前可解析的 resolved final batch，再退到 checkpoint 与 partial artifacts。continuation context 在 artifact 可解析但 shape 非法时，也会继续按 `sources.json -> citations.json.source_registry -> checkpoint -> partial/runtime carry-forward` 的顺序回退；当 resolved final batch 缺少 `evidence_items.json` 时，当前会优先回退到当前 job 上的 `evidence_items.json`，而不是直接退到 checkpoint reconstruction。
+- `deep_research_result` 在 job 未完成时也可以返回当前 plan / partial artifacts；完成后 `final_report.md`、`sources.json`、`citations.json`、`report.json` 应保持一致。返回里的 `citations` 当前与 `citations.json` 保持完全同构，不再做隐式扁平化；`evidence_items` 也会作为独立字段一起返回。`report.json.sections` 现在还可能带 additive `prose`，`report.runtime` 还可能带 additive `verification`。若某个 JSON artifact 不可读，结果会在 `artifact_errors` 里返回稳定错误码，而不是直接让整次读取失败。对 `completed` job，若最终 provenance bundle 缺失核心 sidecar，当前会通过 `artifact_errors` 暴露缺失项；对 `failed` / `canceled` / `interrupted` job，则优先读取当前可解析的 resolved final batch，再退到 checkpoint 与 partial artifacts。continuation context 在 artifact 可解析但 shape 非法时，也会继续按 `sources.json -> citations.json.source_registry -> checkpoint -> partial/runtime carry-forward` 的顺序回退；当 resolved final batch 缺少 `evidence_items.json` 时，当前会优先回退到当前 job 上的 `evidence_items.json`，而不是直接退到 checkpoint reconstruction。
 - continuation context 当前对 `sources.json`、`citations.json`、`report.json` 逐项判断是否仍可读；某个当前 artifact shape 非法时，不应把仍然可读的其他当前 artifacts 一起降级到 checkpoint。
 - `deep_research_resume` 目前支持从 `draft`、`failed`、`interrupted` job 继续，并优先从最新的 completed research-unit checkpoint 续跑，而不是整 job 从头执行。恢复后的新 attempt 会清理上一轮的终态时间戳，并重新使用新的 attempt 时间窗口。
 - `deep_research_cancel` 只负责发起取消请求；运行中的 job 会在阶段边界或下一次检查点更新时收口。

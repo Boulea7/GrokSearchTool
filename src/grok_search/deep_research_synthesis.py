@@ -75,13 +75,34 @@ def _outline_section_dicts(plan: DeepResearchPlan) -> list[dict[str, Any]]:
 
 def _selected_question_ids(evidence_ledger: list[dict[str, Any]] | None) -> list[str]:
     question_ids: list[str] = []
+    fallback_question_ids: list[str] = []
     for entry in evidence_ledger or []:
         if not isinstance(entry, dict):
             continue
-        question_id = str(entry.get("question_id", "")).strip()
-        if question_id and question_id not in question_ids:
-            question_ids.append(question_id)
-    return question_ids
+        entry_question_ids = _dedupe_preserve_order(
+            [
+                str(question_id).strip()
+                for question_id in (
+                    list(entry.get("question_ids", []) or [])
+                    + ([entry.get("question_id", "")] if entry.get("question_id") else [])
+                )
+                if str(question_id).strip()
+            ]
+        )
+        if not entry_question_ids:
+            continue
+        disposition = str(entry.get("disposition", "")).strip()
+        selected_section_id = str(entry.get("selected_section_id", "")).strip()
+        if disposition == "selected" or selected_section_id:
+            for question_id in entry_question_ids:
+                if question_id not in question_ids:
+                    question_ids.append(question_id)
+            continue
+        if disposition != "rejected":
+            for question_id in entry_question_ids:
+                if question_id not in fallback_question_ids:
+                    fallback_question_ids.append(question_id)
+    return question_ids or fallback_question_ids
 
 
 def _has_open_question_signal(
@@ -166,6 +187,7 @@ def build_synthesis_outline(
                 "section_id": section_id,
                 "title": title,
                 "goal": title,
+                "question_id": item.id,
                 "status": "grounded",
                 "coverage_state": {},
                 "rewrite_reason": "evidence_ledger",
@@ -207,25 +229,39 @@ def evidence_pool_for_section(
     if not isinstance(bank, dict):
         return list(evidence_items), "global"
 
+    selected_packet_ids = [
+        str(packet.get("evidence_id", "")).strip()
+        for packet in bank.get("selected_packets", []) or []
+        if isinstance(packet, dict) and str(packet.get("evidence_id", "")).strip() in evidence_by_id
+    ]
     selected_ids = [
         str(evidence_id).strip()
         for evidence_id in bank.get("selected_evidence_ids", []) or []
         if str(evidence_id).strip() in evidence_by_id
     ]
-    if selected_ids:
-        return [evidence_by_id[evidence_id] for evidence_id in selected_ids], "selected"
+    selected_pool_ids = _dedupe_preserve_order([*selected_packet_ids, *selected_ids])
+    if selected_pool_ids:
+        return [evidence_by_id[evidence_id] for evidence_id in selected_pool_ids], "selected"
 
     rejected_ids = {
         str(evidence_id).strip()
         for evidence_id in bank.get("rejected_evidence_ids", []) or []
         if str(evidence_id).strip()
     }
+    candidate_packet_ids = [
+        str(packet.get("evidence_id", "")).strip()
+        for packet in bank.get("candidate_packets", []) or []
+        if isinstance(packet, dict)
+        and str(packet.get("evidence_id", "")).strip() in evidence_by_id
+        and str(packet.get("evidence_id", "")).strip() not in rejected_ids
+    ]
     candidate_ids = [
         str(evidence_id).strip()
         for evidence_id in bank.get("candidate_evidence_ids", []) or []
         if str(evidence_id).strip() in evidence_by_id and str(evidence_id).strip() not in rejected_ids
     ]
-    if candidate_ids:
-        return [evidence_by_id[evidence_id] for evidence_id in candidate_ids], "candidate"
+    candidate_pool_ids = _dedupe_preserve_order([*candidate_packet_ids, *candidate_ids])
+    if candidate_pool_ids:
+        return [evidence_by_id[evidence_id] for evidence_id in candidate_pool_ids], "candidate"
 
     return list(evidence_items), "global"

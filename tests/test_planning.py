@@ -97,7 +97,8 @@ async def test_out_of_order_phase_returns_error():
         )
     )
 
-    assert "requires 'complexity_assessment'" in wrong["error"]
+    assert wrong["error"] == "phase_order_violation"
+    assert "requires 'complexity_assessment'" in wrong["message"]
     assert wrong["expected_phase_order"][0] == "intent_analysis"
 
 
@@ -123,7 +124,8 @@ async def test_revision_cannot_create_later_phase_out_of_order():
         )
     )
 
-    assert "requires 'tool_selection'" in result["error"]
+    assert result["error"] == "phase_order_violation"
+    assert "requires 'tool_selection'" in result["message"]
 
 
 @pytest.mark.asyncio
@@ -333,7 +335,8 @@ async def test_level_1_blocks_later_phases():
         )
     )
 
-    assert result["error"] == "Level 1 planning completes after query_decomposition."
+    assert result["error"] == "phase_not_allowed_for_level"
+    assert "Level 1 planning completes after query_decomposition." in result["message"]
 
 
 @pytest.mark.asyncio
@@ -480,7 +483,8 @@ async def test_level_2_blocks_execution_phase_after_tool_selection():
         )
     )
 
-    assert result["error"] == "Level 2 planning completes after tool_selection."
+    assert result["error"] == "phase_not_allowed_for_level"
+    assert "Level 2 planning completes after tool_selection." in result["message"]
 
 
 @pytest.mark.asyncio
@@ -2171,6 +2175,99 @@ async def test_plan_tool_mapping_preserves_valid_object_params_in_executable_pla
 
 
 @pytest.mark.asyncio
+async def test_plan_wrappers_accept_additive_structured_alias_inputs():
+    intent = as_payload(
+        await server.plan_intent(
+            thought="Start planning.",
+            core_question="Compare providers deeply.",
+            query_type="comparative",
+            time_sensitivity="recent",
+        )
+    )
+    session_id = intent["session_id"]
+
+    await server.plan_complexity(
+        session_id=session_id,
+        thought="Need full planning.",
+        level=3,
+        estimated_sub_queries=2,
+        estimated_tool_calls=6,
+        justification="Need alias coverage across planning wrappers.",
+    )
+
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Collect baseline facts.",
+        id="sq1",
+        goal="Collect provider baseline.",
+        expected_output="Baseline summary.",
+        boundary="Exclude downstream synthesis.",
+        tool_hint="web_search",
+    )
+    await server.plan_sub_query(
+        session_id=session_id,
+        thought="Compare against the baseline.",
+        id="sq2",
+        goal="Compare against baseline.",
+        expected_output="Comparison summary.",
+        boundary="Exclude baseline collection.",
+        depends_on_list=[" sq1 "],
+        tool_hint="web_search",
+    )
+
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed the baseline search.",
+        term="provider baseline",
+        purpose="sq1",
+        round=1,
+        approach="targeted",
+    )
+    await server.plan_search_term(
+        session_id=session_id,
+        thought="Seed the comparison search.",
+        term="provider comparison",
+        purpose="sq2",
+        round=2,
+    )
+
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map the baseline sub-query.",
+        sub_query_id="sq1",
+        tool="web_search",
+        reason="Need baseline facts.",
+        params={"topic": "news", "limit": 3},
+    )
+    await server.plan_tool_mapping(
+        session_id=session_id,
+        thought="Map the comparison sub-query.",
+        sub_query_id="sq2",
+        tool="web_search",
+        reason="Need comparison facts.",
+    )
+
+    result = as_payload(
+        await server.plan_execution(
+            session_id=session_id,
+            thought="Run baseline work before comparison.",
+            parallel=[[" sq1 "]],
+            sequential_list=[" sq2 "],
+            estimated_rounds=2,
+        )
+    )
+
+    assert result["plan_complete"] is True
+    assert result["executable_plan"]["query_decomposition"][1]["depends_on"] == ["sq1"]
+    assert result["executable_plan"]["tool_selection"][0]["params"] == {"topic": "news", "limit": 3}
+    assert result["executable_plan"]["execution_order"] == {
+        "parallel": [["sq1"]],
+        "sequential": ["sq2"],
+        "estimated_rounds": 2,
+    }
+
+
+@pytest.mark.asyncio
 async def test_plan_tool_mapping_rejects_duplicate_mapping_for_same_sub_query():
     intent = as_payload(
         await server.plan_intent(
@@ -2251,6 +2348,35 @@ def test_planning_engine_rejects_unknown_nonempty_session_id():
     assert planning.engine.get_session("missing-session") is None
 
 
+def test_planning_engine_surfaces_machine_readable_phase_order_error_metadata():
+    intent = planning.engine.process_phase(
+        phase="intent_analysis",
+        thought="Start planning.",
+        phase_data={
+            "core_question": "Compare providers.",
+            "query_type": "comparative",
+            "time_sensitivity": "recent",
+        },
+    )
+
+    result = planning.engine.process_phase(
+        phase="query_decomposition",
+        thought="Skip complexity on purpose.",
+        session_id=intent["session_id"],
+        phase_data={
+            "id": "sq1",
+            "goal": "Compare providers.",
+            "expected_output": "A concise comparison.",
+            "boundary": "Exclude implementation details.",
+        },
+    )
+
+    assert result["error_code"] == "phase_order_violation"
+    assert result["error"].startswith("Phase 'query_decomposition' requires")
+    assert result["message"] == result["error"]
+    assert result["expected_phase_order"][0] == "intent_analysis"
+
+
 def test_planning_engine_rejects_duplicate_tool_mapping_invariant():
     intent = planning.engine.process_phase(
         phase="intent_analysis",
@@ -2309,6 +2435,8 @@ def test_planning_engine_rejects_duplicate_tool_mapping_invariant():
 
     assert first["plan_complete"] is True
     assert "duplicate tool mapping" in duplicate["error"].lower()
+    assert duplicate["error_code"] == "duplicate_tool_mapping"
+    assert duplicate["message"] == duplicate["error"]
     session = planning.engine.get_session(session_id)
     assert session is not None
     assert session.tool_mapping_ids() == ["sq1"]

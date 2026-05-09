@@ -3,9 +3,42 @@ from pathlib import Path
 import re
 
 import pytest
+from deep_research_test_helpers import load_deep_research_fixture
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
+PROBE_PUBLIC_SURFACE_FIXTURES = (
+    "eval_probe_round24_worker_restart_public_surface.json",
+    "eval_probe_round26_aws_dms_public_surface.json",
+    "eval_probe_round30_aws_dms_official_doc.json",
+    "eval_probe_round30_lifecycle_public_surface.json",
+    "eval_probe_round33_aws_dms_official_doc.json",
+    "eval_probe_round33_lifecycle_public_surface.json",
+    "eval_probe_round34_aws_dms_official_doc.json",
+    "eval_probe_round34_lifecycle_public_surface.json",
+    "eval_probe_round35_aws_dms_official_doc.json",
+    "eval_probe_round35_lifecycle_public_surface.json",
+    "eval_probe_round36_aws_dms_official_doc.json",
+    "eval_probe_round36_lifecycle_public_surface.json",
+    "eval_probe_round37_aws_dms_official_doc.json",
+    "eval_probe_round37_lifecycle_public_surface.json",
+)
+PROBE_PUBLIC_SURFACE_METRICS = (
+    "release_gate_consistency",
+    "resolved_batch_parity",
+)
+RECENT_PROBE_EVAL_PARITY_FIXTURES = (
+    ("eval_probe_round33_aws_dms_official_doc.json", "probe_round33_aws_dms_official_doc.json"),
+    ("eval_probe_round33_lifecycle_public_surface.json", "probe_round33_lifecycle_public_surface.json"),
+    ("eval_probe_round34_aws_dms_official_doc.json", "probe_round34_aws_dms_official_doc.json"),
+    ("eval_probe_round34_lifecycle_public_surface.json", "probe_round34_lifecycle_public_surface.json"),
+    ("eval_probe_round35_aws_dms_official_doc.json", "probe_round35_aws_dms_official_doc.json"),
+    ("eval_probe_round35_lifecycle_public_surface.json", "probe_round35_lifecycle_public_surface.json"),
+    ("eval_probe_round36_aws_dms_official_doc.json", "probe_round36_aws_dms_official_doc.json"),
+    ("eval_probe_round36_lifecycle_public_surface.json", "probe_round36_lifecycle_public_surface.json"),
+    ("eval_probe_round37_aws_dms_official_doc.json", "probe_round37_aws_dms_official_doc.json"),
+    ("eval_probe_round37_lifecycle_public_surface.json", "probe_round37_lifecycle_public_surface.json"),
+)
 UNGROUNDED_ANALOGY_MARKERS = ("real-world analogy", "think of ")
 STOPWORDS = {
     "about",
@@ -39,6 +72,19 @@ NOISE_MARKERS = (
 TROUBLESHOOTING_MARKERS = ("troubleshooting", "support")
 
 
+def _is_low_signal_title(title: str) -> bool:
+    normalized = " ".join(str(title or "").split()).lower()
+    if not normalized:
+        return True
+    if re.fullmatch(r"(?:section|chapter|step|part)?\s*\d+(?:\.\d+)*", normalized):
+        return True
+    if re.fullmatch(r"[ivxlcdm]+", normalized):
+        return True
+    if len(normalized) <= 2 and not re.search(r"[a-z]{2}", normalized):
+        return True
+    return False
+
+
 def load_eval_case(name: str) -> dict:
     fixture_path = FIXTURE_DIR / name
     return json.loads(fixture_path.read_text())
@@ -70,6 +116,8 @@ def evaluate_case_metric(case: dict, metric: str) -> dict:
         return evaluate_release_gate_consistency(case)
     if metric == "resolved_batch_parity":
         return evaluate_resolved_batch_parity(case)
+    if metric == "packet_to_prose_fidelity":
+        return evaluate_packet_to_prose_fidelity(case)
     raise ValueError(f"Unsupported metric: {metric}")
 
 
@@ -235,6 +283,7 @@ def evaluate_ranking_noise_suppression(case: dict) -> dict:
     score = 1.0
     allowed_domains = set(_constraint_domains(case))
     query = str(case.get("query", "")).lower()
+    report_status = str(((case.get("report") or {}).get("status") or "")).lower()
     domains = {str(source.get("domain") or "").lower() for source in case.get("sources") or [] if str(source.get("domain") or "").strip()}
     mixed_docs_and_external = any(domain.startswith("docs.") for domain in domains) and any(
         domain and not domain.startswith("docs.") for domain in domains
@@ -243,9 +292,23 @@ def evaluate_ranking_noise_suppression(case: dict) -> dict:
     for source in case.get("sources") or []:
         domain = str(source.get("domain") or "").lower()
         title = str(source.get("title") or "").lower()
+        url = str(source.get("url") or "").lower()
         if any(marker in title for marker in TROUBLESHOOTING_MARKERS):
             reason_tags.append("troubleshooting_shell_source")
             score -= 0.5
+        if report_status == "completed" and _is_low_signal_title(title):
+            reason_tags.append("low_signal_title")
+            score -= 0.5
+        if (
+            report_status == "completed"
+            and
+            allowed_domains
+            and domain in allowed_domains
+            and domain.startswith("docs.")
+            and ("/prescriptive-guidance/" in url or "/patterns/" in url)
+        ):
+            reason_tags.append("same_domain_prescriptive_guidance")
+            score -= 0.6
         if _is_off_domain_for_official_docs_query(query, domain, allowed_domains) or (
             mixed_docs_and_external and domain and not domain.startswith("docs.")
         ):
@@ -371,6 +434,13 @@ def evaluate_release_gate_consistency(case: dict) -> dict:
     score = 1.0
 
     release_reason_codes = [str(code) for code in release_gate.get("reason_codes") or [] if str(code).strip()]
+    surfaced_release_reason_codes = sorted(
+        {
+            *release_reason_codes,
+            *(str(code) for code in release_gate.get("all_reason_codes") or [] if str(code).strip()),
+            *(str(code) for code in release_gate.get("soft_reason_codes") or [] if str(code).strip()),
+        }
+    )
     verifier_reason_codes = [str(code) for code in verifier.get("reason_codes") or [] if str(code).strip()]
     passed = release_gate.get("passed")
     status = str(report.get("status") or "")
@@ -381,10 +451,10 @@ def evaluate_release_gate_consistency(case: dict) -> dict:
     if passed is True and status == "failed":
         reason_tags.append("failed_status_without_release_gate_failure")
         score -= 0.5
-    if any(code not in warnings for code in release_reason_codes):
+    if any(code not in warnings for code in surfaced_release_reason_codes):
         reason_tags.append("release_gate_warning_gap")
         score -= 0.3
-    if verifier_reason_codes and not set(verifier_reason_codes).issubset(set(release_reason_codes)):
+    if verifier_reason_codes and not set(verifier_reason_codes).issubset(set(surfaced_release_reason_codes)):
         reason_tags.append("release_gate_missing_verifier_reason")
         score -= 0.4
     if artifact_errors and status == "completed":
@@ -420,6 +490,10 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
                 "coverage.json",
                 "grounding.json",
                 "verifier.json",
+                "selected_bank.json",
+                "evidence_bank.json",
+                "verification.json",
+                "coverage_gaps.json",
             }
         ]
         mismatched = [
@@ -439,6 +513,66 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
         "verdict": verdict,
         "score": round(score, 3),
         "reason_tags": sorted(set(reason_tags)),
+    }
+
+
+def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
+    report = case.get("report") or {}
+    sections = report.get("sections") or []
+    section_by_id = {
+        str(section.get("section_id", "")).strip(): dict(section)
+        for section in sections
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    }
+    final_report_text = " ".join(str(report.get("final_report") or case.get("final_report") or "").split()).lower()
+    selected_bank = case.get("selected_bank") or case.get("evidence_bank") or []
+    reason_tags: list[str] = []
+    checked_packets = 0
+    for bank in selected_bank:
+        if not isinstance(bank, dict):
+            continue
+        section_id = str(bank.get("section_id", "")).strip()
+        section = section_by_id.get(section_id, {})
+        section_text = " ".join(
+            " ".join(
+                [
+                    str(section.get("summary", "") or ""),
+                    str(section.get("prose", "") or ""),
+                    *[
+                        str(claim.get("text", "") or "")
+                        for claim in section.get("claims", []) or []
+                        if isinstance(claim, dict)
+                    ],
+                ]
+            ).split()
+        ).lower()
+        for row in bank.get("selected_rows", []) or []:
+            if not isinstance(row, dict):
+                continue
+            evidence_id = str(row.get("evidence_id", "")).strip()
+            if not evidence_id:
+                continue
+            checked_packets += 1
+            packet_reflected = bool([claim_id for claim_id in row.get("claim_ids", []) or [] if str(claim_id).strip()])
+            if not packet_reflected:
+                coverage_tags = [
+                    " ".join(str(tag).split()).lower()
+                    for tag in row.get("coverage_tags", []) or []
+                    if " ".join(str(tag).split())
+                ]
+                packet_reflected = any(
+                    tag and (tag in section_text or tag in final_report_text)
+                    for tag in coverage_tags
+                )
+            if not packet_reflected:
+                reason_tags.append("selected_packet_missing_from_prose")
+    verdict = "pass" if not reason_tags else "fail"
+    return {
+        "metric": "packet_to_prose_fidelity",
+        "verdict": verdict,
+        "score": 1.0 if verdict == "pass" else 0.0,
+        "reason_tags": sorted(set(reason_tags)),
+        "checked_packets": checked_packets,
     }
 
 
@@ -559,6 +693,9 @@ def test_citation_faithfulness_probe_goldens(fixture_name):
         "eval_probe_round18_aws_dms.json",
         "eval_probe_round19_aws_dms.json",
         "eval_probe_round20_aws_dms.json",
+        "eval_probe_round22_coverage_ledger.json",
+        "eval_probe_round24_aws_dms_fallback_coverage.json",
+        "eval_probe_round30_aws_dms_official_doc.json",
     ],
 )
 def test_coverage_completeness_probe_goldens(fixture_name):
@@ -610,6 +747,8 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
         "eval_probe_round18_lifecycle.json",
         "eval_probe_round19_lifecycle_b.json",
         "eval_probe_round20_lifecycle.json",
+        "eval_probe_round24_aws_dms_fallback_coverage.json",
+        "eval_probe_round30_aws_dms_official_doc.json",
     ],
 )
 def test_planner_boundary_probe_goldens(fixture_name):
@@ -634,6 +773,10 @@ def test_planner_boundary_probe_goldens(fixture_name):
         "eval_probe_round15_main_snapshot.json",
         "eval_probe_round16_main_snapshot.json",
         "eval_probe_round18_aws_dms.json",
+        "eval_probe_round22_noise_filters.json",
+        "eval_probe_round23_aws_dms_ranking_noise.json",
+        "eval_probe_round24_aws_dms_ranking_success.json",
+        "eval_probe_round30_aws_dms_official_doc.json",
     ],
 )
 def test_ranking_noise_suppression_probe_goldens(fixture_name):
@@ -665,6 +808,10 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
         "eval_probe_round19_lifecycle_b.json",
         "eval_probe_round20_aws_dms.json",
         "eval_probe_round20_lifecycle.json",
+        "eval_probe_round22_noise_filters.json",
+        "eval_probe_round24_aws_dms_fallback_coverage.json",
+        "eval_probe_round24_aws_dms_ranking_success.json",
+        "eval_probe_round30_aws_dms_official_doc.json",
     ],
 )
 def test_diagnostics_consistency_probe_goldens(fixture_name):
@@ -892,3 +1039,176 @@ def test_resolved_batch_parity_detects_mixed_batch_provenance_sidecars():
 
     assert result["verdict"] == "fail"
     assert result["reason_tags"] == ["mixed_batch_artifacts"]
+
+
+def test_packet_to_prose_fidelity_passes_when_selected_packets_are_reflected():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "summary": "RecoveryTimeout and awsdms_txn_state govern AWS DMS recovery behavior.",
+                    "prose": "RecoveryTimeout and awsdms_txn_state govern AWS DMS recovery behavior.",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "RecoveryTimeout governs recovery wait behavior.",
+                        }
+                    ],
+                }
+            ],
+            "final_report": "RecoveryTimeout and awsdms_txn_state govern AWS DMS recovery behavior.",
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_rows": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": ["resume-semantics-claim-1"],
+                        "coverage_tags": ["RecoveryTimeout", "awsdms_txn_state"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "pass"
+    assert result["reason_tags"] == []
+
+
+def test_packet_to_prose_fidelity_detects_selected_packet_missing_from_prose():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "summary": "Resume-processing continues from the last checkpoint.",
+                    "prose": "Resume-processing continues from the last checkpoint.",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "Resume-processing continues from the last checkpoint.",
+                        }
+                    ],
+                }
+            ],
+            "final_report": "Resume-processing continues from the last checkpoint.",
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_rows": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": [],
+                        "coverage_tags": ["RecoveryTimeout"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["selected_packet_missing_from_prose"]
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        "eval_probe_round22_provenance_bundle.json",
+    ],
+)
+def test_provenance_bundle_consistency_probe_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+    golden = case["golden"]["provenance_bundle_consistency"]
+
+    result = evaluate_case_metric(case, "provenance_bundle_consistency")
+
+    assert_metric_matches_golden(result, golden)
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        "eval_probe_round22_provenance_bundle.json",
+    ],
+)
+def test_resolved_batch_parity_probe_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+    golden = case["golden"]["resolved_batch_parity"]
+
+    result = evaluate_case_metric(case, "resolved_batch_parity")
+
+    assert_metric_matches_golden(result, golden)
+
+
+@pytest.mark.parametrize("fixture_name", PROBE_PUBLIC_SURFACE_FIXTURES)
+def test_probe_public_surface_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+
+    for metric in PROBE_PUBLIC_SURFACE_METRICS:
+        golden = case["golden"][metric]
+        result = evaluate_case_metric(case, metric)
+        assert_metric_matches_golden(result, golden)
+
+
+def test_resolved_batch_parity_flags_additive_final_sidecar_mismatch():
+    result = evaluate_case_metric(
+        {
+            "resolved_artifact_batch_id": "batch-good",
+            "artifacts": [
+                {"kind": "selected_bank.json", "metadata": {"batch_id": "batch-good"}},
+                {"kind": "evidence_bank.json", "metadata": {"batch_id": "batch-good"}},
+                {"kind": "verification.json", "metadata": {"batch_id": "batch-good"}},
+                {"kind": "coverage_gaps.json", "metadata": {"batch_id": "batch-bad"}},
+            ],
+        },
+        "resolved_batch_parity",
+    )
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["mixed_batch_artifacts"]
+
+
+@pytest.mark.parametrize(("eval_fixture_name", "live_fixture_name"), RECENT_PROBE_EVAL_PARITY_FIXTURES)
+def test_recent_probe_eval_and_live_fixtures_stay_in_parity(eval_fixture_name, live_fixture_name):
+    eval_case = load_eval_case(eval_fixture_name)
+    live_case = load_deep_research_fixture(live_fixture_name)
+
+    assert live_case["query"] == eval_case["query"]
+    assert live_case["job"]["status"] == eval_case["sample"]["status"]
+    assert live_case["job"]["phase"] == eval_case["sample"]["phase"]
+    assert live_case["public_surface"]["status"]["runtime_warnings"] == eval_case["sample"]["runtime_warnings"]
+    live_batch_id = live_case["public_surface"]["status"].get("resolved_artifact_batch_id", "")
+    eval_batch_id = eval_case["resolved_artifact_batch_id"]
+    if live_batch_id != "$seeded_batch_id":
+        assert live_batch_id == eval_batch_id
+    if live_case.get("artifacts"):
+        assert [artifact["kind"] for artifact in live_case.get("artifacts", [])] == [
+            artifact["kind"] for artifact in eval_case.get("artifacts", [])
+        ]
+    if "artifact_payload" in live_case:
+        assert live_case["artifact_payload"]["report"]["status"] == eval_case["report"]["status"]
+        assert live_case["artifact_payload"]["report"]["runtime"]["release_gate"] == eval_case["report"]["runtime"]["release_gate"]
+        assert live_case["artifact_payload"]["report"]["runtime"]["verifier"] == eval_case["report"]["runtime"]["verifier"]
+        if any(artifact.get("kind") == "selected_bank.json" for artifact in eval_case.get("artifacts", [])):
+            assert bool(live_case["selected_bank"]) == any(
+                artifact.get("kind") == "selected_bank.json" for artifact in eval_case.get("artifacts", [])
+            )
+        if any(artifact.get("kind") == "evidence_bank.json" for artifact in eval_case.get("artifacts", [])):
+            assert bool(live_case["artifact_payload"]["evidence_bank"]) == any(
+                artifact.get("kind") == "evidence_bank.json" for artifact in eval_case.get("artifacts", [])
+            )
+        if any(artifact.get("kind") == "verification.json" for artifact in eval_case.get("artifacts", [])):
+            assert bool(live_case["artifact_payload"]["verification"]) == any(
+                artifact.get("kind") == "verification.json" for artifact in eval_case.get("artifacts", [])
+            )
+        if any(artifact.get("kind") == "coverage_gaps.json" for artifact in eval_case.get("artifacts", [])):
+            assert bool(live_case["artifact_payload"]["coverage_gaps"]) == any(
+                artifact.get("kind") == "coverage_gaps.json" for artifact in eval_case.get("artifacts", [])
+            )

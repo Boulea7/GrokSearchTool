@@ -10,6 +10,13 @@ from .deep_research_runtime import DeepResearchRuntime
 
 
 TERMINAL_STATUSES = {"completed", "failed", "canceled", "interrupted"}
+ATTACH_TERMINAL_EVENT_TYPES = {
+    "job_canceled",
+    "job_completed",
+    "job_failed",
+    "job_interrupted",
+    "job_resolved_from_final_batch",
+}
 
 
 def _build_runtime() -> DeepResearchRuntime:
@@ -49,6 +56,7 @@ def _quote_summary_text(value: str, *, limit: int = 80) -> str:
 
 def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") -> list[str]:
     artifact_fallback = payload.get("artifact_fallback_used")
+    last_error = _summary_value(payload.get("last_error"))
     parts = [
         f"job={_summary_value(payload.get('job_id') or fallback_job_id)}",
         f"status={_summary_value(payload.get('status'))}",
@@ -61,14 +69,41 @@ def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") ->
         f"resolved_batch={_summary_value(payload.get('resolved_artifact_batch_id'))}",
         f"artifact_fallback={_summary_value(artifact_fallback) if artifact_fallback is not None else '-'}",
     ]
+    if last_error != "-":
+        parts.append(f"last_error={last_error}")
     if payload.get("planner_fallback_used"):
         parts.append("planner_fallback=true")
     runtime_warnings = payload.get("runtime_warnings")
     if isinstance(runtime_warnings, list) and runtime_warnings:
         parts.append(f"warnings={len(runtime_warnings)}")
+        parts.append(f"warning_codes={','.join(str(item).strip() for item in runtime_warnings[:3] if str(item).strip())}")
     constraint_violations = payload.get("constraint_violations")
     if isinstance(constraint_violations, list) and constraint_violations:
         parts.append(f"constraint_violations={len(constraint_violations)}")
+        constraint_codes: list[str] = []
+        normalized_items = [item for item in constraint_violations if isinstance(item, dict)]
+        repeated_reason_mode = (
+            len(normalized_items) > 1
+            and len(
+                {
+                    _summary_value(item.get("reason"))
+                    for item in normalized_items
+                    if _summary_value(item.get("reason")) != "-"
+                }
+            )
+            == 1
+        )
+        for item in normalized_items[:3]:
+            preferred_keys = ("unit_id", "reason", "code") if repeated_reason_mode else ("reason", "code", "unit_id")
+            if not isinstance(item, dict):
+                continue
+            for key in preferred_keys:
+                value = _summary_value(item.get(key))
+                if value != "-" and value not in constraint_codes:
+                    constraint_codes.append(value)
+                    break
+        if constraint_codes:
+            parts.append(f"constraint_codes={','.join(constraint_codes)}")
     return parts
 
 
@@ -81,6 +116,96 @@ def _print_job_summary(payload: dict[str, Any], *, fallback_job_id: str = "", ex
     if extra_parts:
         parts.extend(extra_parts)
     _print_summary_line(parts)
+
+
+def _watch_existing_state_message(payload: dict[str, Any], *, fallback_job_id: str = "") -> str | None:
+    attempts = payload.get("attempt_count")
+    try:
+        numeric_attempts = int(attempts)
+    except (TypeError, ValueError):
+        numeric_attempts = 0
+    continued_from = _summary_value(payload.get("continued_from_job_id"))
+    if numeric_attempts <= 1 and continued_from == "-":
+        return None
+
+    parts = [f"job={_summary_value(payload.get('job_id') or fallback_job_id)}"]
+    if numeric_attempts > 1:
+        parts.append(f"attempts={numeric_attempts}")
+    checkpoint = _summary_value(payload.get("current_checkpoint"))
+    if checkpoint != "-":
+        parts.append(f"checkpoint={checkpoint}")
+    if continued_from != "-":
+        parts.append(f"continued_from={continued_from}")
+    return f"watch: attached_to_existing_state {' '.join(parts)}"
+
+
+def _event_attempt_count(event: dict[str, Any]) -> int | None:
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return None
+    value = data.get("attempt_count")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _resolve_watch_attach_after_seq(
+    runtime: DeepResearchRuntime,
+    job_id: str,
+    payload: dict[str, Any],
+    *,
+    page_limit: int = 100,
+) -> int:
+    attempts = payload.get("attempt_count")
+    continued_from = _summary_value(payload.get("continued_from_job_id"))
+    try:
+        numeric_attempts = int(attempts)
+    except (TypeError, ValueError):
+        numeric_attempts = 0
+    if numeric_attempts <= 1 and continued_from == "-":
+        return 0
+
+    after_seq = 0
+    fallback_after_seq = 0
+    previous_attempt_after_seq = 0
+    previous_attempt_count = max(0, numeric_attempts - 1)
+    while True:
+        events_payload = await runtime.events(job_id, after_seq=after_seq, limit=page_limit)
+        events = events_payload.get("events", [])
+        if not events:
+            return fallback_after_seq or previous_attempt_after_seq
+
+        for event in events:
+            try:
+                event_seq = int(event.get("seq", 0))
+            except (TypeError, ValueError):
+                event_seq = 0
+            attempt_count = _event_attempt_count(event)
+            event_type = str(event.get("type", ""))
+            if (
+                previous_attempt_count > 0
+                and attempt_count == previous_attempt_count
+                and event_type in ATTACH_TERMINAL_EVENT_TYPES
+            ):
+                previous_attempt_after_seq = max(previous_attempt_after_seq, event_seq)
+                continue
+            if attempt_count != numeric_attempts:
+                continue
+            if event_type == "job_resumed":
+                return previous_attempt_after_seq or max(0, event_seq - 1)
+            if fallback_after_seq == 0:
+                fallback_after_seq = previous_attempt_after_seq or max(0, event_seq - 1)
+
+        next_after_seq = events_payload.get("next_after_seq", after_seq)
+        try:
+            normalized_next_after_seq = int(next_after_seq)
+        except (TypeError, ValueError):
+            return fallback_after_seq or previous_attempt_after_seq
+        if normalized_next_after_seq <= after_seq:
+            return fallback_after_seq or previous_attempt_after_seq
+        after_seq = normalized_next_after_seq
+    return fallback_after_seq or previous_attempt_after_seq
 
 
 def _print_list_summary(payload: dict[str, Any], *, status_filter: str, limit: int) -> None:
@@ -103,21 +228,38 @@ def _print_events_summary(
     payload: dict[str, Any],
     *,
     after_seq: int,
-    terminal: bool,
+    terminal: bool | None,
     fallback_job_id: str = "",
 ) -> None:
     events = payload.get("events", [])
-    last_event = events[-1]["type"] if events else "-"
+    returned_count = payload.get("returned_count", len(events))
+    last_event = payload.get("last_event_type") or (events[-1]["type"] if events else "-")
+    window_has_terminal_event = payload.get("window_has_terminal_event")
+    job_terminal = payload.get("job_terminal")
+    effective_terminal = (
+        bool(job_terminal or window_has_terminal_event)
+        if job_terminal is not None
+        else (bool(window_has_terminal_event) if window_has_terminal_event is not None else bool(terminal))
+    )
     _print_summary_line(
         [
             f"job={_summary_value(payload.get('job_id') or fallback_job_id)}",
-            f"events={len(events)}",
+            f"events={returned_count}",
             f"after_seq={after_seq}",
             f"next_after_seq={payload.get('next_after_seq', after_seq)}",
             f"last_event={last_event}",
-            f"terminal={'true' if terminal else 'false'}",
+            f"terminal={'true' if effective_terminal else 'false'}",
+            f"window_terminal={_summary_value(window_has_terminal_event) if window_has_terminal_event is not None else '-'}",
         ]
     )
+
+
+async def _run_observation(coro: Any) -> bool:
+    try:
+        await coro
+    except KeyboardInterrupt:
+        return True
+    return False
 
 
 def _spawn_worker(job_id: str) -> None:
@@ -133,15 +275,40 @@ def _spawn_worker(job_id: str) -> None:
     )
 
 
-async def _watch_job(runtime: DeepResearchRuntime, job_id: str, *, interval_seconds: float = 1.0) -> None:
-    last_seq = 0
+async def _watch_job(
+    runtime: DeepResearchRuntime,
+    job_id: str,
+    *,
+    interval_seconds: float = 1.0,
+    initial_status: dict[str, Any] | None = None,
+    suppress_initial_status_line: bool = False,
+    after_seq: int = 0,
+) -> None:
+    last_seq = max(0, after_seq)
     last_status_line = ""
+    printed_existing_state_message = False
+    pending_status = initial_status
+    first_status_from_initial = initial_status is not None
+    if suppress_initial_status_line and initial_status is not None:
+        last_status_line = " ".join(_job_summary_parts(initial_status, fallback_job_id=job_id))
     while True:
-        status = await runtime.status(job_id)
-        events = await runtime.events(job_id, after_seq=last_seq, limit=100)
-        for event in events["events"]:
+        status = pending_status if pending_status is not None else await runtime.status(job_id)
+        pending_status = None
+        events_payload: dict[str, Any] | None = None
+        if not printed_existing_state_message:
+            existing_state_message = _watch_existing_state_message(status, fallback_job_id=job_id)
+            if existing_state_message:
+                print(existing_state_message, file=sys.stderr)
+                attach_after_seq = await _resolve_watch_attach_after_seq(runtime, job_id, status)
+                last_seq = max(last_seq, attach_after_seq)
+            printed_existing_state_message = True
+        events_payload = await runtime.events(job_id, after_seq=last_seq, limit=100)
+        for event in events_payload["events"]:
             print(f"[{event['seq']}] {event['phase']} {event['type']}: {event['message']}", file=sys.stderr)
-        last_seq = events["next_after_seq"]
+        last_seq = events_payload["next_after_seq"]
+        if first_status_from_initial and events_payload["events"]:
+            status = await runtime.status(job_id)
+            first_status_from_initial = False
         summary_parts = _job_summary_parts(status, fallback_job_id=job_id)
         status_line = " ".join(summary_parts)
         if status_line != last_status_line:
@@ -149,6 +316,7 @@ async def _watch_job(runtime: DeepResearchRuntime, job_id: str, *, interval_seco
             last_status_line = status_line
         if status["status"] in TERMINAL_STATUSES:
             return
+        first_status_from_initial = False
         await asyncio.sleep(interval_seconds)
 
 
@@ -170,13 +338,31 @@ async def _handle_start(args: argparse.Namespace) -> int:
         _spawn_worker(response["job_id"])
     _print_json(response)
     if args.watch and not args.plan_only:
-        await _watch_job(runtime, response["job_id"], interval_seconds=args.interval_seconds)
+        interrupted = await _run_observation(
+            _watch_job(
+                runtime,
+                response["job_id"],
+                interval_seconds=args.interval_seconds,
+                after_seq=args.after_seq,
+            )
+        )
+        if interrupted:
+            return 130
     return 0
 
 
 async def _handle_watch(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
-    await _watch_job(runtime, args.job_id, interval_seconds=args.interval_seconds)
+    interrupted = await _run_observation(
+        _watch_job(
+            runtime,
+            args.job_id,
+            interval_seconds=args.interval_seconds,
+            after_seq=args.after_seq,
+        )
+    )
+    if interrupted:
+        return 130
     return 0
 
 
@@ -191,28 +377,33 @@ async def _handle_status(args: argparse.Namespace) -> int:
 async def _handle_events(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
     if args.follow:
-        last_seq = args.after_seq
-        while True:
-            payload = await runtime.events(args.job_id, after_seq=last_seq, limit=args.limit)
-            status = await runtime.status(args.job_id)
-            _print_events_summary(
-                payload,
-                after_seq=last_seq,
-                terminal=status["status"] in TERMINAL_STATUSES,
-                fallback_job_id=args.job_id,
-            )
-            if payload["events"]:
-                _print_json(payload)
-            last_seq = payload["next_after_seq"]
-            if status["status"] in TERMINAL_STATUSES:
-                return 0
-            await asyncio.sleep(args.interval_seconds)
+        async def follow_events() -> None:
+            last_seq = args.after_seq
+            while True:
+                payload = await runtime.events(args.job_id, after_seq=last_seq, limit=args.limit)
+                status = await runtime.status(args.job_id)
+                _print_events_summary(
+                    payload,
+                    after_seq=last_seq,
+                    terminal=payload.get("job_terminal"),
+                    fallback_job_id=args.job_id,
+                )
+                if payload["events"]:
+                    _print_json(payload)
+                last_seq = payload["next_after_seq"]
+                if status["status"] in TERMINAL_STATUSES:
+                    return
+                await asyncio.sleep(args.interval_seconds)
+
+        interrupted = await _run_observation(follow_events())
+        if interrupted:
+            return 130
+        return 0
     payload = await runtime.events(args.job_id, after_seq=args.after_seq, limit=args.limit)
-    status = await runtime.status(args.job_id)
     _print_events_summary(
         payload,
         after_seq=args.after_seq,
-        terminal=status["status"] in TERMINAL_STATUSES,
+        terminal=payload.get("job_terminal"),
         fallback_job_id=args.job_id,
     )
     _print_json(payload)
@@ -222,8 +413,15 @@ async def _handle_events(args: argparse.Namespace) -> int:
 async def _handle_result(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
     if args.artifact:
-        content = runtime.read_artifact_text(args.job_id, args.artifact)
+        artifact = runtime.read_artifact(args.job_id, args.artifact)
+        content = artifact.get("content")
         if content is None:
+            if artifact.get("state") == "hidden":
+                print(
+                    f"artifact_hidden: {args.artifact} reason={artifact.get('artifact_visibility_reason') or '-'}",
+                    file=sys.stderr,
+                )
+                return 1
             print(f"artifact_not_found: {args.artifact}", file=sys.stderr)
             return 1
         status = await runtime.status(args.job_id)
@@ -248,15 +446,26 @@ async def _handle_resume(args: argparse.Namespace) -> int:
         _spawn_worker(args.job_id)
     _print_job_summary(response, fallback_job_id=args.job_id)
     _print_json(response)
-    if args.watch and response["status"] == "queued":
-        await _watch_job(runtime, args.job_id, interval_seconds=args.interval_seconds)
+    if args.watch:
+        interrupted = await _run_observation(
+            _watch_job(
+                runtime,
+                args.job_id,
+                interval_seconds=args.interval_seconds,
+                initial_status=response,
+                suppress_initial_status_line=True,
+                after_seq=args.after_seq,
+            )
+        )
+        if interrupted:
+            return 130
     return 0
 
 
 async def _handle_cancel(args: argparse.Namespace) -> int:
     runtime = _build_runtime()
     response = await runtime.cancel(args.job_id)
-    _print_job_summary(await runtime.status(args.job_id), fallback_job_id=args.job_id)
+    _print_job_summary(response, fallback_job_id=args.job_id)
     _print_json(response)
     return 0
 
@@ -287,7 +496,16 @@ async def _handle_continue(args: argparse.Namespace) -> int:
         _spawn_worker(response["job_id"])
     _print_json(response)
     if args.watch:
-        await _watch_job(runtime, response["job_id"], interval_seconds=args.interval_seconds)
+        interrupted = await _run_observation(
+            _watch_job(
+                runtime,
+                response["job_id"],
+                interval_seconds=args.interval_seconds,
+                after_seq=args.after_seq,
+            )
+        )
+        if interrupted:
+            return 130
     return 0
 
 
@@ -310,6 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--force-new", action="store_true")
         command.add_argument("--watch", action="store_true")
         command.add_argument("--interval-seconds", type=float, default=1.0)
+        command.add_argument("--after-seq", type=int, default=0)
 
     start = subparsers.add_parser("start")
     start.add_argument("query")
@@ -320,6 +539,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch = subparsers.add_parser("watch")
     watch.add_argument("job_id")
     watch.add_argument("--interval-seconds", type=float, default=1.0)
+    watch.add_argument("--after-seq", type=int, default=0)
 
     status = subparsers.add_parser("status")
     status.add_argument("job_id")
@@ -334,12 +554,13 @@ def build_parser() -> argparse.ArgumentParser:
     result = subparsers.add_parser("result")
     result.add_argument("job_id")
     result.add_argument("--artifact", default="")
-    result.add_argument("--include-partial", action="store_true")
+    result.add_argument("--include-partial", action=argparse.BooleanOptionalAction, default=True)
 
     resume = subparsers.add_parser("resume")
     resume.add_argument("job_id")
     resume.add_argument("--watch", action="store_true")
     resume.add_argument("--interval-seconds", type=float, default=1.0)
+    resume.add_argument("--after-seq", type=int, default=0)
 
     cancel = subparsers.add_parser("cancel")
     cancel.add_argument("job_id")
@@ -377,7 +598,10 @@ async def _run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return asyncio.run(_run(args))
+    try:
+        return asyncio.run(_run(args))
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":

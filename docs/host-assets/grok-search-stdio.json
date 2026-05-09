@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "grok-search": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/Boulea7/GrokSearchTool@main",
+        "grok-search"
+      ],
+      "env": {
+        "GROK_API_URL": "https://api.example.com/v1",
+        "GROK_API_KEY": "your-grok-api-key",
+        "TAVILY_API_KEY": "tvly-your-tavily-key",
+        "TAVILY_API_URL": "https://api.tavily.com",
+        "FIRECRAWL_API_KEY": "fc-your-firecrawl-key"
+      }
+    }
+  }
+}

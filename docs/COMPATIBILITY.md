@@ -26,6 +26,24 @@ Compatibility claims are grouped into three levels:
   - core planning, search, and fetch flows are supported
   - behavior still depends on upstream model endpoint compatibility
 
+## Broad host adaptation assets
+
+The repo now also ships broad host adaptation assets for MCP-capable tools that can consume:
+
+- local `stdio` MCP configuration
+- a host-native rule, preset, memory, or skill surface
+
+Current documented adaptation targets are collected in [HOSTS.md](./HOSTS.md):
+
+- Cherry Studio
+- Claude Code / Claude Desktop
+- Cursor
+- Cline
+- Continue
+- Windsurf
+
+These assets improve practical integration guidance, but they do not upgrade a host into `Officially tested` on their own. Hosts should still be treated according to the support levels above until maintainer validation is expanded.
+
 ### Planned
 
 - Dify
@@ -45,7 +63,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `deep_research_*` is now available as a non-interactive MCP job surface for advanced report-style research
 - Any interactive `deep research` experience should remain CLI-first; MCP and skill integrations should stay non-interactive
 - planning `session_id` values are in-process transient handles with about a 1-hour TTL and a 256-session LRU cap; restart, expiry, or eviction requires starting again from a fresh `plan_intent`
-- the planning wrappers intentionally keep scalar shim inputs such as CSV `depends_on`, semicolon-grouped `parallel_groups`, and string `params_json`; `executable_plan` returns normalized structured shapes
+- the planning wrappers intentionally keep scalar shim inputs such as CSV `depends_on`, semicolon-grouped `parallel_groups`, and string `params_json`; additive structured aliases such as `depends_on_list`, `params`, `parallel`, and `sequential_list` are also accepted, and `executable_plan` still returns normalized structured shapes
 - the first `plan_search_term` call must provide `approach`; later non-revision calls may append `search_terms` only after the strategy already exists
 
 ## Provider Requirements
@@ -70,6 +88,10 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `Config.get_config_info()` returns only the base config snapshot; the MCP tool `get_config_info` keeps that snapshot and adds `connection_test`, `doctor`, `feature_readiness`, and minimal real `search/fetch` probes
 - `get_config_info` now also supports additive `detail=full|summary` output levels; `full` remains the default and preserves the current payload shape
 - `get_config_info` and `plan_*` now return structured objects directly rather than JSON strings; callers should not apply an extra JSON decode layer
+- `web_map`, `switch_model`, and `toggle_builtin_tools` keep their legacy JSON-string default contract, but now support additive `response_format=object` for object-first callers
+- under `response_format=object`, those three tools now share a stable envelope shape: `{ok, error, message, data}`; legacy string defaults remain unchanged
+- for `web_map`, `response_format=object` now wraps both success and failure in that shared envelope instead of returning a bare decoded map object on success
+- `plan_*` error payloads now prefer machine-readable codes in `error` and reserve `message` for human-readable text when the underlying planning engine previously surfaced free-form error strings
 - `detail=summary` is currently a compact projection of the same diagnostic run, not a separate lightweight execution path
 - `connection_test` reflects `/models` reachability only; use `doctor` and `feature_readiness` to judge runtime readiness
 - `grok_model_selection` means the configured model was already unsuitable at the `/models` visibility stage and runtime will preselect a better Grok candidate before the real request

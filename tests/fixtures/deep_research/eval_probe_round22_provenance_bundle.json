@@ -1,0 +1,161 @@
+{
+  "sample": "probe-round22-provenance-bundle",
+  "query": "Explain checkpoint lineage restoration",
+  "resolved_artifact_batch_id": "batch-round22",
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.example.com/runtime/checkpoints",
+      "domain": "docs.example.com",
+      "title": "Runtime checkpoints"
+    }
+  ],
+  "citations": {
+    "source_registry": {
+      "R1": {
+        "source_id": "R1",
+        "url": "https://docs.example.com/runtime/checkpoints",
+        "domain": "docs.example.com",
+        "title": "Runtime checkpoints"
+      }
+    },
+    "sections": [
+      {
+        "section_id": "checkpoint-lineage",
+        "title": "Checkpoint Lineage",
+        "claims": [
+          {
+            "claim_id": "checkpoint-lineage-claim-1",
+            "text": "Checkpoint restoration resumes from the latest durable checkpoint before execution continues.",
+            "citations": [
+              "R1"
+            ],
+            "evidence_ids": [
+              "e1"
+            ],
+            "evidence_bindings": [
+              {
+                "source_id": "R1",
+                "evidence_id": "e1",
+                "source_backed": true,
+                "line_start": 10,
+                "line_end": 12
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "status": "completed",
+    "runtime": {
+      "warnings": [],
+      "release_gate": {
+        "passed": true,
+        "reason_codes": []
+      },
+      "verifier": {
+        "reason_codes": []
+      }
+    },
+    "sections": [
+      {
+        "section_id": "checkpoint-lineage",
+        "title": "Checkpoint Lineage",
+        "claims": [
+          {
+            "claim_id": "checkpoint-lineage-claim-1",
+            "text": "Checkpoint restoration resumes from the latest durable checkpoint before execution continues.",
+            "citations": [
+              "R1"
+            ],
+            "evidence_ids": [
+              "e1"
+            ],
+            "evidence_bindings": [
+              {
+                "source_id": "R1",
+                "evidence_id": "e1",
+                "source_backed": true,
+                "line_start": 10,
+                "line_end": 12
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "evidence_items": [
+    {
+      "evidence_id": "e1",
+      "source_ids": [
+        "R1"
+      ],
+      "evidence_kind": "fetch"
+    }
+  ],
+  "artifacts": [
+    {
+      "kind": "sources.json",
+      "metadata": {
+        "batch_id": "batch-round22"
+      }
+    },
+    {
+      "kind": "citations.json",
+      "metadata": {
+        "batch_id": "batch-round22"
+      }
+    },
+    {
+      "kind": "report.json",
+      "metadata": {
+        "batch_id": "batch-round22"
+      }
+    },
+    {
+      "kind": "final_report.md",
+      "metadata": {
+        "batch_id": "batch-round22"
+      }
+    },
+    {
+      "kind": "evidence_items.json",
+      "metadata": {
+        "batch_id": "batch-round22"
+      }
+    },
+    {
+      "kind": "coverage.json",
+      "metadata": {
+        "batch_id": "batch-round22"
+      }
+    },
+    {
+      "kind": "grounding.json",
+      "metadata": {
+        "batch_id": "batch-round22"
+      }
+    },
+    {
+      "kind": "verifier.json",
+      "metadata": {
+        "batch_id": "batch-round22"
+      }
+    }
+  ],
+  "golden": {
+    "provenance_bundle_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

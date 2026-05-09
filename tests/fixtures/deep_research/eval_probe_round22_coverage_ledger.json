@@ -1,0 +1,41 @@
+{
+  "sample": "probe-round22-coverage-ledger",
+  "query": "Follow up checkpoint resume and restart semantics with section-level coverage ledger",
+  "report": {
+    "status": "completed",
+    "coverage": {
+      "planned_section_ids": [
+        "executive-summary",
+        "key-findings",
+        "checkpoint-resume-semantics",
+        "restart-trade-offs"
+      ],
+      "answered_section_ids": [
+        "executive-summary",
+        "key-findings",
+        "checkpoint-resume-semantics",
+        "restart-trade-offs"
+      ],
+      "unanswered_sections": [],
+      "planned_sub_question_ids": [
+        "sq1",
+        "sq2"
+      ],
+      "covered_sub_question_ids": [
+        "sq1",
+        "sq2"
+      ],
+      "uncovered_sub_questions": [],
+      "hard_coverage_gate_passed": true,
+      "hard_uncovered_targets": [],
+      "coverage_gate_passed": true
+    }
+  },
+  "golden": {
+    "coverage_completeness": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

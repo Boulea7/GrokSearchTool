@@ -1,0 +1,323 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing",
+    "runtime_warnings": [
+      "coverage_incomplete",
+      "domain_constraints_applied"
+    ]
+  },
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
+  "resolved_artifact_batch_id": "20260422T082323-3fb4851c",
+  "artifacts": [
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "plan.json",
+      "path": "artifacts/d42798a4e594602140413b75/plan.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:22:24Z",
+      "metadata": {
+        "bytes": 16296
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "planner_trace.json",
+      "path": "artifacts/d42798a4e594602140413b75/planner_trace.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:22:24Z",
+      "metadata": {
+        "bytes": 1514
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "lineage.json",
+      "path": "artifacts/d42798a4e594602140413b75/lineage.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 319
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "source_policy.json",
+      "path": "artifacts/d42798a4e594602140413b75/source_policy.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 431
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "outline_versions.json",
+      "path": "artifacts/d42798a4e594602140413b75/outline_versions.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 2164
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "outline_state.json",
+      "path": "artifacts/d42798a4e594602140413b75/outline_state.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 10681
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "evidence_ledger.json",
+      "path": "artifacts/d42798a4e594602140413b75/evidence_ledger.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 17734
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "section_banks.json",
+      "path": "artifacts/d42798a4e594602140413b75/section_banks.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 33871
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "selected_bank.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/selected_bank.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 9344,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "partial_report.md",
+      "path": "artifacts/d42798a4e594602140413b75/partial_report.md",
+      "content_type": "text/markdown",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 4719
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "sources.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/sources.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 3707,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "citations.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/citations.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 31289,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "report.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/report.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 56052,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "final_report.md",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/final_report.md",
+      "content_type": "text/markdown",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 6232,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "evidence_items.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/evidence_items.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 9276,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "coverage.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/coverage.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 13228,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "grounding.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/grounding.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 7236,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "verifier.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/verifier.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 762,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "selected_bank.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/selected_bank.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 9344,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "evidence_bank.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/evidence_bank.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 5509,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "verification.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/verification.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 7414,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "coverage_gaps.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/coverage_gaps.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 2254,
+        "batch_id": "20260422T082323-3fb4851c"
+      }
+    }
+  ],
+  "report": {
+    "status": "degraded",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied"
+      ],
+      "verifier": {
+        "passed": true,
+        "reason_codes": [],
+        "flagged_claim_ids": [],
+        "summary": {
+          "section_count": 6,
+          "total_claims": 8,
+          "low_confidence_claims": 0,
+          "single_source_claims": 8,
+          "source_backed_binding_count": 8,
+          "search_only_binding_count": 5,
+          "null_span_binding_count": 0,
+          "missing_evidence_items": 0,
+          "mismatched_binding_source": 0,
+          "mismatched_binding_evidence": 0,
+          "invalid_source_backed_span": 0,
+          "duplicate_claims": 0,
+          "low_value_claims": 0,
+          "medium_single_source_search_only": 0,
+          "same_domain_off_topic_dominance": 0,
+          "unbound_citation_sources": 0,
+          "unbound_evidence_ids": 0,
+          "claim_outside_selected_bank": 0,
+          "selected_evidence_unused": 0,
+          "section_packet_mismatch": 0
+        }
+      },
+      "release_gate": {
+        "passed": true,
+        "reason_codes": [],
+        "all_reason_codes": [],
+        "soft_reason_codes": []
+      }
+    }
+  },
+  "golden": {
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

@@ -1,0 +1,366 @@
+{
+  "sample": "probe-round33-lifecycle-public-surface",
+  "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, and selected evidence usage for long-running deep research jobs",
+  "job": {
+    "status": "completed",
+    "phase": "finalizing",
+    "effort": "deep",
+    "resolved_budget_seconds": 240,
+    "attempt_count": 2,
+    "current_checkpoint": "finalizing",
+    "current_checkpoint_kind": "finalizing",
+    "last_error": "",
+    "cancel_requested": false,
+    "continued_from_job_id": "job-lineage-round33"
+  },
+  "plan": {
+    "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, and selected evidence usage for long-running deep research jobs",
+    "include_domains": [
+      "docs.temporal.io",
+      "docs.langchain.com"
+    ],
+    "exclude_domains": [],
+    "continuation": {
+      "mode": "continue",
+      "source_job_id": "job-lineage-round33",
+      "checkpoint_key": "researching-dispatch-a1-unit-search-1"
+    },
+    "brief": {
+      "objective": "Inspect lifecycle parity for resumed deep research jobs.",
+      "deliverable": "A report focused on restart and replay public surfaces."
+    },
+    "search_strategy": {
+      "approach": "targeted",
+      "search_queries": [
+        "Temporal checkpoint restore docs",
+        "LangChain resume watch docs"
+      ]
+    },
+    "sub_questions": [
+      {
+        "id": "sq1",
+        "question": "How do resumed jobs expose checkpoint restore events?",
+        "reason": "Cover event replay semantics."
+      }
+    ],
+    "planner_metadata": {
+      "planner": "probe",
+      "used_fallback": true,
+      "fallback_reason": {
+        "stage": "unsafe_plan",
+        "error": "selected_evidence_unused"
+      }
+    }
+  },
+  "artifact_payload": {
+    "sources": [
+      {
+        "source_id": "R10",
+        "url": "https://docs.temporal.io/workflow-execution/continue-as-new",
+        "title": "Continue-As-New",
+        "domain": "docs.temporal.io",
+        "source_type": "official_docs"
+      },
+      {
+        "source_id": "R11",
+        "url": "https://docs.langchain.com/docs/how_to/tool_stream_events",
+        "title": "Stream tool events",
+        "domain": "docs.langchain.com",
+        "source_type": "official_docs"
+      }
+    ],
+    "report": {
+      "query": "Investigate worker restart, checkpoint restore, resume watch, events after_seq, reconnect, and selected evidence usage for long-running deep research jobs",
+      "summary": "Round33 lifecycle probe keeps continuation lineage visible while exposing resumed event replay and a soft release gate.",
+      "status": "degraded",
+      "sections": [
+        {
+          "section_id": "resume-event-replay",
+          "title": "Resume event replay",
+          "claims": [
+            {
+              "claim_id": "c1",
+              "text": "Resumed jobs should surface job_resumed and checkpoint_restored in order.",
+              "citations": [
+                "R10"
+              ]
+            }
+          ]
+        }
+      ],
+      "unit_results": {
+        "unit-search-1": {
+          "status": "completed",
+          "source_ids": [
+            "R10",
+            "R11"
+          ]
+        }
+      },
+      "runtime": {
+        "warnings": [
+          "coverage_incomplete",
+          "medium_single_source_search_only",
+          "selected_evidence_unused"
+        ],
+        "constraint_violations": [
+          "resume_watch_gap",
+          "selected_evidence_unused"
+        ],
+        "verifier": {
+          "passed": false,
+          "reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ]
+        },
+        "release_gate": {
+          "passed": true,
+          "reason_codes": [],
+          "all_reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ],
+          "soft_reason_codes": [
+            "selected_evidence_unused",
+            "medium_single_source_search_only"
+          ]
+        }
+      }
+    },
+    "final_report": "# Final Report\n\nRound33 lifecycle probe keeps continuation lineage visible while exposing resumed event replay and a soft release gate.\n",
+    "evidence_items": [
+      {
+        "evidence_id": "ev-r33-life-1",
+        "unit_id": "unit-search-1",
+        "summary": "Resumed windows should replay checkpoint restoration.",
+        "detail": "The public lifecycle surface should keep resume and checkpoint restoration visible together.",
+        "source_ids": [
+          "R10",
+          "R11"
+        ],
+        "source_urls": [
+          "https://docs.temporal.io/workflow-execution/continue-as-new",
+          "https://docs.langchain.com/docs/how_to/tool_stream_events"
+        ]
+      }
+    ]
+  },
+  "public_surface": {
+    "status": {
+      "current_checkpoint": "finalizing",
+      "current_checkpoint_kind": "finalizing",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": true,
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "runtime_warnings": [
+        "coverage_incomplete",
+        "medium_single_source_search_only",
+        "selected_evidence_unused"
+      ],
+      "constraint_violations": [
+        "resume_watch_gap",
+        "selected_evidence_unused"
+      ],
+      "artifact_kinds": [
+        "plan.json",
+        "sources.json",
+        "citations.json",
+        "report.json",
+        "final_report.md",
+        "evidence_items.json",
+        "coverage.json",
+        "grounding.json",
+        "verifier.json"
+      ],
+      "operator_summary": {
+        "status": "completed",
+        "phase": "finalizing",
+        "attempt_count": 2,
+        "current_checkpoint": "finalizing",
+        "cancel_requested": false,
+        "continued_from_job_id": "job-lineage-round33",
+        "resolved_artifact_batch_id": "$seeded_batch_id",
+        "planner_fallback_used": true,
+        "runtime_warnings": [
+          "coverage_incomplete",
+          "medium_single_source_search_only",
+          "selected_evidence_unused"
+        ],
+        "constraint_violations": [
+          "resume_watch_gap",
+          "selected_evidence_unused"
+        ]
+      }
+    },
+    "result": {
+      "current_checkpoint_kind": "finalizing",
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "artifact_fallback_used": false,
+      "planner_fallback_used": true,
+      "runtime_warnings": [
+        "coverage_incomplete",
+        "medium_single_source_search_only",
+        "selected_evidence_unused"
+      ],
+      "constraint_violations": [
+        "resume_watch_gap",
+        "selected_evidence_unused"
+      ],
+      "operator_summary": {
+        "status": "completed",
+        "phase": "finalizing",
+        "attempt_count": 2,
+        "current_checkpoint": "finalizing",
+        "cancel_requested": false,
+        "continued_from_job_id": "job-lineage-round33",
+        "resolved_artifact_batch_id": "$seeded_batch_id",
+        "planner_fallback_used": true,
+        "runtime_warnings": [
+          "coverage_incomplete",
+          "medium_single_source_search_only",
+          "selected_evidence_unused"
+        ],
+        "constraint_violations": [
+          "resume_watch_gap",
+          "selected_evidence_unused"
+        ]
+      },
+      "final_report": "# Final Report\n\nRound33 lifecycle probe keeps continuation lineage visible while exposing resumed event replay and a soft release gate.\n",
+      "report": {
+        "status": "degraded",
+        "summary": "Round33 lifecycle probe keeps continuation lineage visible while exposing resumed event replay and a soft release gate.",
+        "runtime": {
+          "warnings": [
+            "coverage_incomplete",
+            "medium_single_source_search_only",
+            "selected_evidence_unused"
+          ],
+          "constraint_violations": [
+            "resume_watch_gap",
+            "selected_evidence_unused"
+          ],
+          "verifier": {
+            "passed": false,
+            "reason_codes": [
+              "selected_evidence_unused",
+              "medium_single_source_search_only"
+            ]
+          },
+          "release_gate": {
+            "passed": true,
+            "reason_codes": [],
+            "all_reason_codes": [
+              "selected_evidence_unused",
+              "medium_single_source_search_only"
+            ],
+            "soft_reason_codes": [
+              "selected_evidence_unused",
+              "medium_single_source_search_only"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "event_window": {
+    "after_seq": 5,
+    "next_after_seq": 9,
+    "returned_count": 4,
+    "last_event_type": "job_completed",
+    "window_has_terminal_event": true,
+    "job_terminal": true
+  },
+  "initial_events": [
+    {
+      "seq": 1,
+      "type": "job_created",
+      "phase": "planning",
+      "message": "Deep research job created.",
+      "data": {
+        "continuation_mode": "continue",
+        "plan_only": false
+      }
+    },
+    {
+      "seq": 2,
+      "type": "planner_fallback",
+      "phase": "planning",
+      "message": "Planner fell back to the deterministic backup plan.",
+      "data": {
+        "stage": "unsafe_plan",
+        "error": "selected_evidence_unused"
+      }
+    },
+    {
+      "seq": 3,
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 0
+      }
+    },
+    {
+      "seq": 4,
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed unit-search-1.",
+      "data": {
+        "sources_count": 2,
+        "unit_type": "search"
+      }
+    },
+    {
+      "seq": 5,
+      "type": "job_interrupted",
+      "phase": "researching",
+      "message": "Deep research interrupted during worker recovery.",
+      "data": {
+        "attempt_count": 1,
+        "checkpoint_key": "researching-dispatch-a1-unit-search-1",
+        "checkpoint_kind": "research_dispatch",
+        "reason": "worker_restarted"
+      }
+    }
+  ],
+  "events_after_seq": [
+    {
+      "seq": 6,
+      "type": "job_resumed",
+      "phase": "researching",
+      "message": "Deep research job resumed from checkpoint.",
+      "data": {
+        "attempt_count": 2,
+        "resume_source": "worker_restarted"
+      }
+    },
+    {
+      "seq": 7,
+      "type": "checkpoint_restored",
+      "phase": "researching",
+      "message": "Deep research restored execution from the latest durable checkpoint.",
+      "data": {
+        "checkpoint_key": "researching-dispatch-a1-unit-search-1",
+        "checkpoint_kind": "research_dispatch"
+      }
+    },
+    {
+      "seq": 8,
+      "type": "phase_started",
+      "phase": "finalizing",
+      "message": "Finalizing report.",
+      "data": {}
+    },
+    {
+      "seq": 9,
+      "type": "job_completed",
+      "phase": "finalizing",
+      "message": "Deep research completed successfully.",
+      "data": {
+        "artifact_batch_id": "$seeded_batch_id",
+        "sources_count": 2
+      }
+    }
+  ]
+}

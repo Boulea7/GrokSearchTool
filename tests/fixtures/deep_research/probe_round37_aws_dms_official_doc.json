@@ -1,0 +1,2665 @@
+{
+  "sample": "probe-round37-aws-dms-official-doc",
+  "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
+  "include_domains": [
+    "docs.aws.amazon.com"
+  ],
+  "exclude_domains": [
+    "repost.aws"
+  ],
+  "job": {
+    "status": "completed",
+    "phase": "finalizing",
+    "effort": "deep",
+    "resolved_budget_seconds": 180,
+    "attempt_count": 1,
+    "current_checkpoint": "finalizing",
+    "current_checkpoint_kind": "finalizing",
+    "last_error": "",
+    "cancel_requested": false,
+    "continued_from_job_id": ""
+  },
+  "plan": {
+    "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
+    "include_domains": [
+      "docs.aws.amazon.com"
+    ],
+    "exclude_domains": [
+      "repost.aws"
+    ],
+    "source_policy": {
+      "mode": "official_docs_only",
+      "allowed_domains": [
+        "docs.aws.amazon.com"
+      ],
+      "blocked_domains": [
+        "repost.aws"
+      ],
+      "allowed_tools": [
+        "search",
+        "fetch",
+        "map"
+      ],
+      "user_data_refs": [],
+      "trust_tiers": [
+        "official_docs",
+        "standard",
+        "paper",
+        "third_party",
+        "community"
+      ],
+      "freshness_window": "current_web",
+      "must_cite_per_section": true,
+      "continuation_mode": "fresh"
+    },
+    "continuation": {
+      "mode": "fresh",
+      "source_job_id": "",
+      "source_job_status": "",
+      "lineage_root_job_id": "",
+      "parent_job_id": "",
+      "continuation_identity": "",
+      "compaction_policy": "",
+      "compaction_reason_codes": [],
+      "focused_snapshot": {},
+      "previous_summary": "",
+      "prior_plan_summary": "",
+      "continuation_goal": "",
+      "source_count": 0,
+      "checkpoint_key": "",
+      "resume_from_checkpoint_key": "",
+      "replay_from_checkpoint_key": "",
+      "state_version": 2,
+      "confirmed_claims": [],
+      "open_questions": [],
+      "trusted_source_headers": [],
+      "carry_forward_constraints": {},
+      "skipped_unit_ids": []
+    },
+    "planner_metadata": {
+      "planner": null,
+      "used_fallback": null
+    }
+  },
+  "source_policy": {
+    "mode": "official_docs_only",
+    "allowed_domains": [
+      "docs.aws.amazon.com"
+    ],
+    "blocked_domains": [
+      "repost.aws"
+    ],
+    "allowed_tools": [
+      "search",
+      "fetch",
+      "map"
+    ],
+    "user_data_refs": [],
+    "trust_tiers": [
+      "official_docs",
+      "standard",
+      "paper",
+      "third_party",
+      "community"
+    ],
+    "freshness_window": "current_web",
+    "must_cite_per_section": true,
+    "continuation_mode": "fresh"
+  },
+  "lineage": {
+    "root_job_id": "d42798a4e594602140413b75",
+    "parent_job_id": "",
+    "continued_from_job_id": "",
+    "continued_from_checkpoint": "",
+    "replay_from_checkpoint": "",
+    "fork_type": "fresh",
+    "carried_forward_source_ids": [],
+    "carried_forward_evidence_ids": [],
+    "skipped_unit_ids": [],
+    "supersedes_job_id": ""
+  },
+  "selected_bank": [
+    {
+      "section_id": "console-vs-api-cli-differences-and-best-practices",
+      "selected_evidence_ids": [
+        "evidence-u1-fetch-1",
+        "evidence-u1-search",
+        "evidence-u3-fetch-1"
+      ],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u1-fetch-1",
+          "selected_section_id": "console-vs-api-cli-differences-and-best-practices",
+          "selection_reason": "",
+          "coverage_tags": [
+            "sq2"
+          ],
+          "rejected_reason": "keyword_overlap",
+          "claim_ids": [
+            "console-vs-api-cli-differences-and-best-practices-claim-7"
+          ],
+          "question_ids": [
+            "sq2"
+          ]
+        },
+        {
+          "evidence_id": "evidence-u1-search",
+          "selected_section_id": "console-vs-api-cli-differences-and-best-practices",
+          "selection_reason": "",
+          "coverage_tags": [
+            "sq2"
+          ],
+          "rejected_reason": "keyword_overlap",
+          "claim_ids": [
+            "console-vs-api-cli-differences-and-best-practices-claim-7"
+          ],
+          "question_ids": [
+            "sq2"
+          ]
+        },
+        {
+          "evidence_id": "evidence-u3-fetch-1",
+          "selected_section_id": "console-vs-api-cli-differences-and-best-practices",
+          "selection_reason": "",
+          "coverage_tags": [
+            "sq5",
+            "sq2",
+            "sq1"
+          ],
+          "rejected_reason": "keyword_overlap",
+          "claim_ids": [
+            "console-vs-api-cli-differences-and-best-practices-claim-8"
+          ],
+          "question_ids": [
+            "sq5",
+            "sq2",
+            "sq1"
+          ]
+        }
+      ],
+      "candidate_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u2-search",
+        "evidence-u2-fetch-1",
+        "evidence-u3-fetch-1"
+      ],
+      "rejected_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u2-search",
+        "evidence-u2-fetch-1",
+        "evidence-u3-fetch-1"
+      ]
+    },
+    {
+      "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+      "selected_evidence_ids": [
+        "evidence-u3-search",
+        "evidence-u3-fetch-1"
+      ],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u3-search",
+          "selected_section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": [
+            "sq5",
+            "sq2",
+            "sq1"
+          ],
+          "rejected_reason": "",
+          "claim_ids": [
+            "overview-of-dms-cdc-checkpoint-mechanics-claim-1"
+          ],
+          "question_ids": [
+            "sq5",
+            "sq2",
+            "sq1"
+          ]
+        },
+        {
+          "evidence_id": "evidence-u3-fetch-1",
+          "selected_section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": [
+            "sq5",
+            "sq2",
+            "sq1"
+          ],
+          "rejected_reason": "",
+          "claim_ids": [
+            "overview-of-dms-cdc-checkpoint-mechanics-claim-1"
+          ],
+          "question_ids": [
+            "sq5",
+            "sq2",
+            "sq1"
+          ]
+        }
+      ],
+      "candidate_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u2-search",
+        "evidence-u2-fetch-1",
+        "evidence-u3-search",
+        "evidence-u3-fetch-1"
+      ],
+      "rejected_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u2-search",
+        "evidence-u2-fetch-1"
+      ]
+    },
+    {
+      "section_id": "postgres-specific-restart-and-checkpoint-handling",
+      "selected_evidence_ids": [
+        "evidence-u1-fetch-1",
+        "evidence-u2-fetch-1",
+        "evidence-u2-search"
+      ],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u1-fetch-1",
+          "selected_section_id": "postgres-specific-restart-and-checkpoint-handling",
+          "selection_reason": "",
+          "coverage_tags": [
+            "sq2"
+          ],
+          "rejected_reason": "keyword_overlap",
+          "claim_ids": [
+            "postgres-specific-restart-and-checkpoint-handling-claim-6"
+          ],
+          "question_ids": [
+            "sq2"
+          ]
+        },
+        {
+          "evidence_id": "evidence-u2-fetch-1",
+          "selected_section_id": "postgres-specific-restart-and-checkpoint-handling",
+          "selection_reason": "",
+          "coverage_tags": [
+            "sq1"
+          ],
+          "rejected_reason": "keyword_overlap",
+          "claim_ids": [
+            "postgres-specific-restart-and-checkpoint-handling-claim-5"
+          ],
+          "question_ids": [
+            "sq1"
+          ]
+        },
+        {
+          "evidence_id": "evidence-u2-search",
+          "selected_section_id": "postgres-specific-restart-and-checkpoint-handling",
+          "selection_reason": "",
+          "coverage_tags": [
+            "sq1"
+          ],
+          "rejected_reason": "keyword_overlap",
+          "claim_ids": [
+            "postgres-specific-restart-and-checkpoint-handling-claim-5"
+          ],
+          "question_ids": [
+            "sq1"
+          ]
+        }
+      ],
+      "candidate_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u2-search",
+        "evidence-u2-fetch-1"
+      ],
+      "rejected_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u2-search",
+        "evidence-u2-fetch-1"
+      ]
+    },
+    {
+      "section_id": "recoverytimeout-and-resume-behavior",
+      "selected_evidence_ids": [
+        "evidence-u1-fetch-1"
+      ],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u1-fetch-1",
+          "selected_section_id": "recoverytimeout-and-resume-behavior",
+          "selection_reason": "",
+          "coverage_tags": [
+            "sq2"
+          ],
+          "rejected_reason": "keyword_overlap",
+          "claim_ids": [
+            "recoverytimeout-and-resume-behavior-claim-4"
+          ],
+          "question_ids": [
+            "sq2"
+          ]
+        }
+      ],
+      "candidate_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u2-search",
+        "evidence-u2-fetch-1",
+        "evidence-u3-search"
+      ],
+      "rejected_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u2-search",
+        "evidence-u2-fetch-1",
+        "evidence-u3-search"
+      ]
+    },
+    {
+      "section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+      "selected_evidence_ids": [
+        "evidence-u2-search",
+        "evidence-u2-fetch-1"
+      ],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u2-search",
+          "selected_section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": [
+            "sq1"
+          ],
+          "rejected_reason": "",
+          "claim_ids": [
+            "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state-claim-2"
+          ],
+          "question_ids": [
+            "sq1"
+          ]
+        },
+        {
+          "evidence_id": "evidence-u2-fetch-1",
+          "selected_section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": [
+            "sq1"
+          ],
+          "rejected_reason": "",
+          "claim_ids": [
+            "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state-claim-2"
+          ],
+          "question_ids": [
+            "sq1"
+          ]
+        }
+      ],
+      "candidate_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u2-search",
+        "evidence-u2-fetch-1",
+        "evidence-u3-search",
+        "evidence-u3-fetch-1"
+      ],
+      "rejected_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u3-search",
+        "evidence-u3-fetch-1"
+      ]
+    },
+    {
+      "section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+      "selected_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1"
+      ],
+      "selected_rows": [
+        {
+          "evidence_id": "evidence-u1-search",
+          "selected_section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": [
+            "sq2"
+          ],
+          "rejected_reason": "",
+          "claim_ids": [
+            "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3"
+          ],
+          "question_ids": [
+            "sq2"
+          ]
+        },
+        {
+          "evidence_id": "evidence-u1-fetch-1",
+          "selected_section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+          "selection_reason": "keyword_overlap",
+          "coverage_tags": [
+            "sq2"
+          ],
+          "rejected_reason": "",
+          "claim_ids": [
+            "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3"
+          ],
+          "question_ids": [
+            "sq2"
+          ]
+        }
+      ],
+      "candidate_evidence_ids": [
+        "evidence-u1-search",
+        "evidence-u1-fetch-1",
+        "evidence-u2-search",
+        "evidence-u2-fetch-1",
+        "evidence-u3-search",
+        "evidence-u3-fetch-1"
+      ],
+      "rejected_evidence_ids": [
+        "evidence-u2-search",
+        "evidence-u2-fetch-1",
+        "evidence-u3-search",
+        "evidence-u3-fetch-1"
+      ]
+    }
+  ],
+  "artifact_payload": {
+    "sources": [
+      {
+        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+        "title": "StartReplicationTask",
+        "provider": "grok",
+        "description": "*AWS Database Migration Service User Guide.* `{ \"CdcStartPosition\": \"string\", \"CdcStartTime\": number,",
+        "source_type": "official_docs",
+        "snippet": "*AWS Database Migration Service User Guide.* `{ \"CdcStartPosition\": \"string\", \"CdcStartTime\": number,",
+        "domain": "docs.aws.amazon.com",
+        "score": null,
+        "published_at": null,
+        "retrieved_at": "2026-04-22T08:22:49Z",
+        "rank": 1,
+        "source_id": "R1",
+        "source_key": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html?#",
+        "quality_score": 61,
+        "quality_tier": "official",
+        "winner_provider": "grok",
+        "ranking_reasons": [
+          "allowlisted_domain",
+          "official_docs",
+          "api_reference",
+          "user_guide",
+          "winner_provider",
+          "has_title",
+          "has_summary_text"
+        ],
+        "citation_count": 4,
+        "section_count": 4,
+        "topic_match_score": 7,
+        "ranking_penalties": []
+      },
+      {
+        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        "title": "DescribeReplicationTasks",
+        "provider": "grok",
+        "description": "Returns information about replication tasks for your account in the current region. `{ \"Filters\": [",
+        "source_type": "official_docs",
+        "snippet": "Returns information about replication tasks for your account in the current region. `{ \"Filters\": [",
+        "domain": "docs.aws.amazon.com",
+        "score": null,
+        "published_at": null,
+        "retrieved_at": "2026-04-22T08:23:18Z",
+        "rank": 2,
+        "source_id": "R5",
+        "source_key": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html?#",
+        "quality_score": 61,
+        "quality_tier": "official",
+        "winner_provider": "grok",
+        "ranking_reasons": [
+          "allowlisted_domain",
+          "official_docs",
+          "api_reference",
+          "winner_provider",
+          "has_title",
+          "has_summary_text"
+        ],
+        "citation_count": 2,
+        "section_count": 2,
+        "topic_match_score": 5,
+        "ranking_penalties": []
+      },
+      {
+        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+        "title": "Creating tasks for ongoing replication using AWS DMS - AWS Database Migration Service",
+        "provider": "grok",
+        "description": "If you agree, AWS and approved third parties will also use cookies to provide useful site features, remember your preferences, and display relevant content, including relevant advertising. To accept or decline all non-essential cookies, choose “Accept” or “Decline.” To make more…",
+        "source_type": "official_docs",
+        "snippet": "If you agree, AWS and approved third parties will also use cookies to provide useful site features, remember your preferences, and display relevant content, including relevant advertising. To accept or decline all non-essential cookies, choose “Accept” or “Decline.” To make more…",
+        "domain": "docs.aws.amazon.com",
+        "score": null,
+        "published_at": null,
+        "retrieved_at": "2026-04-22T08:22:49Z",
+        "rank": 3,
+        "source_id": "R4",
+        "source_key": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html?#",
+        "quality_score": 51,
+        "quality_tier": "official",
+        "winner_provider": "grok",
+        "ranking_reasons": [
+          "allowlisted_domain",
+          "official_docs",
+          "user_guide",
+          "winner_provider",
+          "has_title",
+          "has_summary_text"
+        ],
+        "citation_count": 2,
+        "section_count": 2,
+        "topic_match_score": 6,
+        "ranking_penalties": []
+      }
+    ],
+    "report": {
+      "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
+      "summary": "Medium confidence: Key point: * [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start po… Key point: This example illustrates one usage of DescribeReplicationTasks.",
+      "confidence": "medium",
+      "status": "degraded",
+      "sections": [
+        {
+          "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+          "title": "Overview of DMS CDC Checkpoint Mechanics",
+          "summary": "Medium confidence: Key point: * [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+          "prose": "Medium confidence: Key point: * [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…. * [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart….",
+          "claims": [
+            {
+              "claim_id": "overview-of-dms-cdc-checkpoint-mechanics-claim-1",
+              "text": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+              "citations": [
+                "R4"
+              ],
+              "source_ids": [
+                "R4"
+              ],
+              "unit_id": "u3",
+              "evidence_ids": [
+                "evidence-u3-fetch-1",
+                "evidence-u3-search"
+              ],
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-u3-fetch-1",
+                  "source_id": "R4",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "fetch",
+                  "excerpt": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+                  "excerpt_hash": "81c0d69323a2ea0d7c80663b377b0ca52e84d5b84f0bcc3cf9643ec325a3e47d",
+                  "excerpt_origin": "source_text",
+                  "source_backed": true,
+                  "line_start": 383,
+                  "line_end": 897,
+                  "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                },
+                {
+                  "evidence_id": "evidence-u3-search",
+                  "source_id": "R4",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "search",
+                  "excerpt": "**`awsdms_txn_state`** is a metadata table automatically created by **AWS Database Migration Service (AWS DMS)** on the target database when the task setting **`TaskRecoveryTableEnabled`** is set to **`Yes`** (or **`tru…",
+                  "excerpt_hash": "1c1f96a7f5b58d01535b0f7fb8000aa685ee9afd8ca0ee7d24ae1e3202b53349",
+                  "excerpt_origin": "search_answer",
+                  "source_backed": false,
+                  "line_start": null,
+                  "line_end": null,
+                  "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                }
+              ],
+              "cluster_type": "single_source",
+              "supporting_source_count": 1,
+              "supporting_domain_count": 1,
+              "confidence": "medium"
+            }
+          ],
+          "citations": [
+            "R4"
+          ],
+          "source_ids": [
+            "R4"
+          ],
+          "evidence_ids": [
+            "evidence-u3-fetch-1",
+            "evidence-u3-search"
+          ],
+          "confidence": "medium",
+          "claim_cluster_count": 1,
+          "supporting_source_count": 1,
+          "supporting_domain_count": 1,
+          "pool_mode": "selected",
+          "question_ids": []
+        },
+        {
+          "section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+          "title": "Retrieving Checkpoints: DescribeReplicationTasks, Console, and awsdms_txn_state",
+          "summary": "Medium confidence: Key point: This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+          "prose": "Medium confidence: Key point: This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+          "claims": [
+            {
+              "claim_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state-claim-2",
+              "text": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+              "citations": [
+                "R5"
+              ],
+              "source_ids": [
+                "R5"
+              ],
+              "unit_id": "u2",
+              "evidence_ids": [
+                "evidence-u2-fetch-1",
+                "evidence-u2-search"
+              ],
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-u2-fetch-1",
+                  "source_id": "R5",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "fetch",
+                  "excerpt": "`aws dms describe-replication-tasks --filters \"Name=replication-task-arn,Values=arn:aws:dms:us-west-2:012345678912:task:AAABBBCCC0123456789YYYZZZ0\"` `aws dms describe-replication-tasks --filters \"Name=endpoint-arn,Value…",
+                  "excerpt_hash": "2cf73c8fece1ec6174ce41e153b801b8a62ce861541cf403671b4e4ec55227e8",
+                  "excerpt_origin": "source_text",
+                  "source_backed": true,
+                  "line_start": 244,
+                  "line_end": 375,
+                  "section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                },
+                {
+                  "evidence_id": "evidence-u2-search",
+                  "source_id": "R5",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "search",
+                  "excerpt": "**The `RecoveryCheckpoint` field in the `DescribeReplicationTasks` API (AWS Database Migration Service - DMS) indicates the last checkpoint recorded during a Change Data Capture (CDC) operation for a replication task.**…",
+                  "excerpt_hash": "3a3119498d71cd80e1975a43699a283de47aa085e9918de2aa621ddcdab95c53",
+                  "excerpt_origin": "search_answer",
+                  "source_backed": false,
+                  "line_start": null,
+                  "line_end": null,
+                  "section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                }
+              ],
+              "cluster_type": "single_source",
+              "supporting_source_count": 1,
+              "supporting_domain_count": 1,
+              "confidence": "medium"
+            }
+          ],
+          "citations": [
+            "R5"
+          ],
+          "source_ids": [
+            "R5"
+          ],
+          "evidence_ids": [
+            "evidence-u2-fetch-1",
+            "evidence-u2-search"
+          ],
+          "confidence": "medium",
+          "claim_cluster_count": 1,
+          "supporting_source_count": 1,
+          "supporting_domain_count": 1,
+          "pool_mode": "selected",
+          "question_ids": []
+        },
+        {
+          "section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+          "title": "Using RecoveryCheckpoint for Resume/Start (CdcStartPosition semantics)",
+          "summary": "Medium confidence: Key point: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+          "prose": "Medium confidence: Key point: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…. `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a….",
+          "claims": [
+            {
+              "claim_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "citations": [
+                "R1"
+              ],
+              "source_ids": [
+                "R1"
+              ],
+              "unit_id": "u1",
+              "evidence_ids": [
+                "evidence-u1-fetch-1",
+                "evidence-u1-search"
+              ],
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-u1-fetch-1",
+                  "source_id": "R1",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "fetch",
+                  "excerpt": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+                  "excerpt_hash": "ade6629bca25b906377433666b96cce35164eac8341d6b9115f257d09f9298c2",
+                  "excerpt_origin": "source_text",
+                  "source_backed": true,
+                  "line_start": 87,
+                  "line_end": 210,
+                  "section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                },
+                {
+                  "evidence_id": "evidence-u1-search",
+                  "source_id": "R1",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "search",
+                  "excerpt": "- **CdcStartPosition**: A parameter that specifies where a CDC operation should begin. It accepts formats like a timestamp, native database log position (e.g., LSN for SQL Server, SCN for Oracle), or a checkpoint string…",
+                  "excerpt_hash": "f6f4fcd0e0f1d54a834d005a811e897d0c115f72916b2dadc44cdcdf26954d61",
+                  "excerpt_origin": "search_answer",
+                  "source_backed": false,
+                  "line_start": null,
+                  "line_end": null,
+                  "section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                }
+              ],
+              "cluster_type": "single_source",
+              "supporting_source_count": 1,
+              "supporting_domain_count": 1,
+              "confidence": "medium"
+            }
+          ],
+          "citations": [
+            "R1"
+          ],
+          "source_ids": [
+            "R1"
+          ],
+          "evidence_ids": [
+            "evidence-u1-fetch-1",
+            "evidence-u1-search"
+          ],
+          "confidence": "medium",
+          "claim_cluster_count": 1,
+          "supporting_source_count": 1,
+          "supporting_domain_count": 1,
+          "pool_mode": "selected",
+          "question_ids": []
+        },
+        {
+          "section_id": "recoverytimeout-and-resume-behavior",
+          "title": "RecoveryTimeout and Resume Behavior",
+          "summary": "Medium confidence: Key point: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+          "prose": "Medium confidence: Key point: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…. `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a….",
+          "claims": [
+            {
+              "claim_id": "recoverytimeout-and-resume-behavior-claim-4",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "citations": [
+                "R1"
+              ],
+              "source_ids": [
+                "R1"
+              ],
+              "unit_id": "u1",
+              "evidence_ids": [
+                "evidence-u1-fetch-1"
+              ],
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-u1-fetch-1",
+                  "source_id": "R1",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "fetch",
+                  "excerpt": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+                  "excerpt_hash": "ade6629bca25b906377433666b96cce35164eac8341d6b9115f257d09f9298c2",
+                  "excerpt_origin": "source_text",
+                  "source_backed": true,
+                  "line_start": 87,
+                  "line_end": 210,
+                  "section_id": "recoverytimeout-and-resume-behavior",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                }
+              ],
+              "cluster_type": "single_source",
+              "supporting_source_count": 1,
+              "supporting_domain_count": 1,
+              "confidence": "medium"
+            }
+          ],
+          "citations": [
+            "R1"
+          ],
+          "source_ids": [
+            "R1"
+          ],
+          "evidence_ids": [
+            "evidence-u1-fetch-1"
+          ],
+          "confidence": "medium",
+          "claim_cluster_count": 1,
+          "supporting_source_count": 1,
+          "supporting_domain_count": 1,
+          "pool_mode": "global",
+          "question_ids": []
+        },
+        {
+          "section_id": "postgres-specific-restart-and-checkpoint-handling",
+          "title": "Postgres-Specific Restart and Checkpoint Handling",
+          "summary": "Medium confidence: This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. `start-replication` is the only valid action that can be used for the first time a task with the migration type…",
+          "prose": "Medium confidence: This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. `start-replication` is the only valid action that can be used for the first time a task with the migration type…. This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a….",
+          "claims": [
+            {
+              "claim_id": "postgres-specific-restart-and-checkpoint-handling-claim-5",
+              "text": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+              "citations": [
+                "R5"
+              ],
+              "source_ids": [
+                "R5"
+              ],
+              "unit_id": "u2",
+              "evidence_ids": [
+                "evidence-u2-fetch-1",
+                "evidence-u2-search"
+              ],
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-u2-fetch-1",
+                  "source_id": "R5",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "fetch",
+                  "excerpt": "`aws dms describe-replication-tasks --filters \"Name=replication-task-arn,Values=arn:aws:dms:us-west-2:012345678912:task:AAABBBCCC0123456789YYYZZZ0\"` `aws dms describe-replication-tasks --filters \"Name=endpoint-arn,Value…",
+                  "excerpt_hash": "2cf73c8fece1ec6174ce41e153b801b8a62ce861541cf403671b4e4ec55227e8",
+                  "excerpt_origin": "source_text",
+                  "source_backed": true,
+                  "line_start": 244,
+                  "line_end": 375,
+                  "section_id": "postgres-specific-restart-and-checkpoint-handling",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                },
+                {
+                  "evidence_id": "evidence-u2-search",
+                  "source_id": "R5",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "search",
+                  "excerpt": "**The `RecoveryCheckpoint` field in the `DescribeReplicationTasks` API (AWS Database Migration Service - DMS) indicates the last checkpoint recorded during a Change Data Capture (CDC) operation for a replication task.**…",
+                  "excerpt_hash": "3a3119498d71cd80e1975a43699a283de47aa085e9918de2aa621ddcdab95c53",
+                  "excerpt_origin": "search_answer",
+                  "source_backed": false,
+                  "line_start": null,
+                  "line_end": null,
+                  "section_id": "postgres-specific-restart-and-checkpoint-handling",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                }
+              ],
+              "cluster_type": "single_source",
+              "supporting_source_count": 1,
+              "supporting_domain_count": 1,
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "postgres-specific-restart-and-checkpoint-handling-claim-6",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "citations": [
+                "R1"
+              ],
+              "source_ids": [
+                "R1"
+              ],
+              "unit_id": "u1",
+              "evidence_ids": [
+                "evidence-u1-fetch-1"
+              ],
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-u1-fetch-1",
+                  "source_id": "R1",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "fetch",
+                  "excerpt": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+                  "excerpt_hash": "ade6629bca25b906377433666b96cce35164eac8341d6b9115f257d09f9298c2",
+                  "excerpt_origin": "source_text",
+                  "source_backed": true,
+                  "line_start": 87,
+                  "line_end": 210,
+                  "section_id": "postgres-specific-restart-and-checkpoint-handling",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                }
+              ],
+              "cluster_type": "single_source",
+              "supporting_source_count": 1,
+              "supporting_domain_count": 1,
+              "confidence": "medium"
+            }
+          ],
+          "citations": [
+            "R1",
+            "R5"
+          ],
+          "source_ids": [
+            "R5",
+            "R1"
+          ],
+          "evidence_ids": [
+            "evidence-u2-fetch-1",
+            "evidence-u2-search",
+            "evidence-u1-fetch-1"
+          ],
+          "confidence": "medium",
+          "claim_cluster_count": 2,
+          "supporting_source_count": 2,
+          "supporting_domain_count": 1,
+          "pool_mode": "global",
+          "question_ids": []
+        },
+        {
+          "section_id": "console-vs-api-cli-differences-and-best-practices",
+          "title": "Console vs API/CLI Differences and Best Practices",
+          "summary": "Medium confidence: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a… * [Continuous repli…",
+          "prose": "Medium confidence: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a… * [Continuous repli…. `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…. * [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcS…",
+          "claims": [
+            {
+              "claim_id": "console-vs-api-cli-differences-and-best-practices-claim-7",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "citations": [
+                "R1"
+              ],
+              "source_ids": [
+                "R1"
+              ],
+              "unit_id": "u1",
+              "evidence_ids": [
+                "evidence-u1-fetch-1",
+                "evidence-u1-search"
+              ],
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-u1-fetch-1",
+                  "source_id": "R1",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "fetch",
+                  "excerpt": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+                  "excerpt_hash": "ade6629bca25b906377433666b96cce35164eac8341d6b9115f257d09f9298c2",
+                  "excerpt_origin": "source_text",
+                  "source_backed": true,
+                  "line_start": 87,
+                  "line_end": 210,
+                  "section_id": "console-vs-api-cli-differences-and-best-practices",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                },
+                {
+                  "evidence_id": "evidence-u1-search",
+                  "source_id": "R1",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "search",
+                  "excerpt": "- **CdcStartPosition**: A parameter that specifies where a CDC operation should begin. It accepts formats like a timestamp, native database log position (e.g., LSN for SQL Server, SCN for Oracle), or a checkpoint string…",
+                  "excerpt_hash": "f6f4fcd0e0f1d54a834d005a811e897d0c115f72916b2dadc44cdcdf26954d61",
+                  "excerpt_origin": "search_answer",
+                  "source_backed": false,
+                  "line_start": null,
+                  "line_end": null,
+                  "section_id": "console-vs-api-cli-differences-and-best-practices",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                }
+              ],
+              "cluster_type": "single_source",
+              "supporting_source_count": 1,
+              "supporting_domain_count": 1,
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "console-vs-api-cli-differences-and-best-practices-claim-8",
+              "text": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+              "citations": [
+                "R4"
+              ],
+              "source_ids": [
+                "R4"
+              ],
+              "unit_id": "u3",
+              "evidence_ids": [
+                "evidence-u3-fetch-1"
+              ],
+              "evidence_bindings": [
+                {
+                  "evidence_id": "evidence-u3-fetch-1",
+                  "source_id": "R4",
+                  "source_url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+                  "winner_provider": "grok",
+                  "evidence_kind": "fetch",
+                  "excerpt": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+                  "excerpt_hash": "81c0d69323a2ea0d7c80663b377b0ca52e84d5b84f0bcc3cf9643ec325a3e47d",
+                  "excerpt_origin": "source_text",
+                  "source_backed": true,
+                  "line_start": 383,
+                  "line_end": 897,
+                  "section_id": "console-vs-api-cli-differences-and-best-practices",
+                  "pool_mode": "selected",
+                  "selected_for_section": true,
+                  "question_ids": []
+                }
+              ],
+              "cluster_type": "single_source",
+              "supporting_source_count": 1,
+              "supporting_domain_count": 1,
+              "confidence": "medium"
+            }
+          ],
+          "citations": [
+            "R1",
+            "R4"
+          ],
+          "source_ids": [
+            "R1",
+            "R4"
+          ],
+          "evidence_ids": [
+            "evidence-u1-fetch-1",
+            "evidence-u1-search",
+            "evidence-u3-fetch-1"
+          ],
+          "confidence": "medium",
+          "claim_cluster_count": 2,
+          "supporting_source_count": 2,
+          "supporting_domain_count": 1,
+          "pool_mode": "global",
+          "question_ids": []
+        }
+      ],
+      "coverage": {
+        "planned_section_ids": [
+          "overview-of-dms-cdc-checkpoint-mechanics",
+          "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+          "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+          "recoverytimeout-and-resume-behavior",
+          "postgres-specific-restart-and-checkpoint-handling",
+          "console-vs-api-cli-differences-and-best-practices"
+        ],
+        "answered_section_ids": [
+          "overview-of-dms-cdc-checkpoint-mechanics",
+          "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+          "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+          "recoverytimeout-and-resume-behavior",
+          "postgres-specific-restart-and-checkpoint-handling",
+          "console-vs-api-cli-differences-and-best-practices"
+        ],
+        "unanswered_sections": [],
+        "planned_sub_question_ids": [
+          "sq1",
+          "sq2",
+          "sq3",
+          "sq4",
+          "sq5",
+          "sq6"
+        ],
+        "covered_sub_question_ids": [
+          "sq5"
+        ],
+        "uncovered_sub_questions": [
+          "How is RecoveryCheckpoint retrieved and used for resuming CDC tasks via DescribeReplicationTasks, console, or awsdms_txn_state table?",
+          "What is the exact semantics of providing RecoveryCheckpoint (or checkpoint value) to CdcStartPosition when starting/resuming tasks?",
+          "How does the console expose or use CDC checkpoints for task resume, and any differences with API?",
+          "What is RecoveryTimeout in change processing tuning, its default behavior, and impact on resume when checkpoint is not immediately encountered?",
+          "Any documented differences or best practices for checkpoint recovery across engines, especially Postgres?"
+        ],
+        "sub_questions": [
+          {
+            "sub_question_id": "sq1",
+            "question": "How is RecoveryCheckpoint retrieved and used for resuming CDC tasks via DescribeReplicationTasks, console, or awsdms_txn_state table?",
+            "covered": false,
+            "section_ids": [
+              "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state"
+            ],
+            "claim_ids": [],
+            "supporting_evidence_ids": [
+              "evidence-u2-fetch-1",
+              "evidence-u2-search",
+              "evidence-u3-fetch-1",
+              "evidence-u3-search"
+            ],
+            "supporting_source_ids": [
+              "R5",
+              "R4"
+            ],
+            "explain_via": "explicit_question_binding"
+          },
+          {
+            "sub_question_id": "sq2",
+            "question": "What is the exact semantics of providing RecoveryCheckpoint (or checkpoint value) to CdcStartPosition when starting/resuming tasks?",
+            "covered": false,
+            "section_ids": [
+              "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics"
+            ],
+            "claim_ids": [],
+            "supporting_evidence_ids": [
+              "evidence-u1-fetch-1",
+              "evidence-u1-search",
+              "evidence-u3-fetch-1",
+              "evidence-u3-search"
+            ],
+            "supporting_source_ids": [
+              "R1",
+              "R4"
+            ],
+            "explain_via": "explicit_question_binding"
+          },
+          {
+            "sub_question_id": "sq3",
+            "question": "How does the console expose or use CDC checkpoints for task resume, and any differences with API?",
+            "covered": false,
+            "section_ids": [
+              "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+              "recoverytimeout-and-resume-behavior",
+              "console-vs-api-cli-differences-and-best-practices"
+            ],
+            "claim_ids": [],
+            "supporting_evidence_ids": [],
+            "supporting_source_ids": [],
+            "explain_via": ""
+          },
+          {
+            "sub_question_id": "sq4",
+            "question": "What is RecoveryTimeout in change processing tuning, its default behavior, and impact on resume when checkpoint is not immediately encountered?",
+            "covered": false,
+            "section_ids": [],
+            "claim_ids": [],
+            "supporting_evidence_ids": [],
+            "supporting_source_ids": [],
+            "explain_via": ""
+          },
+          {
+            "sub_question_id": "sq5",
+            "question": "What are Postgres-specific behaviors for CDC restart (vs resume), replication slots, and checkpoint usage on task restart/full reload + CDC?",
+            "covered": true,
+            "section_ids": [
+              "overview-of-dms-cdc-checkpoint-mechanics",
+              "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+              "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+              "recoverytimeout-and-resume-behavior",
+              "postgres-specific-restart-and-checkpoint-handling",
+              "console-vs-api-cli-differences-and-best-practices"
+            ],
+            "claim_ids": [
+              "overview-of-dms-cdc-checkpoint-mechanics-claim-1",
+              "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3",
+              "recoverytimeout-and-resume-behavior-claim-4",
+              "postgres-specific-restart-and-checkpoint-handling-claim-6",
+              "console-vs-api-cli-differences-and-best-practices-claim-7",
+              "console-vs-api-cli-differences-and-best-practices-claim-8"
+            ],
+            "supporting_evidence_ids": [
+              "evidence-u3-fetch-1",
+              "evidence-u3-search"
+            ],
+            "supporting_source_ids": [
+              "R4"
+            ],
+            "explain_via": "explicit_question_binding"
+          },
+          {
+            "sub_question_id": "sq6",
+            "question": "Any documented differences or best practices for checkpoint recovery across engines, especially Postgres?",
+            "covered": false,
+            "section_ids": [
+              "console-vs-api-cli-differences-and-best-practices"
+            ],
+            "claim_ids": [],
+            "supporting_evidence_ids": [],
+            "supporting_source_ids": [],
+            "explain_via": ""
+          }
+        ],
+        "section_coverage": [
+          {
+            "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+            "title": "Overview of DMS CDC Checkpoint Mechanics",
+            "answered": true,
+            "grounded_claim_count": 1,
+            "citation_count": 1,
+            "candidate_evidence_count": 6,
+            "selected_evidence_count": 2,
+            "rejected_evidence_count": 4,
+            "supporting_claim_ids": [
+              "overview-of-dms-cdc-checkpoint-mechanics-claim-1"
+            ],
+            "supporting_evidence_ids": [
+              "evidence-u3-fetch-1",
+              "evidence-u3-search"
+            ],
+            "supporting_source_ids": [
+              "R4"
+            ],
+            "question_id": "",
+            "explain_via": "section_packets",
+            "pool_mode": "selected",
+            "question_ids": []
+          },
+          {
+            "section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+            "title": "Retrieving Checkpoints: DescribeReplicationTasks, Console, and awsdms_txn_state",
+            "answered": true,
+            "grounded_claim_count": 1,
+            "citation_count": 1,
+            "candidate_evidence_count": 6,
+            "selected_evidence_count": 2,
+            "rejected_evidence_count": 4,
+            "supporting_claim_ids": [
+              "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state-claim-2"
+            ],
+            "supporting_evidence_ids": [
+              "evidence-u2-fetch-1",
+              "evidence-u2-search"
+            ],
+            "supporting_source_ids": [
+              "R5"
+            ],
+            "question_id": "",
+            "explain_via": "section_packets",
+            "pool_mode": "selected",
+            "question_ids": []
+          },
+          {
+            "section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+            "title": "Using RecoveryCheckpoint for Resume/Start (CdcStartPosition semantics)",
+            "answered": true,
+            "grounded_claim_count": 1,
+            "citation_count": 1,
+            "candidate_evidence_count": 6,
+            "selected_evidence_count": 2,
+            "rejected_evidence_count": 4,
+            "supporting_claim_ids": [
+              "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3"
+            ],
+            "supporting_evidence_ids": [
+              "evidence-u1-fetch-1",
+              "evidence-u1-search"
+            ],
+            "supporting_source_ids": [
+              "R1"
+            ],
+            "question_id": "",
+            "explain_via": "section_packets",
+            "pool_mode": "selected",
+            "question_ids": []
+          },
+          {
+            "section_id": "recoverytimeout-and-resume-behavior",
+            "title": "RecoveryTimeout and Resume Behavior",
+            "answered": true,
+            "grounded_claim_count": 1,
+            "citation_count": 1,
+            "candidate_evidence_count": 5,
+            "selected_evidence_count": 1,
+            "rejected_evidence_count": 5,
+            "supporting_claim_ids": [
+              "recoverytimeout-and-resume-behavior-claim-4"
+            ],
+            "supporting_evidence_ids": [
+              "evidence-u1-fetch-1"
+            ],
+            "supporting_source_ids": [
+              "R1"
+            ],
+            "question_id": "",
+            "explain_via": "section_packets",
+            "pool_mode": "global",
+            "question_ids": []
+          },
+          {
+            "section_id": "postgres-specific-restart-and-checkpoint-handling",
+            "title": "Postgres-Specific Restart and Checkpoint Handling",
+            "answered": true,
+            "grounded_claim_count": 2,
+            "citation_count": 2,
+            "candidate_evidence_count": 4,
+            "selected_evidence_count": 3,
+            "rejected_evidence_count": 4,
+            "supporting_claim_ids": [
+              "postgres-specific-restart-and-checkpoint-handling-claim-5",
+              "postgres-specific-restart-and-checkpoint-handling-claim-6"
+            ],
+            "supporting_evidence_ids": [
+              "evidence-u2-fetch-1",
+              "evidence-u2-search",
+              "evidence-u1-fetch-1"
+            ],
+            "supporting_source_ids": [
+              "R5",
+              "R1"
+            ],
+            "question_id": "",
+            "explain_via": "section_packets",
+            "pool_mode": "global",
+            "question_ids": []
+          },
+          {
+            "section_id": "console-vs-api-cli-differences-and-best-practices",
+            "title": "Console vs API/CLI Differences and Best Practices",
+            "answered": true,
+            "grounded_claim_count": 2,
+            "citation_count": 2,
+            "candidate_evidence_count": 5,
+            "selected_evidence_count": 3,
+            "rejected_evidence_count": 5,
+            "supporting_claim_ids": [
+              "console-vs-api-cli-differences-and-best-practices-claim-7",
+              "console-vs-api-cli-differences-and-best-practices-claim-8"
+            ],
+            "supporting_evidence_ids": [
+              "evidence-u1-fetch-1",
+              "evidence-u1-search",
+              "evidence-u3-fetch-1"
+            ],
+            "supporting_source_ids": [
+              "R1",
+              "R4"
+            ],
+            "question_id": "",
+            "explain_via": "section_packets",
+            "pool_mode": "global",
+            "question_ids": []
+          }
+        ],
+        "hard_coverage_targets": [
+          {
+            "target": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart beha…",
+            "covered": true,
+            "section_ids": [
+              "overview-of-dms-cdc-checkpoint-mechanics",
+              "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+              "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+              "recoverytimeout-and-resume-behavior",
+              "postgres-specific-restart-and-checkpoint-handling",
+              "console-vs-api-cli-differences-and-best-practices"
+            ],
+            "claim_ids": [
+              "overview-of-dms-cdc-checkpoint-mechanics-claim-1",
+              "console-vs-api-cli-differences-and-best-practices-claim-8"
+            ],
+            "matched_unit_ids": [
+              "u1",
+              "u2",
+              "u3"
+            ],
+            "supporting_source_ids": [
+              "R1",
+              "R4",
+              "R5"
+            ],
+            "explain_via": "section_packets"
+          }
+        ],
+        "hard_uncovered_targets": [],
+        "hard_coverage_gate_passed": true,
+        "coverage_gate_passed": false
+      },
+      "unit_results": {
+        "u1": {
+          "unit_id": "u1",
+          "unit_type": "search",
+          "summary": "- **CdcStartPosition**: A parameter that specifies where a CDC operation should begin. It accepts formats like a timestamp, native database log position (e.g., LSN for SQL Server,…",
+          "detail": "- **CdcStartPosition**: A parameter that specifies where a CDC operation should begin. It accepts formats like a timestamp, native database log position (e.g., LSN for SQL Server, SCN for Oracle), or a checkpoint string. Specifying both CdcStartPosition and CdcStartTime causes an error. [[4]](https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html) - **RecoveryCheckpoint**: A system-generated string in the ReplicationTask object that encodes the exact point (often in a vendor-specific format, e.g., `checkpoint:V1#...`) where DMS last safely processed changes. It is exposed in task descriptions and the console under the CDC section. [[1]](https://docs.aws.amazon.com/dms/latest/APIReference/API_ReplicationTask.html) 1. **Retrieve the value** — Use the AWS Console (task overview > CDC section), `DescribeReplicationTasks` API/CLI, or SDK to fetch the `RecoveryCheckpoint` from an existing task. [[3]](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html)",
+          "citations": [
+            "R1",
+            "R4"
+          ],
+          "source_ids": [
+            "R1",
+            "R4"
+          ],
+          "warnings": [],
+          "requested_model": "grok-4.20-expert",
+          "effective_model": "grok-4.20-expert-4-agent",
+          "provider_name": "primary",
+          "provider_model": "grok-4.20-fast",
+          "provider_api_url": "https://provider-primary.example/v1"
+        },
+        "u2": {
+          "unit_id": "u2",
+          "unit_type": "search",
+          "summary": "**The `RecoveryCheckpoint` field in the `DescribeReplicationTasks` API (AWS Database Migration Service - DMS) indicates the last checkpoint recorded during a Change Data Capture (…",
+          "detail": "**The `RecoveryCheckpoint` field in the `DescribeReplicationTasks` API (AWS Database Migration Service - DMS) indicates the last checkpoint recorded during a Change Data Capture (CDC) operation for a replication task.** [1] - **Usage for Recovery**: Provide the `RecoveryCheckpoint` value to the `CdcStartPosition` parameter when starting or modifying a task (via `StartReplicationTask` or `ModifyReplicationTask`). This restarts CDC from that exact point. [3] - **Availability**: The value is most reliable when the task is in a **stopped** or **failed** state. It may not persist if the task is deleted. For some sources (e.g., PostgreSQL), you can also query the `awsdms_txn_state` metadata table on the target if `TaskRecoveryTableEnabled` is set to `true` in task settings. [4] - [DescribeReplicationTasks](https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html)",
+          "citations": [
+            "R5"
+          ],
+          "source_ids": [
+            "R5"
+          ],
+          "warnings": [],
+          "requested_model": "grok-4.20-expert",
+          "effective_model": "grok-4.20-expert-4-agent",
+          "provider_name": "provider_2",
+          "provider_model": "grok-4.20-0309-non-reasoning",
+          "provider_api_url": "https://provider-fallback.example/v1"
+        },
+        "u3": {
+          "unit_id": "u3",
+          "unit_type": "search",
+          "summary": "**`awsdms_txn_state`** is a metadata table automatically created by **AWS Database Migration Service (AWS DMS)** on the target database when the task setting **`TaskRecoveryTableE…",
+          "detail": "**`awsdms_txn_state`** is a metadata table automatically created by **AWS Database Migration Service (AWS DMS)** on the target database when the task setting **`TaskRecoveryTableEnabled`** is set to **`Yes`** (or **`true`** in JSON). [1]",
+          "citations": [
+            "R4"
+          ],
+          "source_ids": [
+            "R4"
+          ],
+          "warnings": [],
+          "requested_model": "grok-4.20-expert",
+          "effective_model": "grok-4.20-expert-4-agent",
+          "provider_name": "provider_2",
+          "provider_model": "grok-4.20-0309-non-reasoning",
+          "provider_api_url": "https://provider-fallback.example/v1"
+        }
+      },
+      "runtime": {
+        "warnings": [
+          "coverage_incomplete",
+          "domain_constraints_applied"
+        ],
+        "source_policy": {
+          "mode": "official_docs_only",
+          "allowed_domains": [
+            "docs.aws.amazon.com"
+          ],
+          "blocked_domains": [
+            "repost.aws"
+          ],
+          "allowed_tools": [
+            "search",
+            "fetch",
+            "map"
+          ],
+          "user_data_refs": [],
+          "trust_tiers": [
+            "official_docs",
+            "standard",
+            "paper",
+            "third_party",
+            "community"
+          ],
+          "freshness_window": "current_web",
+          "must_cite_per_section": true,
+          "continuation_mode": "fresh"
+        },
+        "coverage": {
+          "must_cover_count": 1,
+          "uncovered_sub_question_count": 5,
+          "unanswered_section_count": 0,
+          "hard_uncovered_target_count": 0
+        },
+        "grounding": {
+          "total_claims": 8,
+          "ungrounded_claims": 0,
+          "single_source_claims": 8,
+          "missing_evidence_binding_claims": 0
+        },
+        "verifier": {
+          "passed": true,
+          "reason_codes": [],
+          "flagged_claim_ids": [],
+          "summary": {
+            "section_count": 6,
+            "total_claims": 8,
+            "low_confidence_claims": 0,
+            "single_source_claims": 8,
+            "source_backed_binding_count": 8,
+            "search_only_binding_count": 5,
+            "null_span_binding_count": 0,
+            "missing_evidence_items": 0,
+            "mismatched_binding_source": 0,
+            "mismatched_binding_evidence": 0,
+            "invalid_source_backed_span": 0,
+            "duplicate_claims": 0,
+            "low_value_claims": 0,
+            "medium_single_source_search_only": 0,
+            "same_domain_off_topic_dominance": 0,
+            "unbound_citation_sources": 0,
+            "unbound_evidence_ids": 0,
+            "claim_outside_selected_bank": 0,
+            "selected_evidence_unused": 0,
+            "section_packet_mismatch": 0
+          }
+        },
+        "release_gate": {
+          "passed": true,
+          "reason_codes": [],
+          "all_reason_codes": [],
+          "soft_reason_codes": []
+        },
+        "constraint_violations": [
+          {
+            "unit_id": "u1",
+            "removed_source_count": 1,
+            "reason": "domain_constraints_applied"
+          },
+          {
+            "unit_id": "u2",
+            "removed_source_count": 1,
+            "reason": "domain_constraints_applied"
+          },
+          {
+            "unit_id": "u3",
+            "removed_source_count": 1,
+            "reason": "domain_constraints_applied"
+          }
+        ],
+        "failed_units": [],
+        "skipped_units": [
+          {
+            "unit_id": "u4",
+            "unit_type": "search",
+            "reason": "sufficient_coverage_reached"
+          },
+          {
+            "unit_id": "u5",
+            "unit_type": "search",
+            "reason": "sufficient_coverage_reached"
+          },
+          {
+            "unit_id": "u6",
+            "unit_type": "search",
+            "reason": "sufficient_coverage_reached"
+          },
+          {
+            "unit_id": "u7",
+            "unit_type": "fetch",
+            "reason": "sufficient_coverage_reached"
+          },
+          {
+            "unit_id": "u8",
+            "unit_type": "fetch",
+            "reason": "sufficient_coverage_reached"
+          },
+          {
+            "unit_id": "u9",
+            "unit_type": "fetch",
+            "reason": "sufficient_coverage_reached"
+          },
+          {
+            "unit_id": "u10",
+            "unit_type": "fetch",
+            "reason": "sufficient_coverage_reached"
+          }
+        ],
+        "provider_winners": [
+          {
+            "unit_id": "u1",
+            "provider_name": "primary",
+            "provider_model": "grok-4.20-fast",
+            "effective_model": "grok-4.20-expert-4-agent"
+          },
+          {
+            "unit_id": "u2",
+            "provider_name": "provider_2",
+            "provider_model": "grok-4.20-0309-non-reasoning",
+            "effective_model": "grok-4.20-expert-4-agent"
+          },
+          {
+            "unit_id": "u3",
+            "provider_name": "provider_2",
+            "provider_model": "grok-4.20-0309-non-reasoning",
+            "effective_model": "grok-4.20-expert-4-agent"
+          }
+        ],
+        "verification": {
+          "supported_claims": [
+            {
+              "claim_id": "overview-of-dms-cdc-checkpoint-mechanics-claim-1",
+              "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+              "text": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state-claim-2",
+              "section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+              "text": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3",
+              "section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "recoverytimeout-and-resume-behavior-claim-4",
+              "section_id": "recoverytimeout-and-resume-behavior",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "postgres-specific-restart-and-checkpoint-handling-claim-5",
+              "section_id": "postgres-specific-restart-and-checkpoint-handling",
+              "text": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "postgres-specific-restart-and-checkpoint-handling-claim-6",
+              "section_id": "postgres-specific-restart-and-checkpoint-handling",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "console-vs-api-cli-differences-and-best-practices-claim-7",
+              "section_id": "console-vs-api-cli-differences-and-best-practices",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "console-vs-api-cli-differences-and-best-practices-claim-8",
+              "section_id": "console-vs-api-cli-differences-and-best-practices",
+              "text": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+              "confidence": "medium"
+            }
+          ],
+          "single_source_claims": [
+            {
+              "claim_id": "overview-of-dms-cdc-checkpoint-mechanics-claim-1",
+              "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+              "text": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state-claim-2",
+              "section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+              "text": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3",
+              "section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "recoverytimeout-and-resume-behavior-claim-4",
+              "section_id": "recoverytimeout-and-resume-behavior",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "postgres-specific-restart-and-checkpoint-handling-claim-5",
+              "section_id": "postgres-specific-restart-and-checkpoint-handling",
+              "text": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "postgres-specific-restart-and-checkpoint-handling-claim-6",
+              "section_id": "postgres-specific-restart-and-checkpoint-handling",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "console-vs-api-cli-differences-and-best-practices-claim-7",
+              "section_id": "console-vs-api-cli-differences-and-best-practices",
+              "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+              "confidence": "medium"
+            },
+            {
+              "claim_id": "console-vs-api-cli-differences-and-best-practices-claim-8",
+              "section_id": "console-vs-api-cli-differences-and-best-practices",
+              "text": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+              "confidence": "medium"
+            }
+          ],
+          "conflicted_claims": [],
+          "unmapped_evidence_ids": [],
+          "confidence_by_section": {
+            "overview-of-dms-cdc-checkpoint-mechanics": "medium",
+            "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state": "medium",
+            "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics": "medium",
+            "recoverytimeout-and-resume-behavior": "medium",
+            "postgres-specific-restart-and-checkpoint-handling": "medium",
+            "console-vs-api-cli-differences-and-best-practices": "medium"
+          },
+          "unresolved_sections": [],
+          "packet_to_prose_fidelity": {
+            "passed": true,
+            "checked_packet_count": 13,
+            "missing_selected_packet_ids": [],
+            "reason_codes": []
+          }
+        }
+      }
+    },
+    "final_report": "# Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior\n\n## Summary\n\nMedium confidence: Key point: * [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start po… Key point: This example illustrates one usage of DescribeReplicationTasks.\n\n## Overview of DMS CDC Checkpoint Mechanics\n\nMedium confidence: Key point: * [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…\n\nMedium confidence: Key point: * [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…. * [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart….\n\n## Retrieving Checkpoints: DescribeReplicationTasks, Console, and awsdms_txn_state\n\nMedium confidence: Key point: This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.\n\nMedium confidence: Key point: This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.\n\n## Using RecoveryCheckpoint for Resume/Start (CdcStartPosition semantics)\n\nMedium confidence: Key point: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…\n\nMedium confidence: Key point: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…. `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a….\n\n## RecoveryTimeout and Resume Behavior\n\nMedium confidence: Key point: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…\n\nMedium confidence: Key point: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…. `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a….\n\n## Postgres-Specific Restart and Checkpoint Handling\n\nMedium confidence: This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. `start-replication` is the only valid action that can be used for the first time a task with the migration type…\n\nMedium confidence: This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. `start-replication` is the only valid action that can be used for the first time a task with the migration type…. This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a….\n\n## Console vs API/CLI Differences and Best Practices\n\nMedium confidence: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a… * [Continuous repli…\n\nMedium confidence: `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a… * [Continuous repli…. `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…. * [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcS…\n\n## Sources\n\n- [R1] StartReplicationTask (official_docs; docs.aws.amazon.com; reasons: allowlisted_domain, official_docs, api_reference, user_guide, winner_provider, has_title, has_summary_text) - https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html\n- [R5] DescribeReplicationTasks (official_docs; docs.aws.amazon.com; reasons: allowlisted_domain, official_docs, api_reference, winner_provider, has_title, has_summary_text) - https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html\n- [R4] Creating tasks for ongoing replication using AWS DMS - AWS Database Migration Service (official_docs; docs.aws.amazon.com; reasons: allowlisted_domain, official_docs, user_guide, winner_provider, has_title, has_summary_text) - https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html\n",
+    "evidence_items": [
+      {
+        "evidence_id": "evidence-u1-search",
+        "unit_id": "u1",
+        "source_ids": [
+          "R1"
+        ],
+        "source_urls": [
+          "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"
+        ],
+        "summary": "- **CdcStartPosition**: A parameter that specifies where a CDC operation should begin. It accepts formats like a timestamp, native database log position (e.g., LSN for SQL Server, SCN for Oracle), or a checkpoint string…",
+        "detail": "- **CdcStartPosition**: A parameter that specifies where a CDC operation should begin. It accepts formats like a timestamp, native database log position (e.g., LSN for SQL Server, SCN for Oracle), or a checkpoint string. Specifying both CdcStartPosition and CdcStartTime causes an error. [[4]](https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html) - **RecoveryCheckpoint**: A system-generated string in the ReplicationTask object that encodes the exact point (often in a vendor-specific format, e.g., `checkpoint:V1#...`) where DMS last safely processed changes. It is exposed in task descriptions and the console under the CDC section. [[1]](https://docs.aws.amazon.com/dms/latest/APIReference/API_ReplicationTask.html) 1. **Retrieve the value** — Use the AWS Console (task overview > CDC section), `DescribeReplicationTasks` API/CLI, or SDK to fetch the `RecoveryCheckpoint` from an existing task. [[3]](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html)",
+        "evidence_kind": "search",
+        "weight": 0.9,
+        "derived_from_source_url": "",
+        "line_start": 8,
+        "line_end": 12
+      },
+      {
+        "evidence_id": "evidence-u1-fetch-1",
+        "unit_id": "u1",
+        "source_ids": [
+          "R1"
+        ],
+        "source_urls": [
+          "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html"
+        ],
+        "summary": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+        "detail": "CdcStartPosition or CdcStartTime to specify when you want a CDC operation to start. CdcStartTime or CdcStartPosition to specify when you want a CDC operation to start. `start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a given task, such as `resume-processing` and reload-target will result in data errors. You can also use [ReloadTables](./API_ReloadTables.html) to reload specific tables that failed during migration instead of restarting the task. For a `full-load-and-cdc` task, DMS migrates table data, and then applies data changes that occur on the source. To load all the tables again, and start capturing source changes, use `reload-target`. Otherwise use `resume-processing`, to replicate the changes from the last stop position. For a `cdc` only task, to start from a specific position, you must use start-replication and also specify the start position. Check the source endpoint DMS documentation for any limitations. For example, not all sources support starting from a time. This example illustrates one usage of Star…",
+        "evidence_kind": "fetch",
+        "weight": 1.0,
+        "derived_from_source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+        "line_start": 87,
+        "line_end": 210
+      },
+      {
+        "evidence_id": "evidence-u2-search",
+        "unit_id": "u2",
+        "source_ids": [
+          "R5"
+        ],
+        "source_urls": [
+          "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"
+        ],
+        "summary": "**The `RecoveryCheckpoint` field in the `DescribeReplicationTasks` API (AWS Database Migration Service - DMS) indicates the last checkpoint recorded during a Change Data Capture (CDC) operation for a replication task.**…",
+        "detail": "**The `RecoveryCheckpoint` field in the `DescribeReplicationTasks` API (AWS Database Migration Service - DMS) indicates the last checkpoint recorded during a Change Data Capture (CDC) operation for a replication task.** [1] - **Usage for Recovery**: Provide the `RecoveryCheckpoint` value to the `CdcStartPosition` parameter when starting or modifying a task (via `StartReplicationTask` or `ModifyReplicationTask`). This restarts CDC from that exact point. [3] - **Availability**: The value is most reliable when the task is in a **stopped** or **failed** state. It may not persist if the task is deleted. For some sources (e.g., PostgreSQL), you can also query the `awsdms_txn_state` metadata table on the target if `TaskRecoveryTableEnabled` is set to `true` in task settings. [4] - [DescribeReplicationTasks](https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html)",
+        "evidence_kind": "search",
+        "weight": 0.9,
+        "derived_from_source_url": "",
+        "line_start": 1,
+        "line_end": 47
+      },
+      {
+        "evidence_id": "evidence-u2-fetch-1",
+        "unit_id": "u2",
+        "source_ids": [
+          "R5"
+        ],
+        "source_urls": [
+          "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html"
+        ],
+        "summary": "`aws dms describe-replication-tasks --filters \"Name=replication-task-arn,Values=arn:aws:dms:us-west-2:012345678912:task:AAABBBCCC0123456789YYYZZZ0\"` `aws dms describe-replication-tasks --filters \"Name=endpoint-arn,Value…",
+        "detail": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks. `aws dms describe-replication-tasks --filters \"Name=replication-task-arn,Values=arn:aws:dms:us-west-2:012345678912:task:AAABBBCCC0123456789YYYZZZ0\"` `aws dms describe-replication-tasks --filters \"Name=endpoint-arn,Values=arn:aws:dms:us-west-2:012345678912:endpoint:AAABBBCCC0123456789YYYZZZ0\"` \"RecoveryCheckpoint\": \"checkpoint:V1#156#00000032:00000a55:000c#0#217#00000032:00000a5a:0003#0#213\", `aws dms describe-replication-tasks --filters \"Name=migration-type,Values=full-load,cdc\"` \"RecoveryCheckpoint\": \"checkpoint:V1#156#00000032:00000a55:000c#0#217#00000032:00000a5a:0003#0#213\", \"RecoveryCheckpoint\": \"checkpoint:V1#5015#00000007.c99042d0.00000001.000c.01.0000:401032.58563.16#0#0#*#0#0\",",
+        "evidence_kind": "fetch",
+        "weight": 1.0,
+        "derived_from_source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        "line_start": 244,
+        "line_end": 375
+      },
+      {
+        "evidence_id": "evidence-u3-search",
+        "unit_id": "u3",
+        "source_ids": [
+          "R4"
+        ],
+        "source_urls": [
+          "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html"
+        ],
+        "summary": "**`awsdms_txn_state`** is a metadata table automatically created by **AWS Database Migration Service (AWS DMS)** on the target database when the task setting **`TaskRecoveryTableEnabled`** is set to **`Yes`** (or **`tru…",
+        "detail": "**`awsdms_txn_state`** is a metadata table automatically created by **AWS Database Migration Service (AWS DMS)** on the target database when the task setting **`TaskRecoveryTableEnabled`** is set to **`Yes`** (or **`true`** in JSON). [1]",
+        "evidence_kind": "search",
+        "weight": 0.9,
+        "derived_from_source_url": "",
+        "line_start": 1,
+        "line_end": 1
+      },
+      {
+        "evidence_id": "evidence-u3-fetch-1",
+        "unit_id": "u3",
+        "source_ids": [
+          "R4"
+        ],
+        "source_urls": [
+          "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html"
+        ],
+        "summary": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+        "detail": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) * [Specifying table selection and transformations rules using JSON](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TableMapping.SelectionTransformation.html) * [Using transformation rule expressions to define column content](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TableMapping.SelectionTransformation.Expressions.html) * [Using data masking to hide sensitive information](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TableMapping.SelectionTransformation.Masking.html) * **Amazon RDS for SQL Server:**[Setting up ongoing replication on a cloud SQL Server DB instance](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Source.SQLServer.CDC.html#CHAP_Source.SQLServer.Configuration). Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStartPosition` parameter to this value when you create the CDC task to begin replication at this start point for your PostgreSQL source. For information on using the AWS CLI to create this CDC task, s…",
+        "evidence_kind": "fetch",
+        "weight": 1.0,
+        "derived_from_source_url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+        "line_start": 383,
+        "line_end": 897
+      }
+    ],
+    "evidence_bank": [
+      {
+        "evidence_id": "evidence-u1-search",
+        "source_ids": [
+          "R1"
+        ],
+        "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+        "snippet_or_excerpt": "- **CdcStartPosition**: A parameter that specifies where a CDC operation should begin. It accepts formats like a timestamp, native database log position (e.g., LSN for SQL Server, SCN for Oracle), or a checkpoint string…",
+        "source_backed": false,
+        "line_span": {
+          "start": 8,
+          "end": 12
+        },
+        "origin_tool": "search",
+        "used_by_section_ids": [
+          "console-vs-api-cli-differences-and-best-practices",
+          "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics"
+        ],
+        "used_by_claim_ids": [
+          "console-vs-api-cli-differences-and-best-practices-claim-7",
+          "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3"
+        ]
+      },
+      {
+        "evidence_id": "evidence-u1-fetch-1",
+        "source_ids": [
+          "R1"
+        ],
+        "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_StartReplicationTask.html",
+        "snippet_or_excerpt": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+        "source_backed": true,
+        "line_span": {
+          "start": 87,
+          "end": 210
+        },
+        "origin_tool": "fetch",
+        "used_by_section_ids": [
+          "console-vs-api-cli-differences-and-best-practices",
+          "postgres-specific-restart-and-checkpoint-handling",
+          "recoverytimeout-and-resume-behavior",
+          "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics"
+        ],
+        "used_by_claim_ids": [
+          "console-vs-api-cli-differences-and-best-practices-claim-7",
+          "postgres-specific-restart-and-checkpoint-handling-claim-6",
+          "recoverytimeout-and-resume-behavior-claim-4",
+          "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3"
+        ]
+      },
+      {
+        "evidence_id": "evidence-u2-search",
+        "source_ids": [
+          "R5"
+        ],
+        "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        "snippet_or_excerpt": "**The `RecoveryCheckpoint` field in the `DescribeReplicationTasks` API (AWS Database Migration Service - DMS) indicates the last checkpoint recorded during a Change Data Capture (CDC) operation for a replication task.**…",
+        "source_backed": false,
+        "line_span": {
+          "start": 1,
+          "end": 47
+        },
+        "origin_tool": "search",
+        "used_by_section_ids": [
+          "postgres-specific-restart-and-checkpoint-handling",
+          "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state"
+        ],
+        "used_by_claim_ids": [
+          "postgres-specific-restart-and-checkpoint-handling-claim-5",
+          "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state-claim-2"
+        ]
+      },
+      {
+        "evidence_id": "evidence-u2-fetch-1",
+        "source_ids": [
+          "R5"
+        ],
+        "source_url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        "snippet_or_excerpt": "`aws dms describe-replication-tasks --filters \"Name=replication-task-arn,Values=arn:aws:dms:us-west-2:012345678912:task:AAABBBCCC0123456789YYYZZZ0\"` `aws dms describe-replication-tasks --filters \"Name=endpoint-arn,Value…",
+        "source_backed": true,
+        "line_span": {
+          "start": 244,
+          "end": 375
+        },
+        "origin_tool": "fetch",
+        "used_by_section_ids": [
+          "postgres-specific-restart-and-checkpoint-handling",
+          "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state"
+        ],
+        "used_by_claim_ids": [
+          "postgres-specific-restart-and-checkpoint-handling-claim-5",
+          "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state-claim-2"
+        ]
+      },
+      {
+        "evidence_id": "evidence-u3-search",
+        "source_ids": [
+          "R4"
+        ],
+        "source_url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+        "snippet_or_excerpt": "**`awsdms_txn_state`** is a metadata table automatically created by **AWS Database Migration Service (AWS DMS)** on the target database when the task setting **`TaskRecoveryTableEnabled`** is set to **`Yes`** (or **`tru…",
+        "source_backed": false,
+        "line_span": {
+          "start": 1,
+          "end": 1
+        },
+        "origin_tool": "search",
+        "used_by_section_ids": [
+          "overview-of-dms-cdc-checkpoint-mechanics"
+        ],
+        "used_by_claim_ids": [
+          "overview-of-dms-cdc-checkpoint-mechanics-claim-1"
+        ]
+      },
+      {
+        "evidence_id": "evidence-u3-fetch-1",
+        "source_ids": [
+          "R4"
+        ],
+        "source_url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html",
+        "snippet_or_excerpt": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+        "source_backed": true,
+        "line_span": {
+          "start": 383,
+          "end": 897
+        },
+        "origin_tool": "fetch",
+        "used_by_section_ids": [
+          "console-vs-api-cli-differences-and-best-practices",
+          "overview-of-dms-cdc-checkpoint-mechanics"
+        ],
+        "used_by_claim_ids": [
+          "console-vs-api-cli-differences-and-best-practices-claim-8",
+          "overview-of-dms-cdc-checkpoint-mechanics-claim-1"
+        ]
+      }
+    ],
+    "verification": {
+      "supported_claims": [
+        {
+          "claim_id": "overview-of-dms-cdc-checkpoint-mechanics-claim-1",
+          "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+          "text": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state-claim-2",
+          "section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+          "text": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3",
+          "section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+          "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "recoverytimeout-and-resume-behavior-claim-4",
+          "section_id": "recoverytimeout-and-resume-behavior",
+          "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "postgres-specific-restart-and-checkpoint-handling-claim-5",
+          "section_id": "postgres-specific-restart-and-checkpoint-handling",
+          "text": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "postgres-specific-restart-and-checkpoint-handling-claim-6",
+          "section_id": "postgres-specific-restart-and-checkpoint-handling",
+          "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "console-vs-api-cli-differences-and-best-practices-claim-7",
+          "section_id": "console-vs-api-cli-differences-and-best-practices",
+          "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "console-vs-api-cli-differences-and-best-practices-claim-8",
+          "section_id": "console-vs-api-cli-differences-and-best-practices",
+          "text": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+          "confidence": "medium"
+        }
+      ],
+      "single_source_claims": [
+        {
+          "claim_id": "overview-of-dms-cdc-checkpoint-mechanics-claim-1",
+          "section_id": "overview-of-dms-cdc-checkpoint-mechanics",
+          "text": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state-claim-2",
+          "section_id": "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state",
+          "text": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics-claim-3",
+          "section_id": "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics",
+          "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "recoverytimeout-and-resume-behavior-claim-4",
+          "section_id": "recoverytimeout-and-resume-behavior",
+          "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "postgres-specific-restart-and-checkpoint-handling-claim-5",
+          "section_id": "postgres-specific-restart-and-checkpoint-handling",
+          "text": "This example illustrates one usage of DescribeReplicationTasks. This example illustrates one usage of DescribeReplicationTasks.",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "postgres-specific-restart-and-checkpoint-handling-claim-6",
+          "section_id": "postgres-specific-restart-and-checkpoint-handling",
+          "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "console-vs-api-cli-differences-and-best-practices-claim-7",
+          "section_id": "console-vs-api-cli-differences-and-best-practices",
+          "text": "`start-replication` is the only valid action that can be used for the first time a task with the migration type of `full-load`full-load, `full-load-and-cdc` or `cdc` is run. Any other action used for the first time on a…",
+          "confidence": "medium"
+        },
+        {
+          "claim_id": "console-vs-api-cli-differences-and-best-practices-claim-8",
+          "section_id": "console-vs-api-cli-differences-and-best-practices",
+          "text": "* [Continuous replication tasks](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html) Here, the `4AF/B00000D0` component is what you need to specify this native CDC start point. Set the DMS API `CdcStart…",
+          "confidence": "medium"
+        }
+      ],
+      "conflicted_claims": [],
+      "unmapped_evidence_ids": [],
+      "confidence_by_section": {
+        "overview-of-dms-cdc-checkpoint-mechanics": "medium",
+        "retrieving-checkpoints-describereplicationtasks-console-and-awsdms-txn-state": "medium",
+        "using-recoverycheckpoint-for-resume-start-cdcstartposition-semantics": "medium",
+        "recoverytimeout-and-resume-behavior": "medium",
+        "postgres-specific-restart-and-checkpoint-handling": "medium",
+        "console-vs-api-cli-differences-and-best-practices": "medium"
+      },
+      "unresolved_sections": [],
+      "packet_to_prose_fidelity": {
+        "passed": true,
+        "checked_packet_count": 13,
+        "missing_selected_packet_ids": [],
+        "reason_codes": []
+      }
+    },
+    "coverage_gaps": {
+      "query": "Follow up AWS DMS checkpoint resume semantics with official docs only; focus on RecoveryCheckpoint, DescribeReplicationTasks, awsdms_txn_state, console CDC checkpoint, RecoveryTimeout, and Postgres-specific restart behavior",
+      "unanswered_sections": [],
+      "uncovered_sub_questions": [
+        "How is RecoveryCheckpoint retrieved and used for resuming CDC tasks via DescribeReplicationTasks, console, or awsdms_txn_state table?",
+        "What is the exact semantics of providing RecoveryCheckpoint (or checkpoint value) to CdcStartPosition when starting/resuming tasks?",
+        "How does the console expose or use CDC checkpoints for task resume, and any differences with API?",
+        "What is RecoveryTimeout in change processing tuning, its default behavior, and impact on resume when checkpoint is not immediately encountered?",
+        "Any documented differences or best practices for checkpoint recovery across engines, especially Postgres?"
+      ],
+      "hard_uncovered_targets": [],
+      "coverage_gate_passed": false,
+      "hard_coverage_gate_passed": true,
+      "blocking_gap_count": 5,
+      "hard_gap_count": 0,
+      "total_gap_count": 5,
+      "gaps": [
+        {
+          "gap_type": "uncovered_sub_question",
+          "target": "How is RecoveryCheckpoint retrieved and used for resuming CDC tasks via DescribeReplicationTasks, console, or awsdms_txn_state table?",
+          "blocking": true
+        },
+        {
+          "gap_type": "uncovered_sub_question",
+          "target": "What is the exact semantics of providing RecoveryCheckpoint (or checkpoint value) to CdcStartPosition when starting/resuming tasks?",
+          "blocking": true
+        },
+        {
+          "gap_type": "uncovered_sub_question",
+          "target": "How does the console expose or use CDC checkpoints for task resume, and any differences with API?",
+          "blocking": true
+        },
+        {
+          "gap_type": "uncovered_sub_question",
+          "target": "What is RecoveryTimeout in change processing tuning, its default behavior, and impact on resume when checkpoint is not immediately encountered?",
+          "blocking": true
+        },
+        {
+          "gap_type": "uncovered_sub_question",
+          "target": "Any documented differences or best practices for checkpoint recovery across engines, especially Postgres?",
+          "blocking": true
+        }
+      ]
+    }
+  },
+  "initial_events": [
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 1,
+      "timestamp": "2026-04-22T08:22:24Z",
+      "type": "job_created",
+      "phase": "planning",
+      "message": "Deep research job created.",
+      "data": {
+        "continuation_mode": "fresh",
+        "plan_only": false
+      }
+    }
+  ],
+  "events_after_seq": [
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 2,
+      "timestamp": "2026-04-22T08:22:24Z",
+      "type": "phase_started",
+      "phase": "planning",
+      "message": "Planning started.",
+      "data": {
+        "unit_count": 10
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 3,
+      "timestamp": "2026-04-22T08:22:24Z",
+      "type": "phase_started",
+      "phase": "researching",
+      "message": "Researching source material.",
+      "data": {
+        "completed_units": 0
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 4,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u1.",
+      "data": {
+        "effective_model": "grok-4.20-expert-4-agent",
+        "provider_model": "grok-4.20-fast",
+        "provider_name": "primary",
+        "sources_count": 4,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 5,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u2.",
+      "data": {
+        "effective_model": "grok-4.20-expert-4-agent",
+        "provider_model": "grok-4.20-0309-non-reasoning",
+        "provider_name": "provider_2",
+        "sources_count": 4,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 6,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "research_unit_completed",
+      "phase": "researching",
+      "message": "Completed u3.",
+      "data": {
+        "effective_model": "grok-4.20-expert-4-agent",
+        "provider_model": "grok-4.20-0309-non-reasoning",
+        "provider_name": "provider_2",
+        "sources_count": 3,
+        "unit_type": "search",
+        "warnings": []
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 7,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "research_unit_skipped",
+      "phase": "researching",
+      "message": "Skipped u4.",
+      "data": {
+        "reason": "sufficient_coverage_reached",
+        "unit_type": "search"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 8,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "research_unit_skipped",
+      "phase": "researching",
+      "message": "Skipped u5.",
+      "data": {
+        "reason": "sufficient_coverage_reached",
+        "unit_type": "search"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 9,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "research_unit_skipped",
+      "phase": "researching",
+      "message": "Skipped u6.",
+      "data": {
+        "reason": "sufficient_coverage_reached",
+        "unit_type": "search"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 10,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "research_unit_skipped",
+      "phase": "researching",
+      "message": "Skipped u7.",
+      "data": {
+        "reason": "sufficient_coverage_reached",
+        "unit_type": "fetch"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 11,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "research_unit_skipped",
+      "phase": "researching",
+      "message": "Skipped u8.",
+      "data": {
+        "reason": "sufficient_coverage_reached",
+        "unit_type": "fetch"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 12,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "research_unit_skipped",
+      "phase": "researching",
+      "message": "Skipped u9.",
+      "data": {
+        "reason": "sufficient_coverage_reached",
+        "unit_type": "fetch"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 13,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "research_unit_skipped",
+      "phase": "researching",
+      "message": "Skipped u10.",
+      "data": {
+        "reason": "sufficient_coverage_reached",
+        "unit_type": "fetch"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 14,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "phase_started",
+      "phase": "synthesizing",
+      "message": "Synthesizing findings.",
+      "data": {
+        "section_count": 6
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 15,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "phase_started",
+      "phase": "finalizing",
+      "message": "Finalizing report.",
+      "data": {}
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "seq": 16,
+      "timestamp": "2026-04-22T08:23:23Z",
+      "type": "job_completed",
+      "phase": "finalizing",
+      "message": "Deep research completed.",
+      "data": {
+        "artifact_batch_id": "$seeded_batch_id",
+        "release_gate": {
+          "all_reason_codes": [],
+          "passed": true,
+          "reason_codes": [],
+          "soft_reason_codes": []
+        },
+        "sources_count": 3
+      }
+    }
+  ],
+  "event_window": {
+    "after_seq": 1,
+    "next_after_seq": 16,
+    "returned_count": 15,
+    "last_event_type": "job_completed",
+    "window_has_terminal_event": true,
+    "job_terminal": true
+  },
+  "public_surface": {
+    "status": {
+      "runtime_warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied"
+      ],
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "planner_fallback_used": false,
+      "operator_summary": {
+        "runtime_warnings": [
+          "coverage_incomplete",
+          "domain_constraints_applied"
+        ],
+        "resolved_artifact_batch_id": "$seeded_batch_id"
+      }
+    },
+    "result": {
+      "runtime_warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied"
+      ],
+      "resolved_artifact_batch_id": "$seeded_batch_id",
+      "report": {
+        "status": "degraded"
+      }
+    }
+  },
+  "artifacts": [
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "plan.json",
+      "path": "artifacts/d42798a4e594602140413b75/plan.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:22:24Z",
+      "metadata": {
+        "bytes": 16296
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "planner_trace.json",
+      "path": "artifacts/d42798a4e594602140413b75/planner_trace.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:22:24Z",
+      "metadata": {
+        "bytes": 1514
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "lineage.json",
+      "path": "artifacts/d42798a4e594602140413b75/lineage.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 319
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "source_policy.json",
+      "path": "artifacts/d42798a4e594602140413b75/source_policy.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 431
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "outline_versions.json",
+      "path": "artifacts/d42798a4e594602140413b75/outline_versions.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 2164
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "outline_state.json",
+      "path": "artifacts/d42798a4e594602140413b75/outline_state.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 10681
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "evidence_ledger.json",
+      "path": "artifacts/d42798a4e594602140413b75/evidence_ledger.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 17734
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "section_banks.json",
+      "path": "artifacts/d42798a4e594602140413b75/section_banks.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 33871
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "selected_bank.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/selected_bank.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 9344,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "partial_report.md",
+      "path": "artifacts/d42798a4e594602140413b75/partial_report.md",
+      "content_type": "text/markdown",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 4719
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "sources.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/sources.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 3707,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "citations.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/citations.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 31289,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "report.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/report.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 56052,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "final_report.md",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/final_report.md",
+      "content_type": "text/markdown",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 6232,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "evidence_items.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/evidence_items.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 9276,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "coverage.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/coverage.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 13228,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "grounding.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/grounding.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 7236,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "verifier.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/verifier.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 762,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "selected_bank.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/selected_bank.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:22:24Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 9344,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "evidence_bank.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/evidence_bank.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 5509,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "verification.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/verification.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 7414,
+        "batch_id": "$seeded_batch_id"
+      }
+    },
+    {
+      "job_id": "d42798a4e594602140413b75",
+      "kind": "coverage_gaps.json",
+      "path": "artifacts/d42798a4e594602140413b75/batches/20260422T082323-3fb4851c/coverage_gaps.json",
+      "content_type": "application/json",
+      "created_at": "2026-04-22T08:23:23Z",
+      "updated_at": "2026-04-22T08:23:23Z",
+      "metadata": {
+        "bytes": 2254,
+        "batch_id": "$seeded_batch_id"
+      }
+    }
+  ],
+  "strict_public_surface": true
+}

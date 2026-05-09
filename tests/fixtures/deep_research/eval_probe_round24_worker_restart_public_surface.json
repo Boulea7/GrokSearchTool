@@ -1,0 +1,155 @@
+{
+  "sample": "probe-round24-worker-restart-public-surface",
+  "query": "Investigate interrupted, continue, and resume semantics for deep research jobs",
+  "resolved_artifact_batch_id": "batch-round24-worker-restart",
+  "report": {
+    "status": "degraded",
+    "coverage": {
+      "query": "Investigate interrupted, continue, and resume semantics for deep research jobs",
+      "planned_section_ids": [],
+      "answered_section_ids": [],
+      "unanswered_sections": [
+        "Open Questions"
+      ],
+      "planned_sub_question_ids": [],
+      "covered_sub_question_ids": [],
+      "uncovered_sub_questions": [
+        "Coverage incomplete"
+      ],
+      "hard_coverage_targets": [],
+      "hard_uncovered_targets": [],
+      "coverage_gate_passed": false,
+      "hard_coverage_gate_passed": true
+    },
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "domain_constraints_applied",
+        "medium_single_source_search_only"
+      ],
+      "grounding": {
+        "total_claims": 0,
+        "grounded_claims": 0,
+        "ungrounded_claims": 0,
+        "single_source_claims": 0,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0
+      },
+      "verifier": {
+        "passed": false,
+        "reason_codes": [
+          "medium_single_source_search_only"
+        ],
+        "flagged_claim_ids": [],
+        "summary": {
+          "section_count": 0,
+          "total_claims": 0,
+          "low_confidence_claims": 0,
+          "single_source_claims": 0,
+          "source_backed_binding_count": 0,
+          "search_only_binding_count": 0,
+          "null_span_binding_count": 0,
+          "missing_evidence_items": 0,
+          "mismatched_binding_source": 0,
+          "mismatched_binding_evidence": 0,
+          "invalid_source_backed_span": 0,
+          "duplicate_claims": 0,
+          "low_value_claims": 0,
+          "medium_single_source_search_only": 1,
+          "same_domain_off_topic_dominance": 0,
+          "unbound_citation_sources": 0,
+          "unbound_evidence_ids": 0
+        }
+      },
+      "release_gate": {
+        "passed": true,
+        "reason_codes": [],
+        "all_reason_codes": [
+          "medium_single_source_search_only"
+        ],
+        "soft_reason_codes": [
+          "medium_single_source_search_only"
+        ]
+      },
+      "constraint_violations": [
+        {
+          "reason": "domain_constraints_applied",
+          "removed_source_count": 1,
+          "unit_id": "restate_durable"
+        },
+        {
+          "reason": "domain_constraints_applied",
+          "removed_source_count": 1,
+          "unit_id": "langgraph_interrupts"
+        },
+        {
+          "reason": "domain_constraints_applied",
+          "removed_source_count": 15,
+          "unit_id": "comparison_synthesis"
+        }
+      ]
+    }
+  },
+  "artifacts": [
+    {
+      "kind": "sources.json",
+      "metadata": {
+        "batch_id": "batch-round24-worker-restart"
+      }
+    },
+    {
+      "kind": "citations.json",
+      "metadata": {
+        "batch_id": "batch-round24-worker-restart"
+      }
+    },
+    {
+      "kind": "report.json",
+      "metadata": {
+        "batch_id": "batch-round24-worker-restart"
+      }
+    },
+    {
+      "kind": "final_report.md",
+      "metadata": {
+        "batch_id": "batch-round24-worker-restart"
+      }
+    },
+    {
+      "kind": "evidence_items.json",
+      "metadata": {
+        "batch_id": "batch-round24-worker-restart"
+      }
+    },
+    {
+      "kind": "coverage.json",
+      "metadata": {
+        "batch_id": "batch-round24-worker-restart"
+      }
+    },
+    {
+      "kind": "grounding.json",
+      "metadata": {
+        "batch_id": "batch-round24-worker-restart"
+      }
+    },
+    {
+      "kind": "verifier.json",
+      "metadata": {
+        "batch_id": "batch-round24-worker-restart"
+      }
+    }
+  ],
+  "golden": {
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

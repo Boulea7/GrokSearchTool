@@ -85,6 +85,61 @@ def test_store_appends_events_with_monotonic_sequence(tmp_path):
     assert store.list_events(job.job_id, after_seq=1) == [second]
 
 
+def test_store_list_events_paginates_and_replays_after_seq_boundaries(tmp_path):
+    store = make_store(tmp_path)
+    job = store.create_job(
+        query="Research event pagination",
+        request_fingerprint="fp-events-pagination",
+        status="running",
+        phase="researching",
+        effort="deep",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=300,
+        continued_from_job_id="",
+    )
+    first = store.append_event(job.job_id, type="job_created", phase="planning", message="Created.")
+    second = store.append_event(job.job_id, type="phase_started", phase="planning", message="Planning.")
+    third = store.append_event(job.job_id, type="phase_started", phase="researching", message="Researching.")
+
+    first_page = store.list_events(job.job_id, after_seq=0, limit=1)
+    second_page = store.list_events(job.job_id, after_seq=first_page[-1].seq, limit=1)
+    tail_page = store.list_events(job.job_id, after_seq=second_page[-1].seq, limit=10)
+    empty_page = store.list_events(job.job_id, after_seq=third.seq, limit=10)
+
+    assert first_page == [first]
+    assert second_page == [second]
+    assert tail_page == [third]
+    assert empty_page == []
+
+
+def test_store_list_events_clamps_negative_after_seq_and_non_positive_limit(tmp_path):
+    store = make_store(tmp_path)
+    job = store.create_job(
+        query="Research event boundary handling",
+        request_fingerprint="fp-events-boundaries",
+        status="running",
+        phase="researching",
+        effort="deep",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=300,
+        continued_from_job_id="",
+    )
+    first = store.append_event(job.job_id, type="job_created", phase="planning", message="Created.")
+    second = store.append_event(job.job_id, type="phase_started", phase="researching", message="Researching.")
+
+    assert store.list_events(job.job_id, after_seq=-99, limit=10) == [first, second]
+    assert store.list_events(job.job_id, after_seq=0, limit=0) == []
+    assert store.list_events(job.job_id, after_seq=0, limit=-5) == []
+
+
 def test_store_persists_checkpoints_and_artifacts(tmp_path):
     store = make_store(tmp_path)
     job = store.create_job(
@@ -157,6 +212,37 @@ def test_store_orders_checkpoints_by_monotonic_sequence_when_timestamps_match(mo
     assert second.checkpoint_seq == 2
 
 
+def test_store_retains_multiple_versions_for_same_checkpoint_key(monkeypatch, tmp_path):
+    store = make_store(tmp_path)
+    job = store.create_job(
+        query="Research checkpoint history",
+        request_fingerprint="fp-checkpoint-history",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    monkeypatch.setattr(deep_research_store_module, "utc_now_iso", lambda: "2026-04-17T00:00:00Z")
+
+    first = store.save_checkpoint(job.job_id, phase="researching", checkpoint_key="researching-u1", state={"n": 1})
+    second = store.save_checkpoint(job.job_id, phase="researching", checkpoint_key="researching-u1", state={"n": 2})
+    checkpoints = store.list_checkpoints(job.job_id)
+
+    assert [checkpoint.checkpoint_key for checkpoint in checkpoints] == ["researching-u1", "researching-u1"]
+    assert [checkpoint.checkpoint_seq for checkpoint in checkpoints] == [1, 2]
+    assert checkpoints[0].state == {"n": 1}
+    assert checkpoints[1].state == {"n": 2}
+    assert store.get_checkpoint(job.job_id, "researching-u1") == second
+    assert first.checkpoint_seq == 1
+    assert second.checkpoint_seq == 2
+
+
 def test_store_reuses_active_or_recent_job_by_request_fingerprint(tmp_path):
     store = make_store(tmp_path)
     active = store.create_job(
@@ -206,6 +292,72 @@ def test_store_reuses_matching_draft_job(tmp_path):
     )
 
     assert store.find_reusable_job("fp-draft-reuse", recent_reuse_seconds=1800) == draft
+
+
+def test_store_list_jobs_orders_stably_when_updated_at_ties(tmp_path):
+    store = make_store(tmp_path)
+    first = store.create_job(
+        query="Stable list order first",
+        request_fingerprint="fp-list-order-first",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    second = store.create_job(
+        query="Stable list order second",
+        request_fingerprint="fp-list-order-second",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    third = store.create_job(
+        query="Stable list order third",
+        request_fingerprint="fp-list-order-third",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ? WHERE job_id = ?",
+            ("2026-04-22T00:00:00Z", "2026-04-22T00:00:01Z", first.job_id),
+        )
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ? WHERE job_id = ?",
+            ("2026-04-22T00:00:00Z", "2026-04-22T00:00:03Z", second.job_id),
+        )
+        connection.execute(
+            "UPDATE jobs SET updated_at = ?, created_at = ? WHERE job_id = ?",
+            ("2026-04-22T00:00:00Z", "2026-04-22T00:00:02Z", third.job_id),
+        )
+
+    assert [job.job_id for job in store.list_jobs(status="completed", limit=10)] == [
+        second.job_id,
+        third.job_id,
+        first.job_id,
+    ]
+    assert store.list_jobs(status="completed", limit=0) == []
 
 
 def test_store_does_not_reuse_expired_completed_job(tmp_path):
