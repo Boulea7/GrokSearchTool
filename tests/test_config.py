@@ -613,6 +613,20 @@ def test_resolve_deep_research_model_uses_standard_override_across_provider_fami
     assert config.resolve_deep_research_model_for_url("https://grok2api.example.com/v1", effort="standard") == "standard-override"
 
 
+def test_blank_deep_research_model_override_uses_profile_default(monkeypatch, tmp_path):
+    config = Config()
+    config.reset_runtime_state()
+    monkeypatch.delenv("GROK_MODEL", raising=False)
+    monkeypatch.setenv("GROK_DEEP_RESEARCH_STANDARD_MODEL", "   ")
+    monkeypatch.setenv("GROK_API_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config, "_load_config_file", lambda: {})
+
+    assert config.resolve_deep_research_model_for_url("https://api.x.ai/v1", effort="standard") == "grok-4.20-expert"
+    assert config.preferred_deep_research_models_for_url("https://api.x.ai/v1", effort="standard")[0] == "grok-4.20-expert"
+
+
 def test_resolve_deep_research_model_uses_ultra_override_across_provider_families(monkeypatch, tmp_path):
     config = Config()
     config.reset_runtime_state()

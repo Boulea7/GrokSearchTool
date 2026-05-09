@@ -6969,7 +6969,7 @@ class DeepResearchRuntime:
                 _mark_canceled(self, job_id, current_job.phase, data={"error": str(exc), "reason": "cancel_requested"})
                 return
             if (
-                current_job.status in {"queued", "interrupted", "canceled", "completed", "failed"}
+                current_job.status in {"interrupted", "canceled", "completed", "failed"}
                 or current_job.attempt_count > (baseline_attempt_count + 1)
             ):
                 return
