@@ -7893,7 +7893,7 @@ async def test_resume_from_research_checkpoint_restores_without_replaying_planni
     async def timed_search(query):
         nonlocal call_count
         call_count += 1
-        await asyncio.sleep(1.2 if call_count == 1 else 0)
+        await asyncio.sleep(2.2 if call_count == 1 else 0)
         return (
             f"Evidence for {query}",
             [{"url": f"https://docs.example.com/{query.replace(' ', '-')}", "title": f"{query.title()} docs"}],
@@ -7908,7 +7908,7 @@ async def test_resume_from_research_checkpoint_restores_without_replaying_planni
 
     response = await runtime.start(
         query="Interrupt before second unit",
-        time_budget_seconds=1,
+        time_budget_seconds=2,
         force_new=True,
         schedule=False,
     )
@@ -7977,7 +7977,7 @@ async def test_events_after_seq_replays_only_new_events_after_research_resume(mo
     async def timed_search(query):
         nonlocal call_count
         call_count += 1
-        await asyncio.sleep(1.2 if call_count == 1 else 0)
+        await asyncio.sleep(2.2 if call_count == 1 else 0)
         return (
             f"Evidence for {query}",
             [{"url": f"https://docs.example.com/{query.replace(' ', '-')}", "title": f"{query.title()} docs"}],
@@ -7992,7 +7992,7 @@ async def test_events_after_seq_replays_only_new_events_after_research_resume(mo
 
     response = await runtime.start(
         query="Interrupt and replay only new events",
-        time_budget_seconds=1,
+        time_budget_seconds=2,
         force_new=True,
         schedule=False,
     )
