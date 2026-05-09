@@ -60,7 +60,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - Long-running `deep research` workflows should not be treated as the default MCP install story
 - The recommended core interaction path remains `plan_* -> web_search`
 - Clear single-hop lookups may still call `web_search` directly when planning would add little value
-- `deep_research_*` is now available as a non-interactive MCP job surface for advanced report-style research
+- `deep_research_*` is now available as a non-interactive MCP job surface for advanced report-style research, including single-artifact reads through `deep_research_artifact`
 - Any interactive `deep research` experience should remain CLI-first; MCP and skill integrations should stay non-interactive
 - planning `session_id` values are in-process transient handles with about a 1-hour TTL and a 256-session LRU cap; restart, expiry, or eviction requires starting again from a fresh `plan_intent`
 - the planning wrappers intentionally keep scalar shim inputs such as CSV `depends_on`, semicolon-grouped `parallel_groups`, and string `params_json`; additive structured aliases such as `depends_on_list`, `params`, `parallel`, and `sequential_list` are also accepted, and `executable_plan` still returns normalized structured shapes
@@ -81,6 +81,7 @@ These hosts remain planned targets until remote transport and host-specific veri
 - `web_search` depends on a working `/chat/completions` or `/responses` implementation, depending on provider family and model family
 - common OpenAI-compatible relays, including many `grok2api`-style reverse proxies, stay on `chat/completions` unless runtime heuristics identify a response-only Grok family
 - `TAVILY_API_KEY` is used by `web_fetch`, `web_map`, and Tavily-backed supplemental `web_search`
+- `TAVILY_FALLBACK_API_URL` / `TAVILY_FALLBACK_API_KEY` provide a remote HTTP API fallback when `TAVILY_API_URL` points at an unavailable local loopback endpoint; secrets should stay in environment or local config only
 - `FIRECRAWL_API_KEY` is used by fetch fallback and optional supplemental `web_search`
 - `web_search.topic` currently supports `general`, `news`, and `finance`
 - `web_search.time_range` currently supports `day`, `week`, `month`, `year`, and normalizes aliases `d`, `w`, `m`, `y`

@@ -18,6 +18,47 @@ RECENT_DEEP_RESEARCH_LIVE_PROBE_FIXTURES = (
     "probe_round36_lifecycle_public_surface.json",
     "probe_round37_aws_dms_official_doc.json",
     "probe_round37_lifecycle_public_surface.json",
+    "probe_round38_aws_dms_partial_failure.json",
+)
+RECENT_DEEP_RESEARCH_PUBLIC_SURFACE_EVAL_FIXTURES = (
+    "eval_probe_round24_worker_restart_public_surface.json",
+    "eval_probe_round26_aws_dms_public_surface.json",
+    "eval_probe_round30_aws_dms_official_doc.json",
+    "eval_probe_round30_lifecycle_public_surface.json",
+    "eval_probe_round33_aws_dms_official_doc.json",
+    "eval_probe_round33_lifecycle_public_surface.json",
+    "eval_probe_round34_aws_dms_official_doc.json",
+    "eval_probe_round34_lifecycle_public_surface.json",
+    "eval_probe_round35_aws_dms_official_doc.json",
+    "eval_probe_round35_lifecycle_public_surface.json",
+    "eval_probe_round36_aws_dms_official_doc.json",
+    "eval_probe_round36_lifecycle_public_surface.json",
+    "eval_probe_round37_aws_dms_official_doc.json",
+    "eval_probe_round37_lifecycle_public_surface.json",
+    "eval_probe_round38_aws_dms_partial_failure.json",
+    "eval_probe_round39_aws_dms_binding_consistency.json",
+    "eval_probe_round39_aws_dms_operation_ranking.json",
+    "eval_probe_round42_lifecycle_surface_mirror.json",
+    "eval_probe_round42_lifecycle_malformed_sidecars.json",
+)
+RECENT_DEEP_RESEARCH_EVAL_LIVE_PARITY_FIXTURES = tuple(
+    (
+        fixture_name,
+        fixture_name.replace("eval_", "", 1),
+    )
+    for fixture_name in (
+        "eval_probe_round33_aws_dms_official_doc.json",
+        "eval_probe_round33_lifecycle_public_surface.json",
+        "eval_probe_round34_aws_dms_official_doc.json",
+        "eval_probe_round34_lifecycle_public_surface.json",
+        "eval_probe_round35_aws_dms_official_doc.json",
+        "eval_probe_round35_lifecycle_public_surface.json",
+        "eval_probe_round36_aws_dms_official_doc.json",
+        "eval_probe_round36_lifecycle_public_surface.json",
+        "eval_probe_round37_aws_dms_official_doc.json",
+        "eval_probe_round37_lifecycle_public_surface.json",
+        "eval_probe_round38_aws_dms_partial_failure.json",
+    )
 )
 
 
@@ -292,6 +333,7 @@ def _artifact_batch_from_snapshot(snapshot: dict) -> list[dict]:
                 "passed": True,
                 "checked_packet_count": 0,
                 "missing_selected_packet_ids": [],
+                "missing_selected_row_ids": [],
                 "reason_codes": [],
             },
         }

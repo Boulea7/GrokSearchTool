@@ -58,6 +58,53 @@ def test_update_section_banks_backfills_selected_packets_for_materialized_sectio
     assert bank_by_id["section-b"]["selected_packets"][0]["claim_ids"] == ["section-b-claim-2"]
 
 
+def test_update_section_banks_honors_selected_section_ids_list():
+    section_banks = [
+        {
+            "section_id": "task-visibility",
+            "candidate_evidence_ids": [],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": [],
+            "candidate_packets": [],
+            "selected_packets": [],
+            "rejected_packets": [],
+            "last_updated_at": "",
+        },
+        {
+            "section_id": "task-start",
+            "candidate_evidence_ids": [],
+            "selected_evidence_ids": [],
+            "rejected_evidence_ids": [],
+            "candidate_packets": [],
+            "selected_packets": [],
+            "rejected_packets": [],
+            "last_updated_at": "",
+        },
+    ]
+    ledger_entries = [
+        {
+            "ledger_id": "ledger-e1",
+            "evidence_id": "e1",
+            "candidate_section_ids": ["task-visibility", "task-start"],
+            "selected_section_ids": ["task-visibility", "task-start"],
+            "rejected_section_ids": [],
+            "question_ids": ["sq1", "sq2"],
+            "source_ids": ["R1"],
+            "unit_id": "unit-search-1",
+            "line_start": 10,
+            "line_end": 11,
+            "materialized_claim_ids": [],
+        }
+    ]
+
+    updated = update_section_banks(section_banks, ledger_entries=ledger_entries, updated_at="2026-04-27T00:00:00Z")
+    bank_by_id = {bank["section_id"]: bank for bank in updated}
+
+    assert bank_by_id["task-visibility"]["selected_evidence_ids"] == ["e1"]
+    assert bank_by_id["task-start"]["selected_evidence_ids"] == ["e1"]
+    assert bank_by_id["task-visibility"]["selected_packets"][0]["question_ids"] == ["sq1", "sq2"]
+
+
 def test_seed_section_banks_from_question_bindings_prefers_candidate_until_section_is_explicitly_selected():
     section_banks = [
         {

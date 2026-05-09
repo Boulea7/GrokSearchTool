@@ -1,0 +1,199 @@
+{
+  "sample": {
+    "status": "failed",
+    "phase": "finalizing",
+    "runtime_warnings": []
+  },
+  "query": "Follow up AWS DMS console CDC checkpoint and Postgres restart nuance with official docs only",
+  "resolved_artifact_batch_id": "batch-round39-binding",
+  "sources": [
+    {
+      "source_id": "R1",
+      "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+      "domain": "docs.aws.amazon.com",
+      "title": "API_DescribeReplicationTasks"
+    },
+    {
+      "source_id": "R2",
+      "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+      "domain": "docs.aws.amazon.com",
+      "title": "Change processing tuning settings"
+    }
+  ],
+  "citations": {
+    "source_registry": {
+      "R1": {
+        "source_id": "R1",
+        "url": "https://docs.aws.amazon.com/dms/latest/APIReference/API_DescribeReplicationTasks.html",
+        "domain": "docs.aws.amazon.com",
+        "title": "API_DescribeReplicationTasks"
+      },
+      "R2": {
+        "source_id": "R2",
+        "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TaskSettings.ChangeProcessingTuning.html",
+        "domain": "docs.aws.amazon.com",
+        "title": "Change processing tuning settings"
+      }
+    },
+    "sections": [
+      {
+        "section_id": "resume-semantics",
+        "title": "Resume Semantics",
+        "claims": [
+          {
+            "claim_id": "resume-semantics-claim-1",
+            "text": "Console CDC checkpoint handling and Postgres restart nuance depend on both DescribeReplicationTasks visibility and ChangeProcessingTuning recovery settings.",
+            "citations": [
+              "R1",
+              "R2"
+            ],
+            "evidence_ids": [
+              "e1"
+            ],
+            "evidence_bindings": [
+              {
+                "source_id": "R3",
+                "evidence_id": "e2",
+                "source_backed": true,
+                "line_start": null,
+                "line_end": null
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "status": "failed",
+    "runtime": {
+      "warnings": [],
+      "release_gate": {
+        "passed": false,
+        "reason_codes": [
+          "missing_evidence_bindings"
+        ]
+      },
+      "verifier": {
+        "reason_codes": [
+          "missing_evidence_bindings"
+        ]
+      }
+    },
+    "sections": [
+      {
+        "section_id": "resume-semantics",
+        "title": "Resume Semantics",
+        "claims": [
+          {
+            "claim_id": "resume-semantics-claim-1",
+            "text": "Console CDC checkpoint handling and Postgres restart nuance depend on both DescribeReplicationTasks visibility and ChangeProcessingTuning recovery settings.",
+            "citations": [
+              "R1",
+              "R2"
+            ],
+            "evidence_ids": [
+              "e1"
+            ],
+            "evidence_bindings": [
+              {
+                "source_id": "R3",
+                "evidence_id": "e2",
+                "source_backed": true,
+                "line_start": null,
+                "line_end": null
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "evidence_items": [
+    {
+      "evidence_id": "e1",
+      "source_ids": [
+        "R1"
+      ],
+      "evidence_kind": "fetch"
+    }
+  ],
+  "artifacts": [
+    {
+      "kind": "sources.json",
+      "metadata": {
+        "batch_id": "batch-round39-binding"
+      }
+    },
+    {
+      "kind": "citations.json",
+      "metadata": {
+        "batch_id": "batch-round39-binding"
+      }
+    },
+    {
+      "kind": "report.json",
+      "metadata": {
+        "batch_id": "batch-round39-binding"
+      }
+    },
+    {
+      "kind": "final_report.md",
+      "metadata": {
+        "batch_id": "batch-round39-binding"
+      }
+    },
+    {
+      "kind": "evidence_items.json",
+      "metadata": {
+        "batch_id": "batch-round39-binding"
+      }
+    },
+    {
+      "kind": "coverage.json",
+      "metadata": {
+        "batch_id": "batch-round39-binding"
+      }
+    },
+    {
+      "kind": "grounding.json",
+      "metadata": {
+        "batch_id": "batch-round39-binding"
+      }
+    },
+    {
+      "kind": "verifier.json",
+      "metadata": {
+        "batch_id": "batch-round39-binding"
+      }
+    }
+  ],
+  "golden": {
+    "provenance_bundle_consistency": {
+      "verdict": "fail",
+      "score": 0.1,
+      "reason_tags": [
+        "invalid_source_backed_span",
+        "unbound_citation_source",
+        "unbound_evidence_id"
+      ]
+    },
+    "resolved_batch_parity": {
+      "verdict": "pass",
+      "score": 1,
+      "reason_tags": []
+    },
+    "release_gate_consistency": {
+      "verdict": "fail",
+      "score": 0.7,
+      "reason_tags": [
+        "release_gate_warning_gap"
+      ]
+    },
+    "surface_consistency": {
+      "verdict": "pass",
+      "score": 1,
+      "reason_tags": []
+    }
+  }
+}

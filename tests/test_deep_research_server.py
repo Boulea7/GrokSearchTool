@@ -131,6 +131,7 @@ def with_minimal_provenance_artifacts(
             "passed": True,
             "checked_packet_count": 0,
             "missing_selected_packet_ids": [],
+            "missing_selected_row_ids": [],
             "reason_codes": [],
         },
     }
@@ -987,6 +988,15 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
     assert result["operator_summary"]["current_checkpoint_kind"] == result["current_checkpoint_kind"]
     assert status["operator_summary"]["artifact_visibility_reason"] == status["artifact_visibility_reason"]
     assert result["operator_summary"]["artifact_visibility_reason"] == result["artifact_visibility_reason"]
+    for field in (
+        "watch_attach_after_seq",
+        "attempt_window_start_seq",
+        "partial_payload_available",
+        "artifact_fallback_used",
+        "resolved_artifact_batch_id",
+    ):
+        assert status["operator_summary"][field] == status[field]
+        assert result["operator_summary"][field] == result[field]
     assert listing["jobs"][0]["job_id"] == response["job_id"]
 
 
@@ -1390,10 +1400,14 @@ async def test_deep_research_result_hidden_final_artifacts_use_visibility_reason
     )
 
     result = await server.deep_research_result(job.job_id)
+    artifact = await server.deep_research_artifact(job.job_id, "final_report.md")
 
     assert result["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
     assert result["artifact_errors"]["report.json"] == "unresolved_batch_backed_final_artifacts_hidden"
     assert result["artifact_errors"]["coverage.json"] == "unresolved_batch_backed_final_artifacts_hidden"
+    assert artifact["state"] == "hidden"
+    assert artifact["content"] is None
+    assert artifact["artifact_visibility_reason"] == "unresolved_batch_backed_final_artifacts_hidden"
 
 
 @pytest.mark.asyncio
@@ -1467,6 +1481,68 @@ async def test_deep_research_recent_probe_events_after_seq_match_fixture(monkeyp
             (event["seq"], event["type"], event["phase"])
             for event in snapshot["events_after_seq"]
         ]
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round37_lifecycle_fixture_malformed_batch_probe_matches_server_result(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        "probe_round37_lifecycle_public_surface.json",
+        request_fingerprint="fp-server-round37-lifecycle-malformed-batch",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+    malformed_probe = snapshot["malformed_batch_probe"]
+    report_path = runtime.store.artifacts_dir / job.job_id / "batches" / seeded["batch_id"] / "report.json"
+
+    report_path.write_text("{not-valid-json", encoding="utf-8")
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    assert status["status"] == malformed_probe["after_corrupt_result_status"]
+    assert result["status"] == malformed_probe["after_corrupt_result_status"]
+    assert (result["report"] is None) is malformed_probe["after_corrupt_report_is_none"]
+    assert result["artifact_errors"] == malformed_probe["after_corrupt_artifact_errors"]
+    assert result["artifact_visibility_reason"] == malformed_probe["after_corrupt_artifact_visibility_reason"]
+
+
+@pytest.mark.asyncio
+async def test_deep_research_round38_aws_dms_partial_failure_fixture_preserves_partial_artifacts(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_live_probe_fixture_job(
+        runtime,
+        "probe_round38_aws_dms_partial_failure.json",
+        request_fingerprint="fp-server-round38-aws-dms-partial-failure",
+    )
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    status = await server.deep_research_status(job.job_id)
+    result = await server.deep_research_result(job.job_id)
+
+    status_surface = snapshot["public_surface"]["status"]
+    result_surface = snapshot["public_surface"]["result"]
+    assert status["status"] == status_surface["status"]
+    assert status["phase"] == status_surface["phase"]
+    assert status["current_checkpoint"] == status_surface["current_checkpoint"]
+    assert status["current_checkpoint_kind"] == status_surface["current_checkpoint_kind"]
+    assert status["resolved_artifact_batch_id"] == status_surface["resolved_artifact_batch_id"]
+    assert status["artifact_visibility_reason"] == status_surface["artifact_visibility_reason"]
+    assert status["runtime_warnings"] == status_surface["runtime_warnings"]
+    assert all(kind in status["artifact_kinds"] for kind in status_surface["artifact_kinds"])
+    assert result["status"] == result_surface["status"]
+    assert result["phase"] == result_surface["phase"]
+    assert result["resolved_artifact_batch_id"] == result_surface["resolved_artifact_batch_id"]
+    assert result["artifact_visibility_reason"] == result_surface["artifact_visibility_reason"]
+    assert result["runtime_warnings"] == result_surface["runtime_warnings"]
+    assert result["report"] is None
+    assert result["final_report"] is None
+    assert result["selected_bank"] == snapshot["selected_bank"]
+    assert result["artifact_errors"] == result_surface["artifact_errors"]
 
 
 @pytest.mark.asyncio
@@ -1683,6 +1759,7 @@ async def test_deep_research_canceled_finalizing_status_and_result_expose_resolv
 
     status = await server.deep_research_status(job.job_id)
     result = await server.deep_research_result(job.job_id)
+    artifact = await server.deep_research_artifact(job.job_id, "evidence_items.json")
 
     assert status["status"] == "canceled"
     assert status["phase"] == "finalizing"
@@ -1697,6 +1774,9 @@ async def test_deep_research_canceled_finalizing_status_and_result_expose_resolv
     assert result["report"]["summary"] == "Recovered final batch report"
     assert result["sources"][0]["url"] == "https://good.example.com/runtime/recovery"
     assert any(artifact["kind"] == "evidence_items.json" for artifact in result["artifacts"])
+    assert artifact["state"] == "available"
+    assert json.loads(artifact["content"]) == seeded["evidence_items"]
+    assert artifact["artifact_visibility_reason"] == ""
 
 
 @pytest.mark.asyncio
@@ -1710,6 +1790,63 @@ async def test_deep_research_result_forwards_include_partial_flag(monkeypatch, t
     result = await server.deep_research_result("job-include-partial", include_partial=False)
 
     assert result == {"job_id": "job-include-partial", "include_partial": False}
+
+
+@pytest.mark.asyncio
+async def test_deep_research_artifact_uses_runtime_visibility_state(monkeypatch, tmp_path):
+    class FakeRuntime:
+        def read_artifact(self, job_id, kind):
+            return {
+                "content": "# Final Report\n\nArtifact body.",
+                "state": "available",
+                "artifact_visibility_reason": "",
+            }
+
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", FakeRuntime())
+
+    result = await server.deep_research_artifact("job-artifact", "final_report.md")
+
+    assert result == {
+        "job_id": "job-artifact",
+        "artifact": "final_report.md",
+        "content": "# Final Report\n\nArtifact body.",
+        "state": "available",
+        "artifact_visibility_reason": "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_deep_research_result_include_partial_false_hides_real_partial_payload(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    job = runtime.store.create_job(
+        query="Server include_partial false",
+        request_fingerprint="fp-server-include-partial-false",
+        status="running",
+        phase="researching",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "partial_report.md", "# Partial Report\n\nStill working.\n", "text/markdown")
+    runtime.write_artifact(
+        job.job_id,
+        "verification.json",
+        json.dumps({"packet_to_prose_fidelity": {"passed": True}}),
+        "application/json",
+    )
+
+    result = await server.deep_research_result(job.job_id, include_partial=False)
+
+    assert result["partial_report"] is None
+    assert result["partial_payload"] is None
+    assert result["operator_summary"]["partial_payload_available"] is False
+    assert result["operator_summary"]["partial_payload_available"] == result["partial_payload_available"]
 
 
 @pytest.mark.asyncio

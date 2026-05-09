@@ -258,6 +258,9 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "TAVILY_API_URL",
         "TAVILY_ENABLED",
         "TAVILY_API_KEY",
+        "TAVILY_FALLBACK_ENABLED",
+        "TAVILY_FALLBACK_API_URL",
+        "TAVILY_FALLBACK_API_KEY",
         "FIRECRAWL_API_URL",
         "FIRECRAWL_API_KEY",
         "config_status",
@@ -6402,6 +6405,200 @@ async def test_call_tavily_extract_uses_expected_transport_contract(monkeypatch)
     assert captured["headers"]["Content-Type"] == "application/json"
     assert captured["json"]["urls"] == ["https://example.com"]
     assert captured["json"]["format"] == "markdown"
+
+
+@pytest.mark.asyncio
+async def test_call_tavily_extract_uses_remote_fallback_when_local_endpoint_is_unavailable(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "local-key")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    monkeypatch.setenv("TAVILY_API_URL", "http://127.0.0.1:18080")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://tavily-fallback.example.com/api/tavily")
+    requests = []
+
+    class CapturingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            requests.append({"url": url, "headers": headers, "json": json})
+            if url.startswith("http://127.0.0.1:18080"):
+                raise httpx.ConnectError("connection refused", request=httpx.Request("POST", url))
+            response = httpx.Response(200, json={"results": [{"raw_content": "# remote ok"}]})
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", CapturingAsyncClient)
+
+    content, error = await server._call_tavily_extract("https://example.com")
+
+    assert error is None
+    assert content == "# remote ok"
+    assert [request["url"] for request in requests] == [
+        "http://127.0.0.1:18080/extract",
+        "https://tavily-fallback.example.com/api/tavily/extract",
+    ]
+    assert requests[0]["headers"]["Authorization"] == "Bearer local-key"
+    assert requests[1]["headers"]["Authorization"] == "Bearer fallback-key"
+
+
+def test_tavily_api_candidates_respect_fallback_switch_force_and_dedupe(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "local-key")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    monkeypatch.setenv("TAVILY_API_URL", "http://127.0.0.1:18080")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://fallback.example.com/api")
+    monkeypatch.setenv("TAVILY_FALLBACK_ENABLED", "false")
+
+    assert [candidate["api_url"] for candidate in server._tavily_api_candidates()] == ["http://127.0.0.1:18080"]
+
+    monkeypatch.setenv("TAVILY_FALLBACK_ENABLED", "true")
+    assert [candidate["api_url"] for candidate in server._tavily_api_candidates()] == [
+        "http://127.0.0.1:18080",
+        "https://fallback.example.com/api",
+    ]
+
+    monkeypatch.setenv("TAVILY_API_URL", "https://api.tavily.com")
+    monkeypatch.setenv("TAVILY_FALLBACK_FORCE", "true")
+    assert [candidate["api_url"] for candidate in server._tavily_api_candidates()] == [
+        "https://api.tavily.com",
+        "https://fallback.example.com/api",
+    ]
+
+    monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://api.tavily.com")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "local-key")
+    assert server._tavily_api_candidates() == [
+        {"label": "Tavily", "api_url": "https://api.tavily.com", "api_key": "local-key"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_call_tavily_search_uses_remote_fallback_when_local_endpoint_is_unavailable(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "local-key")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    monkeypatch.setenv("TAVILY_API_URL", "http://127.0.0.1:18080")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://fallback.example.com/api")
+    requests = []
+
+    class CapturingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            requests.append({"url": url, "headers": headers, "json": json})
+            if url.startswith("http://127.0.0.1:18080"):
+                raise httpx.ConnectError("connection refused", request=httpx.Request("POST", url))
+            response = httpx.Response(200, json={"results": [{"title": "Doc", "url": "https://docs.example.com", "content": "ok"}]})
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", CapturingAsyncClient)
+
+    result = await server._call_tavily_search("fallback search", include_domains=["docs.example.com"])
+
+    assert result == [{"title": "Doc", "url": "https://docs.example.com", "content": "ok", "score": None}]
+    assert [request["url"] for request in requests] == [
+        "http://127.0.0.1:18080/search",
+        "https://fallback.example.com/api/search",
+    ]
+    assert requests[1]["headers"]["Authorization"] == "Bearer fallback-key"
+    assert requests[1]["json"]["include_domains"] == ["docs.example.com"]
+
+
+@pytest.mark.asyncio
+async def test_call_tavily_map_uses_remote_fallback_when_local_endpoint_is_unavailable(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "local-key")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("TAVILY_ENABLED", "true")
+    monkeypatch.setenv("TAVILY_API_URL", "http://127.0.0.1:18080")
+    monkeypatch.setenv("TAVILY_FALLBACK_API_URL", "https://fallback.example.com/api")
+    requests = []
+
+    class CapturingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            requests.append({"url": url, "headers": headers, "json": json})
+            if url.startswith("http://127.0.0.1:18080"):
+                raise httpx.ConnectError("connection refused", request=httpx.Request("POST", url))
+            response = httpx.Response(
+                200,
+                json={"base_url": "https://docs.example.com", "results": ["https://docs.example.com/a"], "response_time": 0.1},
+            )
+            response.request = httpx.Request("POST", url, headers=headers, json=json)
+            return response
+
+    monkeypatch.setattr(httpx, "AsyncClient", CapturingAsyncClient)
+
+    result = await server._call_tavily_map("https://docs.example.com", instructions="docs only")
+
+    payload = json.loads(result)
+    assert payload["results"] == ["https://docs.example.com/a"]
+    assert [request["url"] for request in requests] == [
+        "http://127.0.0.1:18080/map",
+        "https://fallback.example.com/api/map",
+    ]
+    assert requests[1]["headers"]["Authorization"] == "Bearer fallback-key"
+    assert requests[1]["json"]["instructions"] == "docs only"
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_object_reports_tavily_provider_metadata(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+
+    async def fake_tavily_extract(url):
+        return "# Tavily content", None
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily_extract)
+
+    result = await server.web_fetch("https://example.com/page", response_format="object")
+
+    assert result["ok"] is True
+    assert result["data"]["content"] == "# Tavily content"
+    assert result["data"]["provider_name"] == "tavily"
+    assert result["data"]["provider_api_url"] == "https://api.tavily.com/extract"
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_object_reports_firecrawl_fallback_metadata(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    async def fake_tavily_extract(url):
+        return None, "Tavily unavailable"
+
+    async def fake_firecrawl_scrape(url, ctx=None, *, max_retries=None):
+        return "# Firecrawl content", None
+
+    monkeypatch.setattr(server, "_call_tavily_extract", fake_tavily_extract)
+    monkeypatch.setattr(server, "_call_firecrawl_scrape", fake_firecrawl_scrape)
+
+    result = await server.web_fetch("https://example.com/page", response_format="object")
+
+    assert result["ok"] is True
+    assert result["data"]["content"] == "# Firecrawl content"
+    assert result["data"]["provider_name"] == "firecrawl"
+    assert result["data"]["provider_api_url"] == "https://api.firecrawl.dev/v2/scrape"
 
 
 @pytest.mark.asyncio

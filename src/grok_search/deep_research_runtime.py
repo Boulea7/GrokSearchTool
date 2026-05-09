@@ -225,6 +225,7 @@ _STRUCTURAL_SAFE_QUERY_REPAIR_SOURCES = {
 }
 _NON_BLOCKING_VERIFIER_REASON_CODES = {
     "medium_single_source_search_only",
+    "official_doc_family_single_page_only",
     "selected_evidence_unused",
 }
 _EVIDENCE_ITEMS_ARTIFACT_KIND = "evidence_items.json"
@@ -253,6 +254,13 @@ _ADDITIVE_FINAL_ARTIFACT_KINDS = (
     _COVERAGE_GAPS_ARTIFACT_KIND,
 )
 _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS = _FINAL_ARTIFACT_KINDS + _ADDITIVE_FINAL_ARTIFACT_KINDS
+_TERMINAL_EVENT_TYPES = {
+    "job_canceled",
+    "job_completed",
+    "job_failed",
+    "job_interrupted",
+    "job_resolved_from_final_batch",
+}
 _UNRESOLVED_BATCH_BACKED_FINAL_ARTIFACTS_HIDDEN = "unresolved_batch_backed_final_artifacts_hidden"
 _DEFAULT_SEARCH_QUERY_FN = None
 _RUNTIME_RECONCILE_STALE_SECONDS = 30
@@ -327,6 +335,23 @@ def _stable_text_key(value: str) -> str:
 def _tokenize_keywords(value: str) -> list[str]:
     tokens = re.findall(r"[a-z0-9][a-z0-9+.-]*", (value or "").lower())
     return [token for token in tokens if len(token) > 2 and token not in _STOPWORDS and not token.isdigit()]
+
+
+def _query_identifier_terms(value: str) -> list[str]:
+    identifiers: list[str] = []
+    for raw_term in re.findall(r"[A-Za-z][A-Za-z0-9_]{4,}", str(value or "")):
+        normalized_term = raw_term.strip().lower()
+        if (
+            normalized_term
+            and (
+                "_" in raw_term
+                or re.search(r"[A-Z]", raw_term)
+                or len(normalized_term) >= 14
+            )
+            and normalized_term not in identifiers
+        ):
+            identifiers.append(normalized_term)
+    return identifiers
 
 
 def _is_noisy_text(value: str) -> bool:
@@ -573,6 +598,63 @@ def _source_doc_traits(source: dict[str, Any]) -> set[str]:
     return traits
 
 
+def _docs_aws_namespace_priority(source: dict[str, Any], reference_texts: list[str] | None = None) -> int:
+    url = str(source.get("url", "") or "").lower()
+    domain = str(source.get("domain", "") or "").lower()
+    if "docs.aws.amazon.com" not in url and domain != "docs.aws.amazon.com":
+        return 0
+    reference_text_values = [str(value or "") for value in reference_texts or []]
+    reference = " ".join(reference_text_values).lower()
+    if not _aws_dms_intent_signals(reference):
+        return 0
+    traits = _source_doc_traits(source)
+    if "/dms/latest/" in url:
+        return 2
+    if "/cli/latest/reference/dms/" in url:
+        return 2
+    if "prescriptive_guidance" in traits or "troubleshooting" in traits:
+        return -2
+    identifier_terms = _query_identifier_terms(reference)
+    source_text = " ".join(
+        str(source.get(key, "") or "").lower()
+        for key in ("title", "description", "url")
+    )
+    dms_source_signals = (
+        "databasemigrationservice",
+        "/dms/",
+        " aws dms",
+        "replicationtask",
+        "recoverytimeout",
+        "awsdms_txn_state",
+        "cdcstartposition",
+    )
+    if any(term and term in source_text for term in identifier_terms) and any(
+        signal in f" {source_text} " for signal in dms_source_signals
+    ):
+        return 3
+    return -2
+
+
+def _aws_dms_intent_signals(text: str) -> tuple[str, ...]:
+    normalized = f" {str(text or '').lower()} "
+    signals = (
+        ("aws dms", "aws_dms"),
+        ("databasemigrationservice", "databasemigrationservice"),
+        (" describereplicationtasks", "describe_replication_tasks"),
+        (" startreplicationtask", "start_replication_task"),
+        (" modifyreplicationtask", "modify_replication_task"),
+        (" cdcstartposition", "cdc_start_position"),
+        (" recoverycheckpoint", "recovery_checkpoint"),
+        (" awsdms_txn_state", "awsdms_txn_state"),
+        (" recoverytimeout", "recovery_timeout"),
+        (" replication task", "replication_task"),
+        (" postgres", "postgres"),
+        (" resume", "resume"),
+        (" restart", "restart"),
+    )
+    return tuple(label for marker, label in signals if marker in normalized)
+
+
 def _continuation_anchor_terms(continuation: DeepResearchContinuationState) -> list[str]:
     texts = [
         continuation.continuation_goal,
@@ -768,6 +850,11 @@ def _compact_continuation(continuation: DeepResearchContinuationState) -> DeepRe
         state_version=continuation.state_version,
         confirmed_claims=list(continuation.confirmed_claims),
         open_questions=list(continuation.open_questions),
+        follow_up_hints=[dict(item) for item in continuation.follow_up_hints if isinstance(item, dict)],
+        suggested_research_units=[
+            dict(item) for item in continuation.suggested_research_units if isinstance(item, dict)
+        ],
+        coverage_gap_scopes=dict(continuation.coverage_gap_scopes),
         trusted_source_headers=list(continuation.trusted_source_headers),
         carry_forward_constraints=dict(continuation.carry_forward_constraints),
         skipped_unit_ids=list(continuation.skipped_unit_ids),
@@ -788,6 +875,9 @@ def _focused_continuation_snapshot(
     prior_plan_summary: str,
     confirmed_claims: list[str],
     open_questions: list[str],
+    follow_up_hints: list[dict[str, Any]],
+    suggested_research_units: list[dict[str, Any]],
+    coverage_gap_scopes: dict[str, str],
     trusted_source_headers: list[str],
     carry_forward_constraints: dict[str, Any],
     skipped_unit_ids: list[str],
@@ -809,6 +899,11 @@ def _focused_continuation_snapshot(
         "prior_plan_summary": _trim_text(prior_plan_summary, limit=400),
         "confirmed_claims": _dedupe_preserve_order(confirmed_claims),
         "open_questions": _dedupe_preserve_order(open_questions),
+        "follow_up_hints": [dict(item) for item in follow_up_hints if isinstance(item, dict)],
+        "suggested_research_units": [
+            dict(item) for item in suggested_research_units if isinstance(item, dict)
+        ],
+        "coverage_gap_scopes": dict(coverage_gap_scopes or {}),
         "trusted_source_headers": _dedupe_preserve_order(trusted_source_headers),
         "carry_forward_constraints": dict(carry_forward_constraints or {}),
         "skipped_unit_ids": _dedupe_preserve_order(skipped_unit_ids),
@@ -1053,6 +1148,11 @@ def _hydrate_continuation_snapshot(continuation: DeepResearchContinuationState) 
             prior_plan_summary=continuation.prior_plan_summary,
             confirmed_claims=list(continuation.confirmed_claims),
             open_questions=list(continuation.open_questions),
+            follow_up_hints=[dict(item) for item in continuation.follow_up_hints if isinstance(item, dict)],
+            suggested_research_units=[
+                dict(item) for item in continuation.suggested_research_units if isinstance(item, dict)
+            ],
+            coverage_gap_scopes=dict(continuation.coverage_gap_scopes),
             trusted_source_headers=list(continuation.trusted_source_headers),
             carry_forward_constraints=dict(continuation.carry_forward_constraints),
             skipped_unit_ids=list(continuation.skipped_unit_ids),
@@ -1397,6 +1497,9 @@ def _strip_summary_scaffolding(value: str) -> str:
         "low confidence:",
         "key point:",
         "key finding:",
+        "excerpt:",
+        "selected packet:",
+        "source excerpt:",
         "overall,",
     )
     changed = True
@@ -1463,6 +1566,56 @@ def _parse_json_object(value: str) -> dict[str, Any]:
     return parsed
 
 
+def _extract_embedded_json_object(text: str) -> tuple[dict[str, Any], str] | None:
+    decoder = json.JSONDecoder()
+    best_candidate: tuple[dict[str, Any], str, int] | None = None
+    for index, char in enumerate(text):
+        if char not in "{[":
+            continue
+        try:
+            parsed, end_index = decoder.raw_decode(text[index:])
+        except Exception:
+            continue
+        if isinstance(parsed, str):
+            nested = parsed.strip()
+            if nested.startswith("{") or nested.startswith("["):
+                try:
+                    parsed = json.loads(nested)
+                except Exception:
+                    continue
+        if isinstance(parsed, dict):
+            extracted_text = text[index : index + end_index]
+            score = _embedded_json_object_score(parsed)
+            if best_candidate is None or score > best_candidate[2]:
+                best_candidate = (parsed, extracted_text, score)
+                if score >= 12:
+                    break
+    if best_candidate is None:
+        return None
+    return best_candidate[0], best_candidate[1]
+
+
+def _embedded_json_object_score(parsed: dict[str, Any]) -> int:
+    score = 0
+    if isinstance(parsed.get("brief"), dict):
+        score += 8
+    if isinstance(parsed.get("sub_questions"), list):
+        score += 4
+    if isinstance(parsed.get("search_strategy"), dict):
+        score += 4
+    if isinstance(parsed.get("report_outline"), list):
+        score += 4
+    if isinstance(parsed.get("research_units"), list):
+        score += 3
+    if isinstance(parsed.get("planner_metadata"), dict):
+        score += 2
+    if isinstance(parsed.get("query"), str) and parsed.get("query", "").strip():
+        score += 1
+    if isinstance(parsed.get("context"), str):
+        score += 1
+    return score
+
+
 def _parse_json_object_with_trace(value: str) -> tuple[dict[str, Any], dict[str, Any]]:
     text = (value or "").strip()
     trace = {
@@ -1478,7 +1631,15 @@ def _parse_json_object_with_trace(value: str) -> tuple[dict[str, Any], dict[str,
         trace["fenced_json_detected"] = True
         trace["parse_path"] = "fenced_json"
         text = fenced.group(1).strip()
-    parsed = json.loads(text)
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        embedded = _extract_embedded_json_object(text)
+        if embedded is None:
+            raise
+        parsed, extracted_text = embedded
+        trace["parse_path"] = "embedded_json"
+        trace["embedded_json_preview"] = _trim_text(extracted_text, limit=200)
     trace["parsed_type"] = type(parsed).__name__
     if isinstance(parsed, str):
         nested = parsed.strip()
@@ -1599,14 +1760,25 @@ def _current_final_artifact_bundle(store: DeepResearchStore, job_id: str) -> dic
     return {"batch_id": batch_id, "paths": paths}
 
 
+def _read_batch_manifest(batch_dir: Path) -> dict[str, Any]:
+    manifest_path = batch_dir / "manifest.json"
+    text = _read_text_if_exists(manifest_path)
+    value, error = _safe_load_json_artifact(text)
+    if error is not None or not isinstance(value, dict):
+        return {}
+    return value
+
+
 def _batch_bundle_candidate_from_dir(batch_dir: Path) -> dict[str, Any]:
+    manifest = _read_batch_manifest(batch_dir)
     return {
-        "batch_id": batch_dir.name,
+        "batch_id": str(manifest.get("batch_id", "") or batch_dir.name),
         "paths": {
             kind: batch_dir / kind
             for kind in _FINAL_ARTIFACT_KINDS
             if (batch_dir / kind).exists()
         },
+        "manifest": manifest,
     }
 
 
@@ -1614,12 +1786,31 @@ def _batch_bundle_candidates(store: DeepResearchStore, job_id: str) -> list[dict
     batches_dir = store.artifacts_dir / job_id / "batches"
     if not batches_dir.exists():
         return []
-    candidates = sorted(
-        (path for path in batches_dir.iterdir() if path.is_dir()),
-        key=lambda path: (path.stat().st_mtime_ns, path.name),
-        reverse=True,
-    )
-    return [_batch_bundle_candidate_from_dir(path) for path in candidates]
+    candidates = [_batch_bundle_candidate_from_dir(path) for path in batches_dir.iterdir() if path.is_dir()]
+
+    def sort_key(candidate: dict[str, Any]) -> tuple[int, int, dt.datetime, int, str]:
+        manifest = candidate.get("manifest") or {}
+        completeness_ok = 1 if bool(manifest.get("completeness_ok")) else 0
+        try:
+            attempt_count = int(manifest.get("attempt_count") or 0)
+        except (TypeError, ValueError):
+            attempt_count = 0
+        created_at = _parse_utc_iso(str(manifest.get("created_at", "") or "")) or dt.datetime.fromtimestamp(
+            next(iter(candidate.get("paths", {}).values()), batches_dir).stat().st_mtime,
+            tz=dt.UTC,
+        )
+        latest_mtime_ns = max(
+            [path.stat().st_mtime_ns for path in candidate.get("paths", {}).values()] or [0]
+        )
+        return (
+            completeness_ok,
+            attempt_count,
+            created_at,
+            latest_mtime_ns,
+            str(candidate.get("batch_id", "") or ""),
+        )
+
+    return sorted(candidates, key=sort_key, reverse=True)
 
 
 def _latest_batch_bundle_candidate(store: DeepResearchStore, job_id: str) -> dict[str, Any] | None:
@@ -1853,7 +2044,26 @@ def _coverage_gaps_matches_report(
         query=str(coverage_gaps_value.get("query", "") or report_value.get("query", "") or ""),
         coverage=report_coverage,
     )
-    return coverage_gaps_value == expected_payload
+    gaps_value = coverage_gaps_value.get("gaps")
+    legacy_gap_shape = isinstance(gaps_value, list) and not any(
+        isinstance(gap, dict) and "blocking_scope" in gap for gap in gaps_value
+    )
+    if legacy_gap_shape:
+        legacy_keys = {
+            "query",
+            "unanswered_sections",
+            "uncovered_sub_questions",
+            "hard_uncovered_targets",
+            "coverage_gate_passed",
+            "hard_coverage_gate_passed",
+            "hard_gap_count",
+            "total_gap_count",
+        }
+        return all(coverage_gaps_value.get(key) == expected_payload.get(key) for key in legacy_keys)
+    for key, value in coverage_gaps_value.items():
+        if expected_payload.get(key) != value:
+            return False
+    return True
 
 
 def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
@@ -1967,6 +2177,24 @@ def _read_batch_artifact_text(bundle: dict[str, Any] | None, kind: str) -> str |
     return _read_text_if_exists(anchor_path.parent / kind)
 
 
+def _read_public_artifact_text(
+    store: DeepResearchStore,
+    job_id: str,
+    kind: str,
+    *,
+    final_bundle: dict[str, Any] | None,
+    unresolved_batch_backed: bool,
+) -> str | None:
+    if final_bundle is not None:
+        if kind in final_bundle.get("paths", {}):
+            return _read_text_if_exists(final_bundle["paths"][kind])
+        if kind in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS:
+            return _read_batch_artifact_text(final_bundle, kind)
+    if unresolved_batch_backed and kind in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS:
+        return None
+    return store.read_artifact_text(job_id, kind)
+
+
 def _complete_batch_bundles(store: DeepResearchStore, job_id: str) -> list[dict[str, Any]]:
     bundles: list[dict[str, Any]] = []
     for bundle in _batch_bundle_candidates(store, job_id):
@@ -2042,6 +2270,14 @@ def _artifact_bundle_identity(store: DeepResearchStore, job_id: str) -> str:
     return ""
 
 
+def _attempt_id(attempt_count: int | None) -> str:
+    try:
+        normalized = int(attempt_count or 0)
+    except (TypeError, ValueError):
+        normalized = 0
+    return f"attempt-{normalized}" if normalized > 0 else ""
+
+
 def _continuation_source_is_recoverable(
     store: DeepResearchStore,
     source_job: DeepResearchJob,
@@ -2064,7 +2300,12 @@ def _continuation_source_is_recoverable(
                 _normalize_whitespace(continuation.prior_plan_summary),
             )
         ):
-            return True
+            if store.read_artifact_text(source_job.job_id, "report.json"):
+                return True
+            if store.read_artifact_text(source_job.job_id, "plan.json"):
+                return True
+            if store.list_checkpoints(source_job.job_id):
+                return True
     return False
 
 
@@ -2180,6 +2421,7 @@ def _operator_summary_payload(
         "status": job.status,
         "phase": job.phase,
         "attempt_count": job.attempt_count,
+        "attempt_id": _attempt_id(job.attempt_count),
         "current_checkpoint": current_checkpoint,
         "current_checkpoint_kind": _checkpoint_kind(current_checkpoint),
         "current_checkpoint_seq": 0,
@@ -2192,6 +2434,148 @@ def _operator_summary_payload(
         "artifact_fallback_used": False,
         "artifact_visibility_reason": "",
     }
+
+
+def _attempt_window_anchor_seq(
+    store: DeepResearchStore,
+    job: DeepResearchJob,
+) -> int:
+    try:
+        numeric_attempts = int(job.attempt_count or 0)
+    except (TypeError, ValueError):
+        numeric_attempts = 0
+    if numeric_attempts <= 1 and not str(job.continued_from_job_id or "").strip():
+        return 0
+    current_attempt_id = _attempt_id(numeric_attempts)
+    previous_attempt_id = _attempt_id(max(0, numeric_attempts - 1)) if numeric_attempts > 1 else ""
+    previous_attempt_count = max(0, numeric_attempts - 1)
+    anchor_seq = 0
+    for event in _iter_job_events_paginated(store, job.job_id, page_limit=10_000):
+        event_type = str(event.type or "").strip()
+        data = event.data if isinstance(event.data, dict) else {}
+        attempt_id = str(data.get("attempt_id", "") or "").strip()
+        attempt_count_value = data.get("attempt_count")
+        try:
+            attempt_count = int(attempt_count_value)
+        except (TypeError, ValueError):
+            attempt_count = None
+        if event_type in _TERMINAL_EVENT_TYPES and (
+            (previous_attempt_id and attempt_id == previous_attempt_id)
+            or (previous_attempt_count > 0 and attempt_count == previous_attempt_count)
+        ):
+            anchor_seq = max(anchor_seq, event.seq)
+            continue
+        if event_type == "job_resumed" and (
+            attempt_id == current_attempt_id or (attempt_count is not None and attempt_count == numeric_attempts)
+        ):
+            return max(anchor_seq, max(0, event.seq - 1))
+    return anchor_seq
+
+
+def _iter_job_events_paginated(
+    store: DeepResearchStore,
+    job_id: str,
+    *,
+    page_limit: int,
+):
+    after_seq = 0
+    normalized_limit = max(1, int(page_limit or 0))
+    while True:
+        page = list(store.list_events(job_id, after_seq=after_seq, limit=normalized_limit))
+        if not page:
+            return
+        for event in page:
+            yield event
+        if len(page) < normalized_limit:
+            return
+        after_seq = max(int(getattr(page[-1], "seq", after_seq) or after_seq), after_seq)
+
+
+def _safe_load_optional_json_artifact_with_error(
+    store: DeepResearchStore,
+    job_id: str,
+    kind: str,
+) -> tuple[Any | None, str | None]:
+    text = store.read_artifact_text(job_id, kind)
+    value, error = _safe_load_json_artifact(text)
+    if error is not None:
+        return None, error
+    shape_error = _validate_json_artifact_shape(kind, value)
+    if shape_error is not None:
+        return None, shape_error
+    return value, None
+
+
+def _partial_payload(
+    store: DeepResearchStore,
+    job: DeepResearchJob,
+    *,
+    include_partial_report: bool,
+) -> dict[str, Any] | None:
+    if not include_partial_report:
+        return None
+    if _job_prefers_resolved_final_bundle(job) and _resolve_final_artifact_bundle(store, job.job_id) is not None:
+        return None
+    payload: dict[str, Any] = {
+        "partial_report": store.read_artifact_text(job.job_id, "partial_report.md"),
+    }
+    artifact_errors: dict[str, str] = {}
+    json_fields = {
+        "plan": "plan.json",
+        "source_policy": "source_policy.json",
+        "lineage": "lineage.json",
+        "outline_state": "outline_state.json",
+        "outline_versions": "outline_versions.json",
+        "section_graph": "section_graph.json",
+        "evidence_ledger": "evidence_ledger.json",
+        "section_banks": "section_banks.json",
+        "selected_bank": _SELECTED_BANK_ARTIFACT_KIND,
+        "evidence_bank": _EVIDENCE_BANK_ARTIFACT_KIND,
+        "verification": _VERIFICATION_ARTIFACT_KIND,
+        "coverage_gaps": _COVERAGE_GAPS_ARTIFACT_KIND,
+    }
+    for field_name, kind in json_fields.items():
+        value, error = _safe_load_optional_json_artifact_with_error(store, job.job_id, kind)
+        payload[field_name] = value
+        if error is not None:
+            artifact_errors[kind] = error
+    payload["partial_artifact_errors"] = artifact_errors
+    if not any(value not in (None, "", [], {}) for value in payload.values()) and not artifact_errors:
+        return None
+    return payload
+
+
+def _attach_operator_surface_fields(
+    payload: dict[str, Any],
+    *,
+    store: DeepResearchStore,
+    job: DeepResearchJob,
+    diagnostics: dict[str, Any],
+    final_bundle: dict[str, Any] | None,
+    include_partial_report: bool,
+) -> dict[str, Any]:
+    watch_attach_after_seq = _attempt_window_anchor_seq(store, job)
+    payload["watch_attach_after_seq"] = watch_attach_after_seq
+    payload["attempt_window_start_seq"] = watch_attach_after_seq + 1 if watch_attach_after_seq > 0 else 0
+    partial_payload = _partial_payload(store, job, include_partial_report=include_partial_report)
+    payload["partial_payload"] = partial_payload
+    payload["partial_payload_available"] = partial_payload is not None
+    payload["operator_summary"] = {
+        **_operator_summary_payload(
+            job,
+            diagnostics=diagnostics,
+            final_bundle=final_bundle,
+        ),
+        "current_checkpoint_kind": payload["current_checkpoint_kind"],
+        "current_checkpoint_seq": payload["current_checkpoint_seq"],
+        "artifact_fallback_used": payload["artifact_fallback_used"],
+        "artifact_visibility_reason": payload["artifact_visibility_reason"],
+        "resolved_artifact_batch_id": payload["resolved_artifact_batch_id"],
+        "partial_payload_available": payload["partial_payload_available"],
+        "watch_attach_after_seq": watch_attach_after_seq,
+        "attempt_window_start_seq": payload["attempt_window_start_seq"],
+    }
+    return payload
 
 
 def _job_prefers_resolved_final_bundle(job: DeepResearchJob) -> bool:
@@ -2448,7 +2832,12 @@ def _finalize_brief_payload(
     coverage_checklist = _normalize_string_list(normalized.get("coverage_checklist"))
     if not coverage_checklist:
         coverage_checklist = list(normalized["must_cover"])
+    full_coverage_checklist = list(coverage_checklist)
     normalized["coverage_checklist"] = _sanitize_follow_up_surface_items(coverage_checklist, limit=6)
+    if len(full_coverage_checklist) > len(normalized["coverage_checklist"]):
+        normalized_scope = dict(normalized.get("scope") or {})
+        normalized_scope["full_coverage_checklist"] = full_coverage_checklist
+        normalized["scope"] = normalized_scope
     return normalized
 
 
@@ -3384,6 +3773,11 @@ def _result_text_covers_item(result: dict[str, Any], item: str) -> bool:
 
 
 def _stop_policy_targets(plan: DeepResearchPlan) -> list[str]:
+    full_checklist = plan.brief.scope.get("full_coverage_checklist") if isinstance(plan.brief.scope, dict) else None
+    if isinstance(full_checklist, list):
+        targets = _normalize_string_list(full_checklist)
+        if targets:
+            return targets
     targets = _normalize_string_list(plan.brief.coverage_checklist)
     if targets:
         return targets
@@ -3442,6 +3836,30 @@ def _artifact_metadata(content: str, *, batch_id: str = "") -> dict[str, Any]:
     return metadata
 
 
+def _batch_manifest_payload(
+    *,
+    batch_id: str,
+    artifacts: list[dict[str, Any]],
+    batch_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = dict(batch_metadata or {})
+    manifest = {
+        "batch_id": batch_id,
+        "attempt_id": str(metadata.get("attempt_id", "") or "").strip(),
+        "attempt_count": int(metadata.get("attempt_count", 0) or 0),
+        "phase": str(metadata.get("phase", "") or "").strip(),
+        "created_at": str(metadata.get("created_at", "") or utc_now_iso()),
+        "artifact_kinds": [
+            str(item.get("kind", "")).strip()
+            for item in artifacts
+            if str(item.get("kind", "")).strip()
+        ],
+        "completeness_ok": bool(metadata.get("completeness_ok", True)),
+        "provenance_digest": str(metadata.get("provenance_digest", "") or "").strip(),
+    }
+    return manifest
+
+
 def _source_policy_payload(
     *,
     job: DeepResearchJob,
@@ -3449,7 +3867,7 @@ def _source_policy_payload(
 ) -> dict[str, Any]:
     include_domains = list(job.include_domains)
     exclude_domains = list(job.exclude_domains)
-    official_doc_mode = any(domain.startswith("docs.") or domain == "docs.aws.amazon.com" for domain in include_domains)
+    official_doc_mode = bool(include_domains) and all(_is_official_doc_domain(domain) for domain in include_domains)
     return {
         "mode": "official_docs_only" if official_doc_mode else "mixed_web",
         "allowed_domains": include_domains,
@@ -3499,18 +3917,43 @@ def _selected_bank_payload(
     *,
     section_banks: list[dict[str, Any]],
     evidence_ledger: list[dict[str, Any]],
+    sections: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     decisions_by_section_evidence: dict[tuple[str, str], dict[str, Any]] = {}
+    valid_claim_ids_by_section: dict[str, set[str]] = {}
+    if sections:
+        valid_claim_ids_by_section = {
+            str(section.get("section_id", "")).strip(): {
+                str(claim.get("claim_id", "")).strip()
+                for claim in section.get("claims", []) or []
+                if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
+            }
+            for section in sections
+            if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+        }
     for entry in evidence_ledger:
         if not isinstance(entry, dict):
             continue
         evidence_id = str(entry.get("evidence_id", "")).strip()
         if not evidence_id:
             continue
+        selected_section_ids = []
         selected_section_id = str(entry.get("selected_section_id", "")).strip()
         if selected_section_id:
+            selected_section_ids.append(selected_section_id)
+        for raw_section_id in entry.get("selected_section_ids", []) or []:
+            normalized_section_id = str(raw_section_id).strip()
+            if normalized_section_id and normalized_section_id not in selected_section_ids:
+                selected_section_ids.append(normalized_section_id)
+        selection_reason = (
+            str(entry.get("disposition_reason", "")).strip()
+            or str(entry.get("selection_reason", "")).strip()
+            or str(entry.get("disposition", "")).strip()
+            or str(entry.get("decision_state", "")).strip()
+        )
+        for selected_section_id in selected_section_ids:
             decisions_by_section_evidence[(selected_section_id, evidence_id)] = {
-                "selection_reason": str(entry.get("disposition_reason", "")).strip(),
+                "selection_reason": selection_reason,
                 "coverage_tags": list(entry.get("question_ids", []) or []),
                 "rejected_reason": "",
             }
@@ -3518,10 +3961,16 @@ def _selected_bank_payload(
             normalized_section_id = str(rejected_section_id).strip()
             if not normalized_section_id:
                 continue
+            rejected_reason = (
+                str(entry.get("rejected_reason", "")).strip()
+                or str(entry.get("disposition_reason", "")).strip()
+                or str(entry.get("decision_state", "")).strip()
+                or "not_selected_for_section"
+            )
             decisions_by_section_evidence[(normalized_section_id, evidence_id)] = {
                 "selection_reason": "",
                 "coverage_tags": list(entry.get("question_ids", []) or []),
-                "rejected_reason": str(entry.get("disposition_reason", "")).strip() or "not_selected_for_section",
+                "rejected_reason": rejected_reason,
             }
     payload: list[dict[str, Any]] = []
     for bank in section_banks:
@@ -3537,6 +3986,20 @@ def _selected_bank_payload(
             evidence_id = str(packet.get("evidence_id", "")).strip()
             if not evidence_id:
                 continue
+            valid_claim_ids = valid_claim_ids_by_section.get(section_id)
+            claim_ids = [
+                claim_id
+                for claim_id in (
+                    str(raw_claim_id).strip()
+                    for raw_claim_id in packet.get("claim_ids", []) or []
+                )
+                if claim_id
+                and (
+                    sections is None
+                    or section_id in valid_claim_ids_by_section
+                    and claim_id in valid_claim_ids
+                )
+            ]
             selection_details = decisions_by_section_evidence.get((section_id, evidence_id), {})
             selected_rows.append(
                 {
@@ -3545,7 +4008,7 @@ def _selected_bank_payload(
                     "selection_reason": str(selection_details.get("selection_reason", "")).strip(),
                     "coverage_tags": list(selection_details.get("coverage_tags", []) or []),
                     "rejected_reason": str(selection_details.get("rejected_reason", "")).strip(),
-                    "claim_ids": list(packet.get("claim_ids", []) or []),
+                    "claim_ids": claim_ids,
                     "question_ids": list(packet.get("question_ids", []) or []),
                 }
             )
@@ -3624,14 +4087,17 @@ def _evidence_bank_payload(
 
 def _build_section_prose(section: dict[str, Any]) -> str:
     summary = _strip_summary_scaffolding(_normalize_whitespace(str(section.get("summary", "") or "")))
-    raw_claim_texts = [
-        _strip_summary_scaffolding(_normalize_whitespace(str(claim.get("text", "") or "")))
-        for claim in section.get("claims", []) or []
-        if isinstance(claim, dict) and _normalize_whitespace(str(claim.get("text", "") or ""))
-    ]
+    claim_texts: list[str] = []
+    for claim in section.get("claims", []) or []:
+        if not isinstance(claim, dict):
+            continue
+        text = _strip_summary_scaffolding(_normalize_whitespace(str(claim.get("text", "") or "")))
+        if not text:
+            continue
+        claim_texts.append(text)
     unique_sentences: list[str] = []
     seen_sentence_keys: set[str] = set()
-    for candidate in [summary, *raw_claim_texts]:
+    for candidate in [*claim_texts, summary]:
         if not candidate or _is_noisy_text(candidate):
             continue
         normalized_candidate = candidate.rstrip(".")
@@ -3689,17 +4155,35 @@ def _supported_claim_inventory(
     verifier: dict[str, Any],
 ) -> tuple[set[str], set[str], set[str]]:
     supported_ids = _supported_claim_ids(verifier)
+    flagged_claim_ids = {
+        str(claim_id).strip()
+        for claim_id in verifier.get("flagged_claim_ids", []) or []
+        if str(claim_id).strip()
+    }
     supported_evidence_ids: set[str] = set()
     supported_source_ids: set[str] = set()
+    has_non_generic_claim_inventory = False
     for section in sections:
         if not isinstance(section, dict):
             continue
+        section_title = str(section.get("title", "") or "")
+        section_is_generic = (
+            is_summary_section_title(section_title)
+            or is_key_findings_section_title(section_title)
+            or is_open_questions_section_title(section_title)
+        )
         for claim in section.get("claims", []) or []:
             if not isinstance(claim, dict):
                 continue
             claim_id = str(claim.get("claim_id", "")).strip()
-            if claim_id and claim_id not in supported_ids:
+            claim_is_supported = bool(claim_id and claim_id in supported_ids)
+            if not claim_is_supported and supported_ids:
                 continue
+            if not claim_is_supported and not supported_ids:
+                if section_is_generic or (claim_id and claim_id in flagged_claim_ids):
+                    continue
+            if not section_is_generic:
+                has_non_generic_claim_inventory = True
             for evidence_id in claim.get("evidence_ids", []) or []:
                 normalized_evidence_id = str(evidence_id).strip()
                 if normalized_evidence_id:
@@ -3708,6 +4192,30 @@ def _supported_claim_inventory(
                 normalized_source_id = str(source_id).strip()
                 if normalized_source_id:
                     supported_source_ids.add(normalized_source_id)
+    if not supported_ids and not has_non_generic_claim_inventory:
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            section_title = str(section.get("title", "") or "")
+            if not (
+                is_summary_section_title(section_title)
+                or is_key_findings_section_title(section_title)
+            ):
+                continue
+            for claim in section.get("claims", []) or []:
+                if not isinstance(claim, dict):
+                    continue
+                claim_id = str(claim.get("claim_id", "")).strip()
+                if claim_id and claim_id in flagged_claim_ids:
+                    continue
+                for evidence_id in claim.get("evidence_ids", []) or []:
+                    normalized_evidence_id = str(evidence_id).strip()
+                    if normalized_evidence_id:
+                        supported_evidence_ids.add(normalized_evidence_id)
+                for source_id in [*(claim.get("source_ids", []) or []), *(claim.get("citations", []) or [])]:
+                    normalized_source_id = str(source_id).strip()
+                    if normalized_source_id:
+                        supported_source_ids.add(normalized_source_id)
     return supported_ids, supported_evidence_ids, supported_source_ids
 
 
@@ -3790,64 +4298,131 @@ def _packet_to_prose_fidelity_payload(
     sections: list[dict[str, Any]],
     final_report: str = "",
 ) -> dict[str, Any]:
-    section_by_id = {
-        str(section.get("section_id", "")).strip(): dict(section)
-        for section in sections
-        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
-    }
+    def _claim_text_reflected(claim_text: str, surface_text_key: str) -> bool:
+        claim_text_key = _stable_text_key(claim_text)
+        if not claim_text_key:
+            return True
+        if claim_text_key in surface_text_key:
+            return True
+        claim_terms = set(_tokenize_keywords(claim_text))
+        if len(claim_terms) < 3:
+            return False
+        surface_terms = set(_tokenize_keywords(surface_text_key))
+        overlap = claim_terms & surface_terms
+        return len(overlap) >= 3 and (len(overlap) / len(claim_terms)) >= 0.6
+
     missing_selected_packet_ids: list[str] = []
+    missing_selected_row_ids: list[str] = []
+    selected_row_outside_selected_evidence_ids: list[str] = []
+    missing_selected_claim_ids: list[str] = []
+    missing_selected_claim_text_ids: list[str] = []
     checked_packet_count = 0
-    final_report_text = _normalize_whitespace(final_report)
-    for bank in selected_bank:
-        if not isinstance(bank, dict):
+    claim_text_by_id: dict[str, str] = {}
+    section_surface_by_claim_id: dict[str, str] = {}
+    report_claim_ids = {
+        str(claim.get("claim_id", "")).strip()
+        for section in sections
+        if isinstance(section, dict)
+        for claim in section.get("claims", []) or []
+        if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
+    }
+    for section in sections:
+        if not isinstance(section, dict):
             continue
-        section_id = str(bank.get("section_id", "")).strip()
-        section = section_by_id.get(section_id, {})
-        section_text = _normalize_whitespace(
+        section_surface = _stable_text_key(
             " ".join(
                 [
-                    str(section.get("summary", "") or ""),
                     str(section.get("prose", "") or ""),
-                    *[
-                        str(claim.get("text", "") or "")
-                        for claim in section.get("claims", []) or []
-                        if isinstance(claim, dict)
-                    ],
+                    str(final_report or ""),
                 ]
             )
         )
+        for claim in section.get("claims", []) or []:
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get("claim_id", "")).strip()
+            claim_text = _strip_summary_scaffolding(_normalize_whitespace(str(claim.get("text", "") or "")))
+            if not claim_id or not claim_text:
+                continue
+            claim_text_by_id[claim_id] = claim_text
+            section_surface_by_claim_id[claim_id] = section_surface
+    for bank in selected_bank:
+        if not isinstance(bank, dict):
+            continue
+        selected_evidence_ids = _dedupe_preserve_order(
+            [
+                str(evidence_id).strip()
+                for evidence_id in bank.get("selected_evidence_ids", []) or []
+                if str(evidence_id).strip()
+            ]
+        )
+        selected_row_ids: list[str] = []
         for row in bank.get("selected_rows", []) or []:
             if not isinstance(row, dict):
                 continue
             evidence_id = str(row.get("evidence_id", "")).strip()
             if not evidence_id:
                 continue
+            selected_row_ids.append(evidence_id)
+            if selected_evidence_ids and evidence_id not in selected_evidence_ids:
+                selected_row_outside_selected_evidence_ids.append(evidence_id)
             checked_packet_count += 1
-            coverage_tags = [
-                _normalize_whitespace(str(tag))
-                for tag in row.get("coverage_tags", []) or []
-                if _normalize_whitespace(str(tag))
-            ]
             claim_ids = [
                 str(claim_id).strip()
                 for claim_id in row.get("claim_ids", []) or []
                 if str(claim_id).strip()
             ]
             packet_reflected = bool(claim_ids)
-            if not packet_reflected and coverage_tags:
-                packet_reflected = any(
-                    _count_keyword_overlap(section_text, _tokenize_keywords(tag)) > 0
-                    or _count_keyword_overlap(final_report_text, _tokenize_keywords(tag)) > 0
-                    for tag in coverage_tags
-                )
             if not packet_reflected:
                 missing_selected_packet_ids.append(evidence_id)
-    passed = not missing_selected_packet_ids
+            missing_selected_claim_ids.extend(
+                claim_id for claim_id in claim_ids if claim_id not in report_claim_ids
+            )
+            for claim_id in claim_ids:
+                claim_text = claim_text_by_id.get(claim_id, "")
+                if not claim_text:
+                    continue
+                section_surface = section_surface_by_claim_id.get(claim_id, "")
+                if not _claim_text_reflected(claim_text, section_surface):
+                    missing_selected_claim_text_ids.append(claim_id)
+        selected_row_id_set = set(selected_row_ids)
+        missing_selected_row_ids.extend(
+            evidence_id for evidence_id in selected_evidence_ids if evidence_id not in selected_row_id_set
+        )
+    missing_selected_packet_ids = _dedupe_preserve_order(missing_selected_packet_ids)
+    missing_selected_row_ids = _dedupe_preserve_order(missing_selected_row_ids)
+    selected_row_outside_selected_evidence_ids = _dedupe_preserve_order(selected_row_outside_selected_evidence_ids)
+    missing_selected_claim_ids = _dedupe_preserve_order(missing_selected_claim_ids)
+    missing_selected_claim_text_ids = _dedupe_preserve_order(missing_selected_claim_text_ids)
+    passed = not any(
+        [
+            missing_selected_packet_ids,
+            missing_selected_row_ids,
+            selected_row_outside_selected_evidence_ids,
+            missing_selected_claim_ids,
+            missing_selected_claim_text_ids,
+        ]
+    )
+    reason_codes: list[str] = []
+    if missing_selected_packet_ids:
+        reason_codes.append("selected_packet_missing_from_prose")
+    if missing_selected_row_ids:
+        reason_codes.append("selected_packet_row_missing")
+    if selected_row_outside_selected_evidence_ids:
+        reason_codes.append("selected_row_outside_selected_evidence")
+    if missing_selected_claim_ids:
+        reason_codes.append("selected_packet_claim_missing_from_surface")
+    if missing_selected_claim_text_ids:
+        reason_codes.append("selected_packet_claim_text_missing_from_prose")
     return {
         "passed": passed,
         "checked_packet_count": checked_packet_count,
-        "missing_selected_packet_ids": _dedupe_preserve_order(missing_selected_packet_ids),
-        "reason_codes": [] if passed else ["selected_packet_missing_from_prose"],
+        "missing_selected_packet_ids": missing_selected_packet_ids,
+        "missing_selected_row_ids": missing_selected_row_ids,
+        "selected_row_outside_selected_evidence_ids": selected_row_outside_selected_evidence_ids,
+        "missing_selected_claim_ids": missing_selected_claim_ids,
+        "missing_selected_claim_text_ids": missing_selected_claim_text_ids,
+        "reason_codes": reason_codes,
     }
 
 
@@ -3867,6 +4442,7 @@ def _verification_payload(
     supported_claims: list[dict[str, Any]] = []
     single_source_claims: list[dict[str, Any]] = []
     conflicted_claims: list[dict[str, Any]] = []
+    all_claims: list[dict[str, Any]] = []
     confidence_by_section: dict[str, str] = {}
     for section in sections:
         if not isinstance(section, dict):
@@ -3884,6 +4460,7 @@ def _verification_payload(
                 "text": str(claim.get("text", "") or ""),
                 "confidence": str(claim.get("confidence", "") or ""),
             }
+            all_claims.append(claim_payload)
             if claim_id and claim_id not in flagged_claim_ids:
                 supported_claims.append(claim_payload)
             supporting_source_count = len(
@@ -3901,22 +4478,27 @@ def _verification_payload(
         final_report=final_report,
     )
     if "conflict" in set(verifier.get("reason_codes", []) or []):
-        conflicted_claims = [
+        derived_conflicted_claims = [
             claim_payload
-            for claim_payload in [*supported_claims, *single_source_claims]
+            for claim_payload in all_claims
             if str(claim_payload.get("claim_id", "")).strip() in flagged_claim_ids
         ]
-        if not conflicted_claims:
-            conflicted_claims = [
-                {
-                    "claim_id": str(claim.get("claim_id", "")).strip(),
-                    "section_id": str(claim.get("section_id", "") or ""),
-                    "text": str(claim.get("text", "") or ""),
-                    "confidence": str(claim.get("confidence", "") or ""),
-                }
-                for claim in verifier.get("conflicted_claims", []) or []
-                if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
-            ]
+        verifier_conflicted_claims = [
+            {
+                "claim_id": str(claim.get("claim_id", "")).strip(),
+                "section_id": str(claim.get("section_id", "") or ""),
+                "text": str(claim.get("text", "") or ""),
+                "confidence": str(claim.get("confidence", "") or ""),
+            }
+            for claim in verifier.get("conflicted_claims", []) or []
+            if isinstance(claim, dict) and str(claim.get("claim_id", "")).strip()
+        ]
+        conflicted_by_id: dict[str, dict[str, Any]] = {}
+        for claim in [*derived_conflicted_claims, *verifier_conflicted_claims]:
+            claim_id = str(claim.get("claim_id", "")).strip()
+            if claim_id and claim_id not in conflicted_by_id:
+                conflicted_by_id[claim_id] = claim
+        conflicted_claims = list(conflicted_by_id.values())
     unresolved_sections = [
         str(title)
         for title in [
@@ -3966,15 +4548,43 @@ def _coverage_gaps_payload(
     hard_uncovered_targets = _dedupe_preserve_order(
         [str(item) for item in coverage.get("hard_uncovered_targets", []) or [] if str(item).strip()]
     )
+    def _gap_hint(target: str, gap_type: str, scope: str) -> dict[str, Any]:
+        query_terms = _normalize_whitespace(f"{query} {target}")
+        include_domains = ["docs.aws.amazon.com"] if _aws_dms_intent_signals(query_terms.lower()) else []
+        return {
+            "target": target,
+            "gap_type": gap_type,
+            "blocking_scope": scope,
+            "search_query": _trim_text(query_terms, limit=180),
+            "reason": gap_type,
+            "source_policy": {"include_domains": include_domains, "exclude_domains": []},
+        }
+
     gaps = [
-        {"gap_type": "unanswered_section", "target": item, "blocking": True}
+        {"gap_type": "unanswered_section", "target": item, "blocking": False, "blocking_scope": "soft"}
         for item in unanswered_sections
     ] + [
-        {"gap_type": "uncovered_sub_question", "target": item, "blocking": True}
+        {"gap_type": "uncovered_sub_question", "target": item, "blocking": False, "blocking_scope": "soft"}
         for item in uncovered_sub_questions
     ] + [
-        {"gap_type": "hard_uncovered_target", "target": item, "blocking": False}
+        {"gap_type": "hard_uncovered_target", "target": item, "blocking": True, "blocking_scope": "hard"}
         for item in hard_uncovered_targets
+    ]
+    follow_up_hints = [
+        _gap_hint(str(gap["target"]), str(gap["gap_type"]), str(gap["blocking_scope"]))
+        for gap in gaps
+        if str(gap.get("target", "")).strip()
+    ]
+    suggested_research_units = [
+        {
+            "title": _trim_text(hint["target"], limit=96),
+            "goal": _trim_text(f"Resolve coverage gap: {hint['target']}", limit=180),
+            "query": hint["search_query"],
+            "source_policy": hint["source_policy"],
+            "reason": hint["reason"],
+            "blocking_scope": hint["blocking_scope"],
+        }
+        for hint in follow_up_hints
     ]
     return {
         "query": query,
@@ -3983,11 +4593,75 @@ def _coverage_gaps_payload(
         "hard_uncovered_targets": hard_uncovered_targets,
         "coverage_gate_passed": bool(coverage.get("coverage_gate_passed", not gaps)),
         "hard_coverage_gate_passed": bool(coverage.get("hard_coverage_gate_passed", not hard_uncovered_targets)),
-        "blocking_gap_count": len(unanswered_sections) + len(uncovered_sub_questions),
+        "blocking_gap_count": len(hard_uncovered_targets),
         "hard_gap_count": len(hard_uncovered_targets),
         "total_gap_count": len(gaps),
         "gaps": gaps,
+        "follow_up_hints": follow_up_hints,
+        "suggested_research_units": suggested_research_units,
     }
+
+
+def _structured_follow_up_hints(coverage_gaps: dict[str, Any], *, limit: int = 8) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+    for raw_hint in coverage_gaps.get("follow_up_hints", []) or []:
+        if not isinstance(raw_hint, dict):
+            continue
+        target = _normalize_whitespace(str(raw_hint.get("target", "") or ""))
+        if not target:
+            continue
+        hint = {
+            "target": _trim_text(target, limit=180),
+            "gap_type": _normalize_whitespace(str(raw_hint.get("gap_type") or raw_hint.get("reason") or "")),
+            "blocking_scope": _normalize_whitespace(str(raw_hint.get("blocking_scope") or "soft")),
+            "search_query": _trim_text(str(raw_hint.get("search_query") or target), limit=220),
+            "source_policy": dict(raw_hint.get("source_policy") or {}),
+        }
+        hints.append(hint)
+        if len(hints) >= limit:
+            break
+    return hints
+
+
+def _structured_suggested_research_units(coverage_gaps: dict[str, Any], *, limit: int = 8) -> list[dict[str, Any]]:
+    units: list[dict[str, Any]] = []
+    for raw_unit in coverage_gaps.get("suggested_research_units", []) or []:
+        if not isinstance(raw_unit, dict):
+            continue
+        query = _normalize_whitespace(str(raw_unit.get("query", "") or ""))
+        title = _normalize_whitespace(str(raw_unit.get("title", "") or raw_unit.get("target", "") or query))
+        if not query and not title:
+            continue
+        units.append(
+            {
+                "title": _trim_text(title or query, limit=96),
+                "goal": _trim_text(str(raw_unit.get("goal") or title or query), limit=180),
+                "query": _trim_text(query or title, limit=220),
+                "source_policy": dict(raw_unit.get("source_policy") or {}),
+                "reason": _normalize_whitespace(str(raw_unit.get("reason", "") or "")),
+                "blocking_scope": _normalize_whitespace(str(raw_unit.get("blocking_scope") or "soft")),
+            }
+        )
+        if len(units) >= limit:
+            break
+    return units
+
+
+def _coverage_gap_scopes(coverage_gaps: dict[str, Any]) -> dict[str, str]:
+    scopes: dict[str, str] = {}
+    for gap in coverage_gaps.get("gaps", []) or []:
+        if not isinstance(gap, dict):
+            continue
+        target = _normalize_whitespace(str(gap.get("target", "") or ""))
+        if not target:
+            continue
+        scope = _normalize_whitespace(str(gap.get("blocking_scope") or "soft"))
+        scopes[_trim_text(target, limit=180)] = scope
+    for hint in _structured_follow_up_hints(coverage_gaps):
+        target = str(hint.get("target", "") or "")
+        if target and target not in scopes:
+            scopes[target] = str(hint.get("blocking_scope") or "soft")
+    return scopes
 
 
 def _claim_conflict_reason(left_text: str, right_text: str) -> str:
@@ -4317,6 +4991,144 @@ def _runtime_coverage_state(
     }
 
 
+def _provider_attempt_payload(
+    *,
+    unit_id: str,
+    operation: str,
+    status: str,
+    provider_name: str = "",
+    provider_model: str = "",
+    effective_model: str = "",
+    provider_api_url: str = "",
+    source_count: int = 0,
+    evidence_count: int = 0,
+    error_code: str = "",
+) -> dict[str, Any]:
+    return {
+        "unit_id": unit_id,
+        "operation": operation,
+        "status": status,
+        "provider_name": provider_name,
+        "provider_model": provider_model,
+        "effective_model": effective_model,
+        "provider_api_url": provider_api_url,
+        "source_count": max(0, int(source_count or 0)),
+        "evidence_count": max(0, int(evidence_count or 0)),
+        "error_code": error_code,
+    }
+
+
+def _provider_attempts_payload(
+    *,
+    unit_results: dict[str, dict[str, Any]],
+    failed_units: list[dict[str, Any]],
+    evidence_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    evidence_count_by_unit: dict[str, int] = {}
+    for item in evidence_items:
+        if not isinstance(item, dict):
+            continue
+        unit_id = str(item.get("unit_id", "") or "").strip()
+        if unit_id:
+            evidence_count_by_unit[unit_id] = evidence_count_by_unit.get(unit_id, 0) + 1
+
+    attempts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for unit_id, result in unit_results.items():
+        if not isinstance(result, dict):
+            continue
+        operation = str(result.get("unit_type", "") or "").strip()
+        provider_name = str(result.get("provider_name", "") or "").strip()
+        if operation not in {"search", "fetch", "map"}:
+            continue
+        attempt = _provider_attempt_payload(
+            unit_id=str(unit_id),
+            operation=operation,
+            status="completed",
+            provider_name=provider_name,
+            provider_model=str(result.get("provider_model", "") or ""),
+            effective_model=str(result.get("effective_model", "") or ""),
+            provider_api_url=str(result.get("provider_api_url", "") or ""),
+            source_count=len(result.get("source_ids") or result.get("citations") or []),
+            evidence_count=evidence_count_by_unit.get(str(unit_id), 0),
+        )
+        attempts.append(attempt)
+        seen.add((attempt["unit_id"], attempt["operation"], attempt["status"]))
+
+    for failed in failed_units:
+        if not isinstance(failed, dict):
+            continue
+        unit_id = str(failed.get("unit_id", "") or "").strip()
+        operation = str(failed.get("unit_type", "") or "").strip()
+        if not unit_id or operation not in {"search", "fetch", "map"}:
+            continue
+        key = (unit_id, operation, "failed")
+        if key in seen:
+            continue
+        attempts.append(
+            _provider_attempt_payload(
+                unit_id=unit_id,
+                operation=operation,
+                status="failed",
+                provider_name=str(failed.get("provider_name", "") or ""),
+                provider_model=str(failed.get("provider_model", "") or ""),
+                effective_model=str(failed.get("effective_model", "") or ""),
+                provider_api_url=str(failed.get("provider_api_url", "") or ""),
+                error_code=str(failed.get("reason", "") or failed.get("error_code", "") or ""),
+            )
+        )
+        seen.add(key)
+    return attempts
+
+
+def _provider_capabilities_payload(provider_attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    capabilities: dict[str, Any] = {
+        operation: {"used": False, "providers": []}
+        for operation in ("search", "fetch", "map")
+    }
+    providers_by_operation: dict[str, set[str]] = {operation: set() for operation in capabilities}
+    for attempt in provider_attempts:
+        if not isinstance(attempt, dict):
+            continue
+        operation = str(attempt.get("operation", "") or "").strip()
+        if operation not in capabilities:
+            continue
+        capabilities[operation]["used"] = True
+        provider_name = str(attempt.get("provider_name", "") or "").strip()
+        if provider_name:
+            providers_by_operation[operation].add(provider_name)
+    for operation, providers in providers_by_operation.items():
+        capabilities[operation]["providers"] = sorted(providers)
+    return capabilities
+
+
+def _budget_usage_payload(
+    *,
+    completed_unit_ids: list[str],
+    failed_unit_ids: list[str],
+    skipped_unit_ids: list[str],
+    provider_attempts: list[dict[str, Any]],
+    source_registry: list[dict[str, Any]],
+    evidence_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    calls_by_operation = {"search": 0, "fetch": 0, "map": 0}
+    for attempt in provider_attempts:
+        operation = str(attempt.get("operation", "") or "").strip()
+        if operation in calls_by_operation:
+            calls_by_operation[operation] += 1
+    return {
+        "completed_units": len(completed_unit_ids),
+        "failed_units": len(failed_unit_ids),
+        "skipped_units": len(skipped_unit_ids),
+        "search_calls": calls_by_operation["search"],
+        "fetch_calls": calls_by_operation["fetch"],
+        "map_calls": calls_by_operation["map"],
+        "provider_attempts": len(provider_attempts),
+        "source_count": len(source_registry),
+        "evidence_count": len(evidence_items),
+    }
+
+
 def _build_carry_forward_evidence(
     unit_results: dict[str, dict[str, Any]],
     sections: list[dict[str, Any]],
@@ -4385,7 +5197,7 @@ def _hydrate_evidence_source_ids(
     return hydrated
 
 
-def _domain_looks_like_official_docs(domain: str) -> bool:
+def _is_official_doc_domain(domain: str) -> bool:
     normalized = (domain or "").strip().lower()
     if not normalized:
         return False
@@ -4394,7 +5206,11 @@ def _domain_looks_like_official_docs(domain: str) -> bool:
     return normalized.startswith(_OFFICIAL_DOC_HOST_PREFIXES)
 
 
-def _source_looks_like_official_docs(source: dict[str, Any]) -> bool:
+def _domain_looks_like_official_docs(domain: str) -> bool:
+    return _is_official_doc_domain(domain)
+
+
+def _is_official_doc_source(source: dict[str, Any]) -> bool:
     if not isinstance(source, dict):
         return False
     source_type = str(source.get("source_type", "") or "").strip().lower()
@@ -4416,7 +5232,41 @@ def _source_looks_like_official_docs(source: dict[str, Any]) -> bool:
             domain = urlsplit(str(source["url"])).netloc.lower()
         except Exception:
             domain = ""
-    return _domain_looks_like_official_docs(domain)
+    return _is_official_doc_domain(domain)
+
+
+def _source_looks_like_official_docs(source: dict[str, Any]) -> bool:
+    return _is_official_doc_source(source)
+
+
+def _official_doc_family_key(source: dict[str, Any]) -> str:
+    url = str(source.get("url", "") or "").strip()
+    domain = str(source.get("domain", "") or "").strip().lower()
+    try:
+        parsed = urlsplit(url)
+        domain = domain or parsed.netloc.lower()
+        path = parsed.path.lower()
+    except Exception:
+        path = ""
+    traits = _source_doc_traits(source)
+    if domain == "docs.aws.amazon.com":
+        if "/dms/latest/apireference/" in path:
+            return "aws:dms:api_reference"
+        if "/cli/latest/reference/dms/" in path:
+            return "aws:dms:cli_reference"
+        if "/dms/latest/userguide/" in path:
+            if "cdc" in path:
+                return "aws:dms:cdc_guide"
+            if "tasksettings" in path or "task-settings" in path or "task_settings" in path:
+                return "aws:dms:task_settings"
+            return "aws:dms:user_guide"
+    if "api_reference" in traits:
+        return f"{domain}:api_reference"
+    if "user_guide" in traits:
+        return f"{domain}:user_guide"
+    if "reference" in traits:
+        return f"{domain}:reference"
+    return f"{domain}:official_docs" if domain else "official_docs"
 
 
 def _bootstrap_internal_state(
@@ -4529,7 +5379,7 @@ def _source_quality_bias(source: dict[str, Any]) -> int:
             domain = ""
 
     traits = _source_doc_traits(source)
-    if url.startswith("https://docs.") or url.startswith("http://docs.") or domain.startswith("docs.") or "/docs/" in url or "/documentation/" in url:
+    if _is_official_doc_domain(domain) or "/docs/" in url or "/documentation/" in url:
         bias = 3
         if "api_reference" in traits or "reference" in traits:
             bias += 2
@@ -4560,7 +5410,7 @@ def _source_type(source: dict[str, Any]) -> str:
             domain = urlsplit(url).netloc.lower()
         except Exception:
             domain = ""
-    if url.startswith("https://docs.") or url.startswith("http://docs.") or domain.startswith("docs.") or "/docs/" in url:
+    if _is_official_doc_domain(domain) or "/docs/" in url:
         return "official_docs"
     if domain.startswith("standards.") or "standards." in domain or "/rfc" in url or "/spec" in url or "/standard" in url:
         return "standard"
@@ -4766,20 +5616,24 @@ class DeepResearchRuntime:
 
         reused_job = None
         if not force_new:
-            reused_job = self.store.find_reusable_job(
+            reusable_candidates = self.store.find_reusable_jobs(
                 request_fingerprint,
                 recent_reuse_seconds=config.deep_research_recent_reuse_seconds,
             )
-            if reused_job is not None and bool(reused_job.plan_only) != bool(plan_only):
-                reused_job = None
-            if reused_job is not None and reused_job.status in {"completed", "interrupted"}:
-                if not _final_artifact_bundle_is_usable(self.store, reused_job.job_id):
-                    reused_job = None
-            if reused_job is not None:
+            for candidate in reusable_candidates:
+                if bool(candidate.plan_only) != bool(plan_only):
+                    continue
+                if candidate.status in {"completed", "interrupted"} and not _final_artifact_bundle_is_usable(
+                    self.store,
+                    candidate.job_id,
+                ):
+                    continue
                 try:
-                    self._read_plan(reused_job.job_id, reused_job)
+                    self._read_plan(candidate.job_id, candidate)
                 except Exception:
-                    reused_job = None
+                    continue
+                reused_job = candidate
+                break
         if reused_job is not None:
             if reused_job.status == "interrupted" and _job_prefers_resolved_final_bundle(reused_job):
                 final_bundle = _resolve_final_artifact_bundle(self.store, reused_job.job_id)
@@ -4793,13 +5647,17 @@ class DeepResearchRuntime:
                         finished_at=completed_at,
                         heartbeat_at=utc_now_iso(),
                         last_error="",
+                        cancel_requested=False,
                     )
                     self.store.append_event(
                         reused_job.job_id,
                         type="job_resolved_from_final_batch",
                         phase="finalizing",
                         message="Deep research recovered a usable final artifact batch without rerunning finalization.",
-                        data={"resolved_artifact_batch_id": final_bundle["batch_id"]},
+                        data={
+                            "resolved_artifact_batch_id": final_bundle["batch_id"],
+                            "attempt_id": _attempt_id(max(1, reused_job.attempt_count)),
+                        },
                     )
             return self._job_payload(reused_job, reused=True)
 
@@ -4935,17 +5793,14 @@ class DeepResearchRuntime:
         payload["runtime_warnings"] = diagnostics["runtime_warnings"]
         payload["constraint_violations"] = diagnostics["constraint_violations"]
         payload["artifact_visibility_reason"] = visibility_reason
-        operator_summary = _operator_summary_payload(
-            job,
+        return _attach_operator_surface_fields(
+            payload,
+            store=self.store,
+            job=job,
             diagnostics=diagnostics,
             final_bundle=final_bundle,
+            include_partial_report=True,
         )
-        operator_summary["current_checkpoint_kind"] = payload["current_checkpoint_kind"]
-        operator_summary["current_checkpoint_seq"] = payload["current_checkpoint_seq"]
-        operator_summary["artifact_fallback_used"] = payload["artifact_fallback_used"]
-        operator_summary["artifact_visibility_reason"] = payload["artifact_visibility_reason"]
-        payload["operator_summary"] = operator_summary
-        return payload
 
     async def events(self, job_id: str, *, after_seq: int = 0, limit: int = 100) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
@@ -4974,68 +5829,68 @@ class DeepResearchRuntime:
             job_id,
             job=job,
         )
-        final_text = (
-            _read_text_if_exists(final_bundle["paths"]["final_report.md"])
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, "final_report.md")
+        final_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            "final_report.md",
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        citations_text = (
-            _read_text_if_exists(final_bundle["paths"]["citations.json"])
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, "citations.json")
+        citations_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            "citations.json",
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        evidence_items_text = (
-            _read_batch_artifact_text(final_bundle, _EVIDENCE_ITEMS_ARTIFACT_KIND)
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND)
+        evidence_items_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            _EVIDENCE_ITEMS_ARTIFACT_KIND,
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        report_text = (
-            _read_text_if_exists(final_bundle["paths"]["report.json"])
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, "report.json")
+        report_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            "report.json",
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        sources_text = (
-            _read_text_if_exists(final_bundle["paths"]["sources.json"])
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, "sources.json")
+        sources_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            "sources.json",
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        selected_bank_text = (
-            _read_batch_artifact_text(final_bundle, _SELECTED_BANK_ARTIFACT_KIND)
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, _SELECTED_BANK_ARTIFACT_KIND)
+        selected_bank_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            _SELECTED_BANK_ARTIFACT_KIND,
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        evidence_bank_text = (
-            _read_batch_artifact_text(final_bundle, _EVIDENCE_BANK_ARTIFACT_KIND)
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, _EVIDENCE_BANK_ARTIFACT_KIND)
+        evidence_bank_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            _EVIDENCE_BANK_ARTIFACT_KIND,
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        verification_text = (
-            _read_batch_artifact_text(final_bundle, _VERIFICATION_ARTIFACT_KIND)
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, _VERIFICATION_ARTIFACT_KIND)
+        verification_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            _VERIFICATION_ARTIFACT_KIND,
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
-        coverage_gaps_text = (
-            _read_batch_artifact_text(final_bundle, _COVERAGE_GAPS_ARTIFACT_KIND)
-            if final_bundle is not None
-            else None
-            if unresolved_batch_backed
-            else self.store.read_artifact_text(job_id, _COVERAGE_GAPS_ARTIFACT_KIND)
+        coverage_gaps_text = _read_public_artifact_text(
+            self.store,
+            job_id,
+            _COVERAGE_GAPS_ARTIFACT_KIND,
+            final_bundle=final_bundle,
+            unresolved_batch_backed=unresolved_batch_backed,
         )
         artifact_errors: dict[str, str] = {}
         plan_value, plan_error = _safe_load_json_artifact(plan_text)
@@ -5076,6 +5931,9 @@ class DeepResearchRuntime:
             (_VERIFICATION_ARTIFACT_KIND, verification_value),
             (_COVERAGE_GAPS_ARTIFACT_KIND, coverage_gaps_value),
         ):
+            if final_bundle is not None and value is None and kind in _ADDITIVE_FINAL_ARTIFACT_KINDS:
+                artifact_errors[kind] = "missing_required_artifact"
+                continue
             shape_error = _validate_json_artifact_shape(kind, value)
             if shape_error:
                 artifact_errors[kind] = shape_error
@@ -5107,12 +5965,12 @@ class DeepResearchRuntime:
             final_text = _fallback_final_report_text(report_value)
         required = _report_artifact_contract_error(job)
         for kind, error_code in required.items():
-            artifact_text = (
-                _read_text_if_exists(final_bundle["paths"][kind])
-                if final_bundle is not None and kind in final_bundle["paths"]
-                else None
-                if unresolved_batch_backed
-                else self.store.read_artifact_text(job_id, kind)
+            artifact_text = _read_public_artifact_text(
+                self.store,
+                job_id,
+                kind,
+                final_bundle=final_bundle,
+                unresolved_batch_backed=unresolved_batch_backed,
             )
             if artifact_text is None:
                 artifact_errors[kind] = _required_artifact_error_code(kind, visibility_reason)
@@ -5151,18 +6009,14 @@ class DeepResearchRuntime:
                 if not (unresolved_batch_backed and artifact.get("kind") in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS)
             ],
         }
-        payload["operator_summary"] = {
-            **_operator_summary_payload(
-                job,
-                diagnostics=diagnostics,
-                final_bundle=final_bundle,
-            ),
-            "current_checkpoint_kind": payload["current_checkpoint_kind"],
-            "current_checkpoint_seq": payload["current_checkpoint_seq"],
-            "artifact_fallback_used": payload["artifact_fallback_used"],
-            "artifact_visibility_reason": payload["artifact_visibility_reason"],
-        }
-        return payload
+        return _attach_operator_surface_fields(
+            payload,
+            store=self.store,
+            job=job,
+            diagnostics=diagnostics,
+            final_bundle=final_bundle,
+            include_partial_report=include_partial,
+        )
 
     def read_artifact(self, job_id: str, kind: str) -> dict[str, Any]:
         job = self.store.get_job(job_id)
@@ -5183,6 +6037,12 @@ class DeepResearchRuntime:
                 return {
                     "content": batch_text,
                     "state": "available",
+                    "artifact_visibility_reason": "",
+                }
+            if kind in _RESOLVED_FINAL_PUBLIC_ARTIFACT_KINDS:
+                return {
+                    "content": None,
+                    "state": "missing",
                     "artifact_visibility_reason": "",
                 }
         if unresolved_batch_backed and _artifact_hidden_by_visibility_reason(kind, visibility_reason):
@@ -5235,13 +6095,17 @@ class DeepResearchRuntime:
                     finished_at=completed_at,
                     heartbeat_at=utc_now_iso(),
                     last_error="",
+                    cancel_requested=False,
                 )
                 self.store.append_event(
                     job_id,
                     type="job_resolved_from_final_batch",
                     phase="finalizing",
                     message="Deep research recovered a usable final artifact batch without rerunning finalization.",
-                    data={"resolved_artifact_batch_id": final_bundle["batch_id"]},
+                    data={
+                        "resolved_artifact_batch_id": final_bundle["batch_id"],
+                        "attempt_id": _attempt_id(max(1, job.attempt_count)),
+                    },
                 )
                 return await self.status(job_id)
         checkpoint_state, _ = self._load_checkpoint_state(job)
@@ -5270,6 +6134,7 @@ class DeepResearchRuntime:
                 "checkpoint_seq": current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0,
                 "resume_source": resume_source,
                 "attempt_count": next_attempt_count,
+                "attempt_id": _attempt_id(next_attempt_count),
                 "completed_units_count": completed_units_count,
             },
         )
@@ -5345,7 +6210,13 @@ class DeepResearchRuntime:
         )
         return artifact.model_dump()
 
-    def write_artifact_batch(self, job_id: str, artifacts: list[dict[str, str]]) -> list[dict[str, Any]]:
+    def write_artifact_batch(
+        self,
+        job_id: str,
+        artifacts: list[dict[str, str]],
+        *,
+        batch_metadata: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         batch_id = utc_now_iso().replace(":", "").replace("-", "").replace("Z", "") + "-" + secrets.token_hex(4)
         persisted: list[dict[str, Any]] = []
         payloads: list[dict[str, Any]] = []
@@ -5367,6 +6238,15 @@ class DeepResearchRuntime:
                     "metadata": _artifact_metadata(content, batch_id=batch_id),
                 }
             )
+        manifest_payload = _batch_manifest_payload(
+            batch_id=batch_id,
+            artifacts=payloads,
+            batch_metadata=batch_metadata,
+        )
+        manifest_path = batch_dir / "manifest.json"
+        manifest_temp_path = manifest_path.with_name(f".manifest.json.{secrets.token_hex(4)}.tmp")
+        manifest_temp_path.write_text(_json_markdown_block(manifest_payload), encoding="utf-8")
+        manifest_temp_path.replace(manifest_path)
         persisted_artifacts = self.store.upsert_artifact_batch(job_id, artifacts=payloads)
         for artifact in persisted_artifacts:
             persisted.append(artifact.model_dump())
@@ -5413,6 +6293,7 @@ class DeepResearchRuntime:
                 data={
                     "resolved_artifact_batch_id": final_bundle["batch_id"],
                     "resolved_status": refreshed.status,
+                    "attempt_id": _attempt_id(max(1, refreshed.attempt_count)),
                     "recovery_reason": job.last_error or ("cancel_requested_during_recovery" if job.cancel_requested else ""),
                 },
             )
@@ -6403,9 +7284,11 @@ class DeepResearchRuntime:
 
         def _continuation_artifact_text(kind: str, current_text: str) -> str:
             if use_final_bundle:
-                text = _read_text_if_exists(final_bundle["paths"][kind])
-                artifact_origin_map[kind] = "resolved_final_bundle"
-                return text or ""
+                path = (final_bundle.get("paths") or {}).get(kind)
+                text = _read_text_if_exists(path) if path else ""
+                if text:
+                    artifact_origin_map[kind] = "resolved_final_bundle"
+                    return text
             if bundle_candidate is not None:
                 batch_text = _read_batch_artifact_text(bundle_candidate, kind)
                 if batch_text:
@@ -6422,9 +7305,30 @@ class DeepResearchRuntime:
         current_evidence_items_text = self.store.read_artifact_text(
             continue_from_job_id, _EVIDENCE_ITEMS_ARTIFACT_KIND
         ) or ""
+        current_selected_bank_text = self.store.read_artifact_text(
+            continue_from_job_id, _SELECTED_BANK_ARTIFACT_KIND
+        ) or ""
+        current_verification_text = self.store.read_artifact_text(
+            continue_from_job_id, _VERIFICATION_ARTIFACT_KIND
+        ) or ""
+        current_coverage_gaps_text = self.store.read_artifact_text(
+            continue_from_job_id, _COVERAGE_GAPS_ARTIFACT_KIND
+        ) or ""
         evidence_items_text = _continuation_artifact_text(
             _EVIDENCE_ITEMS_ARTIFACT_KIND,
             current_evidence_items_text,
+        ) or ""
+        selected_bank_text = _continuation_artifact_text(
+            _SELECTED_BANK_ARTIFACT_KIND,
+            current_selected_bank_text,
+        ) or ""
+        verification_text = _continuation_artifact_text(
+            _VERIFICATION_ARTIFACT_KIND,
+            current_verification_text,
+        ) or ""
+        coverage_gaps_text = _continuation_artifact_text(
+            _COVERAGE_GAPS_ARTIFACT_KIND,
+            current_coverage_gaps_text,
         ) or ""
         outline_versions_text = current_outline_versions_text
         if use_final_bundle and not evidence_items_text:
@@ -6438,6 +7342,21 @@ class DeepResearchRuntime:
             report_value, _ = _safe_load_json_artifact(report_text)
             if _validate_json_artifact_shape("report.json", report_value) is None and isinstance(report_value, dict):
                 report = report_value
+        selected_bank_payload: list[dict[str, Any]] = []
+        if selected_bank_text:
+            selected_bank_value, selected_bank_error = _safe_load_json_artifact(selected_bank_text)
+            if selected_bank_error is None and isinstance(selected_bank_value, list):
+                selected_bank_payload = [item for item in selected_bank_value if isinstance(item, dict)]
+        verification_payload: dict[str, Any] = {}
+        if verification_text:
+            verification_value, verification_error = _safe_load_json_artifact(verification_text)
+            if verification_error is None and isinstance(verification_value, dict):
+                verification_payload = verification_value
+        coverage_gaps_payload: dict[str, Any] = {}
+        if coverage_gaps_text:
+            coverage_gaps_value, coverage_gaps_error = _safe_load_json_artifact(coverage_gaps_text)
+            if coverage_gaps_error is None and isinstance(coverage_gaps_value, dict):
+                coverage_gaps_payload = coverage_gaps_value
 
         prior_plan_summary = ""
         plan_payload: dict[str, Any] = {}
@@ -6570,6 +7489,25 @@ class DeepResearchRuntime:
         carry_forward_unit_results = _sanitize_unit_results(carry_forward_unit_results, carry_forward_sources)
         carry_forward_sections = _sanitize_continuation_sections(carry_forward_sections, carry_forward_sources)
         carry_forward_evidence = _sanitize_evidence_items(carry_forward_evidence, carry_forward_sources)
+        trusted_selected_evidence_ids = {
+            str(evidence_id).strip()
+            for bank in selected_bank_payload
+            for evidence_id in bank.get("selected_evidence_ids", []) or []
+            if str(evidence_id).strip()
+        }
+        trusted_selected_evidence_ids.update(
+            str(row.get("evidence_id", "")).strip()
+            for bank in selected_bank_payload
+            for row in bank.get("selected_rows", []) or []
+            if isinstance(row, dict) and str(row.get("evidence_id", "")).strip()
+        )
+        if trusted_selected_evidence_ids:
+            carry_forward_evidence = [
+                item
+                for item in carry_forward_evidence
+                if str(item.get("evidence_id", "")).strip() in trusted_selected_evidence_ids
+            ]
+            artifact_origin_map["carry_forward_evidence_filter"] = _SELECTED_BANK_ARTIFACT_KIND
         carry_forward_outline_versions = _append_outline_version_if_changed(
             carry_forward_outline_versions,
             sections=carry_forward_sections,
@@ -6637,8 +7575,50 @@ class DeepResearchRuntime:
         continuation_goal = plan_payload.get("query") or job.query
         source_count = len(carry_forward_sources)
         carry_forward_constraints = _carry_forward_constraints(job=job, plan_payload=plan_payload)
-        confirmed_claims = _collect_confirmed_claims(carry_forward_sections)
-        open_questions = _collect_continuation_open_questions(report)
+        supported_claims_from_verification = [
+            _summarize_evidence_text(str(claim.get("text", "") or ""), limit=180)
+            for claim in verification_payload.get("supported_claims", []) or []
+            if isinstance(claim, dict)
+        ]
+        confirmed_claims = _dedupe_preserve_order(
+            [
+                claim
+                for claim in supported_claims_from_verification
+                if claim and not _is_noisy_text(claim)
+            ]
+        ) or _collect_confirmed_claims(carry_forward_sections)
+        open_question_candidates = [
+            *_collect_continuation_open_questions(report),
+            *[
+                str(item).strip()
+                for item in verification_payload.get("unresolved_sections", []) or []
+                if str(item).strip()
+            ],
+            *[
+                str(item).strip()
+                for item in coverage_gaps_payload.get("uncovered_sub_questions", []) or []
+                if str(item).strip()
+            ],
+            *[
+                str(item).strip()
+                for item in coverage_gaps_payload.get("hard_uncovered_targets", []) or []
+                if str(item).strip()
+            ],
+            *[
+                str(hint.get("target", "")).strip()
+                for hint in coverage_gaps_payload.get("follow_up_hints", []) or []
+                if isinstance(hint, dict) and str(hint.get("target", "")).strip()
+            ],
+        ]
+        follow_up_hints = _structured_follow_up_hints(coverage_gaps_payload)
+        suggested_research_units = _structured_suggested_research_units(coverage_gaps_payload)
+        coverage_gap_scopes = _coverage_gap_scopes(coverage_gaps_payload)
+        open_question_candidates.extend(
+            str(unit.get("title") or unit.get("query") or "").strip()
+            for unit in suggested_research_units
+            if isinstance(unit, dict) and str(unit.get("title") or unit.get("query") or "").strip()
+        )
+        open_questions = _sanitize_follow_up_surface_items(open_question_candidates, limit=8)
         trusted_source_headers = _trusted_source_headers(carry_forward_sources)
         confirmed_claims_filtered = bool(carry_forward_sections) and not bool(confirmed_claims)
         open_questions_filtered = bool(
@@ -6659,6 +7639,9 @@ class DeepResearchRuntime:
             prior_plan_summary=_trim_text(prior_plan_summary, limit=400),
             confirmed_claims=confirmed_claims,
             open_questions=open_questions,
+            follow_up_hints=follow_up_hints,
+            suggested_research_units=suggested_research_units,
+            coverage_gap_scopes=coverage_gap_scopes,
             trusted_source_headers=trusted_source_headers,
             carry_forward_constraints=carry_forward_constraints,
             skipped_unit_ids=skipped_unit_ids,
@@ -6712,6 +7695,9 @@ class DeepResearchRuntime:
             state_version=2,
             confirmed_claims=confirmed_claims,
             open_questions=open_questions,
+            follow_up_hints=follow_up_hints,
+            suggested_research_units=suggested_research_units,
+            coverage_gap_scopes=coverage_gap_scopes,
             trusted_source_headers=trusted_source_headers,
             carry_forward_constraints=carry_forward_constraints,
             skipped_unit_ids=skipped_unit_ids,
@@ -6776,7 +7762,14 @@ class DeepResearchRuntime:
         payload["runtime_warnings"] = diagnostics["runtime_warnings"]
         payload["constraint_violations"] = diagnostics["constraint_violations"]
         payload["artifact_visibility_reason"] = visibility_reason
-        return payload
+        return _attach_operator_surface_fields(
+            payload,
+            store=self.store,
+            job=job,
+            diagnostics=diagnostics,
+            final_bundle=final_bundle,
+            include_partial_report=True,
+        )
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
         payload = job.model_dump()
@@ -6785,6 +7778,7 @@ class DeepResearchRuntime:
             if job.current_checkpoint
             else None
         )
+        payload["attempt_id"] = _attempt_id(job.attempt_count)
         payload["current_checkpoint_kind"] = _checkpoint_kind(job.current_checkpoint)
         payload["current_checkpoint_seq"] = current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0
         return payload
@@ -6965,6 +7959,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "checkpoint_kind": _checkpoint_kind(current_checkpoint.checkpoint_key),
                 "checkpoint_seq": current_checkpoint.checkpoint_seq,
                 "attempt_count": worker_attempt_count,
+                "attempt_id": _attempt_id(worker_attempt_count),
                 "completed_units_count": len(checkpoint_state.completed_unit_ids) if checkpoint_state else 0,
             },
         )
@@ -7049,7 +8044,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     stop_policy = dict(plan.brief.stop_policy or {})
     max_search_queries = max(1, int(stop_policy.get("max_search_queries", len(plan.search_strategy.search_queries) or unit_total) or 1))
     stop_on_sufficient_coverage = bool(stop_policy.get("stop_on_sufficient_coverage", True))
-    allow_one_post_resume_batch = bool(restored_from_checkpoint and completed_unit_ids)
+    # If planning or checkpoint restoration already consumed the budget, still allow
+    # one research batch so the job can materialize a useful checkpoint before pausing.
+    allow_one_budget_overrun_batch = bool(restored_from_checkpoint and completed_unit_ids) or not completed_unit_ids
     while len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids) < len(plan.research_units):
         ready_units = [
             unit
@@ -7162,7 +8159,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             _mark_canceled(runtime, job_id, "researching")
             return
         elapsed_seconds = (dt.datetime.now(dt.UTC) - started_at_dt).total_seconds()
-        if elapsed_seconds >= job.resolved_budget_seconds and not allow_one_post_resume_batch:
+        if elapsed_seconds >= job.resolved_budget_seconds and not allow_one_budget_overrun_batch:
             _write_partial_outputs(runtime, job_id, plan, completed_unit_ids, unit_results, sections)
             latest_checkpoint_key = (
                 f"researching-{completed_unit_ids[-1]}"
@@ -7194,6 +8191,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     "checkpoint_kind": _checkpoint_kind(latest_checkpoint_key),
                     "checkpoint_seq": latest_checkpoint.checkpoint_seq if latest_checkpoint is not None else 0,
                     "attempt_count": worker_attempt_count,
+                    "attempt_id": _attempt_id(worker_attempt_count),
                     "completed_units_count": len(completed_unit_ids),
                 },
             )
@@ -7231,7 +8229,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             *[_execute_research_unit(runtime, plan, unit) for unit in batch_units],
             return_exceptions=True,
         )
-        allow_one_post_resume_batch = False
+        allow_one_budget_overrun_batch = False
         if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
             return
         batch_error: Exception | None = None
@@ -7280,6 +8278,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                         "unit_id": unit.unit_id,
                         "unit_type": unit.unit_type,
                         "reason": error_code,
+                        "provider_name": unit_result.get("provider_name", ""),
+                        "provider_model": unit_result.get("provider_model", ""),
+                        "effective_model": unit_result.get("effective_model", ""),
+                        "provider_api_url": unit_result.get("provider_api_url", ""),
+                        "error_code": unit_result.get("error_code", "") or error_code,
                     }
                 )
                 runtime.store.append_event(
@@ -7287,7 +8290,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     type="research_unit_failed",
                     phase="researching",
                     message=f"Failed {unit.unit_id}.",
-                    data={"unit_type": unit.unit_type, "error": error_code},
+                    data={
+                        "unit_type": unit.unit_type,
+                        "error": error_code,
+                        "provider_name": unit_result.get("provider_name", ""),
+                        "provider_model": unit_result.get("provider_model", ""),
+                        "effective_model": unit_result.get("effective_model", ""),
+                        "provider_api_url": unit_result.get("provider_api_url", ""),
+                    },
                 )
                 progress = 20.0 + ((len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids)) / unit_total) * 50.0
                 runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
@@ -7626,7 +8636,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             *runtime_warnings,
             *_coverage_warning_codes(report_coverage),
             *release_gate["reason_codes"],
-            *release_gate.get("soft_reason_codes", []),
+            *[
+                code
+                for code in release_gate.get("soft_reason_codes", [])
+                if code != "official_doc_family_single_page_only"
+            ],
         }
     )
     if plan.planner_metadata.get("used_fallback"):
@@ -7642,10 +8656,25 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     selected_bank = _selected_bank_payload(
         section_banks=section_banks,
         evidence_ledger=evidence_ledger,
+        sections=citations["sections"],
     )
     evidence_bank = _evidence_bank_payload(
         evidence_items=evidence_items,
         sections=citations["sections"],
+    )
+    provider_attempts = _provider_attempts_payload(
+        unit_results=unit_results,
+        failed_units=failed_units,
+        evidence_items=evidence_items,
+    )
+    provider_capabilities = _provider_capabilities_payload(provider_attempts)
+    budget_usage = _budget_usage_payload(
+        completed_unit_ids=completed_unit_ids,
+        failed_unit_ids=failed_unit_ids,
+        skipped_unit_ids=skipped_unit_ids,
+        provider_attempts=provider_attempts,
+        source_registry=source_registry,
+        evidence_items=evidence_items,
     )
     report = {
         "query": plan.query,
@@ -7658,6 +8687,20 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "runtime": {
             "warnings": runtime_warnings,
             "source_policy": dict(plan.source_policy),
+            "research_brief": {
+                "objective": plan.brief.objective,
+                "deliverable": plan.brief.deliverable,
+                "success_criteria": list(plan.brief.success_criteria),
+                "must_cover_count": len(plan.brief.must_cover),
+                "coverage_checklist_count": len(plan.brief.coverage_checklist),
+            },
+            "budget": {
+                "effort": job.effort,
+                "resolved_budget_seconds": job.resolved_budget_seconds,
+                "hard_timeout_seconds": config.deep_research_hard_timeout_seconds,
+                "max_concurrency": config.deep_research_max_concurrency,
+                "usage": budget_usage,
+            },
             "coverage": {
                 "must_cover_count": len(plan.brief.must_cover),
                 "uncovered_sub_question_count": len(report_coverage.get("uncovered_sub_questions", [])),
@@ -7675,12 +8718,15 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             "constraint_violations": constraint_violations,
             "failed_units": failed_units,
             "skipped_units": skipped_units,
+            "provider_capabilities": provider_capabilities,
+            "provider_attempts": provider_attempts,
             "provider_winners": [
                 {
                     "unit_id": result.get("unit_id", ""),
                     "provider_name": result.get("provider_name", ""),
                     "provider_model": result.get("provider_model", ""),
                     "effective_model": result.get("effective_model", ""),
+                    "provider_api_url": result.get("provider_api_url", ""),
                 }
                 for result in unit_results.values()
                 if result.get("provider_name")
@@ -7786,6 +8832,13 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "content_type": "application/json",
             },
         ],
+        batch_metadata={
+            "attempt_id": _attempt_id(worker_attempt_count),
+            "attempt_count": worker_attempt_count,
+            "phase": "finalizing",
+            "created_at": utc_now_iso(),
+            "completeness_ok": True,
+        },
     )
     artifact_batch_id = next(
         (artifact.get("metadata", {}).get("batch_id", "") for artifact in persisted_artifacts if artifact.get("metadata")),
@@ -7879,10 +8932,19 @@ async def _execute_research_unit(
 ) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
     reference_texts = [plan.query, unit.title, unit.goal, unit.query, unit.instructions]
     if unit.unit_type == "fetch":
-        fetched = await _fetch_url(unit.url)
+        fetch_result = await _fetch_url_with_details(unit.url)
+        fetched = fetch_result.get("content", "")
         if not fetched:
             return (
-                {"summary": "", "detail": ""},
+                {
+                    "summary": "",
+                    "detail": "",
+                    "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                    "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                    "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                    "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+                    "error_code": str(fetch_result.get("error_code", "") or ""),
+                },
                 [],
                 [],
             )
@@ -7904,7 +8966,14 @@ async def _execute_research_unit(
         line_end = detail_line_end or summary_line_end
         source = {"url": unit.url, "title": unit.title}
         return (
-            {"summary": summary, "detail": detail},
+            {
+                "summary": summary,
+                "detail": detail,
+                "provider_name": str(fetch_result.get("provider_name", "") or ""),
+                "provider_model": str(fetch_result.get("provider_model", "") or ""),
+                "effective_model": str(fetch_result.get("effective_model", "") or ""),
+                "provider_api_url": str(fetch_result.get("provider_api_url", "") or ""),
+            },
             [source],
             [
                 DeepResearchEvidenceItem(
@@ -7923,10 +8992,19 @@ async def _execute_research_unit(
         )
 
     if unit.unit_type == "map":
-        mapped = await _map_url(unit.url, unit.instructions)
+        map_result = await _map_url_with_details(unit.url, unit.instructions)
+        mapped = map_result.get("content", "")
         if not mapped:
             return (
-                {"summary": "", "detail": ""},
+                {
+                    "summary": "",
+                    "detail": "",
+                    "provider_name": str(map_result.get("provider_name", "") or ""),
+                    "provider_model": str(map_result.get("provider_model", "") or ""),
+                    "effective_model": str(map_result.get("effective_model", "") or ""),
+                    "provider_api_url": str(map_result.get("provider_api_url", "") or ""),
+                    "error_code": str(map_result.get("error_code", "") or ""),
+                },
                 [],
                 [],
             )
@@ -7966,11 +9044,17 @@ async def _execute_research_unit(
             for candidate in extract_unique_urls(mapped_raw)
             if candidate and candidate != unit.url
         ]
+        candidate_sources = _apply_domain_constraints(
+            candidate_sources,
+            include_domains=plan.include_domains,
+            exclude_domains=plan.exclude_domains,
+        )
         fetch_limit = max(0, plan.search_strategy.selective_fetch.max_urls_per_search)
         ranked_candidate_sources = _select_fetch_sources(candidate_sources, plan, unit)
         for candidate_source in ranked_candidate_sources[:fetch_limit]:
             candidate_url = candidate_source["url"]
-            fetched = await _fetch_url(candidate_url)
+            fetch_result = await _fetch_url_with_details(candidate_url)
+            fetched = fetch_result.get("content", "")
             if not fetched:
                 continue
             fetched_source = _enrich_source_from_fetched_text(
@@ -8014,13 +9098,27 @@ async def _execute_research_unit(
                     char_limit=180,
                 ),
                 "detail": detail,
+                "provider_name": str(map_result.get("provider_name", "") or ""),
+                "provider_model": str(map_result.get("provider_model", "") or ""),
+                "effective_model": str(map_result.get("effective_model", "") or ""),
+                "provider_api_url": str(map_result.get("provider_api_url", "") or ""),
             },
             sources,
             evidence_items,
         )
 
     if _search_query is _DEFAULT_SEARCH_QUERY_FN:
-        search_result = await _search_query_with_details(unit.query or unit.goal, effort=plan.effort)
+        try:
+            search_result = await _search_query_with_details(
+                unit.query or unit.goal,
+                effort=plan.effort,
+                include_domains=plan.include_domains,
+                exclude_domains=plan.exclude_domains,
+            )
+        except TypeError as exc:
+            if "include_domains" not in str(exc) and "exclude_domains" not in str(exc):
+                raise
+            search_result = await _search_query_with_details(unit.query or unit.goal, effort=plan.effort)
         answer = search_result["answer"]
         sources = search_result["sources"]
     else:
@@ -8082,7 +9180,8 @@ async def _execute_research_unit(
         )
     fetched_evidence_items: list[dict[str, Any]] = []
     for source in selected_sources_for_grounding[:fetch_limit]:
-        fetched = await _fetch_url(source["url"])
+        fetch_result = await _fetch_url_with_details(source["url"])
+        fetched = fetch_result.get("content", "")
         if not fetched:
             continue
         enriched_source = _enrich_source_from_fetched_text(source, fetched)
@@ -8260,6 +9359,7 @@ def _select_fetch_sources(
     prefer_outline = bool(plan.search_strategy.selective_fetch.prefer_titles_matching_outline)
     outline_keywords = _tokenize_keywords(" ".join(f"{section.title} {section.goal}" for section in plan.report_outline))
     query_keywords = _tokenize_keywords(f"{unit.title} {unit.goal} {unit.query}")
+    query_identifier_terms = _query_identifier_terms(f"{unit.title} {unit.goal} {unit.query}")
 
     query_intent_text = f"{unit.title} {unit.goal} {unit.query}".lower()
     troubleshooting_intent = any(
@@ -8294,11 +9394,23 @@ def _select_fetch_sources(
         and sum(1 for text in candidate_texts if term in set(_tokenize_keywords(text))) == 1
     ]
 
-    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, str]:
+    def score(source: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, int, int, str]:
         title = f"{source.get('title', '')} {source.get('description', '')} {source.get('url', '')}"
         quality_bias = _source_quality_bias(source)
         lowered_title = title.lower()
         traits = _source_doc_traits(source)
+        namespace_priority = _docs_aws_namespace_priority(
+            source,
+            [plan.query, unit.title, unit.goal, unit.query, *[section.goal for section in plan.report_outline]],
+        )
+        trait_priority = 0
+        if "api_reference" in traits or "reference" in traits:
+            trait_priority = 2
+        elif "user_guide" in traits:
+            trait_priority = 1
+        elif "prescriptive_guidance" in traits:
+            trait_priority = -1
+        identifier_match_count = sum(1 for term in query_identifier_terms if term and term in lowered_title)
         non_shell_distinctive_match_count = 0
         if "prescriptive_guidance" not in traits and "troubleshooting" not in traits:
             non_shell_distinctive_match_count = _count_keyword_overlap(title, distinctive_query_terms)
@@ -8315,7 +9427,10 @@ def _select_fetch_sources(
         if _is_low_signal_title(str(source.get("title") or "")):
             shell_penalty -= 2
         return (
+            namespace_priority,
             non_shell_distinctive_match_count,
+            trait_priority,
+            identifier_match_count,
             quality_bias,
             _count_keyword_overlap(title, outline_keywords) if prefer_outline else 0,
             substring_query_overlap,
@@ -8487,6 +9602,34 @@ def _coverage_for_report(
             str(entry.get("ledger_id", "")).strip() or str(index): entry
             for index, entry in enumerate(question_entries)
         }.values())
+        bank_candidate_evidence_ids = [
+            str(item).strip()
+            for item in bank.get("candidate_evidence_ids", []) or []
+            if str(item).strip()
+        ]
+        bank_has_selected_evidence_ids = "selected_evidence_ids" in bank
+        bank_selected_evidence_ids = [
+            str(item).strip()
+            for item in bank.get("selected_evidence_ids", []) or []
+            if str(item).strip()
+        ]
+        ledger_evidence_ids = {
+            str(entry.get("evidence_id", "")).strip()
+            for entry in question_entries
+            if str(entry.get("evidence_id", "")).strip()
+        }
+        ledger_selected_evidence_ids = {
+            str(entry.get("evidence_id", "")).strip()
+            for entry in question_entries
+            if str(entry.get("evidence_id", "")).strip()
+            and (
+                str(entry.get("selected_section_id", "")).strip() == section_id
+                or any(
+                    str(selected_section_id).strip() == section_id
+                    for selected_section_id in entry.get("selected_section_ids", []) or []
+                )
+            )
+        }
         section_coverage.append(
             {
                 "section_id": section_id,
@@ -8494,23 +9637,11 @@ def _coverage_for_report(
                 "answered": bool(grounded_claims),
                 "grounded_claim_count": len(grounded_claims),
                 "citation_count": len(grounded_citations),
-                "candidate_evidence_count": len(
-                    [item for item in bank.get("candidate_evidence_ids", []) if str(item).strip()]
-                ) or len(
-                    {
-                        str(entry.get("evidence_id", "")).strip()
-                        for entry in question_entries
-                        if str(entry.get("evidence_id", "")).strip()
-                    }
-                ),
-                "selected_evidence_count": len(
-                    [item for item in bank.get("selected_evidence_ids", []) if str(item).strip()]
-                ) or len(
-                    {
-                        str(entry.get("evidence_id", "")).strip()
-                        for entry in question_entries
-                        if str(entry.get("evidence_id", "")).strip()
-                    }
+                "candidate_evidence_count": len(bank_candidate_evidence_ids) or len(ledger_evidence_ids),
+                "selected_evidence_count": (
+                    len(bank_selected_evidence_ids)
+                    if bank_has_selected_evidence_ids
+                    else len(ledger_selected_evidence_ids)
                 ),
                 "rejected_evidence_count": len(
                     [item for item in bank.get("rejected_evidence_ids", []) if str(item).strip()]
@@ -8957,7 +10088,7 @@ def _build_release_gate(
             if (
                 official_docs_only
                 and coverage_incomplete
-                and code == "medium_single_source_search_only"
+                and code in {"medium_single_source_search_only", "official_doc_family_single_page_only"}
             ):
                 blocking_reason_codes.append(code)
                 continue
@@ -9076,6 +10207,7 @@ def _build_verifier_diagnostics(
         if isinstance(item, dict) and str(item.get("evidence_id", "")).strip()
     }
     seen_claim_keys: dict[str, dict[str, Any]] = {}
+    specific_claim_snapshots: list[dict[str, Any]] = []
     section_bank_by_id = {
         str(bank.get("section_id", "")).strip(): dict(bank)
         for bank in section_banks or []
@@ -9121,6 +10253,7 @@ def _build_verifier_diagnostics(
         "conflicted_claims": 0,
         "low_value_claims": 0,
         "medium_single_source_search_only": 0,
+        "official_doc_family_single_page_only": 0,
         "same_domain_off_topic_dominance": 0,
         "unbound_citation_sources": 0,
         "unbound_evidence_ids": 0,
@@ -9180,6 +10313,11 @@ def _build_verifier_diagnostics(
             source_id in source_registry and _source_looks_like_official_docs(source_registry[source_id])
             for source_id in selected_evidence_source_ids
         )
+        selected_official_family_keys = {
+            _official_doc_family_key(source_registry[source_id])
+            for source_id in selected_evidence_source_ids
+            if source_id in source_registry and _source_looks_like_official_docs(source_registry[source_id])
+        }
         used_selected_evidence_ids: set[str] = set()
         section_claim_snapshots: list[dict[str, Any]] = []
         for claim in section.get("claims", []):
@@ -9236,19 +10374,47 @@ def _build_verifier_diagnostics(
             if claim_text:
                 claim_key = _stable_text_key(claim_text)
                 previous_claim = seen_claim_keys.get(claim_key)
+                current_source_ids = {
+                    str(source_id).strip()
+                    for source_id in claim.get("source_ids", []) or claim.get("citations", []) or []
+                    if str(source_id).strip()
+                }
+                current_evidence_ids = {
+                    str(evidence_id).strip()
+                    for evidence_id in claim.get("evidence_ids", []) or []
+                    if str(evidence_id).strip()
+                }
+                current_excerpt_hashes = {
+                    str(binding.get("excerpt_hash", "")).strip()
+                    for binding in bindings
+                    if isinstance(binding, dict) and str(binding.get("excerpt_hash", "")).strip()
+                }
                 if previous_claim is not None:
                     previous_is_rollup = bool(previous_claim.get("is_rollup"))
                     previous_section_id = str(previous_claim.get("section_id", "")).strip()
+                    previous_evidence_ids = {
+                        str(evidence_id).strip()
+                        for evidence_id in previous_claim.get("evidence_ids", []) or []
+                        if str(evidence_id).strip()
+                    }
                     if not section_is_rollup and previous_is_rollup:
                         seen_claim_keys[claim_key] = {
                             "claim_id": claim_id,
                             "is_rollup": False,
                             "section_id": section_id,
+                            "source_ids": list(current_source_ids),
+                            "evidence_ids": list(current_evidence_ids),
+                            "excerpt_hashes": list(current_excerpt_hashes),
                         }
                     elif (
                         not section_is_rollup
                         and not previous_is_rollup
-                        and previous_section_id == section_id
+                        and (
+                            previous_section_id == section_id
+                            or bool(previous_evidence_ids & current_evidence_ids)
+                            or bool(set(previous_claim.get("source_ids", []) or []) & current_source_ids)
+                            or bool(set(previous_claim.get("excerpt_hashes", []) or []) & current_excerpt_hashes)
+                        )
                     ):
                         if claim_id:
                             flagged_claim_ids.append(claim_id)
@@ -9259,6 +10425,9 @@ def _build_verifier_diagnostics(
                         "claim_id": claim_id,
                         "is_rollup": section_is_rollup,
                         "section_id": section_id,
+                        "source_ids": list(current_source_ids),
+                        "evidence_ids": list(current_evidence_ids),
+                        "excerpt_hashes": list(current_excerpt_hashes),
                     }
                 if _is_noisy_text(raw_claim_text) or _is_noisy_text(claim_text):
                     if claim_id:
@@ -9331,6 +10500,9 @@ def _build_verifier_diagnostics(
                         flagged_claim_ids.append(claim_id)
                     integrity_counts["medium_single_source_search_only"] += 1
                     reason_codes.append("medium_single_source_search_only")
+                elif len(selected_official_family_keys) <= 1:
+                    integrity_counts["official_doc_family_single_page_only"] += 1
+                    reason_codes.append("official_doc_family_single_page_only")
             if (
                 confidence == "low"
                 and supporting_source_count <= 1
@@ -9365,6 +10537,15 @@ def _build_verifier_diagnostics(
                     "evidence_ids": list(claim.get("evidence_ids", []) or []),
                 }
             )
+            if not section_is_rollup and claim_id:
+                specific_claim_snapshots.append(
+                    {
+                        "claim_id": claim_id,
+                        "section_id": section_id,
+                        "text": claim_text or raw_claim_text,
+                        "confidence": str(claim.get("confidence", "") or ""),
+                    }
+                )
         for index, left_claim in enumerate(section_claim_snapshots):
             left_text = str(left_claim.get("text", "") or "")
             if not left_text:
@@ -9389,6 +10570,37 @@ def _build_verifier_diagnostics(
                     )
                 integrity_counts["conflicted_claims"] += 2
                 reason_codes.append("conflict")
+        if not section_is_rollup:
+            current_section_claims = [
+                claim for claim in specific_claim_snapshots if str(claim.get("section_id", "")).strip() == section_id
+            ]
+            previous_section_claims = [
+                claim for claim in specific_claim_snapshots if str(claim.get("section_id", "")).strip() != section_id
+            ]
+            for left_claim in current_section_claims:
+                left_text = str(left_claim.get("text", "") or "")
+                if not left_text:
+                    continue
+                for right_claim in previous_section_claims:
+                    right_text = str(right_claim.get("text", "") or "")
+                    conflict_reason = _claim_conflict_reason(left_text, right_text)
+                    if not conflict_reason:
+                        continue
+                    for conflicted in (left_claim, right_claim):
+                        conflict_claim_id = str(conflicted.get("claim_id", "")).strip()
+                        if conflict_claim_id:
+                            flagged_claim_ids.append(conflict_claim_id)
+                        conflicted_claims.append(
+                            {
+                                "claim_id": conflict_claim_id,
+                                "section_id": str(conflicted.get("section_id", "") or ""),
+                                "text": str(conflicted.get("text", "") or ""),
+                                "confidence": str(conflicted.get("confidence", "") or ""),
+                                "reason": conflict_reason,
+                            }
+                        )
+                    integrity_counts["conflicted_claims"] += 2
+                    reason_codes.append("conflict")
         unused_selected_evidence_ids = [
             evidence_id
             for evidence_id in selected_evidence_ids
@@ -10082,6 +11294,7 @@ def _build_section_citations(
             return build_section_from_pool(section, claims_pool, enforce_overlap=False)
         derived_claims: list[dict[str, Any]] = []
         seen_claim_keys: set[str] = set()
+        max_rollup_claims = 3
         for concrete in concrete_sections:
             concrete_claims = [dict(claim) for claim in concrete.get("claims", []) if isinstance(claim, dict)]
             if not concrete_claims:
@@ -10152,9 +11365,7 @@ def _build_section_citations(
                 ).model_dump()
             )
             seen_claim_keys.add(claim_key)
-            if len(derived_claims) >= 2:
-                break
-            if len(derived_claims) >= 2:
+            if len(derived_claims) >= max_rollup_claims:
                 break
         if not derived_claims:
             return None
@@ -10270,6 +11481,7 @@ def _build_section_citations(
 
 def _build_section_summary(section_claims: list[dict[str, Any]]) -> str:
     summary_parts: list[str] = []
+    max_summary_parts = 3
     for claim in section_claims:
         text = _strip_summary_scaffolding(
             _summarize_evidence_text(str(claim.get("text", "")), limit=220)
@@ -10279,7 +11491,7 @@ def _build_section_summary(section_claims: list[dict[str, Any]]) -> str:
         if text in summary_parts:
             continue
         summary_parts.append(text)
-        if len(summary_parts) >= 2:
+        if len(summary_parts) >= max_summary_parts:
             break
     if not summary_parts:
         return ""
@@ -10416,7 +11628,13 @@ async def _search_query(query: str, *, effort: str = "standard") -> tuple[str, l
     return result["answer"], result["sources"]
 
 
-async def _search_query_with_details(query: str, *, effort: str = "standard") -> dict[str, Any]:
+async def _search_query_with_details(
+    query: str,
+    *,
+    effort: str = "standard",
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> dict[str, Any]:
     from . import server as server_module
 
     provider, provider_meta = await _build_runtime_grok_provider(effort=effort)
@@ -10426,6 +11644,16 @@ async def _search_query_with_details(query: str, *, effort: str = "standard") ->
     if not merged:
         merged = standardize_sources([{"url": url} for url in extract_unique_urls(answer or content)])
     warning_code = server_module._assess_search_body_quality(answer, merged)
+    supplemental_sources = await _supplemental_sources_for_deep_research(
+        query,
+        answer=answer,
+        existing_sources=merged,
+        warning_code=warning_code,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+    )
+    if supplemental_sources:
+        merged = standardize_sources(merge_sources(merged, supplemental_sources))
     return {
         "answer": answer.strip() or content.strip(),
         "sources": merged,
@@ -10460,6 +11688,41 @@ async def _provider_search_with_sources(
 _DEFAULT_SEARCH_QUERY_FN = _search_query
 
 
+async def _supplemental_sources_for_deep_research(
+    query: str,
+    *,
+    answer: str,
+    existing_sources: list[dict[str, Any]],
+    warning_code: str | None,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    if not warning_code and answer.strip() and existing_sources:
+        return []
+    from . import server as server_module
+
+    results = await server_module._call_tavily_search(
+        query,
+        4,
+        include_domains=include_domains or None,
+        exclude_domains=exclude_domains or None,
+    )
+    provider_name = "tavily"
+    if not results:
+        results = await server_module._call_firecrawl_search(query, 4)
+        provider_name = "firecrawl"
+    supplemental: list[dict[str, Any]] = []
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+        source = dict(item)
+        source.setdefault("provider", provider_name)
+        if provider_name == "tavily" and not source.get("description") and source.get("content"):
+            source["description"] = source.get("content")
+        supplemental.append(source)
+    return supplemental
+
+
 async def _fetch_url(url: str) -> str | None:
     from . import server
 
@@ -10469,6 +11732,33 @@ async def _fetch_url(url: str) -> str | None:
     return result
 
 
+_DEFAULT_FETCH_URL_FN = _fetch_url
+
+
+async def _fetch_url_with_details(url: str) -> dict[str, Any]:
+    if _fetch_url is not _DEFAULT_FETCH_URL_FN:
+        content = await _fetch_url(url)
+        return {"content": content or ""}
+
+    from . import server
+
+    result = await server.web_fetch(url, response_format="object")
+    if isinstance(result, dict):
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        content = str(data.get("content", "") or "") if result.get("ok") else ""
+        return {
+            "content": content,
+            "provider_name": str(data.get("provider_name", "") or ""),
+            "provider_model": str(data.get("provider_model", "") or ""),
+            "effective_model": str(data.get("effective_model", "") or ""),
+            "provider_api_url": str(data.get("provider_api_url", "") or ""),
+            "error_code": str(result.get("error", "") or ""),
+        }
+    if not result or result.startswith("提取失败:") or result.startswith("配置错误:"):
+        return {"content": "", "error_code": "fetch_failed"}
+    return {"content": result, "error_code": ""}
+
+
 async def _map_url(url: str, instructions: str = "") -> str | None:
     from . import server
 
@@ -10476,3 +11766,29 @@ async def _map_url(url: str, instructions: str = "") -> str | None:
     if not result or result.startswith("映射失败:") or result.startswith("配置错误:"):
         return None
     return result
+
+
+_DEFAULT_MAP_URL_FN = _map_url
+
+
+async def _map_url_with_details(url: str, instructions: str = "") -> dict[str, Any]:
+    if _map_url is not _DEFAULT_MAP_URL_FN:
+        content = await _map_url(url, instructions)
+        return {"content": content or ""}
+
+    from . import server
+
+    result = await server.web_map(url, instructions=instructions, response_format="object")
+    if isinstance(result, dict):
+        content = json.dumps(result.get("data"), ensure_ascii=False, indent=2) if result.get("ok") else ""
+        return {
+            "content": content,
+            "provider_name": "tavily" if result.get("ok") else "",
+            "provider_model": "",
+            "effective_model": "",
+            "provider_api_url": f"{config.tavily_api_url.rstrip('/')}/map" if result.get("ok") else "",
+            "error_code": str(result.get("error", "") or ""),
+        }
+    if not result or result.startswith("映射失败:") or result.startswith("配置错误:"):
+        return {"content": "", "error_code": "map_failed"}
+    return {"content": result, "provider_name": "tavily", "provider_model": "", "effective_model": "", "provider_api_url": f"{config.tavily_api_url.rstrip('/')}/map", "error_code": ""}

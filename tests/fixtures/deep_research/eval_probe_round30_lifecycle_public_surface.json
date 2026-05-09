@@ -79,12 +79,17 @@
   "golden": {
     "release_gate_consistency": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
       "reason_tags": []
     },
     "resolved_batch_parity": {
       "verdict": "pass",
-      "score": 1.0,
+      "score": 1,
+      "reason_tags": []
+    },
+    "surface_consistency": {
+      "verdict": "pass",
+      "score": 1,
       "reason_tags": []
     }
   }

@@ -3,42 +3,21 @@ from pathlib import Path
 import re
 
 import pytest
-from deep_research_test_helpers import load_deep_research_fixture
+from deep_research_test_helpers import (
+    RECENT_DEEP_RESEARCH_EVAL_LIVE_PARITY_FIXTURES,
+    RECENT_DEEP_RESEARCH_PUBLIC_SURFACE_EVAL_FIXTURES,
+    load_deep_research_fixture,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_research"
-PROBE_PUBLIC_SURFACE_FIXTURES = (
-    "eval_probe_round24_worker_restart_public_surface.json",
-    "eval_probe_round26_aws_dms_public_surface.json",
-    "eval_probe_round30_aws_dms_official_doc.json",
-    "eval_probe_round30_lifecycle_public_surface.json",
-    "eval_probe_round33_aws_dms_official_doc.json",
-    "eval_probe_round33_lifecycle_public_surface.json",
-    "eval_probe_round34_aws_dms_official_doc.json",
-    "eval_probe_round34_lifecycle_public_surface.json",
-    "eval_probe_round35_aws_dms_official_doc.json",
-    "eval_probe_round35_lifecycle_public_surface.json",
-    "eval_probe_round36_aws_dms_official_doc.json",
-    "eval_probe_round36_lifecycle_public_surface.json",
-    "eval_probe_round37_aws_dms_official_doc.json",
-    "eval_probe_round37_lifecycle_public_surface.json",
-)
+PROBE_PUBLIC_SURFACE_FIXTURES = RECENT_DEEP_RESEARCH_PUBLIC_SURFACE_EVAL_FIXTURES
 PROBE_PUBLIC_SURFACE_METRICS = (
     "release_gate_consistency",
     "resolved_batch_parity",
+    "surface_consistency",
 )
-RECENT_PROBE_EVAL_PARITY_FIXTURES = (
-    ("eval_probe_round33_aws_dms_official_doc.json", "probe_round33_aws_dms_official_doc.json"),
-    ("eval_probe_round33_lifecycle_public_surface.json", "probe_round33_lifecycle_public_surface.json"),
-    ("eval_probe_round34_aws_dms_official_doc.json", "probe_round34_aws_dms_official_doc.json"),
-    ("eval_probe_round34_lifecycle_public_surface.json", "probe_round34_lifecycle_public_surface.json"),
-    ("eval_probe_round35_aws_dms_official_doc.json", "probe_round35_aws_dms_official_doc.json"),
-    ("eval_probe_round35_lifecycle_public_surface.json", "probe_round35_lifecycle_public_surface.json"),
-    ("eval_probe_round36_aws_dms_official_doc.json", "probe_round36_aws_dms_official_doc.json"),
-    ("eval_probe_round36_lifecycle_public_surface.json", "probe_round36_lifecycle_public_surface.json"),
-    ("eval_probe_round37_aws_dms_official_doc.json", "probe_round37_aws_dms_official_doc.json"),
-    ("eval_probe_round37_lifecycle_public_surface.json", "probe_round37_lifecycle_public_surface.json"),
-)
+RECENT_PROBE_EVAL_PARITY_FIXTURES = RECENT_DEEP_RESEARCH_EVAL_LIVE_PARITY_FIXTURES
 UNGROUNDED_ANALOGY_MARKERS = ("real-world analogy", "think of ")
 STOPWORDS = {
     "about",
@@ -118,6 +97,14 @@ def evaluate_case_metric(case: dict, metric: str) -> dict:
         return evaluate_resolved_batch_parity(case)
     if metric == "packet_to_prose_fidelity":
         return evaluate_packet_to_prose_fidelity(case)
+    if metric == "coverage_gap_scope_consistency":
+        return evaluate_coverage_gap_scope_consistency(case)
+    if metric == "surface_consistency":
+        return evaluate_surface_consistency(case)
+    if metric == "official_doc_family_granularity":
+        return evaluate_official_doc_family_granularity(case)
+    if metric == "provider_budget_surface":
+        return evaluate_provider_budget_surface(case)
     raise ValueError(f"Unsupported metric: {metric}")
 
 
@@ -517,55 +504,44 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
 
 
 def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
-    report = case.get("report") or {}
-    sections = report.get("sections") or []
-    section_by_id = {
-        str(section.get("section_id", "")).strip(): dict(section)
-        for section in sections
-        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
-    }
-    final_report_text = " ".join(str(report.get("final_report") or case.get("final_report") or "").split()).lower()
     selected_bank = case.get("selected_bank") or case.get("evidence_bank") or []
+    surface_claim_ids = _surface_claim_ids(case)
+    claim_text_by_id = _surface_claim_text_by_id(case)
+    surface_text = _stable_surface_text(case)
     reason_tags: list[str] = []
     checked_packets = 0
     for bank in selected_bank:
         if not isinstance(bank, dict):
             continue
-        section_id = str(bank.get("section_id", "")).strip()
-        section = section_by_id.get(section_id, {})
-        section_text = " ".join(
-            " ".join(
-                [
-                    str(section.get("summary", "") or ""),
-                    str(section.get("prose", "") or ""),
-                    *[
-                        str(claim.get("text", "") or "")
-                        for claim in section.get("claims", []) or []
-                        if isinstance(claim, dict)
-                    ],
-                ]
-            ).split()
-        ).lower()
+        selected_evidence_ids = [
+            str(evidence_id).strip()
+            for evidence_id in bank.get("selected_evidence_ids", []) or []
+            if str(evidence_id).strip()
+        ]
+        selected_row_ids: list[str] = []
         for row in bank.get("selected_rows", []) or []:
             if not isinstance(row, dict):
                 continue
             evidence_id = str(row.get("evidence_id", "")).strip()
             if not evidence_id:
                 continue
+            selected_row_ids.append(evidence_id)
             checked_packets += 1
-            packet_reflected = bool([claim_id for claim_id in row.get("claim_ids", []) or [] if str(claim_id).strip()])
-            if not packet_reflected:
-                coverage_tags = [
-                    " ".join(str(tag).split()).lower()
-                    for tag in row.get("coverage_tags", []) or []
-                    if " ".join(str(tag).split())
-                ]
-                packet_reflected = any(
-                    tag and (tag in section_text or tag in final_report_text)
-                    for tag in coverage_tags
-                )
-            if not packet_reflected:
+            if selected_evidence_ids and evidence_id not in selected_evidence_ids:
+                reason_tags.append("selected_row_outside_selected_evidence")
+            claim_ids = [str(claim_id).strip() for claim_id in row.get("claim_ids", []) or [] if str(claim_id).strip()]
+            if not claim_ids:
                 reason_tags.append("selected_packet_missing_from_prose")
+                continue
+            if any(claim_id not in surface_claim_ids for claim_id in claim_ids):
+                reason_tags.append("selected_packet_claim_missing_from_surface")
+            for claim_id in claim_ids:
+                claim_text = claim_text_by_id.get(claim_id, "")
+                if claim_text and not _claim_text_reflected(claim_text, surface_text):
+                    reason_tags.append("selected_packet_claim_text_missing_from_prose")
+        selected_row_id_set = set(selected_row_ids)
+        if any(evidence_id not in selected_row_id_set for evidence_id in selected_evidence_ids):
+            reason_tags.append("selected_packet_row_missing")
     verdict = "pass" if not reason_tags else "fail"
     return {
         "metric": "packet_to_prose_fidelity",
@@ -574,6 +550,295 @@ def evaluate_packet_to_prose_fidelity(case: dict) -> dict:
         "reason_tags": sorted(set(reason_tags)),
         "checked_packets": checked_packets,
     }
+
+
+def evaluate_coverage_gap_scope_consistency(case: dict) -> dict:
+    coverage_gaps = case.get("coverage_gaps") or {}
+    if not isinstance(coverage_gaps, dict):
+        coverage_gaps = {}
+    gaps = coverage_gaps.get("gaps") or []
+    reason_tags: list[str] = []
+    blocking_count = 0
+    hard_count = 0
+    for gap in gaps:
+        if not isinstance(gap, dict):
+            reason_tags.append("malformed_gap")
+            continue
+        scope = str(gap.get("blocking_scope", "") or "").strip()
+        blocking = bool(gap.get("blocking"))
+        gap_type = str(gap.get("gap_type", "") or "").strip()
+        if scope not in {"hard", "soft"}:
+            reason_tags.append("missing_blocking_scope")
+        if scope == "hard":
+            hard_count += 1
+            if not blocking:
+                reason_tags.append("hard_gap_not_blocking")
+        if scope == "soft" and blocking:
+            reason_tags.append("soft_gap_marked_blocking")
+        if gap_type == "hard_uncovered_target" and scope != "hard":
+            reason_tags.append("hard_target_scope_mismatch")
+        if blocking:
+            blocking_count += 1
+    if int(coverage_gaps.get("blocking_gap_count", 0) or 0) != blocking_count:
+        reason_tags.append("blocking_gap_count_mismatch")
+    if int(coverage_gaps.get("hard_gap_count", 0) or 0) != hard_count:
+        reason_tags.append("hard_gap_count_mismatch")
+    verdict = "pass" if not reason_tags else "fail"
+    return {
+        "metric": "coverage_gap_scope_consistency",
+        "verdict": verdict,
+        "score": 1.0 if verdict == "pass" else 0.0,
+        "reason_tags": sorted(set(reason_tags)),
+    }
+
+
+def evaluate_surface_consistency(case: dict) -> dict:
+    public_surface = case.get("public_surface") if isinstance(case.get("public_surface"), dict) else {}
+    surfaces = {
+        name: public_surface.get(name)
+        for name in ("status", "result")
+        if isinstance(public_surface.get(name), dict)
+    }
+    reason_tags: list[str] = []
+    if not surfaces:
+        return {
+            "metric": "surface_consistency",
+            "verdict": "pass",
+            "score": 1.0,
+            "reason_tags": [],
+        }
+
+    sample = case.get("sample") if isinstance(case.get("sample"), dict) else {}
+    for name, surface in surfaces.items():
+        operator_summary = surface.get("operator_summary") if isinstance(surface.get("operator_summary"), dict) else {}
+        if not operator_summary:
+            reason_tags.append(f"{name}_missing_operator_summary")
+            continue
+        for field in ("status", "phase"):
+            expected = sample.get(field, surface.get(field))
+            if expected is not None and operator_summary.get(field) != expected:
+                reason_tags.append(f"{name}_operator_{field}_mismatch")
+        for field in ("watch_attach_after_seq", "attempt_window_start_seq"):
+            if field in surface and operator_summary.get(field) != surface.get(field):
+                reason_tags.append(f"{name}_operator_{field}_mismatch")
+        partial_payload_available = surface.get("partial_payload") is not None
+        if operator_summary.get("partial_payload_available") != partial_payload_available:
+            reason_tags.append(f"{name}_operator_partial_payload_available_mismatch")
+
+    if "status" in surfaces and "result" in surfaces:
+        for field in ("watch_attach_after_seq", "attempt_window_start_seq"):
+            if surfaces["status"].get(field) != surfaces["result"].get(field):
+                reason_tags.append(f"status_result_{field}_mismatch")
+        status_partial = surfaces["status"].get("partial_payload") is not None
+        result_partial = surfaces["result"].get("partial_payload") is not None
+        if status_partial != result_partial:
+            reason_tags.append("status_result_partial_payload_available_mismatch")
+
+    reason_tags = sorted(set(reason_tags))
+    score = max(0.0, 1.0 - (0.25 * len(reason_tags)))
+    return {
+        "metric": "surface_consistency",
+        "verdict": "pass" if not reason_tags else "fail",
+        "score": round(score, 3),
+        "reason_tags": reason_tags,
+    }
+
+
+def evaluate_official_doc_family_granularity(case: dict) -> dict:
+    sources = list(case.get("sources") or [])
+    registry = _source_registry(case)
+    sources.extend(source for source in registry.values() if isinstance(source, dict))
+    actual_families = {
+        _official_doc_family_key(source)
+        for source in sources
+        if isinstance(source, dict) and str(source.get("domain", "") or "").lower() == "docs.aws.amazon.com"
+    }
+    expected_families = {
+        str(item).strip()
+        for item in (case.get("expected_official_doc_families") or [])
+        if str(item).strip()
+    }
+    reason_tags: list[str] = []
+    if expected_families and not expected_families.issubset(actual_families):
+        reason_tags.append("missing_expected_official_doc_family")
+    if len(actual_families) < int(case.get("min_official_doc_family_count", 0) or 0):
+        reason_tags.append("insufficient_official_doc_family_count")
+    return {
+        "metric": "official_doc_family_granularity",
+        "verdict": "pass" if not reason_tags else "fail",
+        "score": 1.0 if not reason_tags else 0.0,
+        "reason_tags": sorted(set(reason_tags)),
+    }
+
+
+def evaluate_provider_budget_surface(case: dict) -> dict:
+    report = case.get("report") or {}
+    runtime = (report.get("runtime") or {})
+    unit_results = report.get("unit_results") if isinstance(report.get("unit_results"), dict) else {}
+    budget = runtime.get("budget") if isinstance(runtime.get("budget"), dict) else {}
+    provider_winners = runtime.get("provider_winners") if isinstance(runtime.get("provider_winners"), list) else []
+    provider_attempts = runtime.get("provider_attempts") if isinstance(runtime.get("provider_attempts"), list) else []
+    provider_capabilities = runtime.get("provider_capabilities") if isinstance(runtime.get("provider_capabilities"), dict) else {}
+    feature_readiness = case.get("feature_readiness") if isinstance(case.get("feature_readiness"), dict) else {}
+    reason_tags: list[str] = []
+
+    if not provider_winners:
+        reason_tags.append("missing_provider_winners")
+    if not provider_attempts:
+        reason_tags.append("missing_provider_attempts")
+    if not provider_capabilities:
+        reason_tags.append("missing_provider_capabilities")
+    winner_unit_ids: list[str] = []
+    for winner in provider_winners:
+        if not isinstance(winner, dict):
+            reason_tags.append("malformed_provider_winner")
+            continue
+        unit_id = str(winner.get("unit_id", "") or "").strip()
+        if not unit_id:
+            reason_tags.append("missing_provider_winner_unit_id")
+        else:
+            winner_unit_ids.append(unit_id)
+            if unit_results and unit_id not in unit_results:
+                reason_tags.append("provider_winner_unit_missing_from_unit_results")
+        if not str(winner.get("provider_name", "") or "").strip():
+            reason_tags.append("missing_provider_name")
+        if not str(winner.get("provider_api_url", "") or "").strip():
+            reason_tags.append("missing_provider_api_url")
+    if len(winner_unit_ids) != len(set(winner_unit_ids)):
+        reason_tags.append("duplicate_provider_winner_unit_id")
+
+    attempt_unit_ids: list[str] = []
+    for attempt in provider_attempts:
+        if not isinstance(attempt, dict):
+            reason_tags.append("malformed_provider_attempt")
+            continue
+        unit_id = str(attempt.get("unit_id", "") or "").strip()
+        operation = str(attempt.get("operation", "") or "").strip()
+        status = str(attempt.get("status", "") or "").strip()
+        if not unit_id:
+            reason_tags.append("missing_provider_attempt_unit_id")
+        else:
+            attempt_unit_ids.append(unit_id)
+        if operation not in {"search", "fetch", "map"}:
+            reason_tags.append("invalid_provider_attempt_operation")
+        if status not in {"completed", "failed"}:
+            reason_tags.append("invalid_provider_attempt_status")
+        if status == "completed" and not str(attempt.get("provider_name", "") or "").strip():
+            reason_tags.append("completed_attempt_missing_provider_name")
+        if status == "completed" and not str(attempt.get("provider_api_url", "") or "").strip():
+            reason_tags.append("completed_attempt_missing_provider_api_url")
+        capability = provider_capabilities.get(operation)
+        if operation and isinstance(capability, dict):
+            capability_providers = {
+                str(provider).strip()
+                for provider in capability.get("providers", []) or []
+                if str(provider).strip()
+            }
+            provider_name = str(attempt.get("provider_name", "") or "").strip()
+            if provider_name and provider_name not in capability_providers:
+                reason_tags.append("provider_attempt_missing_from_capabilities")
+
+    if winner_unit_ids and attempt_unit_ids and not set(winner_unit_ids).issubset(set(attempt_unit_ids)):
+        reason_tags.append("provider_winner_missing_provider_attempt")
+
+    if int(budget.get("resolved_budget_seconds", 0) or 0) <= 0:
+        reason_tags.append("missing_resolved_budget_seconds")
+    if int(budget.get("max_concurrency", 0) or 0) <= 0:
+        reason_tags.append("missing_max_concurrency")
+    usage = budget.get("usage") if isinstance(budget.get("usage"), dict) else {}
+    if not usage:
+        reason_tags.append("missing_budget_usage")
+    else:
+        if int(usage.get("completed_units", 0) or 0) + int(usage.get("failed_units", 0) or 0) <= 0:
+            reason_tags.append("missing_budget_usage_terminal_units")
+        if int(usage.get("provider_attempts", 0) or 0) != len(provider_attempts):
+            reason_tags.append("budget_usage_provider_attempt_count_mismatch")
+
+    deep_runtime = feature_readiness.get("deep_research_runtime")
+    if isinstance(deep_runtime, dict):
+        degraded_by = set(deep_runtime.get("degraded_by") or [])
+        if deep_runtime.get("status") == "degraded" and "advanced_optional" not in degraded_by:
+            reason_tags.append("advanced_degrade_not_marked_optional")
+
+    reason_tags = sorted(set(reason_tags))
+    return {
+        "metric": "provider_budget_surface",
+        "verdict": "pass" if not reason_tags else "fail",
+        "score": 1.0 if not reason_tags else 0.0,
+        "reason_tags": reason_tags,
+    }
+
+
+def _surface_claim_ids(case: dict) -> set[str]:
+    claim_ids: set[str] = set()
+    for surface in (case.get("report"), case.get("citations")):
+        if not isinstance(surface, dict):
+            continue
+        for section in surface.get("sections", []) or []:
+            if not isinstance(section, dict):
+                continue
+            for claim in section.get("claims", []) or []:
+                if not isinstance(claim, dict):
+                    continue
+                claim_id = str(claim.get("claim_id", "")).strip()
+                if claim_id:
+                    claim_ids.add(claim_id)
+    return claim_ids
+
+
+def _surface_claim_text_by_id(case: dict) -> dict[str, str]:
+    claim_texts: dict[str, str] = {}
+    for claim in _iter_claims(case):
+        claim_id = str(claim.get("claim_id", "")).strip()
+        text = _stable_text(str(claim.get("text", "") or ""))
+        if claim_id and text:
+            claim_texts[claim_id] = text
+    return claim_texts
+
+
+def _stable_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _stable_surface_text(case: dict) -> str:
+    texts: list[str] = []
+    report = case.get("report") if isinstance(case.get("report"), dict) else {}
+    for section in report.get("sections", []) or []:
+        if not isinstance(section, dict):
+            continue
+        texts.append(str(section.get("prose", "") or ""))
+    texts.append(str(report.get("final_report", "") or case.get("final_report", "") or ""))
+    return _stable_text(" ".join(texts))
+
+
+def _claim_text_reflected(claim_text: str, surface_text: str) -> bool:
+    if not claim_text:
+        return True
+    if claim_text in surface_text:
+        return True
+    claim_terms = _keywords(claim_text)
+    if len(claim_terms) < 3:
+        return False
+    surface_terms = _keywords(surface_text)
+    overlap = claim_terms & surface_terms
+    return len(overlap) >= 3 and (len(overlap) / len(claim_terms)) >= 0.6
+
+
+def _official_doc_family_key(source: dict) -> str:
+    url = str(source.get("url", "") or "").lower()
+    domain = str(source.get("domain", "") or "").lower()
+    if domain == "docs.aws.amazon.com":
+        if "/dms/latest/apireference/" in url:
+            return "aws:dms:api_reference"
+        if "/cli/latest/reference/dms/" in url:
+            return "aws:dms:cli_reference"
+        if "/dms/latest/userguide/" in url:
+            if "cdc" in url:
+                return "aws:dms:cdc_guide"
+            if "tasksettings" in url or "task-settings" in url or "task_settings" in url:
+                return "aws:dms:task_settings"
+            return "aws:dms:user_guide"
+    return f"{domain}:official_docs" if domain else "official_docs"
 
 
 def _iter_claims(case: dict):
@@ -776,6 +1041,7 @@ def test_planner_boundary_probe_goldens(fixture_name):
         "eval_probe_round22_noise_filters.json",
         "eval_probe_round23_aws_dms_ranking_noise.json",
         "eval_probe_round24_aws_dms_ranking_success.json",
+        "eval_probe_round39_aws_dms_operation_ranking.json",
         "eval_probe_round30_aws_dms_official_doc.json",
     ],
 )
@@ -1114,13 +1380,305 @@ def test_packet_to_prose_fidelity_detects_selected_packet_missing_from_prose():
     result = evaluate_case_metric(case, "packet_to_prose_fidelity")
 
     assert result["verdict"] == "fail"
+
+
+def test_packet_to_prose_fidelity_detects_selected_evidence_missing_selected_row():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "summary": "AWS DMS can resume CDC from a checkpoint.",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "AWS DMS can resume CDC from a checkpoint.",
+                        }
+                    ],
+                }
+            ],
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_evidence_ids": ["e1"],
+                "selected_rows": [],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["selected_packet_row_missing"]
+
+
+def test_packet_to_prose_fidelity_rejects_generic_coverage_tag_without_claim_binding():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "summary": "Checkpoint behavior depends on the replication task mode.",
+                    "prose": "Checkpoint behavior depends on the replication task mode.",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "Checkpoint behavior depends on the replication task mode.",
+                        }
+                    ],
+                }
+            ],
+            "final_report": "Checkpoint behavior depends on the replication task mode.",
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_rows": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": [],
+                        "coverage_tags": ["checkpoint"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "fail"
     assert result["reason_tags"] == ["selected_packet_missing_from_prose"]
+
+
+def test_packet_to_prose_fidelity_rejects_claim_id_missing_from_report_surface():
+    case = {
+        "report": {
+            "sections": [
+                {
+                    "section_id": "resume-semantics",
+                    "claims": [
+                        {
+                            "claim_id": "resume-semantics-claim-1",
+                            "text": "RecoveryTimeout governs recovery wait behavior.",
+                        }
+                    ],
+                }
+            ],
+        },
+        "selected_bank": [
+            {
+                "section_id": "resume-semantics",
+                "selected_rows": [
+                    {
+                        "evidence_id": "e1",
+                        "claim_ids": ["missing-claim-id"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["selected_packet_claim_missing_from_surface"]
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        "eval_probe_round40_aws_dms_packet_fidelity.json",
+        "eval_probe_round40_aws_dms_packet_fidelity_negative.json",
+        "eval_probe_round40_aws_dms_packet_fidelity_missing_claim_ids.json",
+        "eval_probe_round40_aws_dms_packet_fidelity_claim_surface_mismatch.json",
+        "eval_probe_round42_selected_bank_extra_row_drift.json",
+    ],
+)
+def test_packet_to_prose_fidelity_aws_dms_probe_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+    golden = case["golden"]["packet_to_prose_fidelity"]
+
+    result = evaluate_case_metric(case, "packet_to_prose_fidelity")
+
+    assert_metric_matches_golden(result, golden)
+
+
+def test_coverage_gap_scope_consistency_detects_soft_gap_marked_blocking():
+    case = {
+        "coverage_gaps": {
+            "blocking_gap_count": 1,
+            "hard_gap_count": 0,
+            "gaps": [
+                {
+                    "gap_type": "uncovered_sub_question",
+                    "target": "DescribeReplicationTasks RecoveryCheckpoint visibility",
+                    "blocking": True,
+                    "blocking_scope": "soft",
+                }
+            ],
+        }
+    }
+
+    result = evaluate_case_metric(case, "coverage_gap_scope_consistency")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["soft_gap_marked_blocking"]
+
+
+def test_coverage_gap_scope_consistency_aws_dms_probe_golden():
+    case = load_eval_case("eval_probe_round41_aws_dms_coverage_gate_scope.json")
+    golden = case["golden"]["coverage_gap_scope_consistency"]
+
+    result = evaluate_case_metric(case, "coverage_gap_scope_consistency")
+
+    assert_metric_matches_golden(result, golden)
+
+
+def test_official_doc_family_granularity_round42_golden():
+    case = load_eval_case("eval_probe_round42_aws_dms_official_doc_family_granularity.json")
+    golden = case["golden"]["official_doc_family_granularity"]
+
+    result = evaluate_case_metric(case, "official_doc_family_granularity")
+
+    assert_metric_matches_golden(result, golden)
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        "eval_probe_round42_lifecycle_surface_mirror.json",
+        "eval_probe_round42_lifecycle_malformed_sidecars.json",
+    ],
+)
+def test_surface_consistency_round42_probe_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+    golden = case["golden"]["surface_consistency"]
+
+    result = evaluate_case_metric(case, "surface_consistency")
+
+    assert_metric_matches_golden(result, golden)
+
+
+def test_surface_consistency_detects_operator_summary_mirror_gap():
+    case = {
+        "sample": {"status": "interrupted", "phase": "researching"},
+        "public_surface": {
+            "status": {
+                "watch_attach_after_seq": 9,
+                "attempt_window_start_seq": 10,
+                "partial_payload": {"plan": {"brief": {"objective": "Surface mirror"}}},
+                "operator_summary": {
+                    "status": "interrupted",
+                    "phase": "researching",
+                    "watch_attach_after_seq": 9,
+                    "attempt_window_start_seq": 99,
+                    "partial_payload_available": False,
+                },
+            },
+            "result": {
+                "watch_attach_after_seq": 9,
+                "attempt_window_start_seq": 10,
+                "partial_payload": {"plan": {"brief": {"objective": "Surface mirror"}}},
+                "operator_summary": {
+                    "status": "interrupted",
+                    "phase": "researching",
+                    "watch_attach_after_seq": 9,
+                    "attempt_window_start_seq": 10,
+                    "partial_payload_available": True,
+                },
+            },
+        },
+    }
+
+    result = evaluate_case_metric(case, "surface_consistency")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == [
+        "status_operator_attempt_window_start_seq_mismatch",
+        "status_operator_partial_payload_available_mismatch",
+    ]
+
+
+def test_provider_budget_surface_round43_probe_golden():
+    case = load_eval_case("eval_probe_round43_provider_budget_surface.json")
+    golden = case["golden"]["provider_budget_surface"]
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert_metric_matches_golden(result, golden)
+
+
+def test_provider_budget_surface_detects_missing_provider_api_url():
+    case = {
+        "report": {
+            "runtime": {
+                "budget": {"resolved_budget_seconds": 240, "max_concurrency": 2},
+                "provider_winners": [
+                    {
+                        "unit_id": "u1",
+                        "provider_name": "tavily",
+                        "provider_api_url": "",
+                    }
+                ],
+            }
+        }
+    }
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == [
+        "missing_budget_usage",
+        "missing_provider_api_url",
+        "missing_provider_attempts",
+        "missing_provider_capabilities",
+    ]
+
+
+def test_provider_budget_surface_requires_provider_winners_to_match_unit_results():
+    case = {
+        "report": {
+            "unit_results": {
+                "unit-search-1": {
+                    "summary": "Search unit result.",
+                }
+            },
+            "runtime": {
+                "budget": {"resolved_budget_seconds": 240, "max_concurrency": 2},
+                "provider_winners": [
+                    {
+                        "unit_id": "unit-search-2",
+                        "provider_name": "tavily",
+                        "provider_api_url": "https://api.tavily.com",
+                    },
+                    {
+                        "unit_id": "unit-search-2",
+                        "provider_name": "firecrawl",
+                        "provider_api_url": "https://api.firecrawl.dev",
+                    },
+                ],
+            },
+        }
+    }
+
+    result = evaluate_case_metric(case, "provider_budget_surface")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == [
+        "duplicate_provider_winner_unit_id",
+        "missing_budget_usage",
+        "missing_provider_attempts",
+        "missing_provider_capabilities",
+        "provider_winner_unit_missing_from_unit_results",
+    ]
 
 
 @pytest.mark.parametrize(
     "fixture_name",
     [
         "eval_probe_round22_provenance_bundle.json",
+        "eval_probe_round39_aws_dms_binding_consistency.json",
     ],
 )
 def test_provenance_bundle_consistency_probe_goldens(fixture_name):

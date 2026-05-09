@@ -205,9 +205,10 @@ class DeepResearchStore:
                 for row in legacy_rows:
                     job_id = str(row["job_id"])
                     checkpoint_seq = int(row["checkpoint_seq"] or 0) if "checkpoint_seq" in legacy_columns else 0
-                    if checkpoint_seq <= 0:
-                        checkpoint_seq = next_seq_by_job.get(job_id, 0) + 1
-                    next_seq_by_job[job_id] = max(next_seq_by_job.get(job_id, 0), checkpoint_seq)
+                    last_seq = next_seq_by_job.get(job_id, 0)
+                    if checkpoint_seq <= last_seq:
+                        checkpoint_seq = last_seq + 1
+                    next_seq_by_job[job_id] = checkpoint_seq
                     connection.execute(
                         """
                         INSERT INTO job_checkpoints (
@@ -594,7 +595,7 @@ class DeepResearchStore:
             return None
         return path.read_text(encoding="utf-8")
 
-    def find_reusable_job(self, request_fingerprint: str, *, recent_reuse_seconds: int) -> DeepResearchJob | None:
+    def find_reusable_jobs(self, request_fingerprint: str, *, recent_reuse_seconds: int) -> list[DeepResearchJob]:
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -604,20 +605,30 @@ class DeepResearchStore:
                 """,
                 (request_fingerprint,),
             ).fetchall()
+        reusable: list[DeepResearchJob] = []
         for row in rows:
             job = self._row_to_job(row)
             if job.status in {"draft", "queued", "running"}:
-                return job
+                reusable.append(job)
+                continue
             if job.status == "interrupted" and (job.phase == "finalizing" or job.current_checkpoint == "finalizing"):
-                return job
+                reusable.append(job)
+                continue
             if job.status == "completed" and recent_reuse_seconds > 0:
                 finished_at = _parse_utc_iso(job.finished_at)
                 if finished_at is None:
                     continue
                 age_seconds = (dt.datetime.now(dt.UTC) - finished_at.astimezone(dt.UTC)).total_seconds()
                 if age_seconds <= recent_reuse_seconds:
-                    return job
-        return None
+                    reusable.append(job)
+        return reusable
+
+    def find_reusable_job(self, request_fingerprint: str, *, recent_reuse_seconds: int) -> DeepResearchJob | None:
+        candidates = self.find_reusable_jobs(
+            request_fingerprint,
+            recent_reuse_seconds=recent_reuse_seconds,
+        )
+        return candidates[0] if candidates else None
 
     def reconcile_incomplete_jobs(
         self,

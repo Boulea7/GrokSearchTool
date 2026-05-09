@@ -73,6 +73,17 @@ def _job_summary_parts(payload: dict[str, Any], *, fallback_job_id: str = "") ->
         parts.append(f"last_error={last_error}")
     if payload.get("planner_fallback_used"):
         parts.append("planner_fallback=true")
+    if payload.get("partial_payload_available"):
+        parts.append("partial_payload_available=true")
+    watch_attach_after_seq = payload.get("watch_attach_after_seq")
+    if isinstance(watch_attach_after_seq, int) and watch_attach_after_seq > 0:
+        parts.append(f"watch_attach_after_seq={watch_attach_after_seq}")
+    attempt_window_start_seq = payload.get("attempt_window_start_seq")
+    if isinstance(attempt_window_start_seq, int) and attempt_window_start_seq > 0:
+        parts.append(f"attempt_window_start_seq={attempt_window_start_seq}")
+    artifact_visibility_reason = _summary_value(payload.get("artifact_visibility_reason"))
+    if artifact_visibility_reason != "-":
+        parts.append(f"artifact_visibility_reason={artifact_visibility_reason}")
     runtime_warnings = payload.get("runtime_warnings")
     if isinstance(runtime_warnings, list) and runtime_warnings:
         parts.append(f"warnings={len(runtime_warnings)}")
@@ -150,6 +161,17 @@ def _event_attempt_count(event: dict[str, Any]) -> int | None:
         return None
 
 
+def _event_attempt_id(event: dict[str, Any]) -> str:
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return ""
+    value = str(data.get("attempt_id", "") or "").strip()
+    if value:
+        return value
+    attempt_count = _event_attempt_count(event)
+    return f"attempt-{attempt_count}" if attempt_count is not None and attempt_count > 0 else ""
+
+
 async def _resolve_watch_attach_after_seq(
     runtime: DeepResearchRuntime,
     job_id: str,
@@ -157,12 +179,30 @@ async def _resolve_watch_attach_after_seq(
     *,
     page_limit: int = 100,
 ) -> int:
+    explicit_anchor = payload.get("watch_attach_after_seq")
+    try:
+        normalized_explicit_anchor = int(explicit_anchor)
+    except (TypeError, ValueError):
+        normalized_explicit_anchor = None
+    if normalized_explicit_anchor is not None and normalized_explicit_anchor >= 0:
+        return normalized_explicit_anchor
+    attempt_window_start_seq = payload.get("attempt_window_start_seq")
+    try:
+        normalized_attempt_window_start_seq = int(attempt_window_start_seq)
+    except (TypeError, ValueError):
+        normalized_attempt_window_start_seq = None
+    if normalized_attempt_window_start_seq is not None and normalized_attempt_window_start_seq > 0:
+        return normalized_attempt_window_start_seq - 1
     attempts = payload.get("attempt_count")
     continued_from = _summary_value(payload.get("continued_from_job_id"))
     try:
         numeric_attempts = int(attempts)
     except (TypeError, ValueError):
         numeric_attempts = 0
+    payload_attempt_id = str(payload.get("attempt_id", "") or "").strip()
+    if not payload_attempt_id and numeric_attempts > 0:
+        payload_attempt_id = f"attempt-{numeric_attempts}"
+    previous_attempt_id = f"attempt-{max(0, numeric_attempts - 1)}" if numeric_attempts > 1 else ""
     if numeric_attempts <= 1 and continued_from == "-":
         return 0
 
@@ -182,15 +222,21 @@ async def _resolve_watch_attach_after_seq(
             except (TypeError, ValueError):
                 event_seq = 0
             attempt_count = _event_attempt_count(event)
+            attempt_id = _event_attempt_id(event)
             event_type = str(event.get("type", ""))
             if (
-                previous_attempt_count > 0
-                and attempt_count == previous_attempt_count
+                (
+                    (previous_attempt_id and attempt_id == previous_attempt_id)
+                    or (previous_attempt_count > 0 and attempt_count == previous_attempt_count)
+                )
                 and event_type in ATTACH_TERMINAL_EVENT_TYPES
             ):
                 previous_attempt_after_seq = max(previous_attempt_after_seq, event_seq)
                 continue
-            if attempt_count != numeric_attempts:
+            if payload_attempt_id:
+                if attempt_id != payload_attempt_id:
+                    continue
+            elif attempt_count != numeric_attempts:
                 continue
             if event_type == "job_resumed":
                 return previous_attempt_after_seq or max(0, event_seq - 1)
@@ -447,6 +493,9 @@ async def _handle_resume(args: argparse.Namespace) -> int:
     _print_job_summary(response, fallback_job_id=args.job_id)
     _print_json(response)
     if args.watch:
+        if response.get("plan_only") and response.get("status") == "draft":
+            print("plan_only_resume_blocked: plan-only draft jobs cannot be watched for execution", file=sys.stderr)
+            return 0
         interrupted = await _run_observation(
             _watch_job(
                 runtime,
@@ -521,7 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_common_research_args(command: argparse.ArgumentParser) -> None:
         command.add_argument("--context", default="")
-        command.add_argument("--effort", default="standard")
+        command.add_argument("--effort", default="standard", help="Research effort profile: standard, deep, or ultra.")
         command.add_argument("--time-budget-seconds", type=int, default=0)
         command.add_argument("--include-domain", action="append", default=None)
         command.add_argument("--exclude-domain", action="append", default=None)

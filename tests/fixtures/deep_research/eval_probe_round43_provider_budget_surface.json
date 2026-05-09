@@ -1,0 +1,97 @@
+{
+  "sample": {
+    "status": "completed",
+    "phase": "finalizing"
+  },
+  "query": "Provider fallback and budget visibility for deep research public surfaces",
+  "report": {
+    "runtime": {
+      "budget": {
+        "effort": "standard",
+        "resolved_budget_seconds": 240,
+        "hard_timeout_seconds": 900,
+        "max_concurrency": 2,
+        "usage": {
+          "completed_units": 2,
+          "failed_units": 0,
+          "skipped_units": 0,
+          "search_calls": 1,
+          "fetch_calls": 1,
+          "map_calls": 0,
+          "provider_attempts": 2,
+          "source_count": 3,
+          "evidence_count": 3
+        }
+      },
+      "provider_capabilities": {
+        "search": {
+          "used": true,
+          "providers": ["grok"]
+        },
+        "fetch": {
+          "used": true,
+          "providers": ["tavily"]
+        },
+        "map": {
+          "used": false,
+          "providers": []
+        }
+      },
+      "provider_attempts": [
+        {
+          "unit_id": "unit-search-1",
+          "operation": "search",
+          "status": "completed",
+          "provider_name": "grok",
+          "provider_model": "grok-4.20-expert",
+          "effective_model": "grok-4.20-expert",
+          "provider_api_url": "https://provider.example.invalid/v1/chat/completions",
+          "source_count": 2,
+          "evidence_count": 2,
+          "error_code": ""
+        },
+        {
+          "unit_id": "unit-fetch-1",
+          "operation": "fetch",
+          "status": "completed",
+          "provider_name": "tavily",
+          "provider_model": "",
+          "effective_model": "",
+          "provider_api_url": "https://tavily-fallback.example.invalid/api/extract",
+          "source_count": 1,
+          "evidence_count": 1,
+          "error_code": ""
+        }
+      ],
+      "provider_winners": [
+        {
+          "unit_id": "unit-search-1",
+          "provider_name": "grok",
+          "provider_model": "grok-4.20-expert",
+          "effective_model": "grok-4.20-expert",
+          "provider_api_url": "https://provider.example.invalid/v1/chat/completions"
+        },
+        {
+          "unit_id": "unit-fetch-1",
+          "provider_name": "tavily",
+          "provider_model": "",
+          "effective_model": "",
+          "provider_api_url": "https://tavily-fallback.example.invalid/api/extract"
+        }
+      ]
+    }
+  },
+  "feature_readiness": {
+    "deep_research_runtime": {
+      "status": "degraded",
+      "degraded_by": ["advanced_optional"]
+    }
+  },
+  "golden": {
+    "provider_budget_surface": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}
