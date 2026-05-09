@@ -12,6 +12,7 @@ All notable changes to this repository are documented here.
 - Added the public `deep_research_artifact(job_id, artifact)` MCP surface for single-artifact reads with the same resolved-final-batch visibility rules as CLI `result --artifact`.
 - Updated `plan_*` wrappers to return structured objects directly instead of JSON-string payloads, and documented object response contracts for `web_map`, `switch_model`, and `toggle_builtin_tools`.
 - Added public host-integration guidance in `docs/HOSTS.md` for companion skills, host assets, and stdio setup.
+- Clarified public docs for Tavily fallback defaults, localized deep research artifact surfaces, and release-safe relay fixture placeholders.
 
 ### Fixed
 
@@ -21,7 +22,7 @@ All notable changes to this repository are documented here.
 ### Verification
 
 - Validated the AWS DMS RecoveryCheckpoint path with a narrow live Grok probe and checked in sanitized live fixtures.
-- Verified focused deep research tests (`659 passed`), Python compile checks, Ruff, staged secret patterns, and the full local pytest suite (`1286 passed`).
+- Verified focused deep research tests (`659 passed`), Python compile checks, Ruff, staged secret patterns, GitHub packaging artifact smoke, and the full local pytest suite (`1297 passed`).
 
 ## 1.0.0 - 2026-04-04
 
