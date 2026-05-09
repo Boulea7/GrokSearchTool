@@ -149,31 +149,31 @@ Create a `STDIO` MCP server entry with the same core fields:
 
 ### Core environment variables
 
-| Variable | Required | Description |
-| --- | --- | --- |
-| `GROK_API_URL` | Yes | OpenAI-compatible Grok endpoint; using an explicit `/v1` suffix is recommended, the current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
-| `GROK_API_KEY` | Yes | Grok API key |
-| `GROK_MODEL` | No | Default model; see the precedence notes below |
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `GROK_API_URL` | Yes | - | OpenAI-compatible Grok endpoint; using an explicit `/v1` suffix is recommended, the current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
+| `GROK_API_KEY` | Yes | - | Grok API key |
+| `GROK_MODEL` | No | Code default | Default model; see the precedence notes below |
 | `GROK_MODEL_PROFILE` | No | `balanced_auto` | When `GROK_MODEL` is not explicitly set, resolve a provider-aware default model for official xAI, OpenRouter, and common OpenAI-compatible relays / grok2api-like proxies |
 | `GROK_DEEP_RESEARCH_STANDARD_PROFILE` | No | `reasoning` | Default deep research profile for `standard` effort; automatically downgrades when unavailable |
 | `GROK_DEEP_RESEARCH_DEEP_PROFILE` | No | `multi_agent` | Default deep research profile for `deep` effort; automatically downgrades to single-agent when multi-agent is unavailable |
 | `GROK_DEEP_RESEARCH_ULTRA_PROFILE` | No | `ultra` | Default deep research profile for `ultra` effort; when explicitly requested it prefers `grok-4.20-heavy-16-agent` and automatically downgrades to lighter multi-agent or single-agent models when needed |
-| `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | No | The second Grok provider; real requests automatically fail over to it when the primary provider fails |
-| `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | No | Additional Grok providers, tried in numeric order as the fallback chain |
+| `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | No | - | The second Grok provider; real requests automatically fail over to it when the primary provider fails |
+| `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | No | - | Additional Grok providers, tried in numeric order as the fallback chain |
 | `GROK_MODEL_FALLBACKS` | No | Built-in downgrade chain | A comma-separated model fallback order used when a provider explicitly reports that the requested model is unavailable; this can explicitly include `grok-4.1-fast` |
-| `GROK_TIME_CONTEXT_MODE` | No | Time-context injection mode: `always`, `auto`, or `never` |
-| `TAVILY_API_KEY` | No | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
-| `TAVILY_API_URL` | No | Tavily endpoint |
-| `TAVILY_ENABLED` | No | Enable or disable Tavily-backed fetch/map paths |
-| `TAVILY_FALLBACK_API_URL` | No | Remote HTTP API fallback used when the primary Tavily URL is a local loopback endpoint and is unavailable; must be explicitly configured |
-| `TAVILY_FALLBACK_API_KEY` | No | Tavily fallback Bearer token; defaults to `TAVILY_API_KEY` and must not be committed |
-| `TAVILY_FALLBACK_ENABLED` | No | Enable or disable the local-loopback Tavily fallback path; defaults to disabled |
-| `FIRECRAWL_API_KEY` | No | Firecrawl key for fetch fallback and optional supplemental `web_search` |
-| `FIRECRAWL_API_URL` | No | Firecrawl endpoint |
-| `GROK_DEBUG` | No | Enable debug logging |
-| `GROK_LOG_LEVEL` | No | Log level |
-| `GROK_LOG_DIR` | No | Log directory; `get_config_info` returns the resolved runtime path |
-| `GROK_OUTPUT_CLEANUP` | No | Enable answer cleanup |
+| `GROK_TIME_CONTEXT_MODE` | No | `always` | Time-context injection mode: `always`, `auto`, or `never` |
+| `TAVILY_API_KEY` | No | - | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
+| `TAVILY_API_URL` | No | Tavily default | Tavily endpoint |
+| `TAVILY_ENABLED` | No | Enabled | Enable or disable Tavily-backed fetch/map paths |
+| `TAVILY_FALLBACK_API_URL` | No | - | Remote HTTP API fallback used when the primary Tavily URL is a local loopback endpoint and is unavailable; must be explicitly configured |
+| `TAVILY_FALLBACK_API_KEY` | No | `TAVILY_API_KEY` | Tavily fallback Bearer token; defaults to `TAVILY_API_KEY` and must not be committed |
+| `TAVILY_FALLBACK_ENABLED` | No | `false` | Enable or disable the local-loopback Tavily fallback path; defaults to disabled |
+| `FIRECRAWL_API_KEY` | No | - | Firecrawl key for fetch fallback and optional supplemental `web_search` |
+| `FIRECRAWL_API_URL` | No | Firecrawl default | Firecrawl endpoint |
+| `GROK_DEBUG` | No | `false` | Enable debug logging |
+| `GROK_LOG_LEVEL` | No | `INFO` | Log level |
+| `GROK_LOG_DIR` | No | User config path | Log directory; `get_config_info` returns the resolved runtime path |
+| `GROK_OUTPUT_CLEANUP` | No | Enabled | Enable answer cleanup |
 | `GROK_FILTER_THINK_TAGS` | No | Legacy alias for `GROK_OUTPUT_CLEANUP`; prefer `GROK_OUTPUT_CLEANUP` |
 | `GROK_RETRY_MAX_ATTEMPTS` | No | Max retry attempts |
 | `GROK_RETRY_MULTIPLIER` | No | Retry backoff multiplier |

@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 README = ROOT_DIR / "README.md"
+DOCS_README = ROOT_DIR / "docs" / "README.md"
 COMPATIBILITY = ROOT_DIR / "docs" / "COMPATIBILITY.md"
 GET_SOURCES_LIFECYCLE = ROOT_DIR / "docs" / "GET_SOURCES_LIFECYCLE.md"
 README_EN = ROOT_DIR / "README.en.md"
@@ -458,9 +459,63 @@ def test_docs_explain_deep_research_job_surface_and_cli():
     for localized in (readme_zh_tw, readme_ja, readme_ru):
         assert "`21`" in localized
         assert "`deep_research_artifact`" in localized
+        assert "`deep_research_result`" in localized
+        assert "`deep_research_status`" in localized
+        assert "`grok-search-research result --artifact <kind>`" in localized
+        assert "`artifact_errors`" in localized
+        assert "`artifact_visibility_reason`" in localized
+        assert "`operator_summary`" in localized
+        assert "Provider Accounting" in localized
     assert "`deep_research_*`" in compatibility
     assert "`deep_research_resume`" in agents
     assert "`deep_research_*`" in skill
+
+
+def test_docs_readme_points_to_public_entry_points():
+    docs_readme = DOCS_README.read_text(encoding="utf-8")
+
+    assert "../README.md" in docs_readme
+    assert "../README.en.md" in docs_readme
+    assert "./COMPATIBILITY.md" in docs_readme
+    assert "./RELEASING.md" in docs_readme
+
+
+def test_public_docs_and_tests_do_not_embed_private_release_endpoints():
+    private_fragments = (
+        "ai." + "example-provider.de",
+        "api." + "example-relay.xyz",
+        "tavily." + "example-user.cc",
+        "/Users/" + "example-user",
+        "/private/var/" + "folders",
+    )
+    scanned_paths = [
+        *ROOT_DIR.glob("README*.md"),
+        *ROOT_DIR.glob("docs/*.md"),
+        *ROOT_DIR.glob(".github/workflows/*.yml"),
+        *ROOT_DIR.glob("src/**/*.py"),
+        *ROOT_DIR.glob("tests/**/*.py"),
+    ]
+
+    for path in scanned_paths:
+        if path == Path(__file__).resolve():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for fragment in private_fragments:
+            assert fragment not in text, f"{fragment!r} leaked in {path.relative_to(ROOT_DIR)}"
+
+
+def test_localized_readmes_cover_tavily_fallback_contract():
+    localized_readmes = (
+        README_ZH_TW.read_text(encoding="utf-8"),
+        README_JA.read_text(encoding="utf-8"),
+        README_RU.read_text(encoding="utf-8"),
+    )
+
+    for text in localized_readmes:
+        assert "`TAVILY_FALLBACK_API_URL`" in text
+        assert "`TAVILY_FALLBACK_API_KEY`" in text
+        assert "`TAVILY_FALLBACK_ENABLED`" in text
+        assert "`false`" in text
 
 
 def test_docs_explain_checkpoint_resume_continuation_and_structured_artifacts():

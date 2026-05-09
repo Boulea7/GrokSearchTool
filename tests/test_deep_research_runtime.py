@@ -2315,7 +2315,7 @@ async def test_ultra_effort_falls_back_to_heavy_single_agent_before_lower_tiers(
             }
         ), []
 
-    monkeypatch.setenv("GROK_API_URL", "https://grok2api.example.com/v1")
+    monkeypatch.setenv("GROK_API_URL", "https://relay.example.com/v1")
     monkeypatch.setenv("GROK_API_KEY", "primary-key")
     monkeypatch.delenv("GROK_MODEL", raising=False)
     monkeypatch.delenv("GROK_DEEP_RESEARCH_ULTRA_PROFILE", raising=False)

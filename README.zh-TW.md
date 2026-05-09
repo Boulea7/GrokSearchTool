@@ -48,6 +48,8 @@ GrokSearch 是一個獨立維護的 MCP 伺服器，面向需要快速、可靠�
 planning `session_id` 是目前進程內的 transient handle，預設 TTL 約 1 小時、LRU 上限 256；若進程重啟、TTL 到期或快取淘汰，應從新的 `plan_intent` 重新開始。
 wrapper 目前刻意維持標量 shim 輸入，例如 CSV 形式的 `depends_on`、分號分組的 `parallel_groups`，以及字串化 JSON 的 `params_json`；首次建立 `search_strategy` 時必須提供 `approach`。
 
+`deep_research_result` / `deep_research_status` 會暴露 additive artifact diagnostics，例如 `artifact_errors`、`artifact_visibility_reason`、resolved `batch_id` 與 `operator_summary`。`deep_research_artifact(job_id, artifact)` 與 CLI `grok-search-research result --artifact <kind>` 使用同一套 artifact 可見性規則，會優先讀取 resolved final batch；Provider Accounting 也可能作為最終報告正文與 `report.json` / `citations.json` 的 additive section 出現，用於說明 provider attempts、failed fetch、warnings 與 budget usage。
+
 ## 安裝
 
 ### 前置條件
@@ -143,6 +145,9 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `TAVILY_API_KEY` | 否 | `web_fetch` / `web_map` 用的 Tavily Key，也用於 Tavily supplemental `web_search` |
 | `TAVILY_API_URL` | 否 | Tavily API 端點 |
 | `TAVILY_ENABLED` | 否 | 是否啟用 Tavily 路徑 |
+| `TAVILY_FALLBACK_API_URL` | 否 | 當主 Tavily 端點是不可用的本機 loopback 時可使用的遠端 HTTP API fallback；預設沒有內建端點，必須顯式設定 |
+| `TAVILY_FALLBACK_API_KEY` | 否 | Tavily fallback Bearer token；預設復用 `TAVILY_API_KEY`，不要提交到公開倉庫 |
+| `TAVILY_FALLBACK_ENABLED` | 否 | 是否啟用本機 loopback Tavily fallback；預設為 `false` |
 | `FIRECRAWL_API_KEY` | 否 | Firecrawl fallback Key，也可用於 supplemental `web_search` |
 | `FIRECRAWL_API_URL` | 否 | Firecrawl API 端點 |
 | `GROK_DEBUG` | 否 | 是否啟用除錯日誌；同時控制 debug-only progress 與 `ctx.info()` 中間進度轉發 |
