@@ -2151,7 +2151,37 @@ async def test_probe_web_search_with_fallback_prefers_configured_web_search_fall
         "https://api.example.com/v1",
         "test-key",
         "grok-4.20-auto",
-        ["grok-4.20-auto", "grok-4.20-reasoning", "grok-4.20-fast"],
+        ["grok-4.20-auto", "grok-4.20-fast", "grok-4.20-reasoning"],
+    )
+
+    assert attempts == ["grok-4.20-auto", "grok-4.20-reasoning"]
+    assert result["fallback_model"] == "grok-4.20-reasoning"
+
+
+@pytest.mark.asyncio
+async def test_probe_web_search_with_fallback_uses_configured_models_when_listing_unavailable(monkeypatch):
+    attempts = []
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.20-auto")
+    monkeypatch.setenv("GROK_WEB_SEARCH_FALLBACK_MODELS", "grok-4.20-reasoning,grok-4.20-fast")
+
+    async def fake_probe(api_url, api_key, model):
+        attempts.append(model)
+        if model == "grok-4.20-reasoning":
+            return server._build_doctor_check("grok_search_probe", "ok", "probe ok")
+        return server._build_doctor_check(
+            "grok_search_probe",
+            "error",
+            "model unavailable",
+            reason_code="model_unavailable",
+        )
+
+    monkeypatch.setattr(server, "_probe_web_search", fake_probe)
+
+    result = await server._probe_web_search_with_fallback(
+        "https://api.example.com/v1",
+        "test-key",
+        "grok-4.20-auto",
+        [],
     )
 
     assert attempts == ["grok-4.20-auto", "grok-4.20-reasoning"]

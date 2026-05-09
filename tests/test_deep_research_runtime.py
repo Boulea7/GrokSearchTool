@@ -8150,6 +8150,27 @@ async def test_stale_worker_exception_after_reconcile_does_not_overwrite_termina
 
 
 @pytest.mark.asyncio
+async def test_runner_exception_before_status_transition_marks_queued_job_failed(tmp_path):
+    runtime = build_runtime(tmp_path)
+    runtime._generate_plan_with_model = lambda job, continuation: asyncio.sleep(0, result=structured_plan_payload(job, continuation))
+
+    async def broken_runner(current_runtime, job_id):
+        raise RuntimeError("runner failed before status transition")
+
+    runtime._runner = broken_runner
+    response = await runtime.start(query="Queued runner failure", force_new=True, schedule=False)
+
+    await runtime._run(response["job_id"])
+
+    job = runtime.store.get_job(response["job_id"])
+    events = await runtime.events(response["job_id"])
+
+    assert job.status == "failed"
+    assert job.last_error == "runner failed before status transition"
+    assert any(event["type"] == "job_failed" for event in events["events"])
+
+
+@pytest.mark.asyncio
 async def test_stale_worker_reconnect_lifecycle_matches_round21_fixture(monkeypatch, tmp_path):
     runtime = build_runtime(tmp_path)
     fixture = load_deep_research_fixture("probe_round21_stale_worker_reconnect.json")

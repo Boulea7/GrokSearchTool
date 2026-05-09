@@ -388,19 +388,22 @@ def _tool_fallback_candidates(
         for model in available_models
     }
     preferred: list[str] = []
-    seen: set[str] = set()
+    seen_models: set[str] = set()
+    seen_cores: set[str] = set()
     current_core = _normalized_grok_model_core(current_model)
     for preferred_model in preferred_models:
         normalized_preferred = preferred_model.strip()
         if not normalized_preferred:
             continue
-        candidate = available_by_core.get(_normalized_grok_model_core(normalized_preferred))
+        preferred_core = _normalized_grok_model_core(normalized_preferred)
+        candidate = available_by_core.get(preferred_core) if available_by_core else normalized_preferred
         if not candidate:
             continue
         candidate_core = _normalized_grok_model_core(candidate)
-        if candidate_core == current_core or candidate in seen:
+        if candidate_core == current_core or candidate in seen_models or candidate_core in seen_cores:
             continue
-        seen.add(candidate)
+        seen_models.add(candidate)
+        seen_cores.add(candidate_core)
         preferred.append(candidate)
     if preferred:
         return preferred

@@ -245,7 +245,7 @@ class Config:
         if value is None:
             return None
         normalized = value.strip()
-        return normalized if normalized else ""
+        return normalized or None
 
     def _tool_profile_model_list_override(self, override_key: str) -> list[str] | None:
         value = self._get_env_value(override_key)
