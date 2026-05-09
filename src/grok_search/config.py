@@ -1,6 +1,5 @@
 import os
 import json
-import re
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -9,11 +8,7 @@ _SENSITIVE_URL_PARAM_KEYS = {
     "apikey",
     "access_token",
     "auth_token",
-    "client_secret",
     "code",
-    "id_token",
-    "password",
-    "refresh_token",
     "token",
     "signature",
     "sig",
@@ -34,7 +29,7 @@ class Config:
         '"git+https://github.com/Boulea7/GrokSearchTool@main","grok-search"],'
         '"env":{"GROK_API_URL":"https://api.example.com/v1","GROK_API_KEY":"your-api-key"}}\''
     )
-    _DEFAULT_MODEL = "grok-4.20-0309"
+    _DEFAULT_MODEL = "grok-4.1-fast"
 
     def __new__(cls):
         if cls._instance is None:
@@ -42,7 +37,6 @@ class Config:
             cls._instance._config_file = None
             cls._instance._cached_model = None
             cls._instance._project_env_cache = None
-            cls._instance._project_env_source_cache = None
         return cls._instance
 
     def _project_root(self) -> Path:
@@ -72,51 +66,22 @@ class Config:
                 value = value.strip()
                 if not key:
                     continue
-                value = self._normalize_env_value(value)
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                    value = value[1:-1]
                 parsed[key] = value
         except OSError:
             return {}
         return parsed
 
-    @staticmethod
-    def _normalize_env_value(value: str) -> str:
-        text = (value or "").strip()
-        if not text:
-            return ""
-
-        if text[0] in {'"', "'"}:
-            quote = text[0]
-            closing_index = 1
-            while closing_index < len(text):
-                if text[closing_index] == quote and text[closing_index - 1] != "\\":
-                    remainder = text[closing_index + 1 :].strip()
-                    if not remainder or remainder.startswith("#"):
-                        return text[1:closing_index]
-                    return text
-                closing_index += 1
-            return text
-
-        return re.sub(r"\s+#.*$", "", text).strip()
-
-    def _load_project_env_with_sources(self) -> tuple[dict[str, str], dict[str, str]]:
+    def _load_project_env(self) -> dict[str, str]:
         if self._project_env_cache is not None:
-            return self._project_env_cache, self._project_env_source_cache or {}
+            return self._project_env_cache
 
         project_root = self._project_root()
         merged: dict[str, str] = {}
-        sources: dict[str, str] = {}
         for name in (".env", ".env.local"):
-            current = self._parse_env_file(project_root / name)
-            merged.update(current)
-            source_name = "project_env_local" if name == ".env.local" else "project_env"
-            for key in current:
-                sources[key] = source_name
+            merged.update(self._parse_env_file(project_root / name))
         self._project_env_cache = merged
-        self._project_env_source_cache = sources
-        return merged, sources
-
-    def _load_project_env(self) -> dict[str, str]:
-        merged, _ = self._load_project_env_with_sources()
         return merged
 
     def _get_env_value(self, key: str, default: str | None = None) -> str | None:
@@ -126,12 +91,6 @@ class Config:
         if key in project_env:
             return project_env[key]
         return default
-
-    def _get_env_value_source(self, key: str) -> str | None:
-        if key in os.environ:
-            return "process_env"
-        _, project_sources = self._load_project_env_with_sources()
-        return project_sources.get(key)
 
     @property
     def config_file(self) -> Path:
@@ -235,44 +194,28 @@ class Config:
 
     @property
     def log_dir(self) -> Path:
-        log_dir = self._resolved_log_dir_path()
-        if Path(self._log_dir_setting()).is_absolute():
-            return log_dir
-
-        for candidate in self._log_dir_candidates():
-            try:
-                candidate.mkdir(parents=True, exist_ok=True)
-                return candidate
-            except OSError:
-                pass
-
-        fallback = Path("/tmp") / "grok-search" / ((self._get_env_value("GROK_LOG_DIR", "logs") or "logs"))
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
-
-    def _log_dir_setting(self) -> str:
         log_dir_str = self._get_env_value("GROK_LOG_DIR", "logs") or "logs"
-        return log_dir_str
-
-    def _resolved_log_dir_path(self) -> Path:
-        log_dir_str = self._log_dir_setting()
         log_dir = Path(log_dir_str)
         if log_dir.is_absolute():
             return log_dir
 
-        return Path.home() / ".config" / "grok-search" / log_dir_str
+        home_log_dir = Path.home() / ".config" / "grok-search" / log_dir_str
+        try:
+            home_log_dir.mkdir(parents=True, exist_ok=True)
+            return home_log_dir
+        except OSError:
+            pass
 
-    def _log_dir_candidates(self) -> tuple[Path, ...]:
-        log_dir_str = self._log_dir_setting()
-        preferred = self._resolved_log_dir_path()
-        if Path(log_dir_str).is_absolute():
-            return (preferred,)
+        cwd_log_dir = Path.cwd() / log_dir_str
+        try:
+            cwd_log_dir.mkdir(parents=True, exist_ok=True)
+            return cwd_log_dir
+        except OSError:
+            pass
 
-        return (
-            preferred,
-            Path.cwd() / log_dir_str,
-            Path("/tmp") / "grok-search" / log_dir_str,
-        )
+        tmp_log_dir = Path("/tmp") / "grok-search" / log_dir_str
+        tmp_log_dir.mkdir(parents=True, exist_ok=True)
+        return tmp_log_dir
 
     def _apply_model_suffix(self, model: str) -> str:
         if not model:
@@ -281,7 +224,7 @@ class Config:
             url = self.grok_api_url
         except ValueError:
             return model
-        if "openrouter" in url.lower() and ":online" not in model:
+        if "openrouter" in url and ":online" not in model:
             return f"{model}:online"
         return model
 
@@ -298,15 +241,6 @@ class Config:
         self._cached_model = self._apply_model_suffix(model)
         return self._cached_model
 
-    @property
-    def grok_model_source(self) -> str:
-        env_source = self._get_env_value_source("GROK_MODEL")
-        if env_source:
-            return env_source
-        if self._load_config_file().get("model"):
-            return "persisted_config"
-        return "default"
-
     def set_model(self, model: str) -> None:
         config_data = self._load_config_file()
         config_data["model"] = model
@@ -316,7 +250,6 @@ class Config:
     def reset_runtime_state(self) -> None:
         self._cached_model = None
         self._project_env_cache = None
-        self._project_env_source_cache = None
 
     @staticmethod
     def _mask_api_key(key: str) -> str:
@@ -397,12 +330,11 @@ class Config:
             "GROK_API_URL": self._mask_url(api_url) if api_url != "未配置" else api_url,
             "GROK_API_KEY": api_key_masked,
             "GROK_MODEL": self.grok_model,
-            "GROK_MODEL_SOURCE": self.grok_model_source,
             "GROK_DEBUG": self.debug_enabled,
             "GROK_OUTPUT_CLEANUP": self.output_cleanup_enabled,
             "GROK_TIME_CONTEXT_MODE": self.time_context_mode,
             "GROK_LOG_LEVEL": self.log_level,
-            "GROK_LOG_DIR": str(self._resolved_log_dir_path()),
+            "GROK_LOG_DIR": str(self.log_dir),
             "TAVILY_API_URL": self._mask_url(self.tavily_api_url),
             "TAVILY_ENABLED": self.tavily_enabled,
             "TAVILY_API_KEY": self._mask_api_key(self.tavily_api_key) if self.tavily_api_key else "未配置",
