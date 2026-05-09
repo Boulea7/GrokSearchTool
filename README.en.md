@@ -151,7 +151,7 @@ Create a `STDIO` MCP server entry with the same core fields:
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `GROK_API_URL` | Yes | - | OpenAI-compatible Grok endpoint; using an explicit `/v1` suffix is recommended, the current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
+| `GROK_API_URL` | Yes | - | OpenAI-compatible Grok base URL supplied by your provider; common paths include `/v1`. The current code path does not pre-block omission on its own, but many OpenAI-compatible endpoints may still fail at runtime without it and usually surface a compatibility warning |
 | `GROK_API_KEY` | Yes | - | Grok API key |
 | `GROK_MODEL` | No | Code default | Default model; see the precedence notes below |
 | `GROK_MODEL_PROFILE` | No | `balanced_auto` | When `GROK_MODEL` is not explicitly set, resolve a provider-aware default model for official xAI, OpenRouter, and common OpenAI-compatible relays / grok2api-like proxies |

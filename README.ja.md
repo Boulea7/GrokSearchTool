@@ -138,7 +138,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 | 変数 | 必須 | 説明 |
 | --- | --- | --- |
-| `GROK_API_URL` | Yes | OpenAI 互換 Grok エンドポイント。明示的な `/v1` サフィックス付きのルートを推奨します。現在のコードパスは `/v1` 省略だけでは事前にブロックしませんが、多くの OpenAI 互換エンドポイントでは実行時に失敗し、通常は compatibility warning も伴います |
+| `GROK_API_URL` | Yes | 利用するプロバイダが提供する OpenAI-compatible Grok base URL。一般的なパス形式には `/v1` が含まれます。現在のコードパスは `/v1` 省略だけでは事前にブロックしませんが、多くの OpenAI-compatible エンドポイントでは実行時に失敗し、通常は compatibility warning も伴います |
 | `GROK_API_KEY` | Yes | Grok API Key |
 | `GROK_MODEL` | No | デフォルトモデル。優先順位は process env > project `.env.local` > project `.env` > 永続 config > コード既定値 |
 | `GROK_TIME_CONTEXT_MODE` | No | 時間コンテキスト注入モード：`always` / `auto` / `never` |
