@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -8,7 +9,11 @@ _SENSITIVE_URL_PARAM_KEYS = {
     "apikey",
     "access_token",
     "auth_token",
+    "client_secret",
     "code",
+    "id_token",
+    "password",
+    "refresh_token",
     "token",
     "signature",
     "sig",
@@ -66,12 +71,31 @@ class Config:
                 value = value.strip()
                 if not key:
                     continue
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-                    value = value[1:-1]
+                value = self._normalize_env_value(value)
                 parsed[key] = value
         except OSError:
             return {}
         return parsed
+
+    @staticmethod
+    def _normalize_env_value(value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            return ""
+
+        if text[0] in {'"', "'"}:
+            quote = text[0]
+            closing_index = 1
+            while closing_index < len(text):
+                if text[closing_index] == quote and text[closing_index - 1] != "\\":
+                    remainder = text[closing_index + 1 :].strip()
+                    if not remainder or remainder.startswith("#"):
+                        return text[1:closing_index]
+                    return text
+                closing_index += 1
+            return text
+
+        return re.sub(r"\s+#.*$", "", text).strip()
 
     def _load_project_env(self) -> dict[str, str]:
         if self._project_env_cache is not None:
@@ -224,7 +248,7 @@ class Config:
             url = self.grok_api_url
         except ValueError:
             return model
-        if "openrouter" in url and ":online" not in model:
+        if "openrouter" in url.lower() and ":online" not in model:
             return f"{model}:online"
         return model
 

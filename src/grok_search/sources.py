@@ -1,13 +1,14 @@
 import ast
+import asyncio
 import datetime as dt
 import json
 import re
-import uuid
+import secrets
+import time
+from collections.abc import Mapping
 from collections import OrderedDict
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
-
-import asyncio
 
 from .config import config
 from .utils import extract_unique_urls
@@ -30,13 +31,20 @@ _GENERIC_LINK_LIST_HEADING_PATTERN = re.compile(
     r"(?i)^(?:useful|related|helpful|official|reference|references|docs?|documentation|links?|resources?|endpoints?)"
     r"(?:\s+[a-z0-9][\w/-]*)*$"
 )
+_REAL_SOURCE_LIST_HEADING_PATTERN = re.compile(
+    r"(?i)^(?:#{1,6}\s*)?(?:sources?(?:\s+i\s+used)?|references?|citations?|related\s+sources?|further\s+reading)\s*:?\s*$"
+)
 _THINK_BLOCK_PATTERN = re.compile(r"(?is)<think>.*?</think>")
 _SENSITIVE_URL_QUERY_KEYS = {
     "api_key",
     "apikey",
     "access_token",
     "auth_token",
+    "client_secret",
     "code",
+    "id_token",
+    "password",
+    "refresh_token",
     "token",
     "signature",
     "sig",
@@ -91,33 +99,67 @@ _POLICY_CONTEXT_KEYWORDS = (
 
 
 def new_session_id() -> str:
-    return uuid.uuid4().hex[:12]
+    return secrets.token_hex(16)
 
 
 class SourcesCache:
-    def __init__(self, max_size: int = 256):
+    def __init__(
+        self,
+        max_size: int = 256,
+        ttl_seconds: float = 3600.0,
+        now_fn=None,
+    ):
         self._max_size = max_size
+        self._ttl_seconds = ttl_seconds
+        self._now = now_fn or time.monotonic
         self._lock = asyncio.Lock()
-        self._cache: OrderedDict[str, object] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[float | None, object]] = OrderedDict()
+
+    def _expires_at(self) -> float | None:
+        if self._ttl_seconds <= 0:
+            return None
+        return self._now() + self._ttl_seconds
+
+    def _purge_expired_locked(self) -> None:
+        if self._ttl_seconds <= 0:
+            return
+
+        now = self._now()
+        expired_ids = [
+            session_id
+            for session_id, (expires_at, _) in self._cache.items()
+            if expires_at is not None and expires_at <= now
+        ]
+        for session_id in expired_ids:
+            self._cache.pop(session_id, None)
 
     async def set(self, session_id: str, sources: object) -> None:
         async with self._lock:
-            self._cache[session_id] = sources
+            self._purge_expired_locked()
+            self._cache[session_id] = (self._expires_at(), sources)
             self._cache.move_to_end(session_id)
             while len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
 
     async def get(self, session_id: str) -> object | None:
         async with self._lock:
-            sources = self._cache.get(session_id)
-            if sources is None:
+            self._purge_expired_locked()
+            cached = self._cache.get(session_id)
+            if cached is None:
                 return None
+            _, sources = cached
             self._cache.move_to_end(session_id)
             return sources
 
     async def size(self) -> int:
         async with self._lock:
+            self._purge_expired_locked()
             return len(self._cache)
+
+    async def snapshot(self) -> list[object]:
+        async with self._lock:
+            self._purge_expired_locked()
+            return [value for _, value in self._cache.values()]
 
 
 def merge_sources(*source_lists: list[dict]) -> list[dict]:
@@ -141,7 +183,7 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
     standardized_by_url: OrderedDict[str, dict] = OrderedDict()
 
     for index, item in enumerate(sources or []):
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             continue
 
         raw_item = dict(item)
@@ -165,9 +207,10 @@ def standardize_sources(sources: list[dict], retrieved_at: str | None = None) ->
         raw_item["published_at"] = _normalize_optional_text(raw_item.get("published_at") or raw_item.get("published_date"))
         raw_item["retrieved_at"] = _normalize_optional_text(raw_item.get("retrieved_at")) or timestamp
         raw_item["_source_order"] = index
-        existing = standardized_by_url.get(url)
+        canonical_key = _canonicalize_source_dedupe_key(url)
+        existing = standardized_by_url.get(canonical_key)
         if existing is None or _should_replace_standardized_source(existing, raw_item):
-            standardized_by_url[url] = raw_item
+            standardized_by_url[canonical_key] = raw_item
 
     standardized = list(standardized_by_url.values())
     standardized.sort(key=_source_priority_key)
@@ -182,9 +225,7 @@ def _source_priority_key(item: dict) -> tuple:
     score = item.get("score")
     title = (item.get("title") or "").strip()
     description = (item.get("description") or "").strip()
-    provider = (item.get("provider") or "").strip().lower()
     return (
-        0 if provider == "grok" else 1,
         0 if score is not None else 1,
         -(score if isinstance(score, (int, float)) else 0.0),
         0 if title else 1,
@@ -376,7 +417,12 @@ def _split_tail_link_block(text: str) -> tuple[str, list[dict]] | None:
     if not sources:
         return None
 
-    answer = "\n".join(lines[:tail_start]).rstrip()
+    answer_end = tail_start
+    heading_index = tail_start - 1
+    if heading_index >= 0 and _REAL_SOURCE_LIST_HEADING_PATTERN.fullmatch(lines[heading_index].strip()):
+        answer_end = heading_index
+
+    answer = "\n".join(lines[:answer_end]).rstrip()
     if _looks_like_list_intro(answer):
         return None
     return answer, sources
@@ -425,6 +471,8 @@ def _looks_like_list_intro(text: str) -> bool:
     if not stripped:
         return False
     last_line = stripped.splitlines()[-1].strip()
+    if _REAL_SOURCE_LIST_HEADING_PATTERN.fullmatch(last_line):
+        return False
     return bool(last_line) and (
         last_line.endswith(":") or _GENERIC_LINK_LIST_HEADING_PATTERN.fullmatch(last_line) is not None
     )
@@ -588,6 +636,22 @@ def _normalize_url(value: Any) -> str:
         return _sanitize_url_for_output(url)
     except ValueError:
         return ""
+
+
+def _canonicalize_source_dedupe_key(url: str) -> str:
+    parsed = urlsplit(url)
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return url
+
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+
+    netloc = hostname
+    if parsed.port is not None:
+        netloc = f"{hostname}:{parsed.port}"
+
+    return urlunsplit((parsed.scheme.lower(), netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 def _normalize_text(value: Any) -> str:

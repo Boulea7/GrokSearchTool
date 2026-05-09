@@ -3,7 +3,11 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from grok_search.providers.grok import GrokSearchProvider, _WaitWithRetryAfter
+from grok_search.providers.grok import (
+    GrokSearchProvider,
+    _WaitWithRetryAfter,
+    _httpx_client_kwargs_for_url,
+)
 from grok_search.utils import fetch_prompt
 
 
@@ -18,6 +22,18 @@ class DummyResponse:
         if self._json_error is not None:
             raise self._json_error
         return self._json_data
+
+
+def test_provider_httpx_client_kwargs_disable_env_proxies_for_dotted_loopback():
+    local = _httpx_client_kwargs_for_url("http://localhost:18080/extract", timeout=httpx.Timeout(10.0))
+    dotted_local = _httpx_client_kwargs_for_url("http://localhost.:18080/extract", timeout=httpx.Timeout(10.0))
+    loopback = _httpx_client_kwargs_for_url("http://127.0.0.2:18080/extract", timeout=httpx.Timeout(10.0))
+    remote = _httpx_client_kwargs_for_url("https://api.example.com/v1", timeout=httpx.Timeout(10.0))
+
+    assert local["trust_env"] is False
+    assert dotted_local["trust_env"] is False
+    assert loopback["trust_env"] is False
+    assert "trust_env" not in remote
 
 
 @pytest.mark.asyncio
@@ -380,6 +396,86 @@ async def test_parse_completion_response_accepts_mixed_case_structured_citations
 
 
 @pytest.mark.asyncio
+async def test_parse_completion_response_sanitizes_structured_citation_urls_before_appending_sources():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text=(
+            '{"choices":[{"message":{"content":"hello world","citations":['
+            '{"title":"OpenAI","url":"https://user:pass@openai.com/docs'
+            '?client_secret=example-client-secret&access_token=abc123#password=example-value"}]}}]}'
+        ),
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": "hello world",
+                        "citations": [
+                            {
+                                "title": "OpenAI",
+                                "url": (
+                                    "https://user:pass@openai.com/docs"
+                                    "?client_secret=example-client-secret"
+                                    "&access_token=abc123"
+                                    "#password=example-value"
+                                ),
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "https://openai.com/docs?client_secret=REDACTED&access_token=REDACTED#password=REDACTED" in result
+    assert "user:pass@" not in result
+    assert "example-client-secret" not in result
+    assert "abc123" not in result
+    assert "example-value" not in result
+
+
+@pytest.mark.asyncio
+async def test_parse_completion_response_preserves_invalid_port_citations_while_sanitizing():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+    response = DummyResponse(
+        text=(
+            '{"choices":[{"message":{"content":"hello world","citations":['
+            '{"title":"OpenAI","url":"https://user:pass@openai.com:abc/docs'
+            '?client_secret=example-client-secret#password=example-value"}]}}]}'
+        ),
+        json_data={
+            "choices": [
+                {
+                    "message": {
+                        "content": "hello world",
+                        "citations": [
+                            {
+                                "title": "OpenAI",
+                                "url": (
+                                    "https://user:pass@openai.com:abc/docs"
+                                    "?client_secret=example-client-secret"
+                                    "#password=example-value"
+                                ),
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+    )
+
+    result = await provider._parse_completion_response(response)
+
+    assert result.startswith("hello world")
+    assert "https://openai.com:abc/docs?client_secret=REDACTED#password=REDACTED" in result
+    assert "user:pass@" not in result
+    assert "example-client-secret" not in result
+    assert "example-value" not in result
+
+
+@pytest.mark.asyncio
 async def test_parse_completion_response_appends_annotation_sources():
     provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
     response = DummyResponse(
@@ -721,6 +817,55 @@ async def test_parse_streaming_response_does_not_duplicate_existing_sources_head
 
     assert result.count("## Sources") == 1
     assert result.count("https://docs.example.com/already") == 1
+
+
+@pytest.mark.asyncio
+async def test_parse_streaming_response_accepts_single_json_line_without_sse_prefix():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    class LineResponse:
+        def __init__(self, lines):
+            self._lines = lines
+            self.headers = {}
+
+        async def aiter_lines(self):
+            for line in self._lines:
+                yield line
+
+    response = LineResponse(
+        ['{"choices":[{"delta":{"content":"hello world"}}]}']
+    )
+
+    result = await provider._parse_streaming_response(response)
+
+    assert result == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_parse_streaming_response_merges_sse_and_raw_json_lines():
+    provider = GrokSearchProvider("https://api.example.com", "test-key", "test-model")
+
+    class LineResponse:
+        def __init__(self, lines):
+            self._lines = lines
+            self.headers = {}
+
+        async def aiter_lines(self):
+            for line in self._lines:
+                yield line
+
+    response = LineResponse(
+        [
+            'data: {"choices":[{"delta":{"content":"hello "}}]}',
+            "",
+            '{"choices":[{"delta":{"content":"world"}}]}',
+            "data: [DONE]",
+        ]
+    )
+
+    result = await provider._parse_streaming_response(response)
+
+    assert result == "hello world"
 
 
 @pytest.mark.asyncio

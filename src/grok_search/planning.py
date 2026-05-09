@@ -42,6 +42,21 @@ class SubQuery(BaseModel):
     boundary: str = Field(description="What this sub-query explicitly excludes — MUST state mutual exclusion with sibling sub-queries, not just the broader domain")
     depends_on: Optional[list[str]] = Field(default=None, description="IDs of prerequisite sub-queries")
 
+    @field_validator("id")
+    @classmethod
+    def normalize_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("id must not be empty")
+        return stripped
+
+    @field_validator("depends_on")
+    @classmethod
+    def normalize_dependencies(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return value
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
 
 class SearchTerm(BaseModel):
     term: str = Field(description="Search query string. MUST be ≤8 words. Drop redundant synonyms (e.g., use 'RAG' not 'RAG retrieval augmented generation').")
@@ -77,6 +92,14 @@ class ToolPlanItem(BaseModel):
     tool: Literal["web_search", "web_fetch", "web_map"]
     reason: str
     params: Optional[dict] = Field(default=None, description="Tool-specific parameters")
+
+    @field_validator("sub_query_id")
+    @classmethod
+    def normalize_sub_query_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("sub_query_id must not be empty")
+        return stripped
 
 
 class ExecutionOrderOutput(BaseModel):
@@ -140,7 +163,7 @@ class PlanningSession:
         if not record or not isinstance(record.data, list):
             return set()
         return {
-            item["id"]
+            item["id"].strip()
             for item in record.data
             if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
         }
@@ -161,7 +184,7 @@ class PlanningSession:
         if not record or not isinstance(record.data, list):
             return []
         return [
-            item["sub_query_id"]
+            item["sub_query_id"].strip()
             for item in record.data
             if isinstance(item, dict) and isinstance(item.get("sub_query_id"), str) and item["sub_query_id"].strip()
         ]
@@ -318,29 +341,37 @@ class PlanningEngine:
                     "complexity_level": session.complexity_level,
                 }
 
+        normalized_tool_mapping_id = (
+            phase_data.get("sub_query_id", "").strip()
+            if isinstance(phase_data, dict) and isinstance(phase_data.get("sub_query_id"), str)
+            else ""
+        )
         if (
             target == "tool_selection"
             and not is_revision
-            and isinstance(phase_data, dict)
-            and isinstance(phase_data.get("sub_query_id"), str)
-            and phase_data["sub_query_id"] in session.tool_mapping_ids()
+            and normalized_tool_mapping_id
+            and normalized_tool_mapping_id in session.tool_mapping_ids()
         ):
             return {
-                "error": f"Duplicate tool mapping for sub_query_id: {phase_data['sub_query_id']}",
+                "error": f"Duplicate tool mapping for sub_query_id: {normalized_tool_mapping_id}",
                 "session_id": session.session_id,
                 "completed_phases": session.completed_phases,
                 "complexity_level": session.complexity_level,
             }
 
+        normalized_sub_query_id = (
+            phase_data.get("id", "").strip()
+            if isinstance(phase_data, dict) and isinstance(phase_data.get("id"), str)
+            else ""
+        )
         if (
             target == "query_decomposition"
             and not is_revision
-            and isinstance(phase_data, dict)
-            and isinstance(phase_data.get("id"), str)
-            and phase_data["id"] in session.sub_query_ids()
+            and normalized_sub_query_id
+            and normalized_sub_query_id in session.sub_query_ids()
         ):
             return {
-                "error": f"Duplicate sub-query id: {phase_data['id']}",
+                "error": f"Duplicate sub-query id: {normalized_sub_query_id}",
                 "session_id": session.session_id,
                 "completed_phases": session.completed_phases,
                 "complexity_level": session.complexity_level,
@@ -379,10 +410,6 @@ class PlanningEngine:
                 )
             elif existing and isinstance(existing.data, dict) and isinstance(phase_data, dict):
                 existing.data.setdefault("search_terms", []).extend(phase_data.get("search_terms", []))
-                if phase_data.get("approach"):
-                    existing.data["approach"] = phase_data["approach"]
-                if phase_data.get("fallback_plan"):
-                    existing.data["fallback_plan"] = phase_data["fallback_plan"]
                 existing.thought = thought
                 existing.confidence = confidence
             else:

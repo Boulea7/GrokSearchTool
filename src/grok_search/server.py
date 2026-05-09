@@ -1,6 +1,7 @@
 import asyncio
 import re
 import sys
+from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Literal, Optional
@@ -185,8 +186,14 @@ def _mask_sensitive_text(value: str) -> str:
         (r"\bsk-[A-Za-z0-9_\-]+\b", "sk-***"),
         (r"\bfc-[A-Za-z0-9_\-]+\b", "fc-***"),
         (r"\btvly-[A-Za-z0-9_\-]+\b", "tvly-***"),
-        (r"([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|token|signature|sig|code)=)[^&\s]+", r"\1***"),
-        (r"((?:api[_-]?key|access[_-]?token|auth[_-]?token|token|signature|sig|code)=)[^&\s\"'}]+", r"\1***"),
+        (
+            r"([?#&](?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|refresh[_-]?token|id[_-]?token|password|token|signature|sig|code)=)[^&#\s]+",
+            r"\1***",
+        ),
+        (
+            r"((?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|refresh[_-]?token|id[_-]?token|password|token|signature|sig|code)=)[^&#\s\"'}]+",
+            r"\1***",
+        ),
     ]
     for pattern, replacement in patterns:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
@@ -290,7 +297,6 @@ def _format_grok_error(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
         location = _mask_sensitive_url(exc.response.headers.get("location", "").strip())
-        request_id = _extract_request_id(exc.response.headers)
         summary = _extract_error_summary(exc.response)
         if status_code in {301, 302, 303, 307, 308} and location:
             message = f"搜索失败: 上游返回 HTTP {status_code} 重定向到 {location}，请检查代理认证状态"
@@ -298,8 +304,6 @@ def _format_grok_error(exc: Exception) -> str:
             message = f"搜索失败: 上游返回 HTTP {status_code}"
         if summary:
             message += f"，摘要={summary}"
-        if request_id:
-            message += f"，request_id={request_id}"
         return message
 
     message = _mask_sensitive_text(str(exc).strip())
@@ -354,7 +358,6 @@ def _format_fetch_error(provider: str, exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
         location = _mask_sensitive_url(exc.response.headers.get("location", "").strip())
-        request_id = _extract_request_id(exc.response.headers)
         summary = _extract_error_summary(exc.response)
         if status_code in {301, 302, 303, 307, 308} and location:
             message = f"{provider} 返回 HTTP {status_code} 重定向到 {location}，请检查认证状态"
@@ -364,8 +367,6 @@ def _format_fetch_error(provider: str, exc: Exception) -> str:
             message = f"{provider} 返回 HTTP {status_code}"
         if summary:
             message += f"，摘要={summary}"
-        if request_id:
-            message += f"，request_id={request_id}"
         return message
 
     message = _mask_sensitive_text(str(exc).strip())
@@ -488,13 +489,37 @@ _TIME_RANGE_ALIASES = {"d": "day", "w": "week", "m": "month", "y": "year"}
 _DOMAIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".lan", ".home", ".corp")
 _LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
+_LOOPBACK_HELPER_SUFFIXES = ("localtest.me", "lvh.me")
 _DNS_ALIAS_IP_SUFFIXES = ("nip.io", "xip.io", "sslip.io")
+
+
+@dataclass(frozen=True)
+class _TargetPreflightResult:
+    status: Literal["allow", "reject", "skipped_due_to_error"]
+    message: str | None = None
+
+
+def _allow_target_preflight() -> _TargetPreflightResult:
+    return _TargetPreflightResult("allow")
+
+
+def _reject_target_preflight(message: str) -> _TargetPreflightResult:
+    return _TargetPreflightResult("reject", message)
+
+
+def _skip_target_preflight(message: str) -> _TargetPreflightResult:
+    return _TargetPreflightResult("skipped_due_to_error", message)
+
 _SENSITIVE_URL_PARAM_KEYS = {
     "api_key",
     "apikey",
     "access_token",
     "auth_token",
+    "client_secret",
     "code",
+    "id_token",
+    "password",
+    "refresh_token",
     "token",
     "signature",
     "sig",
@@ -544,6 +569,8 @@ def _validate_public_target_url(url: str) -> str | None:
         return "仅支持 http/https URL"
     if host in _LOCAL_HOSTNAMES or any(host.endswith(f".{name}") for name in _LOCAL_HOSTNAMES):
         return "目标 URL 不能指向本地或私有网络"
+    if host in _LOOPBACK_HELPER_SUFFIXES or any(host.endswith(f".{name}") for name in _LOOPBACK_HELPER_SUFFIXES):
+        return "目标 URL 不能指向本地或私有网络"
     if _looks_like_ipv4_loopback_shorthand(host):
         return "目标 URL 不能指向本地或私有网络"
     alias_ip = _extract_dns_alias_ip(host)
@@ -573,37 +600,6 @@ def _is_non_public_ip(ip) -> bool:
     return ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified
 
 
-def _default_port_for_scheme(scheme: str) -> int:
-    return 443 if scheme.lower() == "https" else 80
-
-
-def _resolve_hostname_ips(host: str, port: int) -> list:
-    import socket
-
-    resolved_ips = []
-    seen: set[str] = set()
-    try:
-        records = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except OSError:
-        return []
-
-    for record in records:
-        sockaddr = record[4] if len(record) >= 5 else None
-        if not sockaddr:
-            continue
-        candidate = sockaddr[0]
-        try:
-            resolved_ip = ip_address(candidate)
-        except ValueError:
-            continue
-        normalized = str(resolved_ip)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        resolved_ips.append(resolved_ip)
-    return resolved_ips
-
-
 def _resolve_and_validate_public_target(url: str) -> str | None:
     parsed = urlparse((url or "").strip())
     host = (parsed.hostname or "").lower().rstrip(".")
@@ -613,12 +609,8 @@ def _resolve_and_validate_public_target(url: str) -> str | None:
     try:
         host_ip = ip_address(host)
     except ValueError:
-        port = parsed.port or _default_port_for_scheme(parsed.scheme)
-        resolved_ips = _resolve_hostname_ips(host, port)
-        if not resolved_ips:
-            return None
-        if any(_is_non_public_ip(resolved_ip) for resolved_ip in resolved_ips):
-            return "目标 URL 不能指向本地或私有网络"
+        # Provider-backed fetch/map runs remotely, so local DNS answers are not
+        # authoritative enough to hard-block ordinary public hostnames here.
         return None
 
     if _is_non_public_ip(host_ip):
@@ -626,7 +618,7 @@ def _resolve_and_validate_public_target(url: str) -> str | None:
     return None
 
 
-async def _preflight_redirect_targets(url: str, *, max_redirects: int = 5) -> str | None:
+async def _preflight_redirect_targets(url: str, *, max_redirects: int = 5) -> _TargetPreflightResult:
     import httpx
 
     current_url = url
@@ -634,33 +626,35 @@ async def _preflight_redirect_targets(url: str, *, max_redirects: int = 5) -> st
         try:
             async with httpx.AsyncClient(**_httpx_client_kwargs_for_url(current_url, timeout=5.0)) as client:
                 response = await client.get(current_url, headers={"Accept": "*/*"})
-        except Exception:
-            return None
+        except httpx.TimeoutException:
+            return _skip_target_preflight("目标 URL 重定向预检超时")
+        except httpx.RequestError:
+            return _skip_target_preflight("目标 URL 重定向预检失败")
 
         location = (response.headers.get("location") or "").strip()
         if response.status_code not in {301, 302, 303, 307, 308} or not location:
-            return None
+            return _allow_target_preflight()
 
         next_url = urljoin(current_url, location)
         validation_error = _validate_public_target_url(next_url)
         if validation_error:
-            return validation_error
+            return _reject_target_preflight(validation_error)
         resolution_error = _resolve_and_validate_public_target(next_url)
         if resolution_error:
-            return resolution_error
+            return _reject_target_preflight(resolution_error)
         current_url = next_url
 
-    return "目标 URL 重定向次数过多"
+    return _reject_target_preflight("目标 URL 重定向次数过多")
 
 
-async def _preflight_public_target_url(url: str) -> str | None:
+async def _preflight_public_target_url(url: str) -> _TargetPreflightResult:
     validation_error = _validate_public_target_url(url)
     if validation_error:
-        return validation_error
+        return _reject_target_preflight(validation_error)
 
     resolution_error = _resolve_and_validate_public_target(url)
     if resolution_error:
-        return resolution_error
+        return _reject_target_preflight(resolution_error)
 
     return await _preflight_redirect_targets(url)
 
@@ -820,7 +814,7 @@ def _validate_search_inputs(
     name="web_search",
     output_schema=None,
     description="""
-    Before using this tool, please use the plan_intent tool to plan the search carefully.
+    Prefer `plan_* -> web_search` for non-trivial or ambiguous research tasks, but clear single-hop lookups may directly use `web_search` when planning would add little value.
     Performs a deep web search based on the given query and returns Grok's answer directly.
 
     This tool extracts sources if provided by upstream, caches them, and returns:
@@ -1277,9 +1271,11 @@ async def web_fetch(
     url: Annotated[str, "Valid HTTP/HTTPS web address pointing to the target page. Must be complete and accessible."],
     ctx: Context = None
 ) -> str:
-    validation_error = await _preflight_public_target_url(url)
-    if validation_error:
-        return f"提取失败: {validation_error}"
+    preflight = await _preflight_public_target_url(url)
+    if preflight.status == "reject":
+        return f"提取失败: {preflight.message}"
+    if preflight.status == "skipped_due_to_error":
+        await log_info(ctx, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     await log_info(ctx, "Begin Fetch request", config.debug_enabled)
 
@@ -1324,13 +1320,12 @@ async def _call_tavily_map(url: str, instructions: str = None, max_depth: int = 
         return "配置错误: TAVILY_API_KEY 未配置，请设置环境变量 TAVILY_API_KEY"
     endpoint = f"{api_url.rstrip('/')}/map"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    provider_timeout_ms = timeout * 1000
     body = {
         "url": url,
         "max_depth": max_depth,
         "max_breadth": max_breadth,
         "limit": limit,
-        "timeout": provider_timeout_ms,
+        "timeout": timeout,
     }
     if instructions:
         body["instructions"] = instructions
@@ -1389,9 +1384,11 @@ async def web_map(
     limit: Annotated[int, Field(description="Total number of links to process before stopping.", ge=1, le=500)] = 50,
     timeout: Annotated[int, Field(description="Maximum time in seconds for the operation.", ge=10, le=150)] = 150
 ) -> str:
-    validation_error = await _preflight_public_target_url(url)
-    if validation_error:
-        return f"映射失败: {validation_error}"
+    preflight = await _preflight_public_target_url(url)
+    if preflight.status == "reject":
+        return f"映射失败: {preflight.message}"
+    if preflight.status == "skipped_due_to_error":
+        await log_info(None, f"Redirect preflight skipped: {preflight.message}", config.debug_enabled)
 
     result = await _call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
     return result
@@ -1468,7 +1465,7 @@ def _summarize_doctor_status(doctor_status: str) -> str:
 
 
 def _httpx_client_kwargs_for_url(url: str, *, timeout: float) -> dict:
-    host = (urlparse(url).hostname or "").lower()
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
     kwargs = {"timeout": timeout}
     is_loopback = host == "localhost"
     if not is_loopback:
@@ -1733,7 +1730,19 @@ def _build_provider_readiness_item(check: dict, *, not_ready_message: str) -> di
     return {"status": "degraded", "message": check["message"]}
 
 
-def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> dict:
+def _has_readable_source_session(cache_entries: list[object]) -> bool:
+    for entry in cache_entries:
+        normalized_entry = _normalize_sources_cache_entry(entry)
+        if normalized_entry and normalized_entry["search_status"] != "error":
+            return True
+    return False
+
+
+def _build_feature_readiness(
+    checks: list[dict],
+    *,
+    has_readable_source_session: bool = False,
+) -> dict:
     checks_by_id = {check["check_id"]: check for check in checks}
     grok_config = checks_by_id["grok_config"]
     grok_models = checks_by_id["grok_models"]
@@ -1820,7 +1829,7 @@ def _build_feature_readiness(checks: list[dict], source_cache_size: int = 0) -> 
                 "message": "当前进程内已存在可读取的 source session 缓存。",
                 "transient": True,
             }
-            if source_cache_size > 0
+            if has_readable_source_session
             else {
                 "status": "partial_ready" if web_search_status != "not_ready" else "not_ready",
                 "message": "接口可用，但当前进程内尚无可读取的 source session；需先执行成功的 web_search。",
@@ -1872,6 +1881,38 @@ def _build_doctor_payload(
     }
 
 
+def _render_config_info_payload(config_info: dict, *, detail: str) -> dict:
+    if detail == "full":
+        return config_info
+
+    if detail == "summary":
+        base_snapshot = {
+            key: value
+            for key, value in config_info.items()
+            if key not in {"connection_test", "doctor", "feature_readiness"}
+        }
+        doctor = config_info.get("doctor") or {}
+        summarized_doctor = {
+            "status": doctor.get("status"),
+            "summary": doctor.get("summary"),
+            "recommendations": doctor.get("recommendations", []),
+        }
+        return {
+            key: value
+            for key, value in {
+                **base_snapshot,
+                "connection_test": config_info.get("connection_test"),
+                "doctor": summarized_doctor,
+                "feature_readiness": config_info.get("feature_readiness"),
+            }.items()
+        }
+
+    return {
+        "error": "invalid_detail",
+        "message": "Invalid detail value. Supported values are 'full' and 'summary'.",
+    }
+
+
 @mcp.tool(
     name="get_config_info",
     output_schema=None,
@@ -1887,13 +1928,27 @@ def _build_doctor_payload(
     **Edge Cases & Best Practices:**
         - Use this tool first when debugging connection, provider readiness, or installation issues.
         - API keys are automatically masked for security in the response.
+        - Use `detail=summary` for a compact machine-readable snapshot; keep the default `detail=full` for complete doctor/probe output.
         - Optional provider probes only run when their configuration is present.
         - The `/models` connection test timeout is 10 seconds; additional real `search/fetch` probes may take longer.
     """,
     meta={"version": "1.4.0", "author": "guda.studio"},
 )
-async def get_config_info() -> str:
+async def get_config_info(
+    detail: Annotated[str, "Response detail level: full | summary. Defaults to full."] = "full",
+) -> str:
     import json
+
+    normalized_detail = (detail or "full").strip().lower() or "full"
+    if normalized_detail not in {"full", "summary"}:
+        return json.dumps(
+            {
+                "error": "invalid_detail",
+                "message": "Invalid detail value. Supported values are 'full' and 'summary'.",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
     config_info = config.get_config_info()
     checks: list[dict] = []
@@ -2187,18 +2242,26 @@ async def get_config_info() -> str:
         _build_doctor_check(
             "claude_code_project",
             claude_context_status,
-            f"已找到 Claude Code 项目根目录：{claude_project_root}" if claude_context_status == "ok" else "未检测到项目级 Git 上下文。",
+            "已检测到 Claude Code 项目级 Git 上下文。" if claude_context_status == "ok" else "未检测到项目级 Git 上下文。",
             skipped_reason="" if claude_context_status == "ok" else "missing_git_context",
         )
     )
 
-    feature_readiness = _build_feature_readiness(checks, source_cache_size=await _SOURCES_CACHE.size())
+    source_cache_entries = await _SOURCES_CACHE.snapshot()
+    feature_readiness = _build_feature_readiness(
+        checks,
+        has_readable_source_session=_has_readable_source_session(source_cache_entries),
+    )
     doctor = _build_doctor_payload(checks, feature_readiness, recommendations, recommendation_details)
     config_info["connection_test"] = _build_connection_test_from_models_check(grok_models)
     config_info["doctor"] = doctor
     config_info["feature_readiness"] = feature_readiness
 
-    return json.dumps(config_info, ensure_ascii=False, indent=2)
+    return json.dumps(
+        _render_config_info_payload(config_info, detail=normalized_detail),
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @mcp.tool(
@@ -2392,7 +2455,7 @@ def _get_planning_sub_queries(session) -> list[dict]:
 
 def _get_planning_sub_query_ids(session) -> set[str]:
     return {
-        item["id"]
+        item["id"].strip()
         for item in _get_planning_sub_queries(session)
         if isinstance(item.get("id"), str) and item["id"].strip()
     }
@@ -2407,12 +2470,12 @@ def _planning_validation_message(message: str, field: str | None = None) -> str:
 
 def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | None:
     existing_ids = _get_planning_sub_query_ids(session)
-    sub_query_id = item["id"]
+    sub_query_id = item["id"].strip()
     valid_dependency_ids = {sub_query_id} if is_revision else existing_ids
 
     if is_revision and any(phase in session.phases for phase in ("search_strategy", "tool_selection", "execution_order")):
         return _planning_validation_message(
-            "Sub-query revision would invalidate downstream phases. Restart planning from query_decomposition or open a new session.",
+            "Sub-query revision would invalidate downstream phases. Open a new session to restart planning from query_decomposition.",
             "id",
         )
 
@@ -2447,9 +2510,10 @@ def _validate_sub_query_item(session, item: dict, is_revision: bool) -> str | No
 
 def _validate_sub_query_reference(session, sub_query_id: str, field_name: str) -> str | None:
     existing_ids = _get_planning_sub_query_ids(session)
-    if sub_query_id not in existing_ids:
+    normalized_sub_query_id = sub_query_id.strip()
+    if normalized_sub_query_id not in existing_ids:
         return _planning_validation_message(
-            f"Unknown sub-query id: {sub_query_id}",
+            f"Unknown sub-query id: {normalized_sub_query_id}",
             field_name,
         )
     return None
@@ -2552,7 +2616,7 @@ def _validate_upstream_phase_revision(session, phase: str) -> str | None:
     downstream_phases = PHASE_NAMES[phase_index + 1 :]
     if any(name in session.phases for name in downstream_phases):
         return _planning_validation_message(
-            f"{phase} revision would invalidate downstream phases. Restart planning from {phase} or open a new session.",
+            f"{phase} revision would invalidate downstream phases. Open a new session to restart planning from {phase}.",
             "is_revision",
         )
     return None
@@ -2685,7 +2749,8 @@ async def plan_sub_query(
     import json
     if not planning_engine.get_session(session_id):
         return _planning_session_error(session_id)
-    item = {"id": id, "goal": goal, "expected_output": expected_output, "boundary": boundary}
+    normalized_id = id.strip()
+    item = {"id": normalized_id, "goal": goal, "expected_output": expected_output, "boundary": boundary}
     if depends_on:
         item["depends_on"] = _split_csv(depends_on)
     if tool_hint:
@@ -2706,7 +2771,7 @@ async def plan_sub_query(
 @mcp.tool(
     name="plan_search_term",
     output_schema=None,
-    description="Phase 4: Add one search term. Call once per term; data accumulates. First call must set approach.",
+    description="Phase 4: Add one search term. Call once per term; data accumulates. First call must set approach. Later non-revision calls append search_terms only and do not overwrite existing approach/fallback_plan; use is_revision=true to replace the strategy.",
 )
 async def plan_search_term(
     session_id: Annotated[str, "Session ID from plan_intent"],
@@ -2725,7 +2790,7 @@ async def plan_search_term(
         return _planning_session_error(session_id)
     if any(phase in session.phases for phase in ("tool_selection", "execution_order")):
         return _planning_validation_message(
-            "Search strategy mutation would invalidate downstream phases. Restart planning from search_strategy or open a new session.",
+            "Search strategy mutation would invalidate downstream phases. Open a new session to rebuild search_strategy.",
             "is_revision",
         )
     if (is_revision or "search_strategy" not in session.phases) and not approach:
@@ -2733,7 +2798,8 @@ async def plan_search_term(
             "first_search_term_requires_approach",
             "The first search term must include approach=broad_first|narrow_first|targeted.",
         )
-    data = {"search_terms": [{"term": term, "purpose": purpose, "round": round}]}
+    normalized_purpose = purpose.strip()
+    data = {"search_terms": [{"term": term, "purpose": normalized_purpose, "round": round}]}
     if approach:
         data["approach"] = approach
     if fallback_plan:
@@ -2746,7 +2812,7 @@ async def plan_search_term(
         )
     except ValidationError as exc:
         return _planning_validation_error("validation_error", "Invalid search strategy input.", _format_validation_details(exc))
-    validation_error = _validate_sub_query_reference(session, purpose, "purpose")
+    validation_error = _validate_sub_query_reference(session, normalized_purpose, "purpose")
     if validation_error:
         return validation_error
     return json.dumps(planning_engine.process_phase(
@@ -2776,29 +2842,40 @@ async def plan_tool_mapping(
         return _planning_session_error(session_id)
     if is_revision and "execution_order" in session.phases:
         return _planning_validation_message(
-            "Tool mapping revision would invalidate execution_order. Restart planning from tool_selection or open a new session.",
+            "Tool mapping revision would invalidate execution_order. Open a new session to rebuild tool_selection.",
             "sub_query_id",
         )
-    item = {"sub_query_id": sub_query_id, "tool": tool, "reason": reason}
+    normalized_sub_query_id = sub_query_id.strip()
+    item = {"sub_query_id": normalized_sub_query_id, "tool": tool, "reason": reason}
     if params_json:
         try:
-            item["params"] = json.loads(params_json)
+            parsed_params = json.loads(params_json)
         except json.JSONDecodeError:
             return _planning_validation_error(
                 "validation_error",
                 "Invalid tool mapping input.",
                 [{"field": "params_json", "message": "params_json must be valid JSON.", "type": "json_invalid"}],
             )
+        if parsed_params is None:
+            parsed_params = None
+        elif not isinstance(parsed_params, dict):
+            return _planning_validation_error(
+                "validation_error",
+                "Invalid tool mapping input.",
+                [{"field": "params_json", "message": "params_json must decode to a JSON object.", "type": "dict_type"}],
+            )
+        if parsed_params is not None:
+            item["params"] = parsed_params
     try:
         ToolPlanItem(**item)
     except ValidationError as exc:
         if any(detail["type"] == "literal_error" for detail in _format_validation_details(exc)):
             return _planning_validation_error("invalid_tool", "tool must be one of web_search, web_fetch, web_map.")
         return _planning_validation_error("validation_error", "Invalid tool mapping input.", _format_validation_details(exc))
-    validation_error = _validate_sub_query_reference(session, sub_query_id, "sub_query_id")
+    validation_error = _validate_sub_query_reference(session, normalized_sub_query_id, "sub_query_id")
     if validation_error:
         return validation_error
-    validation_error = _validate_tool_mapping_item(session, sub_query_id, is_revision=is_revision)
+    validation_error = _validate_tool_mapping_item(session, normalized_sub_query_id, is_revision=is_revision)
     if validation_error:
         return validation_error
     return json.dumps(planning_engine.process_phase(
