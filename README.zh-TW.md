@@ -138,7 +138,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 
 | 變數 | 必填 | 說明 |
 | --- | --- | --- |
-| `GROK_API_URL` | 是 | OpenAI 相容 Grok 端點；建議顯式包含 `/v1` 後綴，程式碼路徑不會僅因省略 `/v1` 就預先攔截，但多數 OpenAI 相容端點仍可能因此在執行期失敗，並通常伴隨相容性 warning |
+| `GROK_API_URL` | 是 | 由你的服務商提供的 OpenAI-compatible Grok base URL；常見路徑形式包含 `/v1`。程式碼路徑不會僅因省略 `/v1` 就預先攔截，但不少 OpenAI-compatible 端點仍可能因此在執行期失敗，並通常伴隨相容性 warning |
 | `GROK_API_KEY` | 是 | Grok API Key |
 | `GROK_MODEL` | 否 | 預設模型；優先級為進程 env > 專案 `.env.local` > 專案 `.env` > 持久化 config > 程式預設 |
 | `GROK_TIME_CONTEXT_MODE` | 否 | 時間上下文注入模式：`always` / `auto` / `never` |

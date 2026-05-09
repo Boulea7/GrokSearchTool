@@ -51,17 +51,19 @@ def _extract_get_sources_lifecycle_contract() -> dict:
     return json.loads(match.group(1))
 
 
-def test_readme_requires_explicit_v1_suffix_for_grok_api_url():
+def test_readme_describes_grok_api_url_without_site_recommendations():
     text = README.read_text(encoding="utf-8")
 
     assert "尽量写成 OpenAI 兼容根路径并显式带上 `/v1`" not in text
     assert "值必须显式包含 `/v1` 后缀" not in text
-    assert "`GROK_API_URL` 推荐使用带显式 `/v1` 后缀的 OpenAI 兼容根路径" in text
+    assert "`GROK_API_URL` 填写你所用服务商提供的 OpenAI-compatible base URL" in text
     assert "代码层不会仅因省略 `/v1` 就预先拦截" in text
-    assert "多数 OpenAI 兼容端点仍可能因此在运行时失败" in text
+    assert "不少 OpenAI-compatible 端点可能因此在运行时失败" in text
+    assert "https://api.example.com/v1" in text
 
     compatibility = COMPATIBILITY.read_text(encoding="utf-8")
     assert "must include an explicit `/v1` suffix" not in compatibility
+    assert "OpenAI-compatible base URL supplied by your provider" in compatibility
     assert "does not pre-block the request on its own" in compatibility
     assert "many OpenAI-compatible endpoints may still fail at runtime" in compatibility
 
@@ -69,16 +71,16 @@ def test_readme_requires_explicit_v1_suffix_for_grok_api_url():
 def test_v1_guidance_stays_aligned_across_multilingual_readmes():
     text = README.read_text(encoding="utf-8")
 
-    assert "推荐使用带显式 `/v1` 后缀的 OpenAI 兼容根路径" in text
+    assert "服务商提供的 OpenAI-compatible base URL" in text
     assert "不会仅因省略 `/v1` 就预先拦截" in text
     assert "运行时失败" in text
     assert "需要 OpenAI 兼容根路径，并显式带上 `/v1` 后缀" not in text
 
     localized_expectations = {
-        README_EN: ["recommended", "does not pre-block", "fail at runtime"],
-        README_ZH_TW: ["建議顯式包含", "不會僅因省略", "執行期失敗"],
-        README_JA: ["推奨", "事前にブロック", "実行時に失敗"],
-        README_RU: ["рекомендуется", "не блокирует запрос заранее", "во время выполнения"],
+        README_EN: ["supplied by your provider", "does not pre-block", "fail at runtime"],
+        README_ZH_TW: ["服務商提供", "不會僅因省略", "執行期失敗"],
+        README_JA: ["プロバイダが提供", "事前にブロック", "実行時に失敗"],
+        README_RU: ["предоставленный вашим провайдером", "не блокирует запрос заранее", "во время выполнения"],
     }
     localized_forbidden = {
         README_EN: "must include an explicit `/v1` suffix",
@@ -481,12 +483,15 @@ def test_docs_readme_points_to_public_entry_points():
 
 
 def test_public_docs_and_tests_do_not_embed_private_release_endpoints():
-    private_fragments = (
-        "ai." + "example-provider.de",
-        "api." + "example-relay.xyz",
-        "tavily." + "example-user.cc",
-        "/Users/" + "example-user",
-        "/private/var/" + "folders",
+    private_fragments = tuple(
+        bytes.fromhex(value).decode("utf-8")
+        for value in (
+            "61692e6875616e3636362e6465",
+            "6170692e3932353231342e78797a",
+            "746176696c792e6976616e6c692e6363",
+            "2f55736572732f6578616d706c652d75736572",
+            "2f707269766174652f7661722f666f6c64657273",
+        )
     )
     scanned_paths = [
         *ROOT_DIR.glob("README*.md"),

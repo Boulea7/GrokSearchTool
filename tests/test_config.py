@@ -3,7 +3,7 @@ import pytest
 from grok_search.config import Config
 
 
-def test_setup_command_uses_release_repo_and_v1_placeholder():
+def test_setup_command_uses_release_repo_and_generic_base_url_example():
     config = Config()
 
     assert "git+https://github.com/Boulea7/GrokSearchTool@main" in config._SETUP_COMMAND

@@ -313,7 +313,7 @@ class Config:
             return "openrouter"
         if host == "api.x.ai" or host.endswith(".x.ai"):
             return "official_xai"
-        if any(marker in host for marker in ("grok2api", "oneapi", "newapi", "example-provider")):
+        if any(marker in host for marker in ("grok2api", "oneapi", "newapi")):
             return "grok2api_like"
         return "openai_compatible_relay"
 

@@ -39,7 +39,7 @@ def test_shared_stdio_snippet_is_valid_json_and_points_to_release_repo():
         "git+https://github.com/Boulea7/GrokSearchTool@main",
         "grok-search",
     ]
-    assert server["env"]["GROK_API_URL"].endswith("/v1")
+    assert server["env"]["GROK_API_URL"] == "https://api.example.com/v1"
     assert "your-grok-api-key" in server["env"]["GROK_API_KEY"]
 
 
