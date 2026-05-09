@@ -502,6 +502,7 @@ claude mcp list
 
 说明：
 - 这是高于 `plan_* -> web_search` 的高级层，不替代默认轻路径。
+- `get_config_info(detail=summary)` 与默认 doctor 当前应优先反映轻路径主能力的健康状态；`deep_research_*` readiness 仍会保留在详细输出里，但属于高级可选层，不应单独把默认总体健康结论拉成 degraded。
 - `deep_research_start` 会创建 job，并立即生成结构化 `plan.json`；其中至少包含 `brief`、`sub_questions`、`search_strategy`、`report_outline`、`research_units`。在 continuation 场景下，`plan.json` 里的 `continuation` 当前只保留 compact 摘要视图，完整 carry-forward state 会额外写到 `continuation.json`。非 `plan_only` 场景下，任务会异步推进并逐步产出 `partial_report.md`、`final_report.md`、`sources.json`、`citations.json`、`report.json`。
 - `force_new` 用于控制 `deep_research_start` 是否必须创建全新 job。
 - 当 `force_new=false` 且请求 fingerprint 与当前 `draft` / `queued` / `running` job 或复用窗口内的已完成 job 匹配时，`deep_research_start` 可能直接复用现有 job；这条规则当前同样适用于带 `continue_from_job_id` 的 follow-up job，返回里会通过 `reused` 明确标识。若调用方必须拿到全新 job，应显式传 `force_new=true`。当前 request fingerprint 也会区分 `plan_only`；`plan_only=true` 不应再复用 execution job，execution start 也不应复用 plan-only draft。对 `completed` job，当前只有在最终四件套可读且来自一致 `batch_id` 时才应继续被视为可复用结果。

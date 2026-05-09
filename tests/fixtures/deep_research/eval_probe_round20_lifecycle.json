@@ -1,0 +1,53 @@
+{
+  "sample": "probe-round20-lifecycle",
+  "query": "Investigate interrupted, continue, and resume semantics for deep research jobs",
+  "planner": {
+    "planner": "model",
+    "used_fallback": false
+  },
+  "plan": {
+    "brief": {
+      "scope": {
+        "include_domains": [
+          "docs.langchain.com",
+          "docs.temporal.io",
+          "docs.restate.dev",
+          "google.github.io"
+        ],
+        "exclude_domains": [],
+        "allowed_sources": [
+          "docs.langchain.com",
+          "docs.temporal.io",
+          "docs.restate.dev",
+          "google.github.io"
+        ]
+      },
+      "continuation_focus": []
+    }
+  },
+  "report": {
+    "status": "interrupted",
+    "runtime": {
+      "warnings": [],
+      "release_gate": {
+        "passed": true,
+        "reason_codes": []
+      },
+      "verifier": {
+        "reason_codes": []
+      }
+    }
+  },
+  "golden": {
+    "planner_boundary": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

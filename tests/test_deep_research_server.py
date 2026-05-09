@@ -29,74 +29,119 @@ def with_minimal_provenance_artifacts(
 ):
     payload = list(artifacts)
     normalized_evidence_items = [] if evidence_items is None else evidence_items
+    coverage_payload = {
+        "query": query,
+        "planned_section_ids": [],
+        "answered_section_ids": [],
+        "unanswered_sections": [],
+        "planned_sub_question_ids": [],
+        "covered_sub_question_ids": [],
+        "uncovered_sub_questions": [],
+        "coverage_gate_passed": True,
+        "hard_coverage_gate_passed": True,
+    }
+    grounding_payload = {
+        "total_claims": 0,
+        "grounded_claims": 0,
+        "ungrounded_claims": 0,
+        "single_source_claims": 0,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0,
+        "total_evidence_bindings": 0,
+        "source_backed_binding_count": 0,
+        "search_only_binding_count": 0,
+        "null_span_binding_count": 0,
+        "grounded_claims_without_source_backed_binding": 0,
+        "sections": [],
+        "sources": [],
+    }
+    verifier_payload = {
+        "passed": True,
+        "reason_codes": [],
+        "flagged_claim_ids": [],
+        "summary": {
+            "section_count": 0,
+            "total_claims": 0,
+            "low_confidence_claims": 0,
+            "single_source_claims": 0,
+            "source_backed_binding_count": 0,
+            "search_only_binding_count": 0,
+            "null_span_binding_count": 0,
+            "missing_evidence_items": 0,
+            "mismatched_binding_source": 0,
+            "mismatched_binding_evidence": 0,
+            "invalid_source_backed_span": 0,
+            "duplicate_claims": 0,
+            "low_value_claims": 0,
+            "medium_single_source_search_only": 0,
+            "same_domain_off_topic_dominance": 0,
+            "unbound_citation_sources": 0,
+            "unbound_evidence_ids": 0,
+        },
+    }
+    for item in payload:
+        if item.get("kind") != "report.json":
+            continue
+        try:
+            report_payload = json.loads(item.get("content") or "")
+        except Exception:
+            continue
+        if not isinstance(report_payload, dict):
+            continue
+        report_payload.setdefault("sections", [])
+        report_payload.setdefault("unit_results", {})
+        coverage_report = report_payload.setdefault("coverage", {})
+        if isinstance(coverage_report, dict):
+            for key, value in coverage_payload.items():
+                coverage_report.setdefault(key, value)
+        else:
+            report_payload["coverage"] = dict(coverage_payload)
+        runtime_payload = report_payload.setdefault("runtime", {})
+        runtime_payload.setdefault("warnings", [])
+        grounding_report = runtime_payload.setdefault(
+            "grounding",
+            {
+                key: grounding_payload[key]
+                for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims")
+            },
+        )
+        if isinstance(grounding_report, dict):
+            for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims"):
+                grounding_report.setdefault(key, grounding_payload[key])
+        else:
+            runtime_payload["grounding"] = {
+                key: grounding_payload[key]
+                for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims")
+            }
+        verifier_report = runtime_payload.setdefault("verifier", {})
+        if isinstance(verifier_report, dict):
+            verifier_report.setdefault("passed", verifier_payload["passed"])
+            verifier_report.setdefault("reason_codes", list(verifier_payload["reason_codes"]))
+            verifier_report.setdefault("flagged_claim_ids", list(verifier_payload["flagged_claim_ids"]))
+            verifier_summary = verifier_report.setdefault("summary", {})
+            if isinstance(verifier_summary, dict):
+                for key, value in verifier_payload["summary"].items():
+                    verifier_summary.setdefault(key, value)
+            else:
+                verifier_report["summary"] = dict(verifier_payload["summary"])
+        else:
+            runtime_payload["verifier"] = json.loads(json.dumps(verifier_payload))
+        item["content"] = json.dumps(report_payload)
     payload.extend(
         [
             {
                 "kind": "coverage.json",
-                "content": json.dumps(
-                    {
-                        "query": query,
-                        "planned_section_ids": [],
-                        "answered_section_ids": [],
-                        "unanswered_sections": [],
-                        "planned_sub_question_ids": [],
-                        "covered_sub_question_ids": [],
-                        "uncovered_sub_questions": [],
-                        "coverage_gate_passed": True,
-                        "hard_coverage_gate_passed": True,
-                    }
-                ),
+                "content": json.dumps(coverage_payload),
                 "content_type": "application/json",
             },
             {
                 "kind": "grounding.json",
-                "content": json.dumps(
-                    {
-                        "total_claims": 0,
-                        "grounded_claims": 0,
-                        "ungrounded_claims": 0,
-                        "single_source_claims": 0,
-                        "low_confidence_claims": 0,
-                        "missing_evidence_binding_claims": 0,
-                        "total_evidence_bindings": 0,
-                        "source_backed_binding_count": 0,
-                        "search_only_binding_count": 0,
-                        "null_span_binding_count": 0,
-                        "grounded_claims_without_source_backed_binding": 0,
-                        "sections": [],
-                        "sources": [],
-                    }
-                ),
+                "content": json.dumps(grounding_payload),
                 "content_type": "application/json",
             },
             {
                 "kind": "verifier.json",
-                "content": json.dumps(
-                    {
-                        "passed": True,
-                        "reason_codes": [],
-                        "flagged_claim_ids": [],
-                        "summary": {
-                            "section_count": 0,
-                            "total_claims": 0,
-                            "low_confidence_claims": 0,
-                            "single_source_claims": 0,
-                            "source_backed_binding_count": 0,
-                            "search_only_binding_count": 0,
-                            "null_span_binding_count": 0,
-                            "missing_evidence_items": 0,
-                            "mismatched_binding_source": 0,
-                            "mismatched_binding_evidence": 0,
-                            "invalid_source_backed_span": 0,
-                            "duplicate_claims": 0,
-                            "low_value_claims": 0,
-                            "medium_single_source_search_only": 0,
-                            "same_domain_off_topic_dominance": 0,
-                            "unbound_citation_sources": 0,
-                            "unbound_evidence_ids": 0
-                        }
-                    }
-                ),
+                "content": json.dumps(verifier_payload),
                 "content_type": "application/json",
             },
         ]
@@ -213,6 +258,40 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
         "plan_payload": plan_payload,
         "report_payload": report_payload,
     }
+
+
+def seed_round20_lifecycle_resume_replay_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round20_lifecycle_resume_replay.json")
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-server-round20-lifecycle-replay",
+        status=snapshot["resume_run"]["status"],
+        phase=snapshot["resume_run"]["phase"],
+        effort="deep",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=snapshot["resume_run"]["attempt_count"],
+        current_checkpoint=snapshot["resume_run"]["current_checkpoint"],
+        finished_at=utc_now_iso(),
+        last_error="time_budget_exceeded",
+    )
+    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_7"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event["type"],
+            phase=event["phase"],
+            message=event.get("message") or event["type"],
+            data=event.get("data") or {},
+        )
+    return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot}
 
 
 def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
@@ -460,9 +539,16 @@ async def test_deep_research_start_status_events_result_and_list(tmp_path):
     listing = await server.deep_research_list()
 
     assert status["status"] == "completed"
-    assert status["artifact_kinds"] == ["plan.json", "planner_trace.json", "partial_report.md", "citations.json", "final_report.md"]
+    assert "plan.json" in status["artifact_kinds"]
+    assert "planner_trace.json" in status["artifact_kinds"]
+    assert "outline_state.json" in status["artifact_kinds"]
+    assert "evidence_ledger.json" in status["artifact_kinds"]
+    assert "section_banks.json" in status["artifact_kinds"]
+    assert "partial_report.md" in status["artifact_kinds"]
+    assert "citations.json" in status["artifact_kinds"]
+    assert "final_report.md" in status["artifact_kinds"]
     assert [event["seq"] for event in events["events"]] == list(range(1, len(events["events"]) + 1))
-    assert events["events"][0]["type"] in {"planner_fallback", "job_created"}
+    assert events["events"][0]["type"] == "job_created"
     assert events["events"][-1]["type"] == "job_completed"
     assert result["final_report"].startswith("# Final Report")
     assert result["partial_report"].startswith("# Partial Report")
@@ -485,6 +571,30 @@ async def test_deep_research_cancel_updates_job_state(monkeypatch, tmp_path):
     assert canceled["cancel_requested"] is True
     assert status["status"] == "canceled"
     assert events["events"][-1]["type"] == "job_canceled"
+
+
+@pytest.mark.asyncio
+async def test_deep_research_events_after_seq_matches_round20_resume_replay_fixture(monkeypatch, tmp_path):
+    runtime = build_runtime(tmp_path, complete_runner)
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", runtime)
+    seeded = seed_round20_lifecycle_resume_replay_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    payload = await server.deep_research_events(job.job_id, after_seq=7, limit=20)
+
+    assert payload["next_after_seq"] == 13
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in payload["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["resume_events_after_seq_7"]
+    ]
+    assert not any(
+        event["type"] == "phase_started" and event["phase"] == "planning"
+        for event in payload["events"]
+    )
 
 
 @pytest.mark.asyncio
@@ -688,6 +798,19 @@ async def test_deep_research_canceled_finalizing_status_and_result_expose_resolv
     assert result["report"]["summary"] == "Recovered final batch report"
     assert result["sources"][0]["url"] == "https://good.example.com/runtime/recovery"
     assert any(artifact["kind"] == "evidence_items.json" for artifact in result["artifacts"])
+
+
+@pytest.mark.asyncio
+async def test_deep_research_result_forwards_include_partial_flag(monkeypatch, tmp_path):
+    class FakeRuntime:
+        async def result(self, job_id, *, include_partial=True):
+            return {"job_id": job_id, "include_partial": include_partial}
+
+    monkeypatch.setattr(server, "_DEEP_RESEARCH_RUNTIME", FakeRuntime())
+
+    result = await server.deep_research_result("job-include-partial", include_partial=False)
+
+    assert result == {"job_id": "job-include-partial", "include_partial": False}
 
 
 @pytest.mark.asyncio

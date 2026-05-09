@@ -9,6 +9,25 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
 from .config import config
+from .deep_research_evidence import (
+    build_evidence_ledger_entries,
+    candidate_evidence_ids_by_section,
+    evidence_source_ids,
+    initialize_section_banks,
+    matched_unit_ids_by_section,
+    merge_evidence_ledger,
+    rejected_evidence_ids_by_section,
+    selected_evidence_ids_by_section,
+    update_section_banks,
+)
+from .deep_research_section_graph import initialize_section_graph, update_section_graph
+from .deep_research_synthesis import (
+    build_synthesis_outline,
+    evidence_pool_for_section,
+    is_key_findings_section_title,
+    is_open_questions_section_title,
+    is_summary_section_title,
+)
 from .deep_research_store import DeepResearchStore
 from .deep_research_types import (
     DeepResearchCheckpointState,
@@ -21,6 +40,8 @@ from .deep_research_types import (
     DeepResearchReportSection,
     DeepResearchResearchUnit,
     DeepResearchSectionCitations,
+    DeepResearchSectionGraphState,
+    DeepResearchSectionNode,
     utc_now_iso,
 )
 from .providers.base import _filter_supported_search_kwargs
@@ -133,6 +154,17 @@ _GAP_EVIDENCE_MARKERS = (
     "open question",
 )
 _VALID_SEARCH_STRATEGY_APPROACHES = {"targeted", "breadth_first", "depth_first"}
+_GENERIC_OUTLINE_TITLES = {
+    "executive summary",
+    "summary",
+    "key findings",
+    "findings",
+    "main findings",
+    "open questions",
+    "remaining gaps",
+    "next steps",
+    "recommendations",
+}
 _UNSAFE_NORMALIZE_ACTION_PREFIXES = (
     "filled_search_query:",
     "degraded_fetch_without_url_to_search:",
@@ -149,7 +181,19 @@ _UNSAFE_VALIDATION_ISSUES = {
     "unknown_dependency",
     "forward_or_cyclic_dependency",
 }
+_SAFE_SEARCH_ONLY_REPAIR_ACTION_PREFIXES = (
+    "filled_search_query:",
+    "added_sub_question_search_unit:",
+)
+_SAFE_SEARCH_ONLY_REPAIR_ISSUES = {
+    "missing_search_query",
+    "missing_sub_question_unit_coverage",
+}
+_NON_BLOCKING_VERIFIER_REASON_CODES = {"medium_single_source_search_only"}
 _EVIDENCE_ITEMS_ARTIFACT_KIND = "evidence_items.json"
+_OUTLINE_STATE_ARTIFACT_KIND = "outline_state.json"
+_EVIDENCE_LEDGER_ARTIFACT_KIND = "evidence_ledger.json"
+_SECTION_BANKS_ARTIFACT_KIND = "section_banks.json"
 _CORE_FINAL_ARTIFACT_KINDS = ("sources.json", "citations.json", "report.json", "final_report.md")
 _PROVENANCE_FINAL_ARTIFACT_KINDS = (
     _EVIDENCE_ITEMS_ARTIFACT_KIND,
@@ -212,6 +256,16 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
         seen.add(lowered)
         unique.append(normalized)
     return unique
+
+
+def _stable_string_list(items: list[str]) -> list[str]:
+    return sorted(
+        {
+            _normalize_whitespace(item).lower()
+            for item in items
+            if _normalize_whitespace(item)
+        }
+    )
 
 
 def _stable_text_key(value: str) -> str:
@@ -632,7 +686,64 @@ def _continuation_compaction_reason_codes(
 
 
 def _continuation_identity_from_snapshot(snapshot: dict[str, Any]) -> str:
-    return hashlib.sha256(_json_markdown_block(snapshot).encode("utf-8")).hexdigest()
+    return hashlib.sha256(json.dumps(_canonicalize_identity_value(snapshot), ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _canonicalize_identity_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _canonicalize_identity_value(item)
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, list):
+        canonical_items = [_canonicalize_identity_value(item) for item in value]
+        if all(isinstance(item, (str, int, float, bool)) or item is None for item in canonical_items):
+            return sorted(canonical_items, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True))
+        if all(isinstance(item, dict) for item in canonical_items):
+            return sorted(
+                canonical_items,
+                key=lambda item: (
+                    str(item.get("source_id", "")),
+                    str(item.get("section_id", "")),
+                    str(item.get("evidence_id", "")),
+                    str(item.get("unit_id", "")),
+                    str(item.get("url", "")),
+                    str(item.get("title", "")),
+                    json.dumps(item, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+        return canonical_items
+    if isinstance(value, str):
+        return _normalize_whitespace(value)
+    return value
+
+
+def _continuation_capsule(continuation: DeepResearchContinuationState) -> dict[str, Any]:
+    return {
+        "mode": continuation.mode,
+        "source_job_id": continuation.source_job_id,
+        "source_job_status": continuation.source_job_status,
+        "continuation_identity": continuation.continuation_identity,
+        "checkpoint_key": continuation.checkpoint_key,
+        "continuation_goal": continuation.continuation_goal,
+        "source_count": continuation.source_count,
+        "compaction_policy": continuation.compaction_policy,
+        "compaction_reason_codes": list(continuation.compaction_reason_codes),
+        "confirmed_claims": list(continuation.confirmed_claims[:4]),
+        "open_questions": list(continuation.open_questions[:4]),
+        "trusted_source_headers": list(continuation.trusted_source_headers[:4]),
+        "carry_forward_constraints": dict(continuation.carry_forward_constraints),
+        "carry_forward_source_ids": [
+            str(item.get("source_id", "")).strip()
+            for item in continuation.carry_forward_sources[:5]
+            if str(item.get("source_id", "")).strip()
+        ],
+        "carry_forward_section_ids": [
+            str(item.get("section_id", "")).strip()
+            for item in continuation.carry_forward_sections[:5]
+            if str(item.get("section_id", "")).strip()
+        ],
+    }
 
 
 def _hydrate_continuation_snapshot(continuation: DeepResearchContinuationState) -> DeepResearchContinuationState:
@@ -1030,6 +1141,10 @@ def _validate_json_artifact_shape(kind: str, value: Any) -> str | None:
             ):
                 return "invalid_shape"
         return None
+    if kind in {"coverage.json", "grounding.json", "verifier.json"}:
+        if not isinstance(value, dict):
+            return "invalid_shape"
+        return None
     return None
 
 
@@ -1086,11 +1201,81 @@ def _latest_batch_bundle_candidate(store: DeepResearchStore, job_id: str) -> dic
     return candidates[0] if candidates else None
 
 
+def _provenance_sidecars_match_report(
+    *,
+    report_value: dict[str, Any] | None,
+    coverage_value: dict[str, Any] | None,
+    grounding_value: dict[str, Any] | None,
+    verifier_value: dict[str, Any] | None,
+) -> bool:
+    allowed_coverage_keys = {
+        "query",
+        "must_cover",
+        "coverage_checklist",
+        "coverage_state",
+        "planned_section_ids",
+        "answered_section_ids",
+        "unanswered_sections",
+        "planned_sub_question_ids",
+        "covered_sub_question_ids",
+        "uncovered_sub_questions",
+        "sub_questions",
+        "section_coverage",
+        "hard_coverage_targets",
+        "hard_uncovered_targets",
+        "hard_coverage_gate_passed",
+        "coverage_gate_passed",
+    }
+    allowed_grounding_keys = {
+        "total_claims",
+        "grounded_claims",
+        "ungrounded_claims",
+        "single_source_claims",
+        "low_confidence_claims",
+        "missing_evidence_binding_claims",
+        "total_evidence_bindings",
+        "source_backed_binding_count",
+        "search_only_binding_count",
+        "null_span_binding_count",
+        "grounded_claims_without_source_backed_binding",
+        "sections",
+        "sources",
+    }
+    if not isinstance(report_value, dict):
+        return False
+    runtime_payload = report_value.get("runtime")
+    report_coverage = report_value.get("coverage")
+    if not isinstance(runtime_payload, dict) or not isinstance(report_coverage, dict):
+        return False
+    report_grounding = runtime_payload.get("grounding")
+    report_verifier = runtime_payload.get("verifier")
+    if not isinstance(report_grounding, dict) or not isinstance(report_verifier, dict):
+        return False
+    if not isinstance(coverage_value, dict) or not isinstance(grounding_value, dict) or not isinstance(verifier_value, dict):
+        return False
+    if set(coverage_value) - allowed_coverage_keys:
+        return False
+    if set(grounding_value) - allowed_grounding_keys:
+        return False
+    for key, value in report_coverage.items():
+        if coverage_value.get(key) != value:
+            return False
+    for key, value in report_grounding.items():
+        if grounding_value.get(key) != value:
+            return False
+    if verifier_value != report_verifier:
+        return False
+    return True
+
+
 def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
     if bundle is None:
         return False
     paths = bundle.get("paths") or {}
     report_value: dict[str, Any] | None = None
+    coverage_value: dict[str, Any] | None = None
+    grounding_value: dict[str, Any] | None = None
+    verifier_value: dict[str, Any] | None = None
     for kind in _FINAL_ARTIFACT_KINDS:
         text = _read_text_if_exists(paths.get(kind))
         if text is None:
@@ -1101,9 +1286,22 @@ def _artifact_bundle_is_usable(bundle: dict[str, Any] | None) -> bool:
                 return False
             if kind == "report.json" and isinstance(value, dict):
                 report_value = value
+            elif kind == "coverage.json" and isinstance(value, dict):
+                coverage_value = value
+            elif kind == "grounding.json" and isinstance(value, dict):
+                grounding_value = value
+            elif kind == "verifier.json" and isinstance(value, dict):
+                verifier_value = value
         elif kind == "final_report.md":
             if not _final_report_text_is_meaningful(text, report_value=report_value):
                 return False
+    if not _provenance_sidecars_match_report(
+        report_value=report_value,
+        coverage_value=coverage_value,
+        grounding_value=grounding_value,
+        verifier_value=verifier_value,
+    ):
+        return False
     return True
 
 
@@ -1213,12 +1411,12 @@ def _artifact_payloads(
         "plan.json",
         "planner_trace.json",
         "continuation.json",
+        "continuation_capsule.json",
+        _OUTLINE_STATE_ARTIFACT_KIND,
+        _EVIDENCE_LEDGER_ARTIFACT_KIND,
+        _SECTION_BANKS_ARTIFACT_KIND,
         "partial_report.md",
         *_FINAL_ARTIFACT_KINDS,
-        _EVIDENCE_ITEMS_ARTIFACT_KIND,
-        "coverage.json",
-        "grounding.json",
-        "verifier.json",
     ]
     for kind in ordered_kinds:
         artifact = current_artifacts.get(kind)
@@ -1504,16 +1702,38 @@ def _unsafe_plan_reason(
     normalize_actions: list[str],
     validation_issues: list[str],
     blocked_reasons: list[str],
+    include_domains: list[str] | None = None,
+    research_units: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if planner == "fallback":
         return None
+    safe_search_only_repairs_allowed = (
+        continuation.mode != "continue"
+        and bool(include_domains)
+        and all(_domain_looks_like_official_docs(domain) for domain in (include_domains or []))
+        and bool(research_units)
+        and all(
+        str(unit.get("unit_type", "")).strip() == "search" for unit in (research_units or [])
+        )
+    )
     for action in normalize_actions:
+        if (
+            safe_search_only_repairs_allowed
+            and action.startswith(_SAFE_SEARCH_ONLY_REPAIR_ACTION_PREFIXES)
+        ):
+            continue
         if any(action.startswith(prefix) for prefix in _UNSAFE_NORMALIZE_ACTION_PREFIXES):
             return {"issue": action, "reason": "unsafe_normalize_action"}
     for issue in validation_issues:
+        if safe_search_only_repairs_allowed and issue in _SAFE_SEARCH_ONLY_REPAIR_ISSUES:
+            continue
         if issue in _UNSAFE_VALIDATION_ISSUES:
             return {"issue": issue, "reason": "unsafe_validation_issue"}
-        if continuation.mode == "continue" and issue == "generic_continuation_outline":
+        if (
+            continuation.mode == "continue"
+            and issue == "generic_continuation_outline"
+            and "expanded_outline_from_follow_up_surface" not in normalize_actions
+        ):
             return {"issue": issue, "reason": "unsafe_continuation_outline"}
     if blocked_reasons:
         return {"issue": blocked_reasons[0], "reason": "blocked_plan_dependency"}
@@ -1714,12 +1934,11 @@ def _outline_from_sub_questions(
 ) -> list[dict[str, Any]]:
     if continuation.mode == "continue" or len(sub_questions) <= 1:
         return outline
-    generic_titles = {"executive summary", "key findings", "open questions", "summary"}
     if not outline:
         return outline
     first_title = str(outline[0].get("title", "")).strip()
     remainder = outline[1:]
-    if remainder and not all(str(item.get("title", "")).strip().lower() in generic_titles for item in remainder):
+    if remainder and not all(_is_generic_section_title(str(item.get("title", "")).strip()) for item in remainder):
         return outline
     summary_section = outline[0] if first_title.lower() == "executive summary" else {
         "section_id": "executive-summary",
@@ -1736,12 +1955,81 @@ def _outline_from_sub_questions(
                 "section_id": _slugify(title),
                 "title": title,
                 "goal": title,
+                "status": "planned",
+                "coverage_state": {},
+                "rewrite_reason": "sub_questions",
             }
         )
     if len(expanded) <= len(outline):
         return outline
     _append_unique(validation_issues, "generic_outline_for_sub_questions")
     _append_unique(normalize_actions, "expanded_outline_from_sub_questions")
+    return expanded
+
+
+def _outline_from_follow_up_surface(
+    outline: list[dict[str, Any]],
+    *,
+    continuation_focus: list[str],
+    normalize_actions: list[str],
+) -> list[dict[str, Any]]:
+    if not outline:
+        return outline
+    focused_titles = [
+        _trim_text(_normalize_whitespace(item.rstrip(" ?")), limit=96)
+        for item in continuation_focus
+        if _trim_text(_normalize_whitespace(item.rstrip(" ?")), limit=96)
+    ]
+    if not focused_titles:
+        return outline
+    rewriteable_generic_sections = [
+        item
+        for item in outline
+        if _is_generic_section_title(str(item.get("title", "")).strip())
+        and str(item.get("title", "")).strip().lower() != "executive summary"
+    ]
+    if not rewriteable_generic_sections:
+        return outline
+    expanded: list[dict[str, Any]] = []
+    used_section_ids: set[str] = set()
+    seen_titles: set[str] = set()
+    for item in outline:
+        title = _trim_text(_normalize_whitespace(str(item.get("title", "")).rstrip(" ?")), limit=96)
+        if _is_generic_section_title(title) and title.lower() != "executive summary":
+            continue
+        candidate = dict(item)
+        expanded.append(candidate)
+        section_id = str(candidate.get("section_id", "")).strip()
+        if section_id:
+            used_section_ids.add(section_id)
+        if title:
+            seen_titles.add(title.lower())
+    added = 0
+    for title in focused_titles:
+        if title.lower() in seen_titles:
+            continue
+        section_id = _slugify(title)
+        candidate_id = section_id
+        suffix = 2
+        while candidate_id in used_section_ids:
+            candidate_id = f"{section_id}-{suffix}"
+            suffix += 1
+        used_section_ids.add(candidate_id)
+        expanded.append(
+            {
+                "section_id": candidate_id,
+                "title": title[:1].upper() + title[1:] if title and title[0].islower() else title,
+                "goal": title,
+                "status": "planned",
+                "coverage_state": {},
+                "rewrite_reason": "follow_up_surface",
+            }
+        )
+        seen_titles.add(title.lower())
+        added += 1
+    if added == 0:
+        return outline
+    _append_unique(normalize_actions, "expanded_outline_from_follow_up_surface")
     return expanded
 
 
@@ -1764,15 +2052,22 @@ def _dedupe_sub_questions(sub_questions: list[dict[str, Any]]) -> tuple[list[dic
 
 
 def _is_generic_outline(report_outline: list[dict[str, Any]]) -> bool:
-    titles: list[str] = []
+    content_titles: list[str] = []
     for item in report_outline:
         if isinstance(item, dict):
             title = str(item.get("title", "")).strip().lower()
         else:
             title = str(item).strip().lower()
         if title:
-            titles.append(title)
-    return titles == ["executive summary", "key findings", "open questions"]
+            if title == "executive summary":
+                continue
+            content_titles.append(title)
+    return bool(content_titles) and all(_is_generic_section_title(title) for title in content_titles)
+
+
+def _is_generic_section_title(title: str) -> bool:
+    normalized = _normalize_whitespace(title).lower()
+    return normalized in _GENERIC_OUTLINE_TITLES
 
 
 def _validate_research_units(units: list[DeepResearchResearchUnit]) -> None:
@@ -2176,6 +2471,95 @@ def _artifact_metadata(content: str, *, batch_id: str = "") -> dict[str, Any]:
     return metadata
 
 
+def _write_internal_state_artifacts(
+    runtime: "DeepResearchRuntime",
+    job_id: str,
+    *,
+    section_graph: dict[str, Any],
+    evidence_ledger: list[dict[str, Any]],
+    section_banks: list[dict[str, Any]],
+) -> None:
+    runtime.write_artifact(
+        job_id,
+        _OUTLINE_STATE_ARTIFACT_KIND,
+        _json_markdown_block(section_graph),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job_id,
+        _EVIDENCE_LEDGER_ARTIFACT_KIND,
+        _json_markdown_block(evidence_ledger),
+        "application/json",
+    )
+    runtime.write_artifact(
+        job_id,
+        _SECTION_BANKS_ARTIFACT_KIND,
+        _json_markdown_block(section_banks),
+        "application/json",
+    )
+
+
+def _reconcile_section_graph_with_materialized_sections(
+    section_graph: dict[str, Any] | None,
+    *,
+    planned_outline: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+    updated_at: str = "",
+) -> dict[str, Any]:
+    base = dict(section_graph or {}) if isinstance(section_graph, dict) else {}
+    base_nodes = {
+        str(node.get("section_id", "")).strip(): dict(node)
+        for node in base.get("nodes", [])
+        if isinstance(node, dict) and str(node.get("section_id", "")).strip()
+    }
+    sections_by_id = {
+        str(section.get("section_id", "")).strip(): dict(section)
+        for section in sections
+        if isinstance(section, dict) and str(section.get("section_id", "")).strip()
+    }
+    nodes: list[dict[str, Any]] = []
+    root_section_ids: list[str] = []
+    for planned in planned_outline:
+        if not isinstance(planned, dict):
+            continue
+        section_id = str(planned.get("section_id", "")).strip()
+        if not section_id:
+            continue
+        root_section_ids.append(section_id)
+        materialized = sections_by_id.get(section_id, {})
+        base_node = base_nodes.get(section_id, {})
+        node = {
+            **base_node,
+            "section_id": section_id,
+            "title": str(planned.get("title", "") or base_node.get("title", "")).strip(),
+            "goal": str(planned.get("goal", "") or base_node.get("goal", "")).strip(),
+            "status": "grounded" if materialized.get("claims") else str(base_node.get("status", "") or "planned"),
+            "rewrite_reason": str(planned.get("rewrite_reason", "") or base_node.get("rewrite_reason", "")).strip(),
+            "evidence_ids": [
+                str(evidence_id).strip()
+                for evidence_id in materialized.get("evidence_ids", []) or []
+                if str(evidence_id).strip()
+            ] or list(base_node.get("evidence_ids") or []),
+            "selected_evidence_ids": [
+                str(evidence_id).strip()
+                for evidence_id in materialized.get("evidence_ids", []) or []
+                if str(evidence_id).strip()
+            ] or list(base_node.get("selected_evidence_ids") or []),
+            "source_ids": [
+                str(source_id).strip()
+                for source_id in materialized.get("source_ids", []) or []
+                if str(source_id).strip()
+            ] or list(base_node.get("source_ids") or []),
+            "last_updated_at": updated_at or str(base_node.get("last_updated_at", "") or ""),
+        }
+        nodes.append(DeepResearchSectionNode.model_validate(node).model_dump())
+    return DeepResearchSectionGraphState(
+        version=int(base.get("version", 1) or 1),
+        root_section_ids=root_section_ids,
+        nodes=nodes,
+    ).model_dump()
+
+
 def _checkpoint_kind(checkpoint_key: str) -> str:
     normalized = (checkpoint_key or "").strip()
     if not normalized:
@@ -2207,6 +2591,9 @@ def _checkpoint_state_payload(
     sources: list[dict[str, Any]],
     evidence_items: list[dict[str, Any]],
     sections: list[dict[str, Any]],
+    section_graph: dict[str, Any] | None = None,
+    evidence_ledger: list[dict[str, Any]] | None = None,
+    section_banks: list[dict[str, Any]] | None = None,
 ) -> DeepResearchCheckpointState:
     return DeepResearchCheckpointState(
         plan=plan,
@@ -2221,6 +2608,9 @@ def _checkpoint_state_payload(
         sources=list(sources),
         evidence_items=list(evidence_items),
         sections=list(sections),
+        section_graph=dict(section_graph or {}),
+        evidence_ledger=list(evidence_ledger or []),
+        section_banks=list(section_banks or []),
     )
 
 
@@ -2331,8 +2721,62 @@ def _hydrate_evidence_source_ids(
     return hydrated
 
 
+def _domain_looks_like_official_docs(domain: str) -> bool:
+    normalized = (domain or "").strip().lower()
+    return normalized.startswith(("docs.", "developer.", "developers.")) or normalized in {
+        "ai.google.dev",
+        "adk.dev",
+    }
+
+
+def _bootstrap_internal_state(
+    plan: DeepResearchPlan,
+    *,
+    unit_results: dict[str, dict[str, Any]],
+    evidence_items: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+    source_registry: list[dict[str, Any]],
+    updated_at: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    hydrated_evidence_items = _hydrate_evidence_source_ids(evidence_items, source_registry)
+    if not hydrated_evidence_items and sections:
+        hydrated_evidence_items = _hydrate_evidence_source_ids(
+            _build_carry_forward_evidence(unit_results, sections),
+            source_registry,
+        )
+    ledger_entries: list[dict[str, Any]] = []
+    for evidence in hydrated_evidence_items:
+        ledger_entries = merge_evidence_ledger(
+            ledger_entries,
+            build_evidence_ledger_entries(
+                plan,
+                unit_id=str(evidence.get("unit_id", "")).strip() or "carry-forward",
+                origin_query=plan.query,
+                evidence_items=[evidence],
+                updated_at=updated_at,
+            ),
+        )
+    section_banks = update_section_banks(
+        initialize_section_banks(plan, updated_at=updated_at),
+        ledger_entries=ledger_entries,
+        updated_at=updated_at,
+    )
+    section_graph = update_section_graph(
+        initialize_section_graph(plan, updated_at=updated_at),
+        plan=plan,
+        source_registry=source_registry,
+        selected_evidence_ids_by_section=selected_evidence_ids_by_section(section_banks),
+        candidate_evidence_ids_by_section=candidate_evidence_ids_by_section(section_banks),
+        rejected_evidence_ids_by_section=rejected_evidence_ids_by_section(section_banks),
+        matched_unit_ids_by_section=matched_unit_ids_by_section(ledger_entries),
+        evidence_source_ids=evidence_source_ids(ledger_entries),
+        updated_at=updated_at,
+    )
+    return section_graph, ledger_entries, section_banks
+
+
 def _planner_continuation_payload(continuation: DeepResearchContinuationState) -> dict[str, Any]:
-    payload = _compact_continuation(continuation).model_dump()
+    payload = _continuation_capsule(continuation)
     if continuation.mode != "continue":
         return payload
     payload["carry_forward_sources"] = [
@@ -2368,8 +2812,6 @@ def _planner_continuation_payload(continuation: DeepResearchContinuationState) -
     payload["open_questions"] = list(continuation.open_questions[:4])
     payload["trusted_source_headers"] = list(continuation.trusted_source_headers[:4])
     payload["carry_forward_constraints"] = dict(continuation.carry_forward_constraints)
-    payload.pop("previous_summary", None)
-    payload.pop("prior_plan_summary", None)
     return payload
 
 
@@ -2655,7 +3097,28 @@ class DeepResearchRuntime:
             continued_from_job_id=continue_from_job_id,
         )
         plan = await self._build_plan(job, continuation)
+        planning_updated_at = utc_now_iso()
+        if continuation.mode == "continue":
+            section_graph, evidence_ledger, section_banks = _bootstrap_internal_state(
+                plan,
+                unit_results=dict(continuation.carry_forward_unit_results),
+                evidence_items=list(continuation.carry_forward_evidence),
+                sections=list(continuation.carry_forward_sections),
+                source_registry=list(continuation.carry_forward_sources),
+                updated_at=planning_updated_at,
+            )
+        else:
+            section_graph = initialize_section_graph(plan, updated_at=planning_updated_at)
+            section_banks = initialize_section_banks(plan, updated_at=planning_updated_at)
+            evidence_ledger = []
         self.write_artifact(job.job_id, "plan.json", _json_markdown_block(plan.model_dump()), "application/json")
+        _write_internal_state_artifacts(
+            self,
+            job.job_id,
+            section_graph=section_graph,
+            evidence_ledger=evidence_ledger,
+            section_banks=section_banks,
+        )
         planner_trace = dict(plan.planner_metadata.get("trace") or {})
         if planner_trace:
             self.write_artifact(
@@ -2674,6 +3137,9 @@ class DeepResearchRuntime:
                 sources=list(continuation.carry_forward_sources),
                 evidence_items=list(continuation.carry_forward_evidence),
                 sections=list(continuation.carry_forward_sections),
+                section_graph=section_graph,
+                evidence_ledger=evidence_ledger,
+                section_banks=section_banks,
             ).model_dump(),
         )
         if continuation.mode == "continue":
@@ -2683,6 +3149,19 @@ class DeepResearchRuntime:
                 _json_markdown_block(continuation.model_dump()),
                 "application/json",
             )
+            self.write_artifact(
+                job.job_id,
+                "continuation_capsule.json",
+                _json_markdown_block(_continuation_capsule(continuation)),
+                "application/json",
+            )
+        self.store.append_event(
+            job.job_id,
+            type="job_created",
+            phase="planning",
+            message="Deep research job created.",
+            data={"plan_only": plan_only, "continuation_mode": continuation.mode},
+        )
         fallback_reason = plan.planner_metadata.get("fallback_reason")
         if isinstance(fallback_reason, dict):
             self.store.append_event(
@@ -2692,13 +3171,6 @@ class DeepResearchRuntime:
                 message="Planner fell back to the deterministic backup plan.",
                 data=fallback_reason,
             )
-        self.store.append_event(
-            job.job_id,
-            type="job_created",
-            phase="planning",
-            message="Deep research job created.",
-            data={"plan_only": plan_only, "continuation_mode": continuation.mode},
-        )
         if not plan_only:
             job = self.store.update_job(
                 job.job_id,
@@ -2716,7 +3188,6 @@ class DeepResearchRuntime:
         await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
         payload = self._serialize_job(job)
-        payload["current_checkpoint_kind"] = _checkpoint_kind(job.current_checkpoint)
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
         bundle_candidate = (
             _latest_batch_bundle_candidate(self.store, job_id)
@@ -2751,6 +3222,7 @@ class DeepResearchRuntime:
     async def result(self, job_id: str, *, include_partial: bool = True) -> dict[str, Any]:
         await self._ensure_startup_reconciled()
         job = self.store.get_job(job_id)
+        current_checkpoint = self.store.get_checkpoint(job_id, job.current_checkpoint) if job.current_checkpoint else None
         plan_text = self.store.read_artifact_text(job_id, "plan.json")
         partial_text = self.store.read_artifact_text(job_id, "partial_report.md") if include_partial else None
         final_bundle = _resolve_final_artifact_bundle(self.store, job_id) if _job_prefers_resolved_final_bundle(job) else None
@@ -2854,6 +3326,7 @@ class DeepResearchRuntime:
             "status": job.status,
             "phase": job.phase,
             "current_checkpoint_kind": _checkpoint_kind(job.current_checkpoint),
+            "current_checkpoint_seq": current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0,
             "plan": plan_value,
             "partial_report": partial_text,
             "final_report": final_text,
@@ -2933,6 +3406,10 @@ class DeepResearchRuntime:
                     data={"resolved_artifact_batch_id": final_bundle["batch_id"]},
                 )
                 return self._job_payload(job, reused=False)
+        checkpoint_state, _ = self._load_checkpoint_state(job)
+        completed_units_count = len(checkpoint_state.completed_unit_ids) if checkpoint_state else 0
+        next_attempt_count = max(1, job.attempt_count + 1)
+        current_checkpoint = self.store.get_checkpoint(job_id, job.current_checkpoint) if job.current_checkpoint else None
         job = self.store.update_job(
             job_id,
             status="queued",
@@ -2942,6 +3419,7 @@ class DeepResearchRuntime:
             last_error="",
             cancel_requested=False,
             heartbeat_at=utc_now_iso(),
+            attempt_count=next_attempt_count,
         )
         self.store.append_event(
             job_id,
@@ -2951,7 +3429,10 @@ class DeepResearchRuntime:
             data={
                 "checkpoint_key": job.current_checkpoint,
                 "checkpoint_kind": _checkpoint_kind(job.current_checkpoint),
+                "checkpoint_seq": current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0,
                 "resume_source": resume_source,
+                "attempt_count": next_attempt_count,
+                "completed_units_count": completed_units_count,
             },
         )
         if schedule:
@@ -3244,6 +3725,7 @@ class DeepResearchRuntime:
                 "include_domains": job.include_domains,
                 "exclude_domains": job.exclude_domains,
                 "continuation": _planner_continuation_payload(continuation),
+                "continuation_capsule": _continuation_capsule(continuation),
             }
         )
         headers = provider._build_api_headers()
@@ -3580,6 +4062,11 @@ class DeepResearchRuntime:
             continuation=continuation,
             normalize_actions=normalize_actions,
         )
+        requested_continuation_focus = _normalize_string_list(
+            (raw_plan.get("brief") or {}).get("continuation_focus")
+            if isinstance(raw_plan.get("brief"), dict)
+            else None
+        )
         sub_questions = raw_plan.get("sub_questions") or []
         if isinstance(sub_questions, dict):
             normalize_actions.append("dict_sub_questions_wrapped")
@@ -3636,11 +4123,6 @@ class DeepResearchRuntime:
         if saw_string_report_outline:
             validation_issues.append("string_report_outline_items")
         if continuation.mode == "continue" and _is_generic_outline(report_outline):
-            report_outline = [
-                {"section_id": "executive-summary", "title": "Executive Summary", "goal": "Summarize the follow-up answer."},
-                {"section_id": "follow-up-findings", "title": "Follow-up Findings", "goal": "Extend or revise prior findings with new evidence."},
-                {"section_id": "remaining-gaps", "title": "Remaining Gaps", "goal": "Call out what still needs confirmation."},
-            ]
             validation_issues.append("generic_continuation_outline")
         research_units = raw_plan.get("research_units") or []
         if isinstance(research_units, dict):
@@ -3782,6 +4264,11 @@ class DeepResearchRuntime:
                     "section_id": section_id,
                     "title": title,
                     "goal": item.get("goal") or title,
+                    "status": _normalize_whitespace(str(item.get("status", "") or "")),
+                    "coverage_state": dict(item.get("coverage_state") or {})
+                    if isinstance(item.get("coverage_state"), dict)
+                    else {},
+                    "rewrite_reason": _normalize_whitespace(str(item.get("rewrite_reason", "") or "")),
                 }
             )
         normalized_units = _ensure_sub_question_unit_coverage(
@@ -3843,6 +4330,11 @@ class DeepResearchRuntime:
             sub_questions=sub_questions,
             strategy=strategy,
         )
+        normalized_outline = _outline_from_follow_up_surface(
+            normalized_outline,
+            continuation_focus=requested_continuation_focus or list(normalized_brief.get("continuation_focus") or []),
+            normalize_actions=normalize_actions,
+        )
 
         raw_planner_metadata = raw_plan.get("planner_metadata")
         if not isinstance(raw_planner_metadata, dict):
@@ -3865,6 +4357,8 @@ class DeepResearchRuntime:
             normalize_actions=planner_trace["normalize_actions"],
             validation_issues=planner_trace["validation_issues"],
             blocked_reasons=planner_trace["blocked_reasons"],
+            include_domains=job.include_domains,
+            research_units=normalized_units,
         )
         planner_trace["unsafe_plan"] = bool(planner_trace.get("unsafe_plan")) or unsafe_plan_reason is not None
         if unsafe_plan_reason is not None:
@@ -4192,8 +4686,8 @@ class DeepResearchRuntime:
             "query": query.strip(),
             "context": context.strip(),
             "effort": effort.strip(),
-            "include_domains": include_domains,
-            "exclude_domains": exclude_domains,
+            "include_domains": _stable_string_list(include_domains),
+            "exclude_domains": _stable_string_list(exclude_domains),
             "continue_from_job_id": continue_from_job_id.strip(),
             "plan_only": bool(plan_only),
             "continuation_identity": continuation_identity.strip(),
@@ -4229,7 +4723,13 @@ class DeepResearchRuntime:
 
     def _serialize_job(self, job: DeepResearchJob) -> dict[str, Any]:
         payload = job.model_dump()
+        current_checkpoint = (
+            self.store.get_checkpoint(job.job_id, job.current_checkpoint)
+            if job.current_checkpoint
+            else None
+        )
         payload["current_checkpoint_kind"] = _checkpoint_kind(job.current_checkpoint)
+        payload["current_checkpoint_seq"] = current_checkpoint.checkpoint_seq if current_checkpoint is not None else 0
         return payload
 
     def _continuation_from_planning_checkpoint(self, job: DeepResearchJob) -> DeepResearchContinuationState | None:
@@ -4344,12 +4844,13 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     job = runtime.store.get_job(job_id)
     now_iso = utc_now_iso()
     started_at = job.started_at or now_iso
+    next_attempt_count = job.attempt_count if job.attempt_count > 0 else 1
     job = runtime.store.update_job(
         job_id,
         status="running",
         started_at=started_at,
         heartbeat_at=now_iso,
-        attempt_count=job.attempt_count + 1,
+        attempt_count=next_attempt_count,
         last_error="",
     )
     worker_attempt_count = job.attempt_count
@@ -4365,18 +4866,35 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             message="Latest checkpoint was not readable; resumed from an earlier checkpoint.",
             data=checkpoint_meta,
         )
+    current_checkpoint = runtime.store.get_checkpoint(job_id, runtime.store.get_job(job_id).current_checkpoint)
+    restored_from_checkpoint = current_checkpoint is not None and current_checkpoint.phase != "planning"
+    if restored_from_checkpoint:
+        runtime.store.append_event(
+            job_id,
+            type="checkpoint_restored",
+            phase=current_checkpoint.phase,
+            message="Deep research restored execution from the latest durable checkpoint.",
+            data={
+                "checkpoint_key": current_checkpoint.checkpoint_key,
+                "checkpoint_kind": _checkpoint_kind(current_checkpoint.checkpoint_key),
+                "checkpoint_seq": current_checkpoint.checkpoint_seq,
+                "attempt_count": worker_attempt_count,
+                "completed_units_count": len(checkpoint_state.completed_unit_ids) if checkpoint_state else 0,
+            },
+        )
 
-    runtime.store.append_event(
-        job_id,
-        type="phase_started",
-        phase="planning",
-        message="Planning started.",
-        data={"unit_count": len(plan.research_units)},
-    )
-    runtime.store.update_job(job_id, phase="planning", progress_pct=10.0, heartbeat_at=utc_now_iso())
+    if not restored_from_checkpoint:
+        runtime.store.append_event(
+            job_id,
+            type="phase_started",
+            phase="planning",
+            message="Planning started.",
+            data={"unit_count": len(plan.research_units)},
+        )
+        runtime.store.update_job(job_id, phase="planning", progress_pct=10.0, heartbeat_at=utc_now_iso())
 
     if runtime.store.get_job(job_id).cancel_requested:
-        _mark_canceled(runtime, job_id, "planning")
+        _mark_canceled(runtime, job_id, current_checkpoint.phase if restored_from_checkpoint and current_checkpoint is not None else "planning")
         return
 
     continuation = runtime._read_runtime_continuation(job)
@@ -4401,6 +4919,27 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
     unit_results = _sanitize_unit_results(unit_results, source_registry)
     evidence_items = _sanitize_evidence_items(evidence_items, source_registry)
     sections = _sanitize_sections(sections, source_registry)
+    current_updated_at = utc_now_iso()
+    if checkpoint_state and checkpoint_state.section_graph and checkpoint_state.section_banks:
+        section_graph = dict(checkpoint_state.section_graph)
+        evidence_ledger = list(checkpoint_state.evidence_ledger)
+        section_banks = list(checkpoint_state.section_banks)
+    else:
+        section_graph, evidence_ledger, section_banks = _bootstrap_internal_state(
+            plan,
+            unit_results=unit_results,
+            evidence_items=evidence_items,
+            sections=sections,
+            source_registry=source_registry,
+            updated_at=current_updated_at,
+        )
+    _write_internal_state_artifacts(
+        runtime,
+        job_id,
+        section_graph=section_graph,
+        evidence_ledger=evidence_ledger,
+        section_banks=section_banks,
+    )
     started_at_dt = _parse_utc_iso(job.started_at) or dt.datetime.now(dt.UTC)
 
     runtime.store.update_job(job_id, phase="researching", progress_pct=20.0, heartbeat_at=utc_now_iso())
@@ -4535,6 +5074,11 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 if completed_unit_ids
                 else runtime.store.get_job(job_id).current_checkpoint
             )
+            latest_checkpoint = (
+                runtime.store.get_checkpoint(job_id, latest_checkpoint_key)
+                if latest_checkpoint_key
+                else None
+            )
             runtime.store.update_job(
                 job_id,
                 status="interrupted",
@@ -4549,7 +5093,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 type="job_interrupted",
                 phase="researching",
                 message="Deep research paused after reaching the time budget.",
-                data={"completed_units": len(completed_unit_ids)},
+                data={
+                    "reason": "time_budget_exceeded",
+                    "checkpoint_key": latest_checkpoint_key,
+                    "checkpoint_kind": _checkpoint_kind(latest_checkpoint_key),
+                    "checkpoint_seq": latest_checkpoint.checkpoint_seq if latest_checkpoint is not None else 0,
+                    "attempt_count": worker_attempt_count,
+                    "completed_units_count": len(completed_unit_ids),
+                },
             )
             return
 
@@ -4568,6 +5119,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             sources=source_registry,
             evidence_items=evidence_items,
             sections=sections,
+            section_graph=section_graph,
+            evidence_ledger=evidence_ledger,
+            section_banks=section_banks,
         ).model_dump()
         dispatch_state["dispatched_unit_ids"] = [unit.unit_id for unit in batch_units]
         runtime.store.save_checkpoint(
@@ -4619,13 +5173,16 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     "summary": "",
                     "detail": "",
                 }
-            if unit.unit_type in {"fetch", "map"} and not unit_result.get("summary") and not constrained_sources and not new_evidence:
+                if unit.unit_type == "search":
+                    new_evidence = []
+            if unit.unit_type in {"fetch", "map", "search"} and not unit_result.get("summary") and not constrained_sources and not new_evidence:
+                error_code = f"empty_{unit.unit_type}_result_after_constraints" if unit.unit_type == "search" else f"empty_{unit.unit_type}_result"
                 failed_unit_ids.append(unit.unit_id)
                 failed_units.append(
                     {
                         "unit_id": unit.unit_id,
                         "unit_type": unit.unit_type,
-                        "reason": f"empty_{unit.unit_type}_result",
+                        "reason": error_code,
                     }
                 )
                 runtime.store.append_event(
@@ -4633,7 +5190,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                     type="research_unit_failed",
                     phase="researching",
                     message=f"Failed {unit.unit_id}.",
-                    data={"unit_type": unit.unit_type, "error": f"empty_{unit.unit_type}_result"},
+                    data={"unit_type": unit.unit_type, "error": error_code},
                 )
                 progress = 20.0 + ((len(completed_unit_ids) + len(failed_unit_ids) + len(skipped_unit_ids)) / unit_total) * 50.0
                 runtime.store.update_job(job_id, progress_pct=min(progress, 75.0), heartbeat_at=utc_now_iso())
@@ -4662,8 +5219,39 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 "provider_api_url": unit_result.get("provider_api_url", ""),
             }
             evidence_items.extend(new_evidence)
+            ledger_entries = build_evidence_ledger_entries(
+                plan,
+                unit_id=unit.unit_id,
+                origin_query=unit.query or unit.goal,
+                evidence_items=new_evidence,
+                updated_at=utc_now_iso(),
+            )
+            evidence_ledger = merge_evidence_ledger(evidence_ledger, ledger_entries)
+            section_banks = update_section_banks(
+                section_banks,
+                ledger_entries=ledger_entries,
+                updated_at=utc_now_iso(),
+            )
+            section_graph = update_section_graph(
+                section_graph,
+                plan=plan,
+                source_registry=source_registry,
+                selected_evidence_ids_by_section=selected_evidence_ids_by_section(section_banks),
+                candidate_evidence_ids_by_section=candidate_evidence_ids_by_section(section_banks),
+                rejected_evidence_ids_by_section=rejected_evidence_ids_by_section(section_banks),
+                matched_unit_ids_by_section=matched_unit_ids_by_section(evidence_ledger),
+                evidence_source_ids=evidence_source_ids(evidence_ledger),
+                updated_at=utc_now_iso(),
+            )
             unit_results = _sanitize_unit_results(unit_results, source_registry)
             evidence_items = _sanitize_evidence_items(evidence_items, source_registry)
+            _write_internal_state_artifacts(
+                runtime,
+                job_id,
+                section_graph=section_graph,
+                evidence_ledger=evidence_ledger,
+                section_banks=section_banks,
+            )
             coverage_state = _runtime_coverage_state(
                 plan,
                 unit_results,
@@ -4684,6 +5272,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
                 sources=source_registry,
                 evidence_items=evidence_items,
                 sections=sections,
+                section_graph=section_graph,
+                evidence_ledger=evidence_ledger,
+                section_banks=section_banks,
             )
             runtime.store.save_checkpoint(
                 job_id,
@@ -4760,11 +5351,38 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
 
     if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
         return
-    sections = _build_section_citations(plan, evidence_items, source_registry)
+    active_outline = build_synthesis_outline(
+        plan,
+        section_graph=section_graph,
+        section_banks=section_banks,
+        evidence_ledger=evidence_ledger,
+    )
+    sections = _build_section_citations(
+        plan,
+        evidence_items,
+        source_registry,
+        section_banks=section_banks,
+        evidence_ledger=evidence_ledger,
+        section_graph=section_graph,
+        planned_outline=active_outline,
+    )
+    section_graph = _reconcile_section_graph_with_materialized_sections(
+        section_graph,
+        planned_outline=active_outline,
+        sections=sections,
+        updated_at=utc_now_iso(),
+    )
     source_registry = _annotate_source_usage(
         source_registry,
         sections,
-        reference_texts=[plan.query, *(f"{section.title} {section.goal}" for section in plan.report_outline)],
+        reference_texts=[
+            plan.query,
+            *(
+                f"{str(section.get('title', '')).strip()} {str(section.get('goal', '')).strip()}"
+                for section in active_outline
+                if isinstance(section, dict)
+            ),
+        ],
         include_domains=plan.include_domains,
         exclude_domains=plan.exclude_domains,
     )
@@ -4803,6 +5421,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             sources=source_registry,
             evidence_items=evidence_items,
             sections=sections,
+            section_graph=section_graph,
+            evidence_ledger=evidence_ledger,
+            section_banks=section_banks,
         ).model_dump(),
     )
 
@@ -4817,7 +5438,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         "sections": _sanitize_sections(sections, source_registry),
     }
     runtime_warnings = sorted({warning for result in unit_results.values() for warning in result.get("warnings", [])})
-    report_coverage = _coverage_for_report(plan, citations["sections"])
+    report_coverage = _coverage_for_report(
+        plan,
+        citations["sections"],
+        coverage_state=coverage_state,
+        planned_outline=active_outline,
+        section_banks=section_banks,
+        evidence_ledger=evidence_ledger,
+    )
     coverage_diagnostics = {
         "query": plan.query,
         "must_cover": list(plan.brief.must_cover),
@@ -4834,7 +5462,14 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         evidence_items=evidence_items,
     )
     release_gate = _build_release_gate(report_coverage, grounding_diagnostics, verifier_diagnostics)
-    runtime_warnings = sorted({*runtime_warnings, *_coverage_warning_codes(report_coverage), *release_gate["reason_codes"]})
+    runtime_warnings = sorted(
+        {
+            *runtime_warnings,
+            *_coverage_warning_codes(report_coverage),
+            *release_gate["reason_codes"],
+            *release_gate.get("soft_reason_codes", []),
+        }
+    )
     if plan.planner_metadata.get("used_fallback"):
         runtime_warnings = sorted({*runtime_warnings, "planner_fallback_used"})
     if constraint_violations:
@@ -4885,6 +5520,24 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         },
     }
     final_report = _build_final_report(plan, citations["sections"], citations["source_registry"], report_summary)
+    section_banks = update_section_banks(
+        section_banks,
+        ledger_entries=evidence_ledger,
+        updated_at=utc_now_iso(),
+    )
+    section_graph = _reconcile_section_graph_with_materialized_sections(
+        section_graph,
+        planned_outline=active_outline,
+        sections=citations["sections"],
+        updated_at=utc_now_iso(),
+    )
+    _write_internal_state_artifacts(
+        runtime,
+        job_id,
+        section_graph=section_graph,
+        evidence_ledger=evidence_ledger,
+        section_banks=section_banks,
+    )
     runtime.write_artifact(job_id, "coverage.json", _json_markdown_block(coverage_diagnostics), "application/json")
     runtime.write_artifact(job_id, "grounding.json", _json_markdown_block(grounding_diagnostics), "application/json")
     runtime.write_artifact(job_id, "verifier.json", _json_markdown_block(verifier_diagnostics), "application/json")
@@ -4946,6 +5599,9 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
             sources=source_registry,
             evidence_items=evidence_items,
             sections=sections,
+            section_graph=section_graph,
+            evidence_ledger=evidence_ledger,
+            section_banks=section_banks,
         ).model_dump(),
     )
     if _job_execution_is_stale(runtime, job_id, attempt_count=worker_attempt_count):
@@ -5230,7 +5886,7 @@ async def _execute_research_unit(
         )
         fetched_evidence_items.append(
             DeepResearchEvidenceItem(
-                evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items)}",
+                evidence_id=f"evidence-{unit.unit_id}-fetch-{len(evidence_items) + len(fetched_evidence_items)}",
                 unit_id=unit.unit_id,
                 source_urls=[source["url"]],
                 summary=fetched_summary,
@@ -5454,7 +6110,29 @@ def _supporting_domain_count(source_ids: list[str], source_registry: dict[str, d
 def _coverage_for_report(
     plan: DeepResearchPlan,
     sections: list[dict[str, Any]],
+    *,
+    coverage_state: dict[str, Any] | None = None,
+    planned_outline: list[dict[str, Any]] | None = None,
+    section_banks: list[dict[str, Any]] | None = None,
+    evidence_ledger: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    banks_by_section = {
+        str(bank.get("section_id", "")).strip(): dict(bank)
+        for bank in section_banks or []
+        if isinstance(bank, dict) and str(bank.get("section_id", "")).strip()
+    }
+    question_id_by_section_id = {
+        _slugify(_trim_text(_normalize_whitespace(item.question.rstrip(" ?")), limit=96)): item.id
+        for item in plan.sub_questions
+    }
+    ledger_by_question_id: dict[str, list[dict[str, Any]]] = {}
+    for entry in evidence_ledger or []:
+        if not isinstance(entry, dict):
+            continue
+        question_id = str(entry.get("question_id", "")).strip()
+        if not question_id:
+            continue
+        ledger_by_question_id.setdefault(question_id, []).append(entry)
     answered_section_ids: list[str] = []
     covered_sub_question_ids: list[str] = []
     uncovered_sub_questions: list[str] = []
@@ -5487,6 +6165,8 @@ def _coverage_for_report(
                 "citations": grounded_citations,
             }
         )
+        bank = banks_by_section.get(section_id, {})
+        question_entries = ledger_by_question_id.get(question_id_by_section_id.get(section_id, ""), [])
         section_coverage.append(
             {
                 "section_id": section_id,
@@ -5494,6 +6174,37 @@ def _coverage_for_report(
                 "answered": bool(grounded_claims),
                 "grounded_claim_count": len(grounded_claims),
                 "citation_count": len(grounded_citations),
+                "candidate_evidence_count": len(
+                    [item for item in bank.get("candidate_evidence_ids", []) if str(item).strip()]
+                ) or len(
+                    {
+                        str(entry.get("evidence_id", "")).strip()
+                        for entry in question_entries
+                        if str(entry.get("evidence_id", "")).strip()
+                    }
+                ),
+                "selected_evidence_count": len(
+                    [item for item in bank.get("selected_evidence_ids", []) if str(item).strip()]
+                ) or len(
+                    {
+                        str(entry.get("evidence_id", "")).strip()
+                        for entry in question_entries
+                        if str(entry.get("evidence_id", "")).strip()
+                    }
+                ),
+                "rejected_evidence_count": len(
+                    [item for item in bank.get("rejected_evidence_ids", []) if str(item).strip()]
+                ) or len(
+                    {
+                        str(entry.get("evidence_id", "")).strip()
+                        for entry in question_entries
+                        if str(entry.get("evidence_id", "")).strip()
+                        and (
+                            any(str(section_ref).strip() for section_ref in entry.get("rejected_section_ids", []) or [])
+                            or str(entry.get("disposition", "")).strip() == "rejected"
+                        )
+                    }
+                ),
             }
         )
     for item in plan.sub_questions:
@@ -5535,11 +6246,27 @@ def _coverage_for_report(
                 "claim_ids": matching_claim_ids,
             }
         )
-    unanswered_sections = [
-        section.title
+    normalized_outline = [
+        {
+            "section_id": str(section.get("section_id", "")).strip(),
+            "title": str(section.get("title", "")).strip(),
+        }
+        for section in (planned_outline or [])
+        if isinstance(section, dict)
+    ] or [
+        {"section_id": section.section_id, "title": section.title}
         for section in plan.report_outline
-        if section.section_id not in answered_section_ids
     ]
+    unanswered_sections = [
+        section["title"]
+        for section in normalized_outline
+        if section["section_id"] not in answered_section_ids
+    ]
+    coverage_items_by_target = {
+        _normalize_whitespace(str(item.get("target", ""))): item
+        for item in (coverage_state or {}).get("items", [])
+        if isinstance(item, dict) and _normalize_whitespace(str(item.get("target", "")))
+    }
     for target in _stop_policy_targets(plan):
         target_tokens = _tokenize_keywords(target)
         coverage_threshold = max(2, min(4, max(1, len(target_tokens) // 2)))
@@ -5562,7 +6289,28 @@ def _coverage_for_report(
                 if section.get("citations") and _count_keyword_overlap(section_text, target_tokens) >= max(coverage_threshold, 3):
                     if section_id and section_id not in matching_section_ids:
                         matching_section_ids.append(section_id)
-        covered = bool(matching_claim_ids)
+        coverage_item = coverage_items_by_target.get(_normalize_whitespace(target), {})
+        matched_unit_ids = [
+            str(unit_id).strip()
+            for unit_id in coverage_item.get("matched_unit_ids", [])
+            if str(unit_id).strip()
+        ]
+        grounded_source_ids = {
+            str(source_id).strip()
+            for source_id in coverage_item.get("grounded_source_ids", [])
+            if str(source_id).strip()
+        }
+        if not matching_claim_ids and grounded_source_ids:
+            for section in grounded_sections:
+                section_id = str(section.get("section_id", "")).strip()
+                section_citations = {
+                    str(citation).strip()
+                    for citation in section.get("citations", [])
+                    if str(citation).strip()
+                }
+                if section_id and section_citations & grounded_source_ids and section_id not in matching_section_ids:
+                    matching_section_ids.append(section_id)
+        covered = bool(matching_claim_ids) or bool(matching_section_ids)
         if not covered:
             hard_uncovered_targets.append(target)
         hard_target_coverage.append(
@@ -5571,12 +6319,13 @@ def _coverage_for_report(
                 "covered": covered,
                 "section_ids": matching_section_ids,
                 "claim_ids": matching_claim_ids,
+                "matched_unit_ids": matched_unit_ids,
             }
         )
     coverage_gate_passed = not unanswered_sections and not uncovered_sub_questions
     hard_coverage_gate_passed = not hard_uncovered_targets
     return {
-        "planned_section_ids": [section.section_id for section in plan.report_outline],
+        "planned_section_ids": [section["section_id"] for section in normalized_outline],
         "answered_section_ids": answered_section_ids,
         "unanswered_sections": unanswered_sections,
         "planned_sub_question_ids": [item.id for item in plan.sub_questions],
@@ -5716,21 +6465,34 @@ def _build_release_gate(
     grounding: dict[str, Any],
     verifier: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    reason_codes: list[str] = []
+    all_reason_codes: list[str] = []
+    blocking_reason_codes: list[str] = []
     hard_coverage_gate_passed = bool(
         coverage.get("hard_coverage_gate_passed", coverage.get("coverage_gate_passed", False))
     )
     if not hard_coverage_gate_passed:
-        reason_codes.append("coverage_incomplete")
+        all_reason_codes.append("coverage_incomplete")
+        blocking_reason_codes.append("coverage_incomplete")
     if int(grounding.get("ungrounded_claims", 0) or 0) > 0:
-        reason_codes.append("ungrounded_claims")
+        all_reason_codes.append("ungrounded_claims")
+        blocking_reason_codes.append("ungrounded_claims")
     if int(grounding.get("missing_evidence_binding_claims", 0) or 0) > 0:
-        reason_codes.append("missing_evidence_bindings")
+        all_reason_codes.append("missing_evidence_bindings")
+        blocking_reason_codes.append("missing_evidence_bindings")
     if isinstance(verifier, dict):
-        reason_codes.extend(str(code) for code in verifier.get("reason_codes", []) if str(code).strip())
+        for code in (str(code).strip() for code in verifier.get("reason_codes", [])):
+            if not code:
+                continue
+            all_reason_codes.append(code)
+            if code not in _NON_BLOCKING_VERIFIER_REASON_CODES:
+                blocking_reason_codes.append(code)
+    all_reason_codes = _dedupe_preserve_order(all_reason_codes)
+    blocking_reason_codes = _dedupe_preserve_order(blocking_reason_codes)
     return {
-        "passed": not reason_codes,
-        "reason_codes": _dedupe_preserve_order(reason_codes),
+        "passed": not blocking_reason_codes,
+        "reason_codes": blocking_reason_codes,
+        "all_reason_codes": all_reason_codes,
+        "soft_reason_codes": [code for code in all_reason_codes if code not in set(blocking_reason_codes)],
     }
 
 
@@ -5835,7 +6597,7 @@ def _build_verifier_diagnostics(
         for item in evidence_items
         if isinstance(item, dict) and str(item.get("evidence_id", "")).strip()
     }
-    seen_claim_keys: set[str] = set()
+    seen_claim_keys: dict[str, dict[str, Any]] = {}
     integrity_counts = {
         "missing_evidence_items": 0,
         "mismatched_binding_source": 0,
@@ -5863,6 +6625,8 @@ def _build_verifier_diagnostics(
         reason_codes.append("high_null_span_ratio")
 
     for section in sections:
+        section_title = str(section.get("title", "") or "").strip()
+        section_is_rollup = is_summary_section_title(section_title) or is_key_findings_section_title(section_title)
         for claim in section.get("claims", []):
             claim_id = str(claim.get("claim_id", "")).strip()
             raw_claim_text = str(claim.get("text", "") or "")
@@ -5881,13 +6645,24 @@ def _build_verifier_diagnostics(
             supporting_source_count = provenance["derived_supporting_source_count"]
             if claim_text:
                 claim_key = _stable_text_key(claim_text)
-                if claim_key in seen_claim_keys:
-                    if claim_id:
-                        flagged_claim_ids.append(claim_id)
-                    integrity_counts["duplicate_claims"] += 1
-                    reason_codes.append("duplicate_claims")
+                previous_claim = seen_claim_keys.get(claim_key)
+                if previous_claim is not None:
+                    previous_is_rollup = bool(previous_claim.get("is_rollup"))
+                    if not section_is_rollup and previous_is_rollup:
+                        seen_claim_keys[claim_key] = {
+                            "claim_id": claim_id,
+                            "is_rollup": False,
+                        }
+                    elif not section_is_rollup and not previous_is_rollup:
+                        if claim_id:
+                            flagged_claim_ids.append(claim_id)
+                        integrity_counts["duplicate_claims"] += 1
+                        reason_codes.append("duplicate_claims")
                 else:
-                    seen_claim_keys.add(claim_key)
+                    seen_claim_keys[claim_key] = {
+                        "claim_id": claim_id,
+                        "is_rollup": section_is_rollup,
+                    }
                 if _is_noisy_text(raw_claim_text) or _is_noisy_text(claim_text):
                     if claim_id:
                         flagged_claim_ids.append(claim_id)
@@ -6110,8 +6885,23 @@ def _build_section_citations(
     plan: DeepResearchPlan,
     evidence_items: list[dict[str, Any]],
     source_registry: list[dict[str, Any]],
+    *,
+    section_banks: list[dict[str, Any]] | None = None,
+    evidence_ledger: list[dict[str, Any]] | None = None,
+    section_graph: dict[str, Any] | None = None,
+    planned_outline: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    outline = plan.report_outline
+    outline = planned_outline or build_synthesis_outline(
+        plan,
+        section_graph=section_graph,
+        section_banks=section_banks,
+        evidence_ledger=evidence_ledger,
+    )
+    outline_position = {
+        str(section.get("section_id", "")).strip(): index
+        for index, section in enumerate(outline)
+        if isinstance(section, dict)
+    }
     registry_by_id = {item["source_id"]: item for item in source_registry if item.get("source_id")}
     claims_pool = [
         DeepResearchEvidenceItem.model_validate(item)
@@ -6129,27 +6919,34 @@ def _build_section_citations(
         ]
 
     sections: list[dict[str, Any]] = []
-    claim_index = 1
-    used_evidence_ids: set[str] = set()
+    claim_counter = {"value": 1}
     used_claim_keys: set[str] = set()
     query_keywords = _tokenize_keywords(plan.query)
-    for section in outline:
+
+    def _section_value(section: dict[str, Any], key: str) -> str:
+        return str(section.get(key, "") or "").strip()
+
+    def build_section_from_pool(
+        section: dict[str, Any],
+        evidence_pool: list[DeepResearchEvidenceItem],
+        *,
+        enforce_overlap: bool,
+    ) -> dict[str, Any] | None:
+        section_title = _section_value(section, "title")
+        section_id = _section_value(section, "section_id")
+        section_goal = _section_value(section, "goal")
+        if not section_id or not section_title:
+            return None
         if _is_gap_section(section) and not any(
-            _has_gap_signal(item.summary) or _has_gap_signal(item.detail) for item in claims_pool
+            _has_gap_signal(item.summary) or _has_gap_signal(item.detail) for item in evidence_pool
         ):
-            continue
-        is_generic_section = section.title.lower() in {"executive summary", "key findings", "summary"}
-        section_keywords = _tokenize_keywords(f"{section.title} {section.goal}")
-        if is_generic_section:
-            section_keywords = query_keywords
-        if not section_keywords:
-            section_keywords = query_keywords
+            return None
+        section_keywords = _tokenize_keywords(f"{section_title} {section_goal}") or query_keywords
         ranked_pool = sorted(
-            claims_pool,
+            evidence_pool,
             key=lambda evidence: (
                 _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords),
                 evidence.weight,
-                0 if evidence.evidence_id in used_evidence_ids else 1,
                 sum(_source_quality_score(registry_by_id.get(source_id, {})) for source_id in evidence.source_ids),
                 len(evidence.source_ids),
                 evidence.evidence_id,
@@ -6161,9 +6958,13 @@ def _build_section_citations(
             overlap_score = _count_keyword_overlap(f"{evidence.summary} {evidence.detail}", section_keywords)
             if not evidence.source_ids:
                 continue
-            if overlap_score <= 0 and section_keywords and not is_generic_section:
+            if enforce_overlap and overlap_score <= 0 and section_keywords:
                 continue
             relevant_evidence.append(evidence)
+        if not relevant_evidence and not enforce_overlap:
+            relevant_evidence = [evidence for evidence in ranked_pool if evidence.source_ids]
+        if not relevant_evidence:
+            return None
         section_claims: list[dict[str, Any]] = []
         clusters: list[list[DeepResearchEvidenceItem]] = []
         cluster_seed_items = [evidence for evidence in relevant_evidence if evidence.evidence_kind != "search"] or relevant_evidence
@@ -6213,9 +7014,10 @@ def _build_section_citations(
             supporting_domain_count = _supporting_domain_count(cluster_source_ids, registry_by_id)
             cluster_type = _cluster_type_for_items(cluster)
             claim = DeepResearchClaim(
-                claim_id=f"{section.section_id}-claim-{claim_index}",
+                claim_id=f"{section_id}-claim-{claim_counter['value']}",
                 text=claim_text,
                 citations=_preferred_citation_ids(cluster_source_ids, source_registry, limit=3),
+                source_ids=cluster_source_ids,
                 unit_id=cluster[0].unit_id,
                 evidence_ids=_dedupe_preserve_order([item.evidence_id for item in cluster]),
                 evidence_bindings=_build_claim_evidence_bindings(cluster, registry_by_id),
@@ -6230,14 +7032,12 @@ def _build_section_citations(
                 ),
             )
             section_claims.append(claim.model_dump())
-            for item in cluster:
-                used_evidence_ids.add(item.evidence_id)
             used_claim_keys.add(claim_key)
-            claim_index += 1
+            claim_counter["value"] += 1
             if len(section_claims) >= 2:
                 break
         if not section_claims:
-            continue
+            return None
         section_summary = _build_section_summary(section_claims)
         section_source_count = len({citation for claim in section_claims for citation in claim.get("citations", [])})
         section_domain_count = _supporting_domain_count(
@@ -6245,11 +7045,27 @@ def _build_section_citations(
             registry_by_id,
         )
         section_model = DeepResearchSectionCitations(
-            section_id=section.section_id,
-            title=section.title,
+            section_id=section_id,
+            title=section_title,
             summary=section_summary,
             claims=section_claims,
             citations=sorted({citation for claim in section_claims for citation in claim.get("citations", [])}),
+            source_ids=_dedupe_preserve_order(
+                [
+                    source_id
+                    for claim in section_claims
+                    for source_id in claim.get("source_ids", [])
+                    if str(source_id).strip()
+                ]
+            ),
+            evidence_ids=_dedupe_preserve_order(
+                [
+                    evidence_id
+                    for claim in section_claims
+                    for evidence_id in claim.get("evidence_ids", [])
+                    if str(evidence_id).strip()
+                ]
+            ),
             confidence=_cluster_confidence(
                 source_count=section_source_count,
                 evidence_count=sum(len(claim.get("evidence_ids", [])) for claim in section_claims),
@@ -6259,8 +7075,122 @@ def _build_section_citations(
             supporting_source_count=section_source_count,
             supporting_domain_count=section_domain_count,
         )
-        sections.append(section_model.model_dump())
-    return sections
+        return section_model.model_dump()
+
+    concrete_sections: list[dict[str, Any]] = []
+    concrete_section_ids: set[str] = set()
+    for section in outline:
+        if not isinstance(section, dict):
+            continue
+        title = _section_value(section, "title")
+        if (
+            is_summary_section_title(title)
+            or is_key_findings_section_title(title)
+            or is_open_questions_section_title(title)
+        ):
+            continue
+        pool_items, pool_mode = evidence_pool_for_section(
+            _section_value(section, "section_id"),
+            evidence_items=[item.model_dump() for item in claims_pool],
+            section_banks=section_banks,
+        )
+        materialized = build_section_from_pool(
+            section,
+            [DeepResearchEvidenceItem.model_validate(item) for item in pool_items],
+            enforce_overlap=pool_mode == "global",
+        )
+        if materialized is None:
+            continue
+        concrete_sections.append(materialized)
+        concrete_section_ids.add(_section_value(materialized, "section_id"))
+
+    def build_generic_section(section: dict[str, Any]) -> dict[str, Any] | None:
+        if not concrete_sections:
+            return build_section_from_pool(section, claims_pool, enforce_overlap=False)
+        derived_claims: list[dict[str, Any]] = []
+        seen_claim_keys: set[str] = set()
+        for concrete in concrete_sections:
+            for claim in concrete.get("claims", []):
+                claim_text = _summarize_evidence_text(str(claim.get("text", "")), limit=_MAX_CLAIM_LENGTH)
+                claim_key = _stable_text_key(claim_text)
+                if not claim_text or claim_key in seen_claim_keys:
+                    continue
+                cloned_claim = dict(claim)
+                cloned_claim["claim_id"] = f"{_section_value(section, 'section_id')}-claim-{len(derived_claims) + 1}"
+                derived_claims.append(cloned_claim)
+                seen_claim_keys.add(claim_key)
+                if len(derived_claims) >= 2:
+                    break
+            if len(derived_claims) >= 2:
+                break
+        if not derived_claims:
+            return None
+        section_source_count = len({citation for claim in derived_claims for citation in claim.get("citations", [])})
+        section_domain_count = _supporting_domain_count(
+            [citation for claim in derived_claims for citation in claim.get("citations", [])],
+            registry_by_id,
+        )
+        return DeepResearchSectionCitations(
+            section_id=_section_value(section, "section_id"),
+            title=_section_value(section, "title"),
+            summary=_build_section_summary(derived_claims),
+            claims=derived_claims,
+            citations=sorted({citation for claim in derived_claims for citation in claim.get("citations", [])}),
+            source_ids=_dedupe_preserve_order(
+                [
+                    source_id
+                    for claim in derived_claims
+                    for source_id in claim.get("source_ids", [])
+                    if str(source_id).strip()
+                ]
+            ),
+            evidence_ids=_dedupe_preserve_order(
+                [
+                    evidence_id
+                    for claim in derived_claims
+                    for evidence_id in claim.get("evidence_ids", [])
+                    if str(evidence_id).strip()
+                ]
+            ),
+            confidence=_cluster_confidence(
+                source_count=section_source_count,
+                evidence_count=sum(len(claim.get("evidence_ids", [])) for claim in derived_claims),
+                domain_count=section_domain_count,
+            ),
+            claim_cluster_count=len(derived_claims),
+            supporting_source_count=section_source_count,
+            supporting_domain_count=section_domain_count,
+        ).model_dump()
+
+    for section in outline:
+        if not isinstance(section, dict):
+            continue
+        section_id = _section_value(section, "section_id")
+        title = _section_value(section, "title")
+        if section_id in concrete_section_ids:
+            continue
+        if is_summary_section_title(title) or is_key_findings_section_title(title):
+            materialized = build_generic_section(section)
+            if materialized is not None:
+                sections.append(materialized)
+            continue
+        if is_open_questions_section_title(title):
+            continue
+        pool_items, pool_mode = evidence_pool_for_section(
+            section_id,
+            evidence_items=[item.model_dump() for item in claims_pool],
+            section_banks=section_banks,
+        )
+        materialized = build_section_from_pool(
+            section,
+            [DeepResearchEvidenceItem.model_validate(item) for item in pool_items],
+            enforce_overlap=pool_mode == "global",
+        )
+        if materialized is not None:
+            sections.append(materialized)
+
+    sections.extend(concrete_sections)
+    return sorted(sections, key=lambda section: outline_position.get(str(section.get("section_id", "")), 10_000))
 
 
 def _build_section_summary(section_claims: list[dict[str, Any]]) -> str:

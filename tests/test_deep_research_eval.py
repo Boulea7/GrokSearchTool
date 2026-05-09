@@ -417,6 +417,9 @@ def evaluate_resolved_batch_parity(case: dict) -> dict:
                 "report.json",
                 "final_report.md",
                 "evidence_items.json",
+                "coverage.json",
+                "grounding.json",
+                "verifier.json",
             }
         ]
         mismatched = [
@@ -554,6 +557,8 @@ def test_citation_faithfulness_probe_goldens(fixture_name):
         "eval_probe_round15_main_snapshot.json",
         "eval_probe_round16_main_snapshot.json",
         "eval_probe_round18_aws_dms.json",
+        "eval_probe_round19_aws_dms.json",
+        "eval_probe_round20_aws_dms.json",
     ],
 )
 def test_coverage_completeness_probe_goldens(fixture_name):
@@ -603,6 +608,8 @@ def test_resume_continue_semantics_probe_goldens(fixture_name):
         "eval_probe_round16_main_snapshot.json",
         "eval_probe_round16_lifecycle.json",
         "eval_probe_round18_lifecycle.json",
+        "eval_probe_round19_lifecycle_b.json",
+        "eval_probe_round20_lifecycle.json",
     ],
 )
 def test_planner_boundary_probe_goldens(fixture_name):
@@ -654,6 +661,10 @@ def test_ranking_noise_suppression_probe_goldens(fixture_name):
         "eval_probe_round16_main_snapshot.json",
         "eval_probe_round18_aws_dms.json",
         "eval_probe_round18_lifecycle.json",
+        "eval_probe_round19_aws_dms.json",
+        "eval_probe_round19_lifecycle_b.json",
+        "eval_probe_round20_aws_dms.json",
+        "eval_probe_round20_lifecycle.json",
     ],
 )
 def test_diagnostics_consistency_probe_goldens(fixture_name):
@@ -661,6 +672,23 @@ def test_diagnostics_consistency_probe_goldens(fixture_name):
     golden = case["golden"]["diagnostics_consistency"]
 
     result = evaluate_case_metric(case, "diagnostics_consistency")
+
+    assert_metric_matches_golden(result, golden)
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        "eval_probe_round19_aws_dms.json",
+        "eval_probe_round19_lifecycle_b.json",
+        "eval_probe_round20_aws_dms.json",
+    ],
+)
+def test_release_gate_consistency_probe_goldens(fixture_name):
+    case = load_eval_case(fixture_name)
+    golden = case["golden"]["release_gate_consistency"]
+
+    result = evaluate_case_metric(case, "release_gate_consistency")
 
     assert_metric_matches_golden(result, golden)
 
@@ -836,6 +864,27 @@ def test_resolved_batch_parity_detects_mixed_batch_artifacts():
             {"kind": "citations.json", "metadata": {"batch_id": "batch-bad"}},
             {"kind": "report.json", "metadata": {"batch_id": "batch-good"}},
             {"kind": "final_report.md", "metadata": {"batch_id": "batch-good"}},
+        ],
+    }
+
+    result = evaluate_case_metric(case, "resolved_batch_parity")
+
+    assert result["verdict"] == "fail"
+    assert result["reason_tags"] == ["mixed_batch_artifacts"]
+
+
+def test_resolved_batch_parity_detects_mixed_batch_provenance_sidecars():
+    case = {
+        "resolved_artifact_batch_id": "batch-good",
+        "artifacts": [
+            {"kind": "sources.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "citations.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "report.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "final_report.md", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "evidence_items.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "coverage.json", "metadata": {"batch_id": "batch-bad"}},
+            {"kind": "grounding.json", "metadata": {"batch_id": "batch-good"}},
+            {"kind": "verifier.json", "metadata": {"batch_id": "batch-good"}},
         ],
     }
 

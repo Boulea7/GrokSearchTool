@@ -72,74 +72,119 @@ def with_minimal_provenance_artifacts(
 ):
     payload = list(artifacts)
     normalized_evidence_items = [] if evidence_items is None else evidence_items
+    coverage_payload = {
+        "query": query,
+        "planned_section_ids": [],
+        "answered_section_ids": [],
+        "unanswered_sections": [],
+        "planned_sub_question_ids": [],
+        "covered_sub_question_ids": [],
+        "uncovered_sub_questions": [],
+        "coverage_gate_passed": True,
+        "hard_coverage_gate_passed": True,
+    }
+    grounding_payload = {
+        "total_claims": 0,
+        "grounded_claims": 0,
+        "ungrounded_claims": 0,
+        "single_source_claims": 0,
+        "low_confidence_claims": 0,
+        "missing_evidence_binding_claims": 0,
+        "total_evidence_bindings": 0,
+        "source_backed_binding_count": 0,
+        "search_only_binding_count": 0,
+        "null_span_binding_count": 0,
+        "grounded_claims_without_source_backed_binding": 0,
+        "sections": [],
+        "sources": [],
+    }
+    verifier_payload = {
+        "passed": True,
+        "reason_codes": [],
+        "flagged_claim_ids": [],
+        "summary": {
+            "section_count": 0,
+            "total_claims": 0,
+            "low_confidence_claims": 0,
+            "single_source_claims": 0,
+            "source_backed_binding_count": 0,
+            "search_only_binding_count": 0,
+            "null_span_binding_count": 0,
+            "missing_evidence_items": 0,
+            "mismatched_binding_source": 0,
+            "mismatched_binding_evidence": 0,
+            "invalid_source_backed_span": 0,
+            "duplicate_claims": 0,
+            "low_value_claims": 0,
+            "medium_single_source_search_only": 0,
+            "same_domain_off_topic_dominance": 0,
+            "unbound_citation_sources": 0,
+            "unbound_evidence_ids": 0,
+        },
+    }
+    for item in payload:
+        if item.get("kind") != "report.json":
+            continue
+        try:
+            report_payload = json.loads(item.get("content") or "")
+        except Exception:
+            continue
+        if not isinstance(report_payload, dict):
+            continue
+        report_payload.setdefault("sections", [])
+        report_payload.setdefault("unit_results", {})
+        coverage_report = report_payload.setdefault("coverage", {})
+        if isinstance(coverage_report, dict):
+            for key, value in coverage_payload.items():
+                coverage_report.setdefault(key, value)
+        else:
+            report_payload["coverage"] = dict(coverage_payload)
+        runtime_payload = report_payload.setdefault("runtime", {})
+        runtime_payload.setdefault("warnings", [])
+        grounding_report = runtime_payload.setdefault(
+            "grounding",
+            {
+                key: grounding_payload[key]
+                for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims")
+            },
+        )
+        if isinstance(grounding_report, dict):
+            for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims"):
+                grounding_report.setdefault(key, grounding_payload[key])
+        else:
+            runtime_payload["grounding"] = {
+                key: grounding_payload[key]
+                for key in ("total_claims", "ungrounded_claims", "single_source_claims", "missing_evidence_binding_claims")
+            }
+        verifier_report = runtime_payload.setdefault("verifier", {})
+        if isinstance(verifier_report, dict):
+            verifier_report.setdefault("passed", verifier_payload["passed"])
+            verifier_report.setdefault("reason_codes", list(verifier_payload["reason_codes"]))
+            verifier_report.setdefault("flagged_claim_ids", list(verifier_payload["flagged_claim_ids"]))
+            verifier_summary = verifier_report.setdefault("summary", {})
+            if isinstance(verifier_summary, dict):
+                for key, value in verifier_payload["summary"].items():
+                    verifier_summary.setdefault(key, value)
+            else:
+                verifier_report["summary"] = dict(verifier_payload["summary"])
+        else:
+            runtime_payload["verifier"] = json.loads(json.dumps(verifier_payload))
+        item["content"] = json.dumps(report_payload)
     payload.extend(
         [
             {
                 "kind": "coverage.json",
-                "content": json.dumps(
-                    {
-                        "query": query,
-                        "planned_section_ids": [],
-                        "answered_section_ids": [],
-                        "unanswered_sections": [],
-                        "planned_sub_question_ids": [],
-                        "covered_sub_question_ids": [],
-                        "uncovered_sub_questions": [],
-                        "coverage_gate_passed": True,
-                        "hard_coverage_gate_passed": True,
-                    }
-                ),
+                "content": json.dumps(coverage_payload),
                 "content_type": "application/json",
             },
             {
                 "kind": "grounding.json",
-                "content": json.dumps(
-                    {
-                        "total_claims": 0,
-                        "grounded_claims": 0,
-                        "ungrounded_claims": 0,
-                        "single_source_claims": 0,
-                        "low_confidence_claims": 0,
-                        "missing_evidence_binding_claims": 0,
-                        "total_evidence_bindings": 0,
-                        "source_backed_binding_count": 0,
-                        "search_only_binding_count": 0,
-                        "null_span_binding_count": 0,
-                        "grounded_claims_without_source_backed_binding": 0,
-                        "sections": [],
-                        "sources": [],
-                    }
-                ),
+                "content": json.dumps(grounding_payload),
                 "content_type": "application/json",
             },
             {
                 "kind": "verifier.json",
-                "content": json.dumps(
-                    {
-                        "passed": True,
-                        "reason_codes": [],
-                        "flagged_claim_ids": [],
-                        "summary": {
-                            "section_count": 0,
-                            "total_claims": 0,
-                            "low_confidence_claims": 0,
-                            "single_source_claims": 0,
-                            "source_backed_binding_count": 0,
-                            "search_only_binding_count": 0,
-                            "null_span_binding_count": 0,
-                            "missing_evidence_items": 0,
-                            "mismatched_binding_source": 0,
-                            "mismatched_binding_evidence": 0,
-                            "invalid_source_backed_span": 0,
-                            "duplicate_claims": 0,
-                            "low_value_claims": 0,
-                            "medium_single_source_search_only": 0,
-                            "same_domain_off_topic_dominance": 0,
-                            "unbound_citation_sources": 0,
-                            "unbound_evidence_ids": 0
-                        }
-                    }
-                ),
+                "content": json.dumps(verifier_payload),
                 "content_type": "application/json",
             },
         ]
@@ -264,6 +309,40 @@ def seed_round11_interrupted_finalizing_job(runtime: DeepResearchRuntime):
         "plan_payload": plan_payload,
         "report_payload": report_payload,
     }
+
+
+def seed_round20_lifecycle_resume_replay_job(runtime: DeepResearchRuntime):
+    snapshot = load_deep_research_fixture("probe_round20_lifecycle_resume_replay.json")
+    job = runtime.store.create_job(
+        query=snapshot["query"],
+        request_fingerprint="fp-cli-round20-lifecycle-replay",
+        status=snapshot["resume_run"]["status"],
+        phase=snapshot["resume_run"]["phase"],
+        effort="deep",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.store.update_job(
+        job.job_id,
+        attempt_count=snapshot["resume_run"]["attempt_count"],
+        current_checkpoint=snapshot["resume_run"]["current_checkpoint"],
+        finished_at=utc_now_iso(),
+        last_error="time_budget_exceeded",
+    )
+    for event in snapshot["initial_events"] + snapshot["resume_events_after_seq_7"]:
+        runtime.store.append_event(
+            job.job_id,
+            type=event["type"],
+            phase=event["phase"],
+            message=event.get("message") or event["type"],
+            data=event.get("data") or {},
+        )
+    return {"job": runtime.store.get_job(job.job_id), "snapshot": snapshot}
 
 
 def seed_canceled_finalizing_job(runtime: DeepResearchRuntime):
@@ -604,7 +683,56 @@ def test_cli_result_artifact_prefers_resolved_final_batch_for_citations(monkeypa
                 },
                 {
                     "kind": "report.json",
-                    "content": json.dumps({"summary": "Good report", "sections": [], "unit_results": {}}),
+                    "content": json.dumps(
+                        {
+                            "summary": "Good report",
+                            "sections": [],
+                            "unit_results": {},
+                            "coverage": {
+                                "planned_section_ids": [],
+                                "answered_section_ids": [],
+                                "unanswered_sections": [],
+                                "planned_sub_question_ids": [],
+                                "covered_sub_question_ids": [],
+                                "uncovered_sub_questions": [],
+                                "coverage_gate_passed": True,
+                                "hard_coverage_gate_passed": True,
+                            },
+                            "runtime": {
+                                "warnings": [],
+                                "grounding": {
+                                    "total_claims": 0,
+                                    "ungrounded_claims": 0,
+                                    "single_source_claims": 0,
+                                    "missing_evidence_binding_claims": 0,
+                                },
+                                "verifier": {
+                                    "passed": True,
+                                    "reason_codes": [],
+                                    "flagged_claim_ids": [],
+                                    "summary": {
+                                        "section_count": 0,
+                                        "total_claims": 0,
+                                        "low_confidence_claims": 0,
+                                        "single_source_claims": 0,
+                                        "source_backed_binding_count": 0,
+                                        "search_only_binding_count": 0,
+                                        "null_span_binding_count": 0,
+                                        "missing_evidence_items": 0,
+                                        "mismatched_binding_source": 0,
+                                        "mismatched_binding_evidence": 0,
+                                        "invalid_source_backed_span": 0,
+                                        "duplicate_claims": 0,
+                                        "low_value_claims": 0,
+                                        "medium_single_source_search_only": 0,
+                                        "same_domain_off_topic_dominance": 0,
+                                        "unbound_citation_sources": 0,
+                                        "unbound_evidence_ids": 0,
+                                    },
+                                },
+                            },
+                        }
+                    ),
                     "content_type": "application/json",
                 },
                 {
@@ -632,6 +760,131 @@ def test_cli_result_artifact_prefers_resolved_final_batch_for_citations(monkeypa
     assert captured.out == artifact_content + "\n"
     assert summary_lines(captured.err) == [
         f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch={batch_id} artifact_fallback=true artifact=citations.json bytes={len(artifact_content.encode('utf-8'))}"
+    ]
+
+
+def test_cli_result_artifact_prefers_resolved_final_batch_for_verifier(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    job = runtime.store.create_job(
+        query="Artifact batch verifier job",
+        request_fingerprint="fp-artifact-batch-verifier",
+        status="completed",
+        phase="finalizing",
+        effort="standard",
+        context="",
+        include_domains=[],
+        exclude_domains=[],
+        plan_only=False,
+        force_new=False,
+        resolved_budget_seconds=240,
+        continued_from_job_id="",
+    )
+    runtime.write_artifact(job.job_id, "plan.json", json.dumps({"query": "Artifact batch verifier job"}), "application/json")
+    persisted = runtime.write_artifact_batch(
+        job.job_id,
+        with_minimal_provenance_artifacts(
+            [
+                {
+                    "kind": "sources.json",
+                    "content": json.dumps([{"source_id": "R1", "url": "https://good.example.com"}]),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "citations.json",
+                    "content": json.dumps({"source_registry": {"R1": {"source_id": "R1", "url": "https://good.example.com"}}, "sections": []}),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "report.json",
+                    "content": json.dumps(
+                        {
+                            "summary": "Good report",
+                            "sections": [],
+                            "unit_results": {},
+                            "coverage": {
+                                "planned_section_ids": [],
+                                "answered_section_ids": [],
+                                "unanswered_sections": [],
+                                "planned_sub_question_ids": [],
+                                "covered_sub_question_ids": [],
+                                "uncovered_sub_questions": [],
+                                "coverage_gate_passed": True,
+                                "hard_coverage_gate_passed": True,
+                            },
+                            "runtime": {
+                                "warnings": [],
+                                "grounding": {
+                                    "total_claims": 0,
+                                    "ungrounded_claims": 0,
+                                    "single_source_claims": 0,
+                                    "missing_evidence_binding_claims": 0,
+                                },
+                                "verifier": {
+                                    "passed": True,
+                                    "reason_codes": [],
+                                    "flagged_claim_ids": [],
+                                    "summary": {
+                                        "section_count": 0,
+                                        "total_claims": 0,
+                                        "low_confidence_claims": 0,
+                                        "single_source_claims": 0,
+                                        "source_backed_binding_count": 0,
+                                        "search_only_binding_count": 0,
+                                        "null_span_binding_count": 0,
+                                        "missing_evidence_items": 0,
+                                        "mismatched_binding_source": 0,
+                                        "mismatched_binding_evidence": 0,
+                                        "invalid_source_backed_span": 0,
+                                        "duplicate_claims": 0,
+                                        "low_value_claims": 0,
+                                        "medium_single_source_search_only": 0,
+                                        "same_domain_off_topic_dominance": 0,
+                                        "unbound_citation_sources": 0,
+                                        "unbound_evidence_ids": 0,
+                                    },
+                                },
+                            },
+                        }
+                    ),
+                    "content_type": "application/json",
+                },
+                {
+                    "kind": "final_report.md",
+                    "content": "# Final Report\n\nGood report.\n",
+                    "content_type": "text/markdown",
+                },
+            ],
+            query="Artifact batch verifier job",
+        ),
+    )
+    runtime.write_artifact(
+        job.job_id,
+        "verifier.json",
+        json.dumps({"passed": False, "reason_codes": ["stale_current_only"]}),
+        "application/json",
+    )
+
+    exit_code = deep_research_cli.main(["result", job.job_id, "--artifact", "verifier.json"])
+    captured = capsys.readouterr()
+    batch_id = persisted[0]["metadata"]["batch_id"]
+    artifact_content = (
+        '{"passed": true, "reason_codes": [], "flagged_claim_ids": [], "summary": '
+        '{"section_count": 0, "total_claims": 0, "low_confidence_claims": 0, '
+        '"single_source_claims": 0, "source_backed_binding_count": 0, '
+        '"search_only_binding_count": 0, "null_span_binding_count": 0, '
+        '"missing_evidence_items": 0, "mismatched_binding_source": 0, '
+        '"mismatched_binding_evidence": 0, "invalid_source_backed_span": 0, '
+        '"duplicate_claims": 0, "low_value_claims": 0, '
+        '"medium_single_source_search_only": 0, '
+        '"same_domain_off_topic_dominance": 0, '
+        '"unbound_citation_sources": 0, "unbound_evidence_ids": 0}}'
+    )
+
+    assert exit_code == 0
+    assert captured.out == artifact_content + "\n"
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} status=completed phase=finalizing progress=0.0% checkpoint=- attempts=0 cancel_requested=false continued_from=- resolved_batch={batch_id} artifact_fallback=true artifact=verifier.json bytes={len(artifact_content.encode('utf-8'))}"
     ]
 
 
@@ -1065,7 +1318,7 @@ def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, t
     assert exit_code == 0
     assert resume_payload["status"] == "queued"
     assert summary_lines(resume_captured.err) == [
-        f"summary: job={job.job_id} status=queued phase=researching progress=0.0% checkpoint=researching attempts=2 cancel_requested=false continued_from=seed-job resolved_batch=- artifact_fallback=false"
+        f"summary: job={job.job_id} status=queued phase=researching progress=0.0% checkpoint=researching attempts=3 cancel_requested=false continued_from=seed-job resolved_batch=- artifact_fallback=false"
     ]
 
     exit_code = deep_research_cli.main(["cancel", job.job_id])
@@ -1079,7 +1332,7 @@ def test_cli_resume_and_cancel_emit_consistent_operator_summaries(monkeypatch, t
         "status": "canceled",
     }
     assert summary_lines(cancel_captured.err) == [
-        f"summary: job={job.job_id} status=canceled phase=researching progress=0.0% checkpoint=researching attempts=2 cancel_requested=true continued_from=seed-job resolved_batch=- artifact_fallback=false"
+        f"summary: job={job.job_id} status=canceled phase=researching progress=0.0% checkpoint=researching attempts=3 cancel_requested=true continued_from=seed-job resolved_batch=- artifact_fallback=false"
     ]
 
 
@@ -1228,6 +1481,30 @@ def test_cli_round12_continue_resume_status_and_events_match_fixture(monkeypatch
 
     assert exit_code == 0
     assert [event["type"] for event in events_payload["events"]] == snapshot["events"]
+
+
+def test_cli_events_after_seq_replay_matches_round20_resume_fixture(monkeypatch, tmp_path, capsys):
+    runtime = build_runtime(tmp_path)
+    monkeypatch.setattr(deep_research_cli, "_build_runtime", lambda: runtime)
+    seeded = seed_round20_lifecycle_resume_replay_job(runtime)
+    job = seeded["job"]
+    snapshot = seeded["snapshot"]
+
+    exit_code = deep_research_cli.main(["events", job.job_id, "--after-seq", "7", "--limit", "20"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert [
+        (event["seq"], event["type"], event["phase"])
+        for event in payload["events"]
+    ] == [
+        (event["seq"], event["type"], event["phase"])
+        for event in snapshot["resume_events_after_seq_7"]
+    ]
+    assert summary_lines(captured.err) == [
+        f"summary: job={job.job_id} events=6 after_seq=7 next_after_seq=13 last_event=job_interrupted terminal=true"
+    ]
 
 
 def test_spawn_worker_writes_logs_to_worker_log_dir(monkeypatch, tmp_path):

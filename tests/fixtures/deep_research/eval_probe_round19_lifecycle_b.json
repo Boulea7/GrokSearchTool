@@ -1,0 +1,71 @@
+{
+  "sample": "probe-round19-lifecycle-b",
+  "query": "Investigate interrupted, continue, and resume semantics for deep research jobs",
+  "planner": {
+    "planner": "fallback",
+    "used_fallback": true,
+    "fallback_reason": {
+      "stage": "unsafe_plan",
+      "error": "unsafe_normalize_action: filled_search_query:tu1"
+    }
+  },
+  "plan": {
+    "brief": {
+      "scope": {
+        "include_domains": [
+          "docs.langchain.com",
+          "docs.temporal.io",
+          "docs.restate.dev",
+          "google.github.io"
+        ],
+        "exclude_domains": [],
+        "allowed_sources": [
+          "docs.langchain.com",
+          "docs.temporal.io",
+          "docs.restate.dev",
+          "google.github.io"
+        ]
+      },
+      "continuation_focus": []
+    }
+  },
+  "report": {
+    "status": "failed",
+    "runtime": {
+      "warnings": [
+        "coverage_incomplete",
+        "planner_fallback_used"
+      ],
+      "release_gate": {
+        "passed": false,
+        "reason_codes": [
+          "coverage_incomplete"
+        ]
+      },
+      "verifier": {
+        "reason_codes": []
+      }
+    }
+  },
+  "sources": [],
+  "golden": {
+    "planner_boundary": {
+      "verdict": "fail",
+      "score": 0.6,
+      "reason_tags": [
+        "planner_fallback_used",
+        "unsafe_plan_fallback"
+      ]
+    },
+    "diagnostics_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    },
+    "release_gate_consistency": {
+      "verdict": "pass",
+      "score": 1.0,
+      "reason_tags": []
+    }
+  }
+}

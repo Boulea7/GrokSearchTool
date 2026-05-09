@@ -69,6 +69,7 @@ class DeepResearchEvent(BaseModel):
 class DeepResearchCheckpoint(BaseModel):
     job_id: str
     checkpoint_key: str
+    checkpoint_seq: int = 0
     phase: DeepResearchPhase
     created_at: str
     state: dict[str, Any] = Field(default_factory=dict)
@@ -118,6 +119,9 @@ class DeepResearchReportSection(BaseModel):
     section_id: str
     title: str
     goal: str
+    status: str = ""
+    coverage_state: dict[str, Any] = Field(default_factory=dict)
+    rewrite_reason: str = ""
 
 
 class DeepResearchContinuation(BaseModel):
@@ -178,6 +182,7 @@ class DeepResearchClaim(BaseModel):
     claim_id: str
     text: str
     citations: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
     unit_id: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_bindings: list[dict[str, Any]] = Field(default_factory=list)
@@ -193,10 +198,62 @@ class DeepResearchSectionCitations(BaseModel):
     summary: str = ""
     claims: list[DeepResearchClaim] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
     confidence: str = ""
     claim_cluster_count: int = 0
     supporting_source_count: int = 0
     supporting_domain_count: int = 0
+
+
+class DeepResearchSectionNode(BaseModel):
+    section_id: str
+    title: str
+    goal: str
+    parent_id: str = ""
+    question_ids: list[str] = Field(default_factory=list)
+    matched_unit_ids: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    candidate_evidence_ids: list[str] = Field(default_factory=list)
+    selected_evidence_ids: list[str] = Field(default_factory=list)
+    rejected_evidence_ids: list[str] = Field(default_factory=list)
+    status: str = "planned"
+    coverage_state: dict[str, Any] = Field(default_factory=dict)
+    rewrite_reason: str = ""
+    last_updated_at: str = ""
+
+
+class DeepResearchSectionGraphState(BaseModel):
+    version: int = 1
+    root_section_ids: list[str] = Field(default_factory=list)
+    nodes: list[DeepResearchSectionNode] = Field(default_factory=list)
+
+
+class DeepResearchEvidenceLedgerEntry(BaseModel):
+    ledger_id: str
+    evidence_id: str
+    unit_id: str
+    question_id: str = ""
+    origin_query: str = ""
+    candidate_section_ids: list[str] = Field(default_factory=list)
+    selected_section_id: str = ""
+    rejected_section_ids: list[str] = Field(default_factory=list)
+    disposition: str = ""
+    disposition_reason: str = ""
+    source_ids: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list)
+    summary: str = ""
+    evidence_kind: str = ""
+    recorded_at: str = ""
+
+
+class DeepResearchSectionEvidenceBank(BaseModel):
+    section_id: str
+    candidate_evidence_ids: list[str] = Field(default_factory=list)
+    selected_evidence_ids: list[str] = Field(default_factory=list)
+    rejected_evidence_ids: list[str] = Field(default_factory=list)
+    last_updated_at: str = ""
 
 
 class DeepResearchPlan(BaseModel):
@@ -228,3 +285,6 @@ class DeepResearchCheckpointState(BaseModel):
     sources: list[dict[str, Any]] = Field(default_factory=list)
     evidence_items: list[dict[str, Any]] = Field(default_factory=list)
     sections: list[dict[str, Any]] = Field(default_factory=list)
+    section_graph: dict[str, Any] = Field(default_factory=dict)
+    evidence_ledger: list[dict[str, Any]] = Field(default_factory=list)
+    section_banks: list[dict[str, Any]] = Field(default_factory=list)
