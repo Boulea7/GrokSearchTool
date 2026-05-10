@@ -30,6 +30,7 @@ jobs:
         uses: astral-sh/setup-uv@v8.1.0
         with:
           cache-dependency-glob: pyproject.toml
+          cache-suffix: release-gates-lint
 
       - name: Run ruff
         run: uv run --with ruff python -m ruff check .
@@ -50,6 +51,7 @@ jobs:
         uses: astral-sh/setup-uv@v8.1.0
         with:
           cache-dependency-glob: pyproject.toml
+          cache-suffix: release-gates-compile
 
       - name: Compile Python files
         run: uv run python -m compileall -q src tests
@@ -70,6 +72,7 @@ jobs:
         uses: astral-sh/setup-uv@v8.1.0
         with:
           cache-dependency-glob: pyproject.toml
+          cache-suffix: release-gates-tests-full
 
       - name: Install development dependencies
         run: uv sync --extra dev
