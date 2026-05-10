@@ -30,6 +30,8 @@ jobs:
         uses: astral-sh/setup-uv@v8.1.0
         with:
           cache-dependency-glob: pyproject.toml
+          cache-suffix: packaging-contracts
+          save-cache: false
 
       - name: Install development dependencies
         run: uv sync --extra dev
