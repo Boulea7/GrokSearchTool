@@ -31,6 +31,7 @@ jobs:
         with:
           cache-dependency-glob: pyproject.toml
           cache-suffix: release-gates-lint
+          save-cache: false
 
       - name: Run ruff
         run: uv run --with ruff python -m ruff check .
@@ -52,6 +53,7 @@ jobs:
         with:
           cache-dependency-glob: pyproject.toml
           cache-suffix: release-gates-compile
+          save-cache: false
 
       - name: Compile Python files
         run: uv run python -m compileall -q src tests
@@ -73,6 +75,7 @@ jobs:
         with:
           cache-dependency-glob: pyproject.toml
           cache-suffix: release-gates-tests-full
+          save-cache: false
 
       - name: Install development dependencies
         run: uv sync --extra dev
