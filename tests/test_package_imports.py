@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from constants import EXPECTED_GROK_SEARCH_TOOL_REPO
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT_DIR / "src"
@@ -534,7 +536,7 @@ def test_readme_install_snippets_match_distribution_contract():
     readme_ja = README_JA.read_text(encoding="utf-8")
     readme_ru = README_RU.read_text(encoding="utf-8")
 
-    expected_repo = "git+https://github.com/Boulea7/GrokSearchTool@main"
+    expected_repo = EXPECTED_GROK_SEARCH_TOOL_REPO
     expected_executable = "grok-search"
     expected_env_keys = {
         "GROK_API_URL",

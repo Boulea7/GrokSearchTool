@@ -70,7 +70,7 @@ wrapper はあえて scalar shim 入力を保っており、`depends_on` は CSV
 - `toggle_builtin_tools` は Claude Code のプロジェクト設定専用です。
 - `get_config_info` における `toggle_builtin_tools` の readiness は、ローカル Git プロジェクト文脈を検出したことだけを示し、Claude Code ホスト全体の検証ではありません。
 - 以下のインストール例は、現在メンテナンスされている公開配布元 `Boulea7/GrokSearchTool` を使います。
-- ローカル worktree、過去の remote 名、古い協業痕跡は、現在も `fork/upstream` PR フローを使っている証拠として読まないでください。
+- ローカル worktree や過去の remote 名は、現在の公開インストール元として読まないでください。
 
 ### MCP として追加
 
@@ -80,7 +80,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@main",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
     "grok-search"
   ],
   "env": {
@@ -102,7 +102,7 @@ claude mcp add-json grok-search --scope user '{
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -123,7 +123,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",

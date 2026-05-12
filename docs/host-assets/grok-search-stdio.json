@@ -4,7 +4,7 @@
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/Boulea7/GrokSearchTool@main",
+        "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
         "grok-search"
       ],
       "env": {

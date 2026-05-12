@@ -2,6 +2,8 @@ import json
 import re
 from pathlib import Path
 
+from constants import EXPECTED_GROK_SEARCH_TOOL_REPO
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 HOSTS = ROOT_DIR / "docs" / "HOSTS.md"
@@ -36,7 +38,7 @@ def test_shared_stdio_snippet_is_valid_json_and_points_to_release_repo():
     assert server["command"] == "uvx"
     assert server["args"] == [
         "--from",
-        "git+https://github.com/Boulea7/GrokSearchTool@main",
+        EXPECTED_GROK_SEARCH_TOOL_REPO,
         "grok-search",
     ]
     assert server["env"]["GROK_API_URL"] == "https://api.example.com/v1"
