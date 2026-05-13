@@ -5,9 +5,13 @@
 
 [English](./README.en.md) | [繁體中文](./README.zh-TW.md) | 简体中文 | [日本語](./README.ja.md) | [Русский](./README.ru.md)
 
-**GrokSearch MCP，为多种 MCP 客户端提供轻量、可核验来源的网络上下文能力**
+**GrokSearch MCP：为 Claude Code、Codex、Cherry Studio 等客户端提供可核验来源的搜索、抓取、规划与深度研究能力**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![FastMCP](https://img.shields.io/badge/FastMCP-2.3.0+-green.svg)](https://github.com/jlowin/fastmcp)
+[![Release](https://img.shields.io/github/v/release/Boulea7/GrokSearchTool?label=release)](https://github.com/Boulea7/GrokSearchTool/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Boulea7/GrokSearchTool/release-gates.yml?branch=main&label=release%20gates)](https://github.com/Boulea7/GrokSearchTool/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![FastMCP](https://img.shields.io/badge/FastMCP-2.3.0+-green.svg)](https://github.com/jlowin/fastmcp)
 
 </div>
 
@@ -15,11 +19,17 @@
 
 ## 一、概述
 
-GrokSearch MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的轻量 MCP 服务器，面向 Claude Code、Codex CLI、Cherry Studio 等支持 MCP 的客户端，提供**最新、可核验、低摩擦**的网络上下文能力。
+GrokSearch MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的 MCP 服务器。它把 Grok 主搜索、Tavily / Firecrawl 抓取、结构化来源缓存、轻量规划和可恢复 deep research job 放进一套稳定工具面里，让 coding agent 在需要外部信息时能更快取得可核验上下文。
 
-公开 package import contract 当前分两层：`grok_search.mcp` 是 access-time lazy export，只有真正访问该导出时才需要 `fastmcp`；`grok_search.providers.GrokSearchProvider` 也是 access-time lazy export，普通非 provider 导入不应仅因 Grok provider 相关依赖缺失而被提前拖死。这只是在导入时收口边界，不改变安装时依赖声明，也不应被理解为这些依赖已经变成 optional extras。
+它不是浏览器自动化框架，也不是只返回一段搜索摘要的 wrapper。它更适合这些场景：
 
-它不是一个以浏览器自动化为核心的重型系统，而是一层为研究型问答优化的搜索基础设施：
+- 让代码助手在回答前查最新文档、API、公告或 issue
+- 把答案正文和来源列表分开，方便后续核验和引用
+- 抓取指定网页正文，或先用站点 map 找到正确文档页
+- 对复杂问题先规划，再按计划搜索和验证来源
+- 对多分钟研究任务使用可查询、可恢复的 deep research job
+
+### 能力分层
 
 - `Grok` 负责主答案生成
 - `Tavily` 负责搜索控制、网页提取与站点映射
@@ -28,9 +38,11 @@ GrokSearch MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构�
 - `deep_research_*` 负责高级、异步、报告型深度研究任务
 - `get_sources` 负责把来源从“答案里的链接”升级成结构化可读取的信源数据
 
-当前推荐主路径是 `plan_* -> web_search`，并在需要来源核对时按需调用 `get_sources`；对明确单跳、低歧义、规划收益很低的查询，也允许直接调用 `web_search`。更重的深度探索能力继续收口到 `deep research`，并优先在 CLI 落地。
+推荐主路径是 `plan_* -> web_search`，需要来源核对时再调用 `get_sources`。明确单跳、低歧义的问题可以直接调用 `web_search`。更重的研究任务进入 `deep_research_*`，本地长时间观察和 continuation 工作优先使用 CLI：`grok-search-research`。
 
-当前公开的 `stdio` 安装示例以维护中的发布仓库 `Boulea7/GrokSearchTool` 为准；本地开发工作区、历史远端命名或旧协作痕迹不代表项目仍按 `fork/upstream` PR 模式推进。
+当前公开的 `stdio` 安装示例以维护中的发布仓库 `Boulea7/GrokSearchTool` 为准；本地开发工作区和历史远端命名不代表当前公开安装源。
+
+### 架构一览
 
 ```text
 Client / Assistant
@@ -47,15 +59,6 @@ Client / Assistant
           └─ web_map     -> Tavily Map
 ```
 
-### 项目定位
-
-推荐分层：
-
-- `plan_* -> web_search`：默认轻量研究路径；需要结构化来源时再调用 `get_sources`
-- `web_fetch`：抓单页正文
-- `web_map`：看站点结构
-- `deep research`：更长时间、更强编排的高级研究层，当前提供非交互 MCP job surface，并由 CLI 承接更完整交互
-
 ### 核心价值
 
 - **答案与来源分离**：`web_search` 返回正文，`get_sources` 返回结构化来源，便于后续核验、排序和复用
@@ -64,15 +67,17 @@ Client / Assistant
 - **深度研究独立分层**：高级研究走 `deep_research_*` 与 `grok-search-research`，不挤占默认轻路径
 - **面向真实运维**：内置 `get_config_info`、feature readiness、最小真实探针、稳定错误契约
 - **运行时安全边界**：对抓取/映射目标做 URL 边界收口，对诊断输出和来源 URL 做敏感信息遮罩
-- **兼容 OpenAI 风格接入**：可对接 Grok-compatible 中转与镜像站，但实际兼容性仍取决于上游对 `/models` 与 `/chat/completions` 的实现
+- **兼容 OpenAI 风格接入**：可对接 Grok-compatible 服务，但实际兼容性仍取决于上游对 `/models` 与 `/chat/completions` 的实现
 
-### 适用场景
+### 三分钟快启
 
-- 让代码助手在回答前先查最新文档、API、规范或公告
-- 对模型生成内容做来源核验，而不是只看“像不像对”
-- 对某个网页做可靠正文抓取，而不是只拿搜索摘要
-- 先列清复杂研究任务，再逐步执行
-- 在支持内建网页工具路由的宿主里收口统一的网页工具入口
+1. 准备 `GROK_API_URL` 和 `GROK_API_KEY` 两个必填变量。
+2. 用下方 Claude Code、Codex 或 Cherry Studio 的 `stdio` 示例安装。
+3. 先调用 `get_config_info` 查看 `doctor.overall` 和 `feature_readiness`。
+4. 调用一次 `web_search`，再用返回的 `session_id` 调用 `get_sources`。
+5. 需要 `web_fetch` / `web_map` 时，再配置 Tavily 或 Firecrawl。
+
+旧版用户可直接看 [从旧版迁移](#从旧版迁移)；导入边界、`response_format`、URL 预检等细节放在 [兼容性说明](#兼容性说明) 和 [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md)。
 
 
 ## 二、安装
@@ -82,6 +87,35 @@ Client / Assistant
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)（推荐的 Python 包管理器）
 - 支持 `stdio` MCP 的客户端，如 Claude Code、Codex CLI、Cherry Studio
+
+### 用本地 coding agent 安装
+
+如果你已经在使用 Codex、Claude Code、Cline、Continue 或其他 coding agent，可以直接把下面这段提示词发给它，让它替你完成安装、配置和 smoke test。发送前请先替换尖括号里的占位符；只想最小配置时，填写 `GROK_API_URL` 与 `GROK_API_KEY` 即可，Tavily / Firecrawl 可以留空或删除。
+
+```text
+请帮我在本机安装 GrokSearch MCP，并把它接入我的本地 coding agent / chat 工具。
+
+项目仓库：
+https://github.com/Boulea7/GrokSearchTool
+
+目标宿主：
+<例如 Codex CLI、Claude Code、Cherry Studio、Continue、Cline；可写多个>
+
+安装要求：
+1. 先阅读仓库 README，以及 docs/COMPATIBILITY.md、docs/HOSTS.md 和 docs/host-assets/grok-search-stdio.json。
+2. 默认使用 release tag v1.1.0 安装；除非我明确要求，不要使用 main 分支。
+3. 根据目标宿主写入本地 MCP 配置，不要把真实 key 写入 Git 仓库。
+4. 基础配置如下：
+   GROK_API_URL="<你的 OpenAI-compatible Grok base URL，通常以 /v1 结尾>"
+   GROK_API_KEY="<你的 Grok API key>"
+   TAVILY_API_KEY="<可选；需要 web_map、Tavily web_fetch 或 supplemental search 时填写>"
+   TAVILY_API_URL="<可选；留空则使用项目默认值>"
+   FIRECRAWL_API_KEY="<可选；需要 Firecrawl fetch fallback 或 supplemental search 时填写>"
+   FIRECRAWL_API_URL="<可选；留空则使用项目默认值>"
+5. 安装后执行 smoke test：get_config_info、web_search、get_sources；如果配置了 Tavily，再测 web_map；如果配置了 Tavily 或 Firecrawl，再测 web_fetch。
+6. 在我的本地私有全局或项目级 agent 说明中加入搜索使用规则，不要提交到 Git：涉及最新资料、网页来源核验、技术文档查询、产品调研或需要引用来源时，优先使用 GrokSearch MCP / companion skill；复杂问题优先走 plan_* -> web_search，再用 get_sources 核验来源；长时间研究任务使用 deep_research_* 或 grok-search-research CLI。
+7. 最后告诉我：写入了哪些本地配置文件、哪些 key 已做脱敏、每个 smoke test 的结果、还有哪些能力因为缺少 Tavily / Firecrawl 等配置而不可用。
+```
 
 ### 支持级别
 
@@ -96,7 +130,7 @@ Client / Assistant
 - 公开安装文档当前只承诺本地 `stdio` 路径
 - `toggle_builtin_tools` 仅适用于 Claude Code 项目级设置
 - `get_config_info` 中 `toggle_builtin_tools` 的 readiness 仅表示检测到了本地 Git 项目上下文，不代表已经完成完整的 Claude Code 宿主验证
-- 下面的安装片段默认使用当前维护中的公开安装源 `Boulea7/GrokSearchTool`
+- 下面的安装片段默认使用当前发布 tag `v1.1.0`，需要跟随开发分支时再手动改为 `main`
 
 <details>
 <summary><b>安装 uv</b></summary>
@@ -128,7 +162,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@main",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
     "grok-search"
   ],
   "env": {
@@ -150,7 +184,7 @@ claude mcp add-json grok-search --scope user '{
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -175,7 +209,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
@@ -204,7 +238,7 @@ claude mcp add-json grok-search --scope user '{
   "args": [
     "--native-tls",
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@main",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
     "grok-search"
   ],
   "env": {
@@ -256,7 +290,7 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_DEEP_RESEARCH_HARD_TIMEOUT_SECONDS` | 否 | `600` | deep research 硬超时上限 |
 | `GROK_DEEP_RESEARCH_MAX_CONCURRENCY` | 否 | `3` | 默认 deep research runtime 同一轮 ready research unit 的最大并发执行数 |
 | `GROK_DEEP_RESEARCH_RECENT_REUSE_SECONDS` | 否 | `1800` | 已完成 deep research job 按 `finished_at` 参与复用的时间窗口 |
-| `PYTHONIOENCODING` | 否 | `utf-8` | 建议显式设为 UTF-8，减少 Windows / 中转站日志乱码 |
+| `PYTHONIOENCODING` | 否 | `utf-8` | 建议显式设为 UTF-8，减少 Windows 或兼容服务日志乱码 |
 | `PYTHONUNBUFFERED` | 否 | `1` | 关闭 Python stdout 缓冲，减少 stdio MCP 启动卡顿 |
 | `PYTHONUTF8` | 否 | `1` | 强制 Python UTF-8 模式 |
 
@@ -291,7 +325,7 @@ claude mcp add-json grok-search --scope user '{
 - 如需更省上下文，可将 `GROK_TIME_CONTEXT_MODE` 设为 `auto`（只在明显时效查询或显式时效控制下注入）或 `never`
 - `GROK_DEBUG=false` 时，`log_info()` 不会写入这类 helper 日志，也不会通过 `ctx.info()` 暴露中间进度；仅在 `GROK_DEBUG=true` 时转发 debug-only progress
 - redirect preflight 若因超时或请求级错误失败，`web_fetch` / `web_map` 当前会直接 fail-closed 并阻断下游 provider 调用；`skipped_due_to_error` 仅保留为内部诊断 / 兼容性 reason code，不再作为继续执行路径
-- 若 `content` 为空，先检查中转站是否真的返回了正文；若 `sources_count=0`，再检查是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
+- 若 `content` 为空，先检查上游兼容服务是否真的返回了正文；若 `sources_count=0`，再检查是否提供了结构化 citations，或正文里是否至少包含可解析的 Markdown 链接 / 裸 URL
 - 若上游 endpoint 指向 `localhost` / `127.x` 等 loopback 地址，运行时会对该请求强制 `trust_env=False`，因此会一并绕过 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 以及 `SSL_CERT_FILE` / `SSL_CERT_DIR`
 
 
@@ -533,6 +567,28 @@ claude mcp list
 - continuation context 当前会优先复用 `sources.json`；若该 artifact 缺失或不可读，会回退到 `citations.json.source_registry` 重建 carry-forward sources。若已完成 job 的当前 artifact 指针混批或缺件，则会优先回退到最近的完整 final artifact batch，再回退到 checkpoint / partial artifacts。运行中的 `queued` / `running` job 在新进程启动时会被回收成 `interrupted`，并带上恢复原因。
 </details>
 
+### 从旧版迁移
+
+如果你来自早期 lightweight 版本，可以按下面的映射理解当前版本：
+
+| 旧版心智 | 当前推荐 |
+| --- | --- |
+| 只做一次搜索 | 继续直接用 `web_search` |
+| 搜索后看来源 | `web_search` 后调用 `get_sources` |
+| `search_planning` 一体式规划 | 使用 `plan_intent -> plan_complexity -> plan_sub_query -> plan_search_term -> plan_tool_mapping -> plan_execution` |
+| 只想抓一个页面 | `web_fetch` |
+| 先找站点里的相关页面 | `web_map`，再对目标 URL 调 `web_fetch` |
+| 旧的一键 provider 入口 | 改用中性的 `GROK_API_URL` / `GROK_API_KEY`，不绑定具体站点 |
+| 长研究任务 | 使用 `deep_research_*`；本地观察、artifact 读取和 continuation 优先用 `grok-search-research` CLI |
+
+当前项目仍保留轻量默认路径，不要求普通搜索任务使用 deep research。`plan_*` 的 planning `session_id` 是进程内临时句柄；进程重启、TTL 到期或缓存淘汰后，需要从新的 `plan_intent` 重新开始。
+
+### 兼容性说明
+
+公开 package import contract 当前分两层：`grok_search.mcp` 是 access-time lazy export，只有真正访问该导出时才需要 `fastmcp`；`grok_search.providers.GrokSearchProvider` 也是 access-time lazy export，普通非 provider 导入不应仅因 Grok provider 相关依赖缺失而被提前拖死。这只是在导入时收口边界，不改变安装时依赖声明，也不应被理解为这些依赖已经变成 optional extras。更完整兼容性说明见 [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md)。
+
+`web_map`、`switch_model` 和 `toggle_builtin_tools` 默认保持 legacy JSON 字符串兼容模式；新调用方建议显式传 `response_format="object"`，以直接读取结构化对象。`web_fetch` / `web_map` 会在不安全 URL、私网/loopback 目标、不可接受 redirect 或 redirect preflight 超时/请求错误时 fail-closed，不会继续调用下游 provider。
+
 ## 四、常见问题
 
 <details>
@@ -546,7 +602,7 @@ A: Grok（`GROK_API_URL` + `GROK_API_KEY`）为必填，提供核心搜索能力
 <summary>
 Q: Grok API 地址需要什么格式？
 </summary>
-A: 填写你所用服务商提供的 OpenAI-compatible base URL，并确认 `/chat/completions` 与 `/models` 端点可用；常见路径形式包含 `/v1`。代码层不会仅因省略 `/v1` 就预先拦截，但不少 OpenAI-compatible 端点可能因此在运行时失败，并通常伴随兼容性 warning。代码层并不要求它必须是“官方”还是“镜像/中转”。
+A: 填写你所用服务商提供的 OpenAI-compatible base URL，并确认 `/chat/completions` 与 `/models` 端点可用；常见路径形式包含 `/v1`。代码层不会仅因省略 `/v1` 就预先拦截，但不少 OpenAI-compatible 端点可能因此在运行时失败，并通常伴随兼容性 warning。代码层不绑定具体站点或服务商。
 </details>
 
 <details>
@@ -563,14 +619,14 @@ Q: `web_search` 返回空内容或直接报错怎么办？
 A: 当前版本已经尽量把错误显性化，你可以按以下方式理解：
 
 - `HTTP 503`：上游服务当前不可用，或该模型没有可用通道
-- “空的占位 completion 帧（choices=null）”：中转站接受了请求，但没有返回可用正文
+- “占位 completion 帧为空（choices=null）”：上游兼容服务接受了请求，但没有返回可用正文
 - 登录页/认证页相关报错：代理认证失效、被重定向，或上游鉴权异常
 
 建议排查顺序：
 
 1. 先用 `get_config_info` 查看 `doctor` 与 `feature_readiness`，确认 `/models` 和可选依赖探测结果
 2. 再切回当前配置或代码默认模型，确认是否为模型兼容性问题
-3. 如果仍然不稳定，优先更换中转站，而不是只改默认模型
+3. 如果仍然不稳定，优先检查上游兼容服务质量，而不是只改默认模型
 </details>
 
 ## 五、补充文档
@@ -602,6 +658,10 @@ CLI 当前优先承接：
 ## 许可证
 
 [MIT License](LICENSE)
+
+## 致谢
+
+本项目最初基于 [GuDaStudio/GrokSearch](https://github.com/GuDaStudio/GrokSearch) 的轻量 MCP 搜索思路发展而来；当前维护版本已扩展为 `plan_*`、`get_sources`、`web_fetch` / `web_map`、`deep_research_*`、CLI、host assets 与 companion skill 组成的独立发布线。
 
 ---
 

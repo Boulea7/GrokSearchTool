@@ -1,12 +1,13 @@
 import pytest
 
+from constants import EXPECTED_GROK_SEARCH_TOOL_REPO
 from grok_search.config import Config
 
 
 def test_setup_command_uses_release_repo_and_generic_base_url_example():
     config = Config()
 
-    assert "git+https://github.com/Boulea7/GrokSearchTool@main" in config._SETUP_COMMAND
+    assert EXPECTED_GROK_SEARCH_TOOL_REPO in config._SETUP_COMMAND
     assert '"GROK_API_URL":"https://api.example.com/v1"' in config._SETUP_COMMAND
 
 

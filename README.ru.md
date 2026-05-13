@@ -70,7 +70,7 @@ wrapper'ы намеренно сохраняют scalar shim-входы: `depend
 - `toggle_builtin_tools` относится только к проектным настройкам Claude Code.
 - readiness для `toggle_builtin_tools` в `get_config_info` означает только то, что обнаружен локальный Git-контекст проекта; это не полная проверка хоста Claude Code.
 - Ниже используются актуальные публичные установочные ссылки из поддерживаемого репозитория `Boulea7/GrokSearchTool`.
-- Локальные worktree, исторические имена remote или старые следы совместной работы не следует трактовать как признак того, что проект всё ещё ведётся через `fork/upstream` PR-процесс.
+- Локальные worktree или исторические имена remote не следует трактовать как текущий публичный источник установки.
 
 ### Добавление как MCP
 
@@ -80,7 +80,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@main",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
     "grok-search"
   ],
   "env": {
@@ -102,7 +102,7 @@ claude mcp add-json grok-search --scope user '{
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -123,7 +123,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",

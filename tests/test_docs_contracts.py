@@ -247,11 +247,11 @@ def test_docs_pin_release_repo_and_stdio_first_host_story():
     agents = _read_private_agents_contract_text()
 
     assert "Boulea7/GrokSearchTool" in readme
-    assert "fork/upstream" in readme
+    assert "当前公开安装源" in readme
     assert "本地 `stdio` 路径" in readme
     assert "Boulea7/GrokSearchTool" in compatibility
     assert "local `stdio`" in compatibility
-    assert "fork/upstream" in agents
+    assert "公开安装源" in agents
 
 
 def test_roadmap_keeps_stdio_first_positioning_without_relisting_already_aligned_planning_story():
@@ -419,9 +419,9 @@ def test_docs_align_minimal_stdio_smoke_check_and_native_tls_guidance():
 
 def test_localized_readmes_pin_release_repo_and_fork_story():
     localized_expectations = {
-        README_ZH_TW: ["Boulea7/GrokSearchTool", "fork/upstream"],
-        README_JA: ["Boulea7/GrokSearchTool", "fork/upstream"],
-        README_RU: ["Boulea7/GrokSearchTool", "fork/upstream"],
+        README_ZH_TW: ["Boulea7/GrokSearchTool", "公開安裝來源"],
+        README_JA: ["Boulea7/GrokSearchTool", "公開インストール元"],
+        README_RU: ["Boulea7/GrokSearchTool", "публичный источник установки"],
     }
 
     for path, expected_fragments in localized_expectations.items():

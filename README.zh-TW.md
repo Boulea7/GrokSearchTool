@@ -70,7 +70,7 @@ wrapper 目前刻意維持標量 shim 輸入，例如 CSV 形式的 `depends_on`
 - `toggle_builtin_tools` 僅適用於 Claude Code 專案級設定。
 - `get_config_info` 中 `toggle_builtin_tools` 的 readiness 只代表偵測到本地 Git 專案上下文，並不等同於完整的 Claude Code host 驗證。
 - 下方安裝片段預設使用目前維護中的公開來源 `Boulea7/GrokSearchTool`。
-- 本地工作樹、歷史遠端命名或舊協作痕跡，不應被理解成專案仍沿用 `fork/upstream` PR 工作流。
+- 本地工作樹或歷史遠端命名，不應被理解成目前的公開安裝來源。
 
 ### 安裝為 MCP
 
@@ -80,7 +80,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@main",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
     "grok-search"
   ],
   "env": {
@@ -102,7 +102,7 @@ claude mcp add-json grok-search --scope user '{
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -123,7 +123,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",

@@ -2,25 +2,36 @@ English | [简体中文](README.md) | [繁體中文](README.zh-TW.md) | [日本�
 
 # GrokSearch
 
+[![Release](https://img.shields.io/github/v/release/Boulea7/GrokSearchTool?label=release)](https://github.com/Boulea7/GrokSearchTool/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Boulea7/GrokSearchTool/release-gates.yml?branch=main&label=release%20gates)](https://github.com/Boulea7/GrokSearchTool/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![FastMCP](https://img.shields.io/badge/FastMCP-2.3.0+-green.svg)](https://github.com/jlowin/fastmcp)
+
 GrokSearch is an independently maintained MCP server for assistants and clients that need fast, reliable, source-backed web context.
 
-It combines `Grok` search with `Tavily` and `Firecrawl` extraction, then exposes a stable MCP tool surface for lightweight lookups, source verification, focused page fetching, a recommended `plan_* -> web_search` workflow for complex searches, and an advanced `deep research` layer for heavier exploration tasks. For clear, low-ambiguity single-hop lookups where planning adds little value, direct `web_search` is still acceptable.
+It combines Grok search, Tavily / Firecrawl extraction, structured source caching, lightweight planning, and resumable deep research jobs behind one stable MCP surface. The goal is simple: when an assistant needs outside information, it should be able to fetch useful context and then show where that context came from.
 
-The public package import contract currently has two boundaries: `grok_search.mcp` is an access-time lazy export, so `fastmcp` is only required when that export is actually accessed; `grok_search.providers.GrokSearchProvider` is also an access-time lazy export, so ordinary non-provider imports should not fail early just because Grok-provider dependencies are missing. This only narrows import-time behavior, does not change the install-time dependency declaration, and should not be read as turning package dependencies into optional extras.
+Use it when you want to:
 
-Public `stdio` installation snippets currently use the maintained release repo `Boulea7/GrokSearchTool`. Local worktrees, historical remote names, or legacy collaboration traces should not be read as an active `fork/upstream` PR workflow.
+- let a coding agent check current docs, APIs, release notes, issues, or announcements;
+- keep answer text and source lists separate for follow-up verification;
+- fetch a known page or map a docs site before fetching the right page;
+- plan complex searches before executing them;
+- run longer report-style research through `deep_research_*` or the `grok-search-research` CLI.
+
+Public `stdio` installation snippets currently use the maintained release repo `Boulea7/GrokSearchTool`. Local worktrees or historical remote names should not be read as the current public install source.
 
 ## Overview
 
-- `web_search`: AI-driven web search with cached sources
-- `get_sources`: retrieve cached sources from `web_search`
-- `web_fetch`: Tavily-first page extraction with Firecrawl fallback
-- `web_map`: website structure mapping
-- `plan_*`: phased planning tools for complex or ambiguous searches
-- `deep_research_*`: asynchronous job tools for advanced report-style research
-- `get_config_info`: inspect configuration and test `/models`
-- `switch_model`: change the default Grok model
-- `toggle_builtin_tools`: toggle Claude Code built-in WebSearch / WebFetch
+Recommended path:
+
+- `plan_* -> web_search` for most non-trivial research tasks;
+- direct `web_search` for clear, low-ambiguity single-hop lookups;
+- `get_sources` whenever source verification matters;
+- `web_fetch` for a known page;
+- `web_map` for discovering pages under a site or docs section;
+- `deep_research_*` and `grok-search-research` for longer, resumable research.
 
 The public MCP surface currently includes `21` tools:
 
@@ -45,6 +56,10 @@ The public MCP surface currently includes `21` tools:
 - `deep_research_resume`
 - `deep_research_cancel`
 - `deep_research_list`
+
+### Compatibility notes
+
+The public package import contract currently has two boundaries: `grok_search.mcp` is an access-time lazy export, so `fastmcp` is only required when that export is actually accessed; `grok_search.providers.GrokSearchProvider` is also an access-time lazy export, so ordinary non-provider imports should not fail early just because Grok-provider dependencies are missing. This only narrows import-time behavior, does not change the install-time dependency declaration, and should not be read as turning package dependencies into optional extras.
 
 `plan_search_term` sets `approach` / `fallback_plan` when `search_strategy` is first created; later non-revision calls append `search_terms` only and do not implicitly rewrite existing strategy metadata.
 planning `session_id` values are in-process transient handles with about a 1-hour TTL and a 256-session LRU cap, so restart / expiry / eviction requires starting again from a fresh `plan_intent`.
@@ -75,7 +90,7 @@ Notes:
 - Public installation guidance currently covers local `stdio` only.
 - `toggle_builtin_tools` is specific to Claude Code project settings.
 - `toggle_builtin_tools` readiness in `get_config_info` only means a local Git project context was detected; it is not a full Claude Code host verification.
-- The installation snippets below intentionally use the current maintained public install source `Boulea7/GrokSearchTool`.
+- The installation snippets below intentionally use release tag `v1.1.0`; change it to `main` only when you explicitly want the development branch.
 
 ### Add as an MCP server
 
@@ -87,7 +102,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@main",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
     "grok-search"
   ],
   "env": {
@@ -111,7 +126,7 @@ Add the following snippet to `~/.codex/config.toml` or project-level `.codex/con
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -136,7 +151,7 @@ Create a `STDIO` MCP server entry with the same core fields:
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@main", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
@@ -365,3 +380,7 @@ python3 -m py_compile src/grok_search/*.py src/grok_search/providers/*.py tests/
 ## License
 
 [MIT](LICENSE)
+
+## Acknowledgements
+
+GrokSearch originally grew from the lightweight MCP search idea in [GuDaStudio/GrokSearch](https://github.com/GuDaStudio/GrokSearch). This maintained release line has since expanded into an independent MCP package with `plan_*`, `get_sources`, `web_fetch` / `web_map`, `deep_research_*`, a CLI, host assets, and a companion skill.
