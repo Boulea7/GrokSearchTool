@@ -11,6 +11,18 @@ def test_setup_command_uses_release_repo_and_generic_base_url_example():
     assert '"GROK_API_URL":"https://api.example.com/v1"' in config._SETUP_COMMAND
 
 
+def test_project_root_ignores_local_agent_documents(monkeypatch, tmp_path):
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    (parent / "AGENTS.md").write_text("local agent notes\n", encoding="utf-8")
+    monkeypatch.chdir(child)
+
+    config = Config()
+
+    assert config._project_root() == child.resolve()
+
+
 def test_default_grok_model_prefers_grok_4_20_0309():
     config = Config()
 

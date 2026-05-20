@@ -9,17 +9,17 @@
     "brief": {
       "scope": {
         "include_domains": [
-          "docs.langchain.com",
-          "docs.temporal.io",
-          "docs.restate.dev",
-          "google.github.io"
+          "agent-runtime.example.com",
+          "workflow-runtime.example.com",
+          "service-runtime.example.com",
+          "compute-runtime.example.com"
         ],
         "exclude_domains": [],
         "allowed_sources": [
-          "docs.langchain.com",
-          "docs.temporal.io",
-          "docs.restate.dev",
-          "google.github.io"
+          "agent-runtime.example.com",
+          "workflow-runtime.example.com",
+          "service-runtime.example.com",
+          "compute-runtime.example.com"
         ]
       },
       "continuation_focus": []

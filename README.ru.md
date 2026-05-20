@@ -6,8 +6,6 @@ GrokSearch — это независимо поддерживаемый MCP-се
 
 Он объединяет поиск через `Grok` и извлечение контента через `Tavily` / `Firecrawl`, предоставляя лёгкий MCP-набор инструментов для поиска, проверки источников, выборочного извлечения страниц и рекомендуемого основного маршрута `plan_* -> web_search` для сложных запросов. Для ясных одношаговых запросов с низкой неоднозначностью также допустим прямой вызов `web_search`. Для более тяжёлых задач теперь доступен отдельный продвинутый слой `deep research`.
 
-Публичный package import contract сейчас имеет две границы: `grok_search.mcp` — это access-time lazy export, поэтому `fastmcp` требуется только при фактическом обращении к этому экспорту; `grok_search.providers.GrokSearchProvider` тоже является access-time lazy export, поэтому обычные non-provider импорты не должны падать заранее только из-за отсутствия зависимостей Grok provider. Это лишь сужает import-time поведение, не меняет декларацию зависимостей на этапе установки и не должно читаться как превращение package dependencies в optional extras.
-
 ## Обзор
 
 - `web_search`: веб-поиск с кэшированием источников
@@ -80,7 +78,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1",
     "grok-search"
   ],
   "env": {
@@ -102,7 +100,7 @@ claude mcp add-json grok-search --scope user '{
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -123,7 +121,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
@@ -242,6 +240,10 @@ python3 -m py_compile src/grok_search/*.py src/grok_search/providers/*.py tests/
 - [Compatibility](docs/COMPATIBILITY.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Changelog](CHANGELOG.md)
+
+## Acknowledgements
+
+This project originally evolved from the ideas and early implementation in [GuDaStudio/GrokSearch](https://github.com/GuDaStudio/GrokSearch). The current release line is independently maintained as an MCP + deep research + CLI + companion skill project.
 
 ## License
 

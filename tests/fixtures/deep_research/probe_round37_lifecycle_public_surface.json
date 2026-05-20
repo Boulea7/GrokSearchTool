@@ -34,8 +34,8 @@
       "source_registry": {
         "R1": {
           "citation_count": 4,
-          "description": "Try Ray with $100 credit — [Start now](https://console.anyscale.com/register/ha?render_flow=ray&utm_source=ray_docs&utm_medium=docs&utm_campaign=banner) Site Navigation * [Get Started](../../ray-overview/getting-started.html \"Get Started\") * [Use Cases](../../ray-overview/use-ca…",
-          "domain": "docs.ray.io",
+          "description": "Try Compute Runtime with $100 credit — [Start now](https://console.example.com/register/ha?render_flow=compute&utm_source=compute_docs&utm_medium=docs&utm_campaign=banner) Site Navigation * [Get Started](../../compute-overview/getting-started.html \"Get Started\") * [Use Cases](../../compute-overview/use-ca…",
+          "domain": "compute-runtime.example.com",
           "provider": "grok",
           "published_at": null,
           "quality_score": 41,
@@ -51,13 +51,13 @@
           "retrieved_at": "2026-04-22T08:24:07Z",
           "score": null,
           "section_count": 4,
-          "snippet": "Try Ray with $100 credit — [Start now](https://console.anyscale.com/register/ha?render_flow=ray&utm_source=ray_docs&utm_medium=docs&utm_campaign=banner) Site Navigation * [Get Started](../../ray-overview/getting-started.html \"Get Started\") * [Use Cases](../../ray-overview/use-ca…",
+          "snippet": "Try Compute Runtime with $100 credit — [Start now](https://console.example.com/register/ha?render_flow=compute&utm_source=compute_docs&utm_medium=docs&utm_campaign=banner) Site Navigation * [Get Started](../../compute-overview/getting-started.html \"Get Started\") * [Use Cases](../../compute-overview/use-ca…",
           "source_id": "R1",
-          "source_key": "https://docs.ray.io/en/latest/train/user-guides/checkpoints.html?#",
+          "source_key": "https://compute-runtime.example.com/en/latest/train/user-guides/checkpoints.html?#",
           "source_type": "official_docs",
           "title": "Saving and Loading Checkpoints[#](#saving-and-loading-checkpoints \"Link to this heading\")",
           "topic_match_score": 3,
-          "url": "https://docs.ray.io/en/latest/train/user-guides/checkpoints.html",
+          "url": "https://compute-runtime.example.com/en/latest/train/user-guides/checkpoints.html",
           "winner_provider": "grok"
         }
       }
@@ -110,13 +110,13 @@
         "source_ids": [
           "R1"
         ],
-        "source_url": "https://docs.ray.io/en/latest/train/user-guides/checkpoints.html",
+        "source_url": "https://compute-runtime.example.com/en/latest/train/user-guides/checkpoints.html",
         "used_by_claim_ids": [
-          "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems-claim-8",
+          "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems-claim-8",
           "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts-claim-3"
         ],
         "used_by_section_ids": [
-          "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems",
+          "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems",
           "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts"
         ]
       }
@@ -148,7 +148,7 @@
           "flagged_claim_ids": [
             "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts-claim-3",
             "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts-claim-4",
-            "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems-claim-9"
+            "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems-claim-9"
           ],
           "passed": false,
           "reason_codes": [
@@ -218,8 +218,8 @@
     "sources": [
       {
         "citation_count": 4,
-        "description": "Try Ray with $100 credit — [Start now](https://console.anyscale.com/register/ha?render_flow=ray&utm_source=ray_docs&utm_medium=docs&utm_campaign=banner) Site Navigation * [Get Started](../../ray-overview/getting-started.html \"Get Started\") * [Use Cases](../../ray-overview/use-ca…",
-        "domain": "docs.ray.io",
+        "description": "Try Compute Runtime with $100 credit — [Start now](https://console.example.com/register/ha?render_flow=compute&utm_source=compute_docs&utm_medium=docs&utm_campaign=banner) Site Navigation * [Get Started](../../compute-overview/getting-started.html \"Get Started\") * [Use Cases](../../compute-overview/use-ca…",
+        "domain": "compute-runtime.example.com",
         "provider": "grok",
         "published_at": null,
         "quality_score": 41,
@@ -235,20 +235,20 @@
         "retrieved_at": "2026-04-22T08:24:07Z",
         "score": null,
         "section_count": 4,
-        "snippet": "Try Ray with $100 credit — [Start now](https://console.anyscale.com/register/ha?render_flow=ray&utm_source=ray_docs&utm_medium=docs&utm_campaign=banner) Site Navigation * [Get Started](../../ray-overview/getting-started.html \"Get Started\") * [Use Cases](../../ray-overview/use-ca…",
+        "snippet": "Try Compute Runtime with $100 credit — [Start now](https://console.example.com/register/ha?render_flow=compute&utm_source=compute_docs&utm_medium=docs&utm_campaign=banner) Site Navigation * [Get Started](../../compute-overview/getting-started.html \"Get Started\") * [Use Cases](../../compute-overview/use-ca…",
         "source_id": "R1",
-        "source_key": "https://docs.ray.io/en/latest/train/user-guides/checkpoints.html?#",
+        "source_key": "https://compute-runtime.example.com/en/latest/train/user-guides/checkpoints.html?#",
         "source_type": "official_docs",
         "title": "Saving and Loading Checkpoints[#](#saving-and-loading-checkpoints \"Link to this heading\")",
         "topic_match_score": 3,
-        "url": "https://docs.ray.io/en/latest/train/user-guides/checkpoints.html",
+        "url": "https://compute-runtime.example.com/en/latest/train/user-guides/checkpoints.html",
         "winner_provider": "grok"
       }
     ],
     "verification": {
       "confidence_by_section": {
         "best-practices-and-open-challenges-recommendations-for-robust-implementation": "high",
-        "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems": "high",
+        "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems": "high",
         "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts": "high",
         "conclusion-key-takeaways-for-reliable-long-running-research-jobs": "high",
         "evidence-selection-and-usage-in-continuations-strategies-for-selected-evidence-to-maintain-focus-and-avoid-poisoning": "medium",
@@ -268,7 +268,7 @@
           "claim_id": "introduction-overview-of-challenges-in-long-running-deep-research-jobs-worker-failures-state-loss-completion-issues-claim-1",
           "confidence": "medium",
           "section_id": "introduction-overview-of-challenges-in-long-running-deep-research-jobs-worker-failures-state-loss-completion-issues",
-          "text": "If using parallel training strategies such as DeepSpeed Zero and FSDP, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
+          "text": "If using parallel training strategies such as Training Runtime ZeRO and Distributed Training, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
         },
         {
           "claim_id": "introduction-overview-of-challenges-in-long-running-deep-research-jobs-worker-failures-state-loss-completion-issues-claim-2",
@@ -286,7 +286,7 @@
           "claim_id": "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts-claim-4",
           "confidence": "medium",
           "section_id": "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts",
-          "text": "**Most probable solution for your query (CRIU checkpoint/restore for AI agents, distributed systems, or long-running research):** Use CRIU (often via container runtimes like Docker, Podman, or Kubernetes) combined with…"
+          "text": "**Most probable solution for your query (checkpoint/restore tooling checkpoint/restore for AI agents, distributed systems, or long-running research):** Use checkpoint/restore tooling (often via container runtimes like container runtime, container runtime, or orchestrator) combined with…"
         },
         {
           "claim_id": "resume-and-continuation-logic-handling-resume-watch-events-after-seq-reconnection-and-lineage-preservation-claim-5",
@@ -307,22 +307,22 @@
           "text": "The context the harness provides to the agent was accurate when it was captured, but the underlying data has changed. The harness has no mechanism to detect that the context is now stale."
         },
         {
-          "claim_id": "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems-claim-8",
+          "claim_id": "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems-claim-8",
           "confidence": "medium",
-          "section_id": "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems",
-          "text": "If using parallel training strategies such as DeepSpeed Zero and FSDP, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
+          "section_id": "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems",
+          "text": "If using parallel training strategies such as Training Runtime ZeRO and Distributed Training, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
         },
         {
-          "claim_id": "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems-claim-9",
+          "claim_id": "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems-claim-9",
           "confidence": "medium",
-          "section_id": "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems",
-          "text": "**Most probable solution for your query (CRIU checkpoint/restore for AI agents, distributed systems, or long-running research):** Use CRIU (often via container runtimes like Docker, Podman, or Kubernetes) combined with…"
+          "section_id": "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems",
+          "text": "**Most probable solution for your query (checkpoint/restore tooling checkpoint/restore for AI agents, distributed systems, or long-running research):** Use checkpoint/restore tooling (often via container runtimes like container runtime, container runtime, or orchestrator) combined with…"
         },
         {
           "claim_id": "best-practices-and-open-challenges-recommendations-for-robust-implementation-claim-10",
           "confidence": "medium",
           "section_id": "best-practices-and-open-challenges-recommendations-for-robust-implementation",
-          "text": "If using parallel training strategies such as DeepSpeed Zero and FSDP, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
+          "text": "If using parallel training strategies such as Training Runtime ZeRO and Distributed Training, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
         },
         {
           "claim_id": "best-practices-and-open-challenges-recommendations-for-robust-implementation-claim-11",
@@ -348,7 +348,7 @@
           "claim_id": "introduction-overview-of-challenges-in-long-running-deep-research-jobs-worker-failures-state-loss-completion-issues-claim-1",
           "confidence": "medium",
           "section_id": "introduction-overview-of-challenges-in-long-running-deep-research-jobs-worker-failures-state-loss-completion-issues",
-          "text": "If using parallel training strategies such as DeepSpeed Zero and FSDP, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
+          "text": "If using parallel training strategies such as Training Runtime ZeRO and Distributed Training, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
         },
         {
           "claim_id": "introduction-overview-of-challenges-in-long-running-deep-research-jobs-worker-failures-state-loss-completion-issues-claim-2",
@@ -375,16 +375,16 @@
           "text": "The context the harness provides to the agent was accurate when it was captured, but the underlying data has changed. The harness has no mechanism to detect that the context is now stale."
         },
         {
-          "claim_id": "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems-claim-8",
+          "claim_id": "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems-claim-8",
           "confidence": "medium",
-          "section_id": "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems",
-          "text": "If using parallel training strategies such as DeepSpeed Zero and FSDP, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
+          "section_id": "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems",
+          "text": "If using parallel training strategies such as Training Runtime ZeRO and Distributed Training, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
         },
         {
           "claim_id": "best-practices-and-open-challenges-recommendations-for-robust-implementation-claim-10",
           "confidence": "medium",
           "section_id": "best-practices-and-open-challenges-recommendations-for-robust-implementation",
-          "text": "If using parallel training strategies such as DeepSpeed Zero and FSDP, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
+          "text": "If using parallel training strategies such as Training Runtime ZeRO and Distributed Training, where each worker only has a shard of the full training state, you can save and report a checkpoint from each worker. See [Saving checkpoints from m…"
         },
         {
           "claim_id": "best-practices-and-open-challenges-recommendations-for-robust-implementation-claim-11",

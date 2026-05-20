@@ -33,11 +33,11 @@
       ],
       "source_registry": {
         "R6": {
-          "domain": "forum.langchain.com",
+          "domain": "forum.example.com",
           "source_id": "R6",
           "source_type": "third_party",
-          "title": "LangGraph checkpoint resume thread",
-          "url": "https://forum.langchain.com/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240"
+          "title": "Checkpoint Runtime checkpoint resume thread",
+          "url": "https://forum.example.com/agent-runtime/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240"
         }
       }
     },
@@ -60,7 +60,7 @@
         "source_ids": [
           "R6"
         ],
-        "source_url": "https://forum.langchain.com/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240",
+        "source_url": "https://forum.example.com/agent-runtime/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240",
         "used_by_claim_ids": [
           "executive-summary-claim-1"
         ],
@@ -131,11 +131,11 @@
     },
     "sources": [
       {
-        "domain": "forum.langchain.com",
+        "domain": "forum.example.com",
         "source_id": "R6",
         "source_type": "third_party",
-        "title": "LangGraph checkpoint resume thread",
-        "url": "https://forum.langchain.com/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240"
+        "title": "Checkpoint Runtime checkpoint resume thread",
+        "url": "https://forum.example.com/agent-runtime/t/can-we-resume-from-the-checkpoint-and-continue-running-at-the-interruption-point-instead-of-starting-from-the-first-node/1240"
       }
     ],
     "verification": {

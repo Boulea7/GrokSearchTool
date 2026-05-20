@@ -519,9 +519,9 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
     }
     source = {
         "source_id": "R1",
-        "url": "https://docs.temporal.io/workflow-execution/continue-as-new",
+        "url": "https://workflow-runtime.example.com/workflow-execution/continue-as-new",
         "title": "Continue-As-New",
-        "domain": "docs.temporal.io",
+        "domain": "workflow-runtime.example.com",
         "source_type": "official_docs",
     }
     report_payload = {
@@ -546,7 +546,7 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
         phase=final_status["phase"],
         effort="deep",
         context="",
-        include_domains=["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+        include_domains=["agent-runtime.example.com", "workflow-runtime.example.com", "service-runtime.example.com"],
         exclude_domains=[],
         plan_only=False,
         force_new=False,
@@ -599,7 +599,7 @@ def seed_round26_worker_restart_dispatch_runtime_job(runtime: DeepResearchRuntim
         phase=snapshot["resume_run"]["phase"],
         effort="deep",
         context="",
-        include_domains=["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+        include_domains=["agent-runtime.example.com", "workflow-runtime.example.com", "service-runtime.example.com"],
         exclude_domains=[],
         plan_only=False,
         force_new=False,
@@ -619,7 +619,7 @@ def seed_round26_worker_restart_dispatch_runtime_job(runtime: DeepResearchRuntim
         json.dumps(
             {
                 "query": snapshot["query"],
-                "include_domains": ["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+                "include_domains": ["agent-runtime.example.com", "workflow-runtime.example.com", "service-runtime.example.com"],
                 "exclude_domains": [],
                 "continuation": {"mode": "fresh"},
                 "brief": {"objective": snapshot["query"]},
@@ -2549,7 +2549,7 @@ def test_cli_round24_worker_restart_status_and_result_match_fixture(monkeypatch,
             "warnings": "3",
             "warning_codes": "coverage_incomplete,domain_constraints_applied,medium_single_source_search_only",
             "constraint_violations": "3",
-            "constraint_codes": "restate_durable,langgraph_interrupts,comparison_synthesis",
+            "constraint_codes": "service_durable,agent_interrupts,comparison_synthesis",
         },
     )
 
@@ -3560,8 +3560,8 @@ def test_cli_status_summary_prefers_unit_ids_when_constraint_reasons_repeat(monk
                     "medium_single_source_search_only",
                 ],
                 "constraint_violations": [
-                    {"reason": "domain_constraints_applied", "unit_id": "restate_durable"},
-                    {"reason": "domain_constraints_applied", "unit_id": "langgraph_interrupts"},
+                    {"reason": "domain_constraints_applied", "unit_id": "service_durable"},
+                    {"reason": "domain_constraints_applied", "unit_id": "agent_interrupts"},
                     {"reason": "domain_constraints_applied", "unit_id": "comparison_synthesis"},
                 ],
                 "planner_fallback_used": False,
@@ -3574,7 +3574,7 @@ def test_cli_status_summary_prefers_unit_ids_when_constraint_reasons_repeat(monk
 
     assert exit_code == 0
     assert summary_lines(captured.err) == [
-        "summary: job=job-24 status=completed phase=finalizing progress=100.0% checkpoint=finalizing attempts=4 cancel_requested=false continued_from=- resolved_batch=batch-24 artifact_fallback=false warnings=3 warning_codes=coverage_incomplete,domain_constraints_applied,medium_single_source_search_only constraint_violations=3 constraint_codes=restate_durable,langgraph_interrupts,comparison_synthesis"
+        "summary: job=job-24 status=completed phase=finalizing progress=100.0% checkpoint=finalizing attempts=4 cancel_requested=false continued_from=- resolved_batch=batch-24 artifact_fallback=false warnings=3 warning_codes=coverage_incomplete,domain_constraints_applied,medium_single_source_search_only constraint_violations=3 constraint_codes=service_durable,agent_interrupts,comparison_synthesis"
     ]
 
 

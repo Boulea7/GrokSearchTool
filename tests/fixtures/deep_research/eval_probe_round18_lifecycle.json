@@ -16,10 +16,10 @@
     "checkpoint_key": "researching-u3",
     "source_count": 7,
     "carry_forward_sources": [
-      {"source_id": "R15", "url": "https://docs.temporal.io/tctl-v1/workflow"},
-      {"source_id": "R1", "url": "https://docs.langchain.com/oss/python/langgraph/persistence"}
+      {"source_id": "R15", "url": "https://workflow-runtime.example.com/tctl-v1/workflow"},
+      {"source_id": "R1", "url": "https://agent-runtime.example.com/oss/python/langgraph/persistence"}
     ],
-    "previous_summary": "**LangGraph enables robust \"deep research\" agents through a persistence layer of checkpoints",
+    "previous_summary": "**Checkpoint Runtime enables robust \"deep research\" agents through a persistence layer of checkpoints",
     "compaction_policy": "focused_snapshot_v1",
     "compaction_reason_codes": [
       "focused_snapshot_v1",
@@ -41,8 +41,8 @@
       },
       "continuation_focus": [
         "Investigate interrupted, continue, and resume semantics for deep research jobs",
-        "5 (docs.temporal.io)",
-        "1 (docs.langchain.com)"
+        "5 (workflow-runtime.example.com)",
+        "1 (agent-runtime.example.com)"
       ]
     }
   },

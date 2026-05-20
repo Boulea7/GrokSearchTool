@@ -37,6 +37,17 @@ class OptionalPrivateContractText:
 def _read_private_agents_contract_text() -> OptionalPrivateContractText:
     if not AGENTS.exists():
         return OptionalPrivateContractText(None)
+    agents_ignored = False
+    for raw_line in GITIGNORE.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line in {"AGENTS.md", "/AGENTS.md"}:
+            agents_ignored = True
+        elif line in {"!AGENTS.md", "!/AGENTS.md"}:
+            agents_ignored = False
+    if agents_ignored:
+        return OptionalPrivateContractText(None)
     return OptionalPrivateContractText(AGENTS.read_text(encoding="utf-8"))
 
 
@@ -126,42 +137,23 @@ def test_docs_explain_lazy_import_boundaries_for_optional_dependencies():
     assert "不应被理解为安装依赖已变成 optional extra" in agents
 
 
-def test_multilingual_readmes_explain_lazy_import_boundaries():
-    localized_expectations = {
-        README_EN: [
-            "`grok_search.mcp`",
-            "access-time lazy export",
-            "`fastmcp`",
-            "`grok_search.providers.GrokSearchProvider`",
-            "does not change the install-time dependency declaration",
-        ],
-        README_ZH_TW: [
-            "`grok_search.mcp`",
-            "access-time lazy export",
-            "`fastmcp`",
-            "`grok_search.providers.GrokSearchProvider`",
-            "不改變安裝時依賴宣告",
-        ],
-        README_JA: [
-            "`grok_search.mcp`",
-            "access-time lazy export",
-            "`fastmcp`",
-            "`grok_search.providers.GrokSearchProvider`",
-            "インストール時の依存宣言は変わりません",
-        ],
-        README_RU: [
-            "`grok_search.mcp`",
-            "access-time lazy export",
-            "`fastmcp`",
-            "`grok_search.providers.GrokSearchProvider`",
-            "не меняет декларацию зависимостей на этапе установки",
-        ],
-    }
+def test_multilingual_readmes_do_not_put_lazy_import_details_in_front_matter():
+    forbidden_fragments = [
+        "`grok_search.mcp`",
+        "access-time lazy export",
+        "`grok_search.providers.GrokSearchProvider`",
+    ]
 
-    for path, expected_fragments in localized_expectations.items():
+    for path in (README_ZH_TW, README_JA, README_RU):
         text = path.read_text(encoding="utf-8")
-        for fragment in expected_fragments:
-            assert fragment in text
+        for fragment in forbidden_fragments:
+            assert fragment not in text
+
+    compatibility = COMPATIBILITY.read_text(encoding="utf-8")
+    assert "`grok_search.mcp`" in compatibility
+    assert "access-time lazy export" in compatibility
+    assert "`grok_search.providers.GrokSearchProvider`" in compatibility
+    assert "does not change the install-time dependency declaration" in compatibility
 
 
 def test_lazy_import_docs_do_not_imply_install_time_optional_extras():
@@ -216,11 +208,12 @@ def test_localized_readmes_cover_cloud_signed_credential_keys():
             assert fragment in text
 
 
-def test_readme_fastmcp_badge_matches_pyproject_minimum_dependency():
+def test_readme_fastmcp_mentions_runtime_dependency_without_external_repo_link():
     readme = README.read_text(encoding="utf-8")
     pyproject = PYPROJECT.read_text(encoding="utf-8")
 
-    assert "FastMCP-2.3.0+" in readme
+    assert "FastMCP" in readme
+    assert "FastMCP-2.3.0+" not in readme
     assert 'fastmcp>=2.3.0' in pyproject
 
 

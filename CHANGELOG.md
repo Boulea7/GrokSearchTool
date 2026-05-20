@@ -6,6 +6,18 @@ All notable changes to this repository are documented here.
 
 No unreleased changes yet.
 
+## 1.1.1 - 2026-05-21
+
+### Changed
+
+- Prepared public install snippets and host assets for the `v1.1.1` release tag.
+- Cleaned public README and companion-host guidance so setup instructions describe host-native rules without relying on local-only setup notes.
+- Replaced third-party project names and domains in public regression fixtures with neutral example targets while preserving deep research lifecycle coverage.
+
+### Fixed
+
+- Stopped treating local-only workspace notes as project-root markers for runtime `.env.local` / `.env` discovery.
+
 ## 1.1.0 - 2026-05-10
 
 ### Changed

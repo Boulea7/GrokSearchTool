@@ -679,9 +679,9 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
     }
     source = {
         "source_id": "R1",
-        "url": "https://docs.temporal.io/workflow-execution/continue-as-new",
+        "url": "https://workflow-runtime.example.com/workflow-execution/continue-as-new",
         "title": "Continue-As-New",
-        "domain": "docs.temporal.io",
+        "domain": "workflow-runtime.example.com",
         "source_type": "official_docs",
     }
     report_payload = {
@@ -706,7 +706,7 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
         phase=final_status["phase"],
         effort="deep",
         context="",
-        include_domains=["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+        include_domains=["agent-runtime.example.com", "workflow-runtime.example.com", "service-runtime.example.com"],
         exclude_domains=[],
         plan_only=False,
         force_new=False,
@@ -796,7 +796,7 @@ def seed_round26_worker_restart_dispatch_runtime_job(runtime: DeepResearchRuntim
         phase=snapshot["resume_run"]["phase"],
         effort="deep",
         context="",
-        include_domains=["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+        include_domains=["agent-runtime.example.com", "workflow-runtime.example.com", "service-runtime.example.com"],
         exclude_domains=[],
         plan_only=False,
         force_new=False,
@@ -816,7 +816,7 @@ def seed_round26_worker_restart_dispatch_runtime_job(runtime: DeepResearchRuntim
         json.dumps(
             {
                 "query": snapshot["query"],
-                "include_domains": ["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+                "include_domains": ["agent-runtime.example.com", "workflow-runtime.example.com", "service-runtime.example.com"],
                 "exclude_domains": [],
                 "continuation": {"mode": "fresh"},
                 "brief": {"objective": snapshot["query"]},
@@ -7448,7 +7448,7 @@ async def test_non_structural_query_fill_from_notes_still_forces_fallback(tmp_pa
 
     response = await runtime.start(
         query="Checkpoint resume semantics",
-        include_domains=["docs.langchain.com", "google.github.io"],
+        include_domains=["agent-runtime.example.com", "compute-runtime.example.com"],
         plan_only=True,
         force_new=True,
         schedule=False,
@@ -19522,7 +19522,7 @@ async def test_multi_fetch_search_unit_uses_unique_evidence_ids_and_keeps_proven
 
     async def search(query):
         return (
-            "Checkpoint identity and interrupt resume semantics are documented in official LangGraph references.",
+            "Checkpoint identity and interrupt resume semantics are documented in official Checkpoint Runtime references.",
             [
                 {
                     "url": "https://docs.example.com/checkpoint-identity",

@@ -33,11 +33,11 @@
       ],
       "source_registry": {
         "R20": {
-          "domain": "docs.temporal.io",
+          "domain": "workflow-runtime.example.com",
           "source_id": "R20",
           "source_type": "official_docs",
           "title": "Continue-As-New",
-          "url": "https://docs.temporal.io/workflow-execution/continue-as-new"
+          "url": "https://workflow-runtime.example.com/workflow-execution/continue-as-new"
         }
       }
     },
@@ -116,11 +116,11 @@
     },
     "sources": [
       {
-        "domain": "docs.temporal.io",
+        "domain": "workflow-runtime.example.com",
         "source_id": "R20",
         "source_type": "official_docs",
         "title": "Continue-As-New",
-        "url": "https://docs.temporal.io/workflow-execution/continue-as-new"
+        "url": "https://workflow-runtime.example.com/workflow-execution/continue-as-new"
       }
     ],
     "verification": {}
@@ -258,8 +258,8 @@
     },
     "exclude_domains": [],
     "include_domains": [
-      "docs.temporal.io",
-      "docs.restate.dev"
+      "workflow-runtime.example.com",
+      "service-runtime.example.com"
     ],
     "planner_metadata": {
       "fallback_reason": {
@@ -273,8 +273,8 @@
     "search_strategy": {
       "approach": "targeted",
       "search_queries": [
-        "Temporal checkpoint restore replay",
-        "Restate durable checkpoint docs"
+        "Workflow Runtime checkpoint restore replay",
+        "Service Runtime durable checkpoint docs"
       ]
     },
     "sub_questions": [

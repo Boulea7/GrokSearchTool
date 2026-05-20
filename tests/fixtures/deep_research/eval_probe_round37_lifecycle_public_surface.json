@@ -281,7 +281,7 @@
         "flagged_claim_ids": [
           "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts-claim-3",
           "checkpointing-and-restore-mechanisms-techniques-tools-e-g-criu-and-integration-with-restarts-claim-4",
-          "case-studies-and-examples-insights-from-frameworks-langgraph-agent-framework-and-distributed-systems-claim-9"
+          "case-studies-and-examples-insights-from-frameworks-agent-runtime-agent-framework-and-distributed-systems-claim-9"
         ],
         "summary": {
           "section_count": 8,

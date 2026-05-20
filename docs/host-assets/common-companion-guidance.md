@@ -9,4 +9,4 @@ Use GrokSearch as a lightweight MCP + companion layer:
 - Reserve `deep_research_*` for longer report-style workflows.
 - Keep interactive deep research in the CLI with `grok-search-research`.
 
-When a host supports its own rules, memories, or skills, adapt this guidance into the host-native surface instead of copying agent-specific private documents.
+When a host supports its own rules, memories, or skills, adapt this guidance into the host-native surface and keep credentials out of version-controlled configuration.

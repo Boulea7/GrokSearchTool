@@ -19,33 +19,31 @@
     "carry_forward_sources": [
       {
         "source_id": "R1",
-        "url": "https://docs.langchain.com/oss/python/langgraph/interrupts"
+        "url": "https://docs.example.com/runtime/interrupts"
       },
       {
         "source_id": "R27",
-        "url": "https://github.com/cloudwego/eino-examples/blob/main/quickstart/chatwitheino/docs/ch07_interrupt_resume.md"
+        "url": "https://docs.example.com/runtime/interrupt-resume"
       },
       {
         "source_id": "R4",
-        "url": "https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/"
+        "url": "https://docs.example.com/runtime/distributed-locks"
       }
     ],
     "previous_summary": "Think of a video game with autosaves. The **thread_id** is your save file (\"MyCampaign.save\"). The **checkpoint_id** is a specific autosave slot or chapter marker inside that file…"
   },
   "plan": {
     "include_domains": [
-      "docs.langchain.com",
-      "github.com",
-      "redis.io"
+      "docs.example.com"
     ],
     "exclude_domains": [],
     "brief": {
       "continuation_focus": [
         "Investigate interrupted, continue, and resume semantics for deep research jobs",
-        "1 (docs.langchain.com)",
-        "6 (github.com)",
-        "10 (redis.io)",
-        "Browse LangGraph persistence and checkpoint docs (python.langchain.com)"
+        "1 (docs.example.com)",
+        "6 (docs.example.com)",
+        "10 (docs.example.com)",
+        "Browse runtime persistence and checkpoint docs"
       ]
     }
   },
