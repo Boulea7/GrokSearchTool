@@ -37,7 +37,16 @@ class OptionalPrivateContractText:
 def _read_private_agents_contract_text() -> OptionalPrivateContractText:
     if not AGENTS.exists():
         return OptionalPrivateContractText(None)
-    if "AGENTS.md" in GITIGNORE.read_text(encoding="utf-8"):
+    agents_ignored = False
+    for raw_line in GITIGNORE.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line in {"AGENTS.md", "/AGENTS.md"}:
+            agents_ignored = True
+        elif line in {"!AGENTS.md", "!/AGENTS.md"}:
+            agents_ignored = False
+    if agents_ignored:
         return OptionalPrivateContractText(None)
     return OptionalPrivateContractText(AGENTS.read_text(encoding="utf-8"))
 

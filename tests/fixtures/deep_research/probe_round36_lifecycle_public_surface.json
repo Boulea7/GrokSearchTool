@@ -33,7 +33,7 @@
       ],
       "source_registry": {
         "R6": {
-          "domain": "forum.example.com/agent-runtime",
+          "domain": "forum.example.com",
           "source_id": "R6",
           "source_type": "third_party",
           "title": "Checkpoint Runtime checkpoint resume thread",
@@ -131,7 +131,7 @@
     },
     "sources": [
       {
-        "domain": "forum.example.com/agent-runtime",
+        "domain": "forum.example.com",
         "source_id": "R6",
         "source_type": "third_party",
         "title": "Checkpoint Runtime checkpoint resume thread",

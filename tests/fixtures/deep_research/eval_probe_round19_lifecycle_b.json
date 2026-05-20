@@ -16,14 +16,14 @@
           "agent-runtime.example.com",
           "workflow-runtime.example.com",
           "service-runtime.example.com",
-          "distributed-runtime.example.com"
+          "compute-runtime.example.com"
         ],
         "exclude_domains": [],
         "allowed_sources": [
           "agent-runtime.example.com",
           "workflow-runtime.example.com",
           "service-runtime.example.com",
-          "distributed-runtime.example.com"
+          "compute-runtime.example.com"
         ]
       },
       "continuation_focus": []

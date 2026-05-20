@@ -7448,7 +7448,7 @@ async def test_non_structural_query_fill_from_notes_still_forces_fallback(tmp_pa
 
     response = await runtime.start(
         query="Checkpoint resume semantics",
-        include_domains=["agent-runtime.example.com", "distributed-runtime.example.com"],
+        include_domains=["agent-runtime.example.com", "compute-runtime.example.com"],
         plan_only=True,
         force_new=True,
         schedule=False,
