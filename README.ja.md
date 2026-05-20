@@ -6,8 +6,6 @@ GrokSearch は、素早く信頼できるソース付き Web コンテキスト�
 
 `Grok` の検索能力と `Tavily` / `Firecrawl` の抽出能力を組み合わせ、軽量な検索、ソース確認、対象ページ取得、そして複雑な検索に対する推奨コア経路 `plan_* -> web_search` を支える MCP ツール群を提供します。計画の価値が低い明確な単発検索では、直接 `web_search` を呼ぶこともできます。より重い探索タスクについては、進階 `deep research` レイヤーも利用できます。
 
-公開されている package import contract には現在 2 つの境界があります。`grok_search.mcp` は access-time lazy export なので、その導出に実際にアクセスしたときだけ `fastmcp` が必要です。`grok_search.providers.GrokSearchProvider` も access-time lazy export なので、通常の非 provider import は Grok provider 関連依存が欠けているだけで早期に失敗すべきではありません。これは import-time の挙動を狭めるだけで、インストール時の依存宣言は変わりませんし、依存が optional extras になったことを意味しません。
-
 ## 概要
 
 - `web_search`: ソースをキャッシュしながら Web 検索を実行
@@ -80,7 +78,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1",
     "grok-search"
   ],
   "env": {
@@ -102,7 +100,7 @@ claude mcp add-json grok-search --scope user '{
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -123,7 +121,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
@@ -242,6 +240,10 @@ python3 -m py_compile src/grok_search/*.py src/grok_search/providers/*.py tests/
 - [Compatibility](docs/COMPATIBILITY.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Changelog](CHANGELOG.md)
+
+## Acknowledgements
+
+This project originally evolved from the ideas and early implementation in [GuDaStudio/GrokSearch](https://github.com/GuDaStudio/GrokSearch). The current release line is independently maintained as an MCP + deep research + CLI + companion skill project.
 
 ## License
 

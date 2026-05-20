@@ -32,7 +32,7 @@ class Config:
     _SETUP_COMMAND = (
         'claude mcp add-json grok-search --scope user '
         '\'{"type":"stdio","command":"uvx","args":["--from",'
-        '"git+https://github.com/Boulea7/GrokSearchTool@v1.1.0","grok-search"],'
+        '"git+https://github.com/Boulea7/GrokSearchTool@v1.1.1","grok-search"],'
         '"env":{"GROK_API_URL":"https://api.example.com/v1","GROK_API_KEY":"your-api-key"}}\''
     )
     _DEFAULT_MODEL = "grok-4.20-0309"
@@ -143,7 +143,7 @@ class Config:
     def _project_root(self) -> Path:
         root = Path.cwd().resolve()
         while True:
-            if (root / ".git").exists() or (root / "pyproject.toml").exists() or (root / "AGENTS.md").exists():
+            if (root / ".git").exists() or (root / "pyproject.toml").exists():
                 return root
             if root == root.parent:
                 return Path.cwd().resolve()

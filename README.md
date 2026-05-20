@@ -11,7 +11,6 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Boulea7/GrokSearchTool/release-gates.yml?branch=main&label=release%20gates)](https://github.com/Boulea7/GrokSearchTool/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![FastMCP](https://img.shields.io/badge/FastMCP-2.3.0+-green.svg)](https://github.com/jlowin/fastmcp)
 
 </div>
 
@@ -19,7 +18,7 @@
 
 ## 一、概述
 
-GrokSearch MCP 是一个基于 [FastMCP](https://github.com/jlowin/fastmcp) 构建的 MCP 服务器。它把 Grok 主搜索、Tavily / Firecrawl 抓取、结构化来源缓存、轻量规划和可恢复 deep research job 放进一套稳定工具面里，让 coding agent 在需要外部信息时能更快取得可核验上下文。
+GrokSearch MCP 是一个基于 FastMCP 构建的 MCP 服务器。它把 Grok 主搜索、Tavily / Firecrawl 抓取、结构化来源缓存、轻量规划和可恢复 deep research job 放进一套稳定工具面里，让 coding agent 在需要外部信息时能更快取得可核验上下文。
 
 它不是浏览器自动化框架，也不是只返回一段搜索摘要的 wrapper。它更适合这些场景：
 
@@ -103,7 +102,7 @@ https://github.com/Boulea7/GrokSearchTool
 
 安装要求：
 1. 先阅读仓库 README，以及 docs/COMPATIBILITY.md、docs/HOSTS.md 和 docs/host-assets/grok-search-stdio.json。
-2. 默认使用 release tag v1.1.0 安装；除非我明确要求，不要使用 main 分支。
+2. 默认使用 release tag v1.1.1 安装；除非我明确要求，不要使用 main 分支。
 3. 根据目标宿主写入本地 MCP 配置，不要把真实 key 写入 Git 仓库。
 4. 基础配置如下：
    GROK_API_URL="<你的 OpenAI-compatible Grok base URL，通常以 /v1 结尾>"
@@ -113,7 +112,7 @@ https://github.com/Boulea7/GrokSearchTool
    FIRECRAWL_API_KEY="<可选；需要 Firecrawl fetch fallback 或 supplemental search 时填写>"
    FIRECRAWL_API_URL="<可选；留空则使用项目默认值>"
 5. 安装后执行 smoke test：get_config_info、web_search、get_sources；如果配置了 Tavily，再测 web_map；如果配置了 Tavily 或 Firecrawl，再测 web_fetch。
-6. 在我的本地私有全局或项目级 agent 说明中加入搜索使用规则，不要提交到 Git：涉及最新资料、网页来源核验、技术文档查询、产品调研或需要引用来源时，优先使用 GrokSearch MCP / companion skill；复杂问题优先走 plan_* -> web_search，再用 get_sources 核验来源；长时间研究任务使用 deep_research_* 或 grok-search-research CLI。
+6. 如果目标宿主支持自定义规则、记忆或 skill，请在对应的宿主原生配置里加入搜索使用规则，并避免提交真实 key：涉及最新资料、网页来源核验、技术文档查询、产品调研或需要引用来源时，优先使用 GrokSearch MCP / companion skill；复杂问题优先走 plan_* -> web_search，再用 get_sources 核验来源；长时间研究任务使用 deep_research_* 或 grok-search-research CLI。
 7. 最后告诉我：写入了哪些本地配置文件、哪些 key 已做脱敏、每个 smoke test 的结果、还有哪些能力因为缺少 Tavily / Firecrawl 等配置而不可用。
 ```
 
@@ -130,7 +129,7 @@ https://github.com/Boulea7/GrokSearchTool
 - 公开安装文档当前只承诺本地 `stdio` 路径
 - `toggle_builtin_tools` 仅适用于 Claude Code 项目级设置
 - `get_config_info` 中 `toggle_builtin_tools` 的 readiness 仅表示检测到了本地 Git 项目上下文，不代表已经完成完整的 Claude Code 宿主验证
-- 下面的安装片段默认使用当前发布 tag `v1.1.0`，需要跟随开发分支时再手动改为 `main`
+- 下面的安装片段默认使用当前发布 tag `v1.1.1`，需要跟随开发分支时再手动改为 `main`
 
 <details>
 <summary><b>安装 uv</b></summary>
@@ -162,7 +161,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1",
     "grok-search"
   ],
   "env": {
@@ -184,7 +183,7 @@ claude mcp add-json grok-search --scope user '{
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -209,7 +208,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
@@ -238,7 +237,7 @@ claude mcp add-json grok-search --scope user '{
   "args": [
     "--native-tls",
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1",
     "grok-search"
   ],
   "env": {
@@ -668,6 +667,4 @@ CLI 当前优先承接：
 <div align="center">
 
 **如果这个项目对您有帮助，请给个 Star！**
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Boulea7/GrokSearchTool&type=date&legend=top-left)](https://www.star-history.com/#Boulea7/GrokSearchTool&type=date&legend=top-left)
 </div>

@@ -469,9 +469,9 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
     }
     source = {
         "source_id": "R1",
-        "url": "https://docs.temporal.io/workflow-execution/continue-as-new",
+        "url": "https://workflow-runtime.example.com/workflow-execution/continue-as-new",
         "title": "Continue-As-New",
-        "domain": "docs.temporal.io",
+        "domain": "workflow-runtime.example.com",
         "source_type": "official_docs",
     }
     report_payload = {
@@ -496,7 +496,7 @@ def seed_round24_worker_restart_live_job(runtime: DeepResearchRuntime):
         phase=final_status["phase"],
         effort="deep",
         context="",
-        include_domains=["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+        include_domains=["agent-runtime.example.com", "workflow-runtime.example.com", "service-runtime.example.com"],
         exclude_domains=[],
         plan_only=False,
         force_new=False,
@@ -549,7 +549,7 @@ def seed_round26_worker_restart_dispatch_runtime_job(runtime: DeepResearchRuntim
         phase=snapshot["resume_run"]["phase"],
         effort="deep",
         context="",
-        include_domains=["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+        include_domains=["agent-runtime.example.com", "workflow-runtime.example.com", "service-runtime.example.com"],
         exclude_domains=[],
         plan_only=False,
         force_new=False,
@@ -569,7 +569,7 @@ def seed_round26_worker_restart_dispatch_runtime_job(runtime: DeepResearchRuntim
         json.dumps(
             {
                 "query": snapshot["query"],
-                "include_domains": ["docs.langchain.com", "docs.temporal.io", "docs.restate.dev"],
+                "include_domains": ["agent-runtime.example.com", "workflow-runtime.example.com", "service-runtime.example.com"],
                 "exclude_domains": [],
                 "continuation": {"mode": "fresh"},
                 "brief": {"objective": snapshot["query"]},

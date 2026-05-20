@@ -33,11 +33,11 @@
       ],
       "source_registry": {
         "R10": {
-          "domain": "docs.temporal.io",
+          "domain": "workflow-runtime.example.com",
           "source_id": "R10",
           "source_type": "official_docs",
           "title": "Continue-As-New",
-          "url": "https://docs.temporal.io/workflow-execution/continue-as-new"
+          "url": "https://workflow-runtime.example.com/workflow-execution/continue-as-new"
         }
       }
     },
@@ -116,11 +116,11 @@
     },
     "sources": [
       {
-        "domain": "docs.temporal.io",
+        "domain": "workflow-runtime.example.com",
         "source_id": "R10",
         "source_type": "official_docs",
         "title": "Continue-As-New",
-        "url": "https://docs.temporal.io/workflow-execution/continue-as-new"
+        "url": "https://workflow-runtime.example.com/workflow-execution/continue-as-new"
       }
     ],
     "verification": {}
@@ -249,8 +249,8 @@
     },
     "exclude_domains": [],
     "include_domains": [
-      "docs.temporal.io",
-      "docs.langchain.com"
+      "workflow-runtime.example.com",
+      "agent-runtime.example.com"
     ],
     "planner_metadata": {
       "fallback_reason": {
@@ -264,8 +264,8 @@
     "search_strategy": {
       "approach": "targeted",
       "search_queries": [
-        "Temporal checkpoint restore docs",
-        "LangChain resume watch docs"
+        "Workflow Runtime checkpoint restore docs",
+        "Agent Runtime resume watch docs"
       ]
     },
     "sub_questions": [

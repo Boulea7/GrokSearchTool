@@ -6,7 +6,6 @@ English | [简体中文](README.md) | [繁體中文](README.zh-TW.md) | [日本�
 [![CI](https://img.shields.io/github/actions/workflow/status/Boulea7/GrokSearchTool/release-gates.yml?branch=main&label=release%20gates)](https://github.com/Boulea7/GrokSearchTool/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![FastMCP](https://img.shields.io/badge/FastMCP-2.3.0+-green.svg)](https://github.com/jlowin/fastmcp)
 
 GrokSearch is an independently maintained MCP server for assistants and clients that need fast, reliable, source-backed web context.
 
@@ -90,7 +89,7 @@ Notes:
 - Public installation guidance currently covers local `stdio` only.
 - `toggle_builtin_tools` is specific to Claude Code project settings.
 - `toggle_builtin_tools` readiness in `get_config_info` only means a local Git project context was detected; it is not a full Claude Code host verification.
-- The installation snippets below intentionally use release tag `v1.1.0`; change it to `main` only when you explicitly want the development branch.
+- The installation snippets below intentionally use release tag `v1.1.1`; change it to `main` only when you explicitly want the development branch.
 
 ### Add as an MCP server
 
@@ -102,7 +101,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1",
     "grok-search"
   ],
   "env": {
@@ -126,7 +125,7 @@ Add the following snippet to `~/.codex/config.toml` or project-level `.codex/con
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -151,7 +150,7 @@ Create a `STDIO` MCP server entry with the same core fields:
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",

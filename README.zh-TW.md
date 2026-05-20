@@ -6,8 +6,6 @@ GrokSearch 是一個獨立維護的 MCP 伺服器，面向需要快速、可靠�
 
 它整合 `Grok` 搜尋與 `Tavily`、`Firecrawl` 擷取能力，提供適合輕量查詢、來源核對、聚焦抓取，並以 `plan_* -> web_search` 為推薦核心路徑的 MCP 工具面；對於明確單跳、低歧義且規劃收益很低的查詢，也允許直接呼叫 `web_search`；對更重的探索任務，現在提供進階 `deep research` 層。
 
-公開 package import contract 目前分成兩層：`grok_search.mcp` 是 access-time lazy export，只有真正存取該導出時才需要 `fastmcp`；`grok_search.providers.GrokSearchProvider` 也是 access-time lazy export，普通非 provider 匯入不應僅因 Grok provider 相關依賴缺失而提早失敗。這只是在匯入時收口邊界，不改變安裝時依賴宣告，也不應被理解為這些依賴已變成 optional extras。
-
 ## 功能概覽
 
 - `web_search`：AI 驅動的網頁搜尋並快取信源
@@ -80,7 +78,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1",
     "grok-search"
   ],
   "env": {
@@ -102,7 +100,7 @@ claude mcp add-json grok-search --scope user '{
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -123,7 +121,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.0", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
@@ -242,6 +240,10 @@ python3 -m py_compile src/grok_search/*.py src/grok_search/providers/*.py tests/
 - [相容性說明](docs/COMPATIBILITY.md)
 - [路線圖](docs/ROADMAP.md)
 - [更新記錄](CHANGELOG.md)
+
+## 致謝
+
+本專案最初基於 [GuDaStudio/GrokSearch](https://github.com/GuDaStudio/GrokSearch) 的思路與早期實作演進而來；目前的公開發佈線已作為獨立維護的 MCP + deep research + CLI + companion skill 專案繼續開發。
 
 ## License
 
