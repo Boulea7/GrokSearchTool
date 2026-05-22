@@ -45,7 +45,6 @@ try:
         engine as planning_engine,
         _split_csv,
     )
-    from grok_search.deep_research_runtime import DeepResearchRuntime
 except ImportError:
     from .providers.grok import GrokSearchProvider
     from .providers.base import _filter_supported_search_kwargs
@@ -72,9 +71,73 @@ except ImportError:
         engine as planning_engine,
         _split_csv,
     )
-    from .deep_research_runtime import DeepResearchRuntime
 
 mcp = FastMCP("grok-search")
+
+_OPTIONAL_TOOL_GROUPS = {
+    "planning": [
+        "plan_intent",
+        "plan_complexity",
+        "plan_sub_query",
+        "plan_search_term",
+        "plan_tool_mapping",
+        "plan_execution",
+    ],
+    "deep_research": [
+        "deep_research_start",
+        "deep_research_status",
+        "deep_research_events",
+        "deep_research_result",
+        "deep_research_artifact",
+        "deep_research_resume",
+        "deep_research_cancel",
+        "deep_research_list",
+    ],
+    "host_controls": [
+        "toggle_builtin_tools",
+    ],
+}
+_ALWAYS_ENABLED_TOOLS = [
+    "web_search",
+    "get_sources",
+    "web_fetch",
+    "web_map",
+    "get_config_info",
+    "switch_model",
+]
+_MCP_DISABLED_TOOL_GROUPS = config.mcp_disabled_tool_groups()
+
+
+def _mcp_tool_group_summary() -> dict[str, Any]:
+    disabled_tools = [
+        tool
+        for group in _MCP_DISABLED_TOOL_GROUPS
+        for tool in _OPTIONAL_TOOL_GROUPS.get(group, [])
+    ]
+    return {
+        "disabled_tool_groups": list(_MCP_DISABLED_TOOL_GROUPS),
+        "disabled_tools": disabled_tools,
+        "optional_tool_groups": _OPTIONAL_TOOL_GROUPS,
+        "always_enabled_tools": _ALWAYS_ENABLED_TOOLS,
+        "env": "GROK_MCP_DISABLED_TOOL_GROUPS",
+        "effective_at": "process_startup",
+        "requires_restart": True,
+    }
+
+
+def _mcp_tool_group_enabled(group: str) -> bool:
+    normalized = config._normalize_mcp_tool_group(group)
+    return normalized not in _MCP_DISABLED_TOOL_GROUPS
+
+
+def _optional_mcp_tool(group: str, **kwargs):
+    def decorator(func):
+        if _mcp_tool_group_enabled(group):
+            return mcp.tool(**kwargs)(func)
+        return func
+
+    return decorator
+
 
 _SOURCES_CACHE = SourcesCache(max_size=256)
 _AVAILABLE_MODELS_CACHE: dict[tuple[str, str], tuple[list[str], float | None]] = {}
@@ -87,7 +150,19 @@ _PREFERRED_GROK_MODEL = "grok-4.20-0309"
 _MODEL_FALLBACK_WARNING = "model_fallback_applied"
 _BODY_MISSING_SOURCES_ONLY_WARNING = "body_missing_sources_only"
 _BODY_PROBABLY_TRUNCATED_WARNING = "body_probably_truncated"
-_DEEP_RESEARCH_RUNTIME = DeepResearchRuntime(config.deep_research_dir)
+_DEEP_RESEARCH_RUNTIME: Any | None = None
+
+
+def _get_deep_research_runtime():
+    global _DEEP_RESEARCH_RUNTIME
+    if _DEEP_RESEARCH_RUNTIME is None:
+        try:
+            from grok_search.deep_research_runtime import DeepResearchRuntime
+        except ImportError:
+            from .deep_research_runtime import DeepResearchRuntime
+
+        _DEEP_RESEARCH_RUNTIME = DeepResearchRuntime(config.deep_research_dir)
+    return _DEEP_RESEARCH_RUNTIME
 
 
 def _available_models_cache_now() -> float:
@@ -3017,7 +3092,7 @@ def _build_feature_readiness(
         deep_research_runtime_status = "degraded"
         deep_research_runtime_message = grok_search_probe["message"]
 
-    return {
+    feature_readiness = {
         "web_search": {
             "status": web_search_status,
             "message": web_search_message,
@@ -3056,6 +3131,13 @@ def _build_feature_readiness(
             "based_on_checks": ["tavily_map"],
             "probe_scope": "map_runtime",
             "degraded_by": web_map_degraded_by,
+        },
+        "planning": {
+            "status": "ready",
+            "message": "Planning MCP tools are enabled.",
+            "based_on_checks": [],
+            "probe_scope": "mcp_tool_group",
+            "degraded_by": [],
         },
         "toggle_builtin_tools": {
             "status": toggle_status,
@@ -3104,6 +3186,40 @@ def _build_feature_readiness(
             "single_model_mode": single_model_mode,
         },
     }
+    disabled_groups = set(_MCP_DISABLED_TOOL_GROUPS)
+    if "planning" in disabled_groups:
+        feature_readiness["planning"] = {
+            "status": "disabled",
+            "message": "Planning MCP tools are disabled by GROK_MCP_DISABLED_TOOL_GROUPS.",
+            "based_on_checks": [],
+            "probe_scope": "mcp_tool_group",
+            "disabled_by": "GROK_MCP_DISABLED_TOOL_GROUPS",
+            "degraded_by": [],
+        }
+    if "host_controls" in disabled_groups:
+        feature_readiness["toggle_builtin_tools"] = {
+            "status": "disabled",
+            "message": "MCP host control tools are disabled by GROK_MCP_DISABLED_TOOL_GROUPS.",
+            "client_specific": True,
+            "based_on_checks": [],
+            "probe_scope": "mcp_tool_group",
+            "disabled_by": "GROK_MCP_DISABLED_TOOL_GROUPS",
+            "degraded_by": [],
+        }
+    if "deep_research" in disabled_groups:
+        disabled_item = {
+            "status": "disabled",
+            "message": "Deep research MCP tools are disabled by GROK_MCP_DISABLED_TOOL_GROUPS.",
+            "advanced_optional": True,
+            "based_on_checks": [],
+            "probe_scope": "mcp_tool_group",
+            "disabled_by": "GROK_MCP_DISABLED_TOOL_GROUPS",
+            "profile_probes": {},
+            "degraded_by": [],
+        }
+        feature_readiness["deep_research_planner"] = dict(disabled_item)
+        feature_readiness["deep_research_runtime"] = dict(disabled_item)
+    return feature_readiness
 
 
 def _feature_affects_overall_doctor_status(item: dict) -> bool:
@@ -3289,6 +3405,8 @@ async def get_config_info(
         }
 
     config_info = config.get_config_info()
+    config_info["GROK_MCP_DISABLED_TOOL_GROUPS"] = list(_MCP_DISABLED_TOOL_GROUPS)
+    config_info["MCP_TOOL_GROUPS"] = _mcp_tool_group_summary()
     routing_diagnostics = config_info.get("GROK_ROUTING_DIAGNOSTICS") or {}
     checks: list[dict] = []
     recommendations: list[str] = []
@@ -3539,17 +3657,29 @@ async def get_config_info(
             skipped_reason="missing_grok_config",
         )
     checks.append(grok_search_probe)
-    if api_url and api_key:
-        for effort in ("standard", "deep", "ultra"):
-            checks.append(await _probe_deep_research_profile(api_url, api_key, effort=effort))
+    if _mcp_tool_group_enabled("deep_research"):
+        if api_url and api_key:
+            for effort in ("standard", "deep", "ultra"):
+                checks.append(await _probe_deep_research_profile(api_url, api_key, effort=effort))
+        else:
+            for effort in ("standard", "deep", "ultra"):
+                checks.append(
+                    _build_doctor_check(
+                        _deep_research_probe_check_id(effort),
+                        "skipped",
+                        f"未执行 deep research {effort} 探针。",
+                        skipped_reason="missing_grok_config",
+                    )
+                )
     else:
         for effort in ("standard", "deep", "ultra"):
             checks.append(
                 _build_doctor_check(
                     _deep_research_probe_check_id(effort),
                     "skipped",
-                    f"未执行 deep research {effort} 探针。",
-                    skipped_reason="missing_grok_config",
+                    f"deep research {effort} MCP tools are disabled.",
+                    skipped_reason="mcp_tool_group_disabled",
+                    disabled_by="GROK_MCP_DISABLED_TOOL_GROUPS",
                 )
             )
     for effort in ("standard", "deep", "ultra"):
@@ -3872,7 +4002,8 @@ async def switch_model(
         )
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "host_controls",
     name="toggle_builtin_tools",
     output_schema=None,
     description="""
@@ -4238,7 +4369,8 @@ def _validate_singleton_phase_overwrite(session, phase: str, is_revision: bool) 
     )
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "planning",
     name="plan_intent",
     output_schema=None,
     description="""
@@ -4296,7 +4428,8 @@ async def plan_intent(
     )
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "planning",
     name="plan_complexity",
     output_schema=None,
     description="Phase 2: Assess search complexity (1-3). Controls required phases: Level 1 = phases 1-3; Level 2 = phases 1-5; Level 3 = all 6.",
@@ -4345,7 +4478,8 @@ async def plan_complexity(
     )
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "planning",
     name="plan_sub_query",
     output_schema=None,
     description="Phase 3: Add one sub-query. Call once per sub-query; data accumulates across calls. Set is_revision=true to replace all.",
@@ -4395,7 +4529,8 @@ async def plan_sub_query(
     )
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "planning",
     name="plan_search_term",
     output_schema=None,
     description="Phase 4: Add one search term. Call once per term; data accumulates. First call must set approach. Later non-revision calls append search_terms only and do not overwrite existing approach/fallback_plan; use is_revision=true to replace the strategy.",
@@ -4451,7 +4586,8 @@ async def plan_search_term(
     )
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "planning",
     name="plan_tool_mapping",
     output_schema=None,
     description="Phase 5: Map a sub-query to a tool. Call once per mapping; data accumulates.",
@@ -4520,7 +4656,8 @@ async def plan_tool_mapping(
     )
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "planning",
     name="plan_execution",
     output_schema=None,
     description="Phase 6: Define execution order. parallel_groups: semicolon-separated groups of comma-separated IDs (e.g., 'sq1,sq2;sq3').",
@@ -4576,7 +4713,8 @@ async def plan_execution(
     )
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "deep_research",
     name="deep_research_start",
     output_schema=None,
     description="""
@@ -4598,7 +4736,7 @@ async def deep_research_start(
 ) -> dict:
     if not query.strip():
         return {"error": "validation_error", "message": "query 不能为空"}
-    return await _DEEP_RESEARCH_RUNTIME.start(
+    return await _get_deep_research_runtime().start(
         query=query,
         context=context,
         effort=effort,
@@ -4611,7 +4749,8 @@ async def deep_research_start(
     )
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "deep_research",
     name="deep_research_status",
     output_schema=None,
     description="Get the current status, phase, progress, and artifact summary for a deep research job.",
@@ -4619,10 +4758,11 @@ async def deep_research_start(
 async def deep_research_status(
     job_id: Annotated[str, "Deep research job ID."]
 ) -> dict:
-    return await _DEEP_RESEARCH_RUNTIME.status(job_id)
+    return await _get_deep_research_runtime().status(job_id)
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "deep_research",
     name="deep_research_events",
     output_schema=None,
     description="Fetch ordered deep research events, optionally starting after a known sequence number.",
@@ -4632,10 +4772,11 @@ async def deep_research_events(
     after_seq: Annotated[int, "Return only events with seq greater than this value."] = 0,
     limit: Annotated[int, "Maximum number of events to return."] = 100,
 ) -> dict:
-    return await _DEEP_RESEARCH_RUNTIME.events(job_id, after_seq=after_seq, limit=limit)
+    return await _get_deep_research_runtime().events(job_id, after_seq=after_seq, limit=limit)
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "deep_research",
     name="deep_research_result",
     output_schema=None,
     description="Return the current deep research result, including plan, partial report, final report, and citations when available.",
@@ -4644,10 +4785,11 @@ async def deep_research_result(
     job_id: Annotated[str, "Deep research job ID."],
     include_partial: Annotated[bool, "Include partial artifacts when the job is incomplete."] = True,
 ) -> dict:
-    return await _DEEP_RESEARCH_RUNTIME.result(job_id, include_partial=include_partial)
+    return await _get_deep_research_runtime().result(job_id, include_partial=include_partial)
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "deep_research",
     name="deep_research_artifact",
     output_schema=None,
     description="Read a single deep research artifact using the same visibility semantics as CLI result --artifact.",
@@ -4656,7 +4798,7 @@ async def deep_research_artifact(
     job_id: Annotated[str, "Deep research job ID."],
     artifact: Annotated[str, "Artifact kind, for example final_report.md, sources.json, citations.json, report.json, evidence_items.json."],
 ) -> dict:
-    payload = _DEEP_RESEARCH_RUNTIME.read_artifact(job_id, artifact)
+    payload = _get_deep_research_runtime().read_artifact(job_id, artifact)
     return {
         "job_id": job_id,
         "artifact": artifact,
@@ -4666,7 +4808,8 @@ async def deep_research_artifact(
     }
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "deep_research",
     name="deep_research_resume",
     output_schema=None,
     description="Resume a draft, failed, or interrupted deep research job from its latest checkpoint.",
@@ -4674,10 +4817,11 @@ async def deep_research_artifact(
 async def deep_research_resume(
     job_id: Annotated[str, "Deep research job ID."]
 ) -> dict:
-    return await _DEEP_RESEARCH_RUNTIME.resume(job_id)
+    return await _get_deep_research_runtime().resume(job_id)
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "deep_research",
     name="deep_research_cancel",
     output_schema=None,
     description="Request cancellation for a deep research job.",
@@ -4685,10 +4829,11 @@ async def deep_research_resume(
 async def deep_research_cancel(
     job_id: Annotated[str, "Deep research job ID."]
 ) -> dict:
-    return await _DEEP_RESEARCH_RUNTIME.cancel(job_id)
+    return await _get_deep_research_runtime().cancel(job_id)
 
 
-@mcp.tool(
+@_optional_mcp_tool(
+    "deep_research",
     name="deep_research_list",
     output_schema=None,
     description="List recent deep research jobs, optionally filtered by status.",
@@ -4697,7 +4842,7 @@ async def deep_research_list(
     status: Annotated[str, "Optional status filter."] = "",
     limit: Annotated[int, "Maximum number of jobs to return."] = 50,
 ) -> dict:
-    return await _DEEP_RESEARCH_RUNTIME.list_jobs(status=status, limit=limit)
+    return await _get_deep_research_runtime().list_jobs(status=status, limit=limit)
 
 
 def _configure_windows_event_loop_policy() -> None:

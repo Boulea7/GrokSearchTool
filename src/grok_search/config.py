@@ -69,6 +69,30 @@ class Config:
     _DEFAULT_DEEP_RESEARCH_DEEP_PROFILE = "multi_agent"
     _DEFAULT_DEEP_RESEARCH_ULTRA_PROFILE = "ultra"
     _ALLOWED_MODEL_PROFILES = {"balanced_auto", "reasoning", "multi_agent", "ultra", "fast", "exact"}
+    _MCP_OPTIONAL_TOOL_GROUPS = {
+        "planning",
+        "deep_research",
+        "host_controls",
+    }
+    _MCP_TOOL_GROUP_ALIASES = {
+        "plan": "planning",
+        "plans": "planning",
+        "planning": "planning",
+        "deep": "deep_research",
+        "deepresearch": "deep_research",
+        "deep-research": "deep_research",
+        "deep_research": "deep_research",
+        "research": "deep_research",
+        "host": "host_controls",
+        "host-control": "host_controls",
+        "host-controls": "host_controls",
+        "host_control": "host_controls",
+        "host_controls": "host_controls",
+        "client": "host_controls",
+        "client-controls": "host_controls",
+        "toggle": "host_controls",
+        "toggle_builtin_tools": "host_controls",
+    }
     _KNOWN_PROVIDER_FAMILIES = {
         "official_xai",
         "openrouter",
@@ -257,6 +281,24 @@ class Config:
     def _tool_profile_model_source(self, override_key: str) -> str:
         source = self._get_env_value_source(override_key)
         return source or "default"
+
+    @classmethod
+    def _normalize_mcp_tool_group(cls, value: str) -> str:
+        normalized = re.sub(r"[\s_]+", "-", (value or "").strip().lower())
+        return cls._MCP_TOOL_GROUP_ALIASES.get(normalized, normalized.replace("-", "_"))
+
+    def mcp_disabled_tool_groups(self) -> list[str]:
+        raw = self._get_env_value("GROK_MCP_DISABLED_TOOL_GROUPS", "") or ""
+        disabled: list[str] = []
+        for item in re.split(r"[,;\s]+", raw):
+            group = self._normalize_mcp_tool_group(item)
+            if group in self._MCP_OPTIONAL_TOOL_GROUPS and group not in disabled:
+                disabled.append(group)
+        return disabled
+
+    def mcp_tool_group_enabled(self, group: str) -> bool:
+        normalized = self._normalize_mcp_tool_group(group)
+        return normalized not in self.mcp_disabled_tool_groups()
 
     @staticmethod
     def _provider_env_keys(suffix: int | None = None) -> tuple[str, str, str]:
@@ -1037,6 +1079,7 @@ class Config:
                 self.provider_family_for_url(api_url) if api_url != "未配置" else "未配置"
             ),
             "GROK_ROUTING_DIAGNOSTICS": self.grok_routing_diagnostics(),
+            "GROK_MCP_DISABLED_TOOL_GROUPS": self.mcp_disabled_tool_groups(),
             "GROK_DEBUG": self.debug_enabled,
             "GROK_OUTPUT_CLEANUP": self.output_cleanup_enabled,
             "GROK_TIME_CONTEXT_MODE": self.time_context_mode,

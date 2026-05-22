@@ -24,7 +24,8 @@ The goal is not to claim identical native feature parity across every host. The 
 
 | Host | MCP path | Native adaptation surface | Recommended asset | Notes |
 | --- | --- | --- | --- | --- |
-| Claude Code / Claude Desktop | local `stdio` | project/user settings, prompt instructions | existing README install snippets + [docs/host-assets/common-companion-guidance.md](./host-assets/common-companion-guidance.md) | `toggle_builtin_tools` remains Claude-specific |
+| Claude Code / Claude Desktop | local `stdio` | project/user settings, prompt instructions | existing README install snippets + [docs/host-assets/claude-code-rule.md](./host-assets/claude-code-rule.md) | `toggle_builtin_tools` remains Claude-specific |
+| Codex CLI / Codex-style clients | local `stdio` | global or project instructions | README install snippets + [docs/host-assets/codex-rule.md](./host-assets/codex-rule.md) | keep secrets in local MCP env or ignored env files |
 | Cherry Studio | local `STDIO` MCP server entry | assistant / preset prompt | [docs/host-assets/cherry-studio-assistant-preset.md](./host-assets/cherry-studio-assistant-preset.md) | best fit is MCP + assistant preset |
 | Cursor | local MCP config | project rules | [docs/host-assets/cursor-project-rule.md](./host-assets/cursor-project-rule.md) | pair MCP with a project rule, not a copied agent file |
 | Cline | local MCP config | Skills / custom instructions | [docs/host-assets/cline-skill.md](./host-assets/cline-skill.md) | use MCP for tools, skill for workflow guidance |

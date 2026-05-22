@@ -1,5 +1,8 @@
 import json
+import os
 import socket
+import subprocess
+import sys
 from collections import UserDict
 from pathlib import Path
 
@@ -11,6 +14,8 @@ from grok_search.providers.base import BaseSearchProvider
 from grok_search.sources import SourcesCache
 
 ORIGINAL_PREFLIGHT_PUBLIC_TARGET_URL = server._preflight_public_target_url
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SRC_DIR = ROOT_DIR / "src"
 
 
 async def allow_public_target(url: str) -> server._TargetPreflightResult:
@@ -250,6 +255,7 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "GROK_DEEP_RESEARCH_ULTRA_PROFILE",
         "GROK_PROVIDER_FAMILY",
         "GROK_ROUTING_DIAGNOSTICS",
+        "GROK_MCP_DISABLED_TOOL_GROUPS",
         "GROK_DEBUG",
         "GROK_OUTPUT_CLEANUP",
         "GROK_TIME_CONTEXT_MODE",
@@ -267,6 +273,7 @@ async def test_get_config_info_explicit_full_matches_default_and_summary_is_exac
         "connection_test",
         "doctor",
         "feature_readiness",
+        "MCP_TOOL_GROUPS",
     }
     assert set(summary_payload["doctor"]) == {"status", "summary", "recommendations"}
     assert strip_response_times(summary_payload["connection_test"]) == strip_response_times(
@@ -520,6 +527,121 @@ async def test_legacy_contract_migration_tools_expose_response_format_parameter(
     assert "response_format" in toggle_builtin_tools_tool.parameters["properties"]
 
 
+def _list_mcp_tool_names_with_disabled_groups(disabled_groups: str) -> list[str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(SRC_DIR)
+    if disabled_groups:
+        env["GROK_MCP_DISABLED_TOOL_GROUPS"] = disabled_groups
+    else:
+        env.pop("GROK_MCP_DISABLED_TOOL_GROUPS", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import asyncio, json\n"
+                "from grok_search import server\n"
+                "async def main():\n"
+                "    tools = await server.mcp.list_tools()\n"
+                "    print(json.dumps(sorted(tool.name for tool in tools)))\n"
+                "asyncio.run(main())\n"
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    return json.loads(result.stdout)
+
+
+def test_mcp_tool_groups_default_to_full_surface():
+    tool_names = _list_mcp_tool_names_with_disabled_groups("")
+
+    assert "web_search" in tool_names
+    assert "plan_intent" in tool_names
+    assert "deep_research_start" in tool_names
+    assert "toggle_builtin_tools" in tool_names
+    assert len(tool_names) == 21
+
+
+def test_mcp_disabled_tool_groups_hide_optional_tools_only():
+    tool_names = _list_mcp_tool_names_with_disabled_groups("planning,deep_research,host_controls")
+
+    assert "web_search" in tool_names
+    assert "get_sources" in tool_names
+    assert "web_fetch" in tool_names
+    assert "web_map" in tool_names
+    assert "get_config_info" in tool_names
+    assert "switch_model" in tool_names
+    assert "plan_intent" not in tool_names
+    assert "plan_execution" not in tool_names
+    assert "deep_research_start" not in tool_names
+    assert "deep_research_list" not in tool_names
+    assert "toggle_builtin_tools" not in tool_names
+    assert len(tool_names) == 6
+
+
+def test_mcp_tool_group_summary_reports_disabled_tools(monkeypatch):
+    monkeypatch.setattr(server, "_MCP_DISABLED_TOOL_GROUPS", ["planning", "deep_research"])
+
+    summary = server._mcp_tool_group_summary()
+
+    assert summary["env"] == "GROK_MCP_DISABLED_TOOL_GROUPS"
+    assert summary["disabled_tool_groups"] == ["planning", "deep_research"]
+    assert "plan_intent" in summary["disabled_tools"]
+    assert "deep_research_start" in summary["disabled_tools"]
+    assert "web_search" in summary["always_enabled_tools"]
+    assert summary["effective_at"] == "process_startup"
+    assert summary["requires_restart"] is True
+
+
+def test_mcp_tool_group_summary_uses_startup_snapshot(monkeypatch):
+    monkeypatch.setattr(server, "_MCP_DISABLED_TOOL_GROUPS", [])
+    monkeypatch.setenv("GROK_MCP_DISABLED_TOOL_GROUPS", "planning,deep_research")
+
+    summary = server._mcp_tool_group_summary()
+
+    assert summary["disabled_tool_groups"] == []
+    assert summary["disabled_tools"] == []
+
+
+def test_disabling_deep_research_avoids_runtime_import_at_startup():
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(SRC_DIR)
+    env["GROK_MCP_DISABLED_TOOL_GROUPS"] = "deep_research"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json, sys\n"
+                "from grok_search import server\n"
+                "print(json.dumps({\n"
+                "    'runtime_loaded': 'grok_search.deep_research_runtime' in sys.modules,\n"
+                "    'runtime_instance': server._DEEP_RESEARCH_RUNTIME is not None,\n"
+                "    'disabled_groups': server._mcp_tool_group_summary()['disabled_tool_groups'],\n"
+                "}))\n"
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload == {
+        "runtime_loaded": False,
+        "runtime_instance": False,
+        "disabled_groups": ["deep_research"],
+    }
+
+
 @pytest.mark.asyncio
 async def test_web_search_surfaces_http_redirect(monkeypatch):
     class DummyProvider:
@@ -624,6 +746,7 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     assert payload["feature_readiness"]["web_search"]["provider_family"] == "openai_compatible_relay"
     assert payload["feature_readiness"]["web_search"]["responses_supported"] is False
     assert payload["feature_readiness"]["web_search"]["multi_agent_supported"] is False
+    assert payload["feature_readiness"]["planning"]["status"] == "ready"
     assert payload["feature_readiness"]["deep_research_planner"]["status"] == "ready"
     assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "ready"
     assert payload["feature_readiness"]["get_sources"]["status"] == "partial_ready"
@@ -635,6 +758,48 @@ async def test_get_config_info_returns_doctor_and_feature_readiness(monkeypatch)
     assert payload["feature_readiness"]["toggle_builtin_tools"]["client_specific"] is True
     assert "/tmp/demo-project" not in checks["claude_code_project"]["message"]
     assert "项目根目录" not in checks["claude_code_project"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_config_info_reports_disabled_mcp_tool_groups(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("GROK_MODEL", "grok-4.1-fast")
+    monkeypatch.setenv("GROK_WEB_SEARCH_MODEL", "grok-4.1-fast")
+    monkeypatch.setattr(server, "_MCP_DISABLED_TOOL_GROUPS", ["planning", "deep_research", "host_controls"])
+    responses = {
+        ("GET", "https://api.example.com/v1/models"): httpx.Response(
+            200,
+            json={"data": [{"id": "grok-4.1-fast"}]},
+        ),
+        ("POST", "https://api.tavily.com/extract"): httpx.Response(
+            200,
+            json={"results": [{"raw_content": "ok"}]},
+        ),
+        ("POST", "https://api.firecrawl.dev/v2/scrape"): httpx.Response(
+            200,
+            json={"data": {"markdown": "# ok"}},
+        ),
+        ("POST", "https://api.tavily.com/map"): httpx.Response(
+            200,
+            json={"results": ["https://example.com"]},
+        ),
+    }
+    patch_async_client(monkeypatch, responses)
+
+    payload = await load_config_info()
+    checks = doctor_checks(payload)
+
+    assert payload["GROK_MCP_DISABLED_TOOL_GROUPS"] == ["planning", "deep_research", "host_controls"]
+    assert payload["MCP_TOOL_GROUPS"]["disabled_tool_groups"] == ["planning", "deep_research", "host_controls"]
+    assert payload["MCP_TOOL_GROUPS"]["effective_at"] == "process_startup"
+    assert payload["feature_readiness"]["planning"]["status"] == "disabled"
+    assert payload["feature_readiness"]["toggle_builtin_tools"]["status"] == "disabled"
+    assert payload["feature_readiness"]["deep_research_planner"]["status"] == "disabled"
+    assert payload["feature_readiness"]["deep_research_runtime"]["status"] == "disabled"
+    assert checks["deep_research_standard_probe"]["status"] == "skipped"
+    assert checks["deep_research_standard_probe"]["skipped_reason"] == "mcp_tool_group_disabled"
+    assert payload["doctor"]["status"] == "ok"
 
 
 @pytest.mark.asyncio

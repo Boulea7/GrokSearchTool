@@ -1,3 +1,5 @@
+![GrokSearch banner](./images/groksearch-banner-v2.png)
+
 English | [简体中文](README.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | [Русский](README.ru.md)
 
 # GrokSearch
@@ -75,6 +77,36 @@ For new callers, prefer `response_format="object"` so you can consume the payloa
 - Python `3.10+`
 - `uv`
 - A client that supports stdio MCP, such as Claude Code, Codex CLI, or Cherry Studio
+
+### Install with a local coding agent
+
+If you already use Codex, Claude Code, Cline, Continue, or another coding agent, you can paste this prompt into that agent and let it install, configure, and smoke-test GrokSearch for you. Replace the placeholders before sending. For a minimal setup, only `GROK_API_URL` and `GROK_API_KEY` are required; Tavily / Firecrawl can stay empty or be removed.
+
+```text
+Please install GrokSearch MCP on this machine and connect it to my local coding agent / chat tool.
+
+Repository:
+https://github.com/Boulea7/GrokSearchTool
+
+Target host:
+<Codex CLI, Claude Code, Cherry Studio, Continue, Cline, or another host>
+
+Requirements:
+1. Read the repository README, docs/COMPATIBILITY.md, docs/HOSTS.md, and docs/host-assets/grok-search-stdio.json first.
+2. Install from release tag v1.1.1 by default; do not use main unless I explicitly ask for it.
+3. Write local MCP configuration for the target host, and never commit real keys to Git.
+4. Base configuration:
+   GROK_API_URL="<your OpenAI-compatible Grok base URL, usually ending in /v1>"
+   GROK_API_KEY="<your Grok API key>"
+   TAVILY_API_KEY="<optional; needed for web_map, Tavily web_fetch, or supplemental search>"
+   TAVILY_API_URL="<optional; leave empty for the project default>"
+   FIRECRAWL_API_KEY="<optional; needed for Firecrawl fetch fallback or supplemental search>"
+   FIRECRAWL_API_URL="<optional; leave empty for the project default>"
+   GROK_MCP_DISABLED_TOOL_GROUPS="<optional; comma-separated planning, deep_research, host_controls; leave empty to enable all tools>"
+5. Run smoke tests after installation: get_config_info, web_search, get_sources; if Tavily is configured, also test web_map; if Tavily or Firecrawl is configured, also test web_fetch.
+6. If the target host supports custom rules, memory, or skills, add a local search-use rule. Claude Code / Codex can use the docs/host-assets rule files directly. Short version: for current information, web source verification, technical docs lookup, product research, or source-backed answers, prefer GrokSearch MCP / companion skill; when planning tools are enabled, use plan_* -> web_search for complex questions, otherwise use web_search directly; use get_sources when sources matter; when deep research tools are enabled, use deep_research_* or the grok-search-research CLI for long research jobs.
+7. Report which local config files changed, which keys were masked, the result of each smoke test, and which capabilities remain unavailable because Tavily / Firecrawl or other optional providers are missing.
+```
 
 ### Support levels
 
@@ -175,6 +207,7 @@ Create a `STDIO` MCP server entry with the same core fields:
 | `GROK_API_URL_2` / `GROK_API_KEY_2` / `GROK_MODEL_2` | No | - | The second Grok provider; real requests automatically fail over to it when the primary provider fails |
 | `GROK_API_URL_3+` / `GROK_API_KEY_3+` / `GROK_MODEL_3+` | No | - | Additional Grok providers, tried in numeric order as the fallback chain |
 | `GROK_MODEL_FALLBACKS` | No | Built-in downgrade chain | A comma-separated model fallback order used when a provider explicitly reports that the requested model is unavailable; this can explicitly include `grok-4.1-fast` |
+| `GROK_MCP_DISABLED_TOOL_GROUPS` | No | Empty | Optional MCP tool groups to hide, separated by commas, semicolons, or spaces. Supported groups are `planning`, `deep_research`, and `host_controls`, plus common aliases. Leave empty to expose all `21` tools. Core tools stay enabled: `web_search`, `get_sources`, `web_fetch`, `web_map`, `get_config_info`, and `switch_model` |
 | `GROK_TIME_CONTEXT_MODE` | No | `always` | Time-context injection mode: `always`, `auto`, or `never` |
 | `TAVILY_API_KEY` | No | - | Tavily key for `web_fetch` / `web_map`, and for Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | No | Tavily default | Tavily endpoint |
@@ -208,6 +241,7 @@ Notes:
 - the preferred built-in default is now `grok-4.20-0309`; runtime selection stays flexible for Grok 4.1+ models and can fall back to a compatible available Grok model instead of failing just because a suffix differs
 - when no explicit `GROK_MODEL` is present, runtime can now derive a provider-aware default from `GROK_MODEL_PROFILE`; the base config snapshot also includes additive `GROK_MODEL_PROFILE`, `GROK_DEEP_RESEARCH_STANDARD_PROFILE`, `GROK_DEEP_RESEARCH_DEEP_PROFILE`, `GROK_DEEP_RESEARCH_ULTRA_PROFILE`, and `GROK_PROVIDER_FAMILY`
 - the base config snapshot now also includes `GROK_ROUTING_DIAGNOSTICS`, which summarizes the active provider, numbered provider chain, profile-derived default models, the expected `/chat/completions` vs `/responses` path, and multi-agent routing signals for official xAI, OpenRouter, generic relays, and grok2api-like proxies
+- if you only want the basic search and fetch surface, set `GROK_MCP_DISABLED_TOOL_GROUPS=planning,deep_research,host_controls` in your MCP `env` block or local `.env.local`; the MCP server will expose only `web_search`, `get_sources`, `web_fetch`, `web_map`, `get_config_info`, and `switch_model`. Leave it unset or empty to expose the full surface. This setting is read at MCP server process startup, so restart the client or MCP server after changing it
 - Grok routing now supports both `/chat/completions` and `/responses`; multi-agent families and response-only relay models prefer `/responses`, while OpenRouter and most relays remain primarily `chat/completions`
 - deep research now defaults to single-agent for `standard`, multi-agent-first for `deep`, and explicitly opt-in heavy multi-agent-first for `ultra`; `ultra` prefers `grok-4.20-heavy-16-agent` and automatically downgrades to lighter multi-agent or single-agent models when the current provider, account, relay, or single-model setup cannot serve that tier
 - OpenRouter-compatible URLs automatically receive the `:online` suffix when needed
@@ -248,7 +282,7 @@ For any local `stdio` host, start with this lightweight verification flow:
 
 - optional `detail="full" | "summary"` output levels; `full` remains the default and preserves the current payload shape
 - `doctor`: overall doctor status, structured checks, and repair recommendations
-- `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, `toggle_builtin_tools`, `deep_research_planner`, and `deep_research_runtime`
+- `feature_readiness`: readiness summaries for `web_search`, `get_sources`, `web_fetch`, `web_map`, `planning`, `toggle_builtin_tools`, `deep_research_planner`, and `deep_research_runtime`
 - `doctor.recommendations_detail`: additive structured repair hints linked to `check_id` and feature scope
 - `feature_readiness.web_fetch.providers`: provider-level readiness details with stable `check_id`; `verified_path` shows which real fetch probe succeeded, and degraded or skipped providers include `reason_code` when it can be derived and may also include `skipped_reason`
 - `grok_provider_chain`: a structured summary of the currently resolved Grok provider count, provider names, and each provider's family / resolved model / expected endpoint path
@@ -268,7 +302,7 @@ Successful `grok_search_probe` results now also report the actual `provider_name
 `feature_readiness.get_sources` now also includes an additive `cache_summary` with `total_sessions`, `readable_sessions`, `error_sessions`, `partial_sessions`, and `unreadable_sessions`.
 `feature_readiness` now also carries summary-safe machine fields: `based_on_checks`, `probe_scope`, and `degraded_by`. For `web_search`, it additionally returns `runtime_override_active` and `runtime_model_source` so callers can tell when a higher-priority runtime override is still in effect.
 `feature_readiness.deep_research_planner` and `feature_readiness.deep_research_runtime` now also expose `profile_probes`, which report the real `standard` / `deep` / `ultra` deep research probes, the winning provider/model, and the endpoint path that actually served the request.
-`ready` means the capability is verified, `degraded` means it exists but probes or partial dependencies are unhealthy, `not_ready` means prerequisites are missing, and `partial_ready` means the interface exists but still depends on transient runtime state; `transient` and `client_specific` items do not lower the overall doctor status on their own.
+`ready` means the capability is verified, `degraded` means it exists but probes or partial dependencies are unhealthy, `not_ready` means prerequisites are missing, `partial_ready` means the interface exists but still depends on transient runtime state, and `disabled` means an MCP tool group was explicitly hidden at process startup; `transient`, `client_specific`, and explicit `disabled` items do not lower the overall doctor status on their own.
 
 If `GROK_MODEL_SOURCE` comes back as `process_env`, `project_env_local`, or `project_env`, calling `switch_model` alone does not change the current process; update or remove that higher-priority override first.
 In that override case, `switch_model` still updates the persisted config, but the returned `current_model` remains the current runtime-effective model. Use `runtime_model_source` to see which higher-priority layer is still active.

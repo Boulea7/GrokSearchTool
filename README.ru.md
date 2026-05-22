@@ -1,3 +1,5 @@
+![GrokSearch banner](./images/groksearch-banner-v2.png)
+
 [简体中文](README.md) | [繁體中文](README.zh-TW.md) | [English](README.en.md) | [日本語](README.ja.md) | Русский
 
 # GrokSearch
@@ -139,6 +141,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `GROK_API_URL` | Да | OpenAI-compatible Grok base URL, предоставленный вашим провайдером; распространенная форма пути включает `/v1`. Текущая кодовая ветка не блокирует запрос заранее только из-за его отсутствия, но многие OpenAI-compatible endpoint'ы без него всё равно могут завершиться ошибкой во время выполнения и обычно сопровождаются compatibility warning |
 | `GROK_API_KEY` | Да | Grok API key |
 | `GROK_MODEL` | Нет | Модель по умолчанию; приоритет: process env > project `.env.local` > project `.env` > persisted config > кодовый default |
+| `GROK_MCP_DISABLED_TOOL_GROUPS` | Нет | Необязательный список групп MCP-инструментов, которые нужно скрыть: `planning`, `deep_research`, `host_controls`. Пустое значение публикует все `21` инструмента; core search / fetch tools этим параметром не отключаются |
 | `GROK_TIME_CONTEXT_MODE` | Нет | Режим внедрения временного контекста: `always` / `auto` / `never` |
 | `TAVILY_API_KEY` | Нет | Tavily key для `web_fetch` / `web_map`, а также для Tavily-backed supplemental `web_search` |
 | `TAVILY_API_URL` | Нет | Tavily API endpoint |
@@ -168,6 +171,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `GROK_TIME_CONTEXT_MODE` по умолчанию равен `always`, то есть текущее поведение с постоянной инъекцией локального времени сохраняется.
 - При `GROK_DEBUG=false` эти helper progress logs не пишутся и не пересылаются через `ctx.info()`; они намеренно работают как debug-only progress/debug signal.
 - Если нужно экономить контекст, можно переключить `GROK_TIME_CONTEXT_MODE` в `auto` (инъекция только для явно временных запросов) или `never`.
+- Если нужен только базовый поиск и fetch, задайте `GROK_MCP_DISABLED_TOOL_GROUPS=planning,deep_research,host_controls` в блоке MCP `env` или в локальном `.env.local`. Если переменная не задана или пуста, публикуется полный набор инструментов. При таком значении остаются только `web_search`, `get_sources`, `web_fetch`, `web_map`, `get_config_info` и `switch_model`. Настройка читается при запуске процесса MCP server, поэтому после изменения нужно перезапустить соответствующий клиент или MCP server.
 
 Примечания:
 
