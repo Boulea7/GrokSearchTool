@@ -6,7 +6,7 @@ All notable changes to this repository are documented here.
 
 No unreleased changes yet.
 
-## 1.2.0 - 2026-05-25
+## 1.2.0 - 2026-05-24
 
 ### Added
 
