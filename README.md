@@ -1,4 +1,4 @@
-![这是图片](./images/title.png)
+![GrokSearch banner](./images/groksearch-banner-v2.png)
 <div align="center">
 
 <!-- # Grok Search MCP -->
@@ -111,8 +111,9 @@ https://github.com/Boulea7/GrokSearchTool
    TAVILY_API_URL="<可选；留空则使用项目默认值>"
    FIRECRAWL_API_KEY="<可选；需要 Firecrawl fetch fallback 或 supplemental search 时填写>"
    FIRECRAWL_API_URL="<可选；留空则使用项目默认值>"
+   GROK_MCP_DISABLED_TOOL_GROUPS="<可选；逗号分隔，可填 planning、deep_research、host_controls；留空表示全部启用>"
 5. 安装后执行 smoke test：get_config_info、web_search、get_sources；如果配置了 Tavily，再测 web_map；如果配置了 Tavily 或 Firecrawl，再测 web_fetch。
-6. 如果目标宿主支持自定义规则、记忆或 skill，请在对应的宿主原生配置里加入搜索使用规则，并避免提交真实 key：涉及最新资料、网页来源核验、技术文档查询、产品调研或需要引用来源时，优先使用 GrokSearch MCP / companion skill；复杂问题优先走 plan_* -> web_search，再用 get_sources 核验来源；长时间研究任务使用 deep_research_* 或 grok-search-research CLI。
+6. 如果目标宿主支持自定义规则、记忆或 skill，请在对应的宿主原生配置里加入搜索使用规则，并避免提交真实 key。Claude Code / Codex 可直接使用 docs/host-assets 里的规则资产；简短版是：涉及最新资料、网页来源核验、技术文档查询、产品调研或需要引用来源时，优先使用 GrokSearch MCP / companion skill；planning 工具可用时复杂问题优先走 plan_* -> web_search，否则直接 web_search；需要来源时用 get_sources；deep research 工具可用时长时间研究任务使用 deep_research_* 或 grok-search-research CLI。
 7. 最后告诉我：写入了哪些本地配置文件、哪些 key 已做脱敏、每个 smoke test 的结果、还有哪些能力因为缺少 Tavily / Firecrawl 等配置而不可用。
 ```
 
@@ -267,6 +268,7 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_MODEL_FALLBACKS` | 否 | 内建降级链 | 逗号分隔的模型自动降级顺序；当当前供应商明确返回“模型不可用”时，会在同一供应商内按该顺序继续尝试，例如可显式包含 `grok-4.1-fast` |
 | `GROK_WEB_SEARCH_MODEL` | 否 | `grok-4.20-fast` | `web_search` 的工具级默认主模型；默认不再隐式继承全局 `GROK_MODEL` |
 | `GROK_WEB_SEARCH_FALLBACK_MODELS` | 否 | `grok-4.20-0309,grok-4.20-auto,grok-4.20-0309-non-reasoning,grok-4.20-reasoning,grok-4.20-expert` | `web_search` 的工具级 fallback 顺序；provider 只补 suffix / path / diagnostics，不改这组顺序 |
+| `GROK_MCP_DISABLED_TOOL_GROUPS` | 否 | 空 | 逗号、分号或空格分隔的可选工具组禁用列表。支持 `planning`、`deep_research`、`host_controls` 及常见别名；未知值会在启动时直接报错，避免拼写错误被静默忽略。留空时保持完整 `21` 个工具。核心 `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info`、`switch_model` 不会被该配置关闭 |
 | `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
@@ -308,6 +310,8 @@ claude mcp add-json grok-search --scope user '{
 > 当没有显式 `GROK_MODEL` 时，运行时当前会按统一工具级策略解析默认模型；同一工具的主模型与 fallback 顺序不会因 provider family 改变。provider 当前只影响 `:online` suffix、`/chat/completions` vs `/responses` 路径选择，以及 capability / availability / diagnostics metadata。`get_config_info` 基础快照会额外返回 `GROK_MODEL_PROFILE`、`GROK_DEEP_RESEARCH_STANDARD_PROFILE`、`GROK_DEEP_RESEARCH_DEEP_PROFILE`、`GROK_DEEP_RESEARCH_ULTRA_PROFILE` 与 `GROK_PROVIDER_FAMILY`，便于排查兼容层差异。
 
 > `get_config_info` 的基础快照现在还会返回 `GROK_ROUTING_DIAGNOSTICS`。其中会列出当前 active provider、编号 provider chain、各 profile 解析出的默认模型、预期会走 `/chat/completions` 还是 `/responses`，以及 multi-agent 相关 routing signals，方便判断官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代在当前配置下到底会怎么走。
+
+> 如果只想保留基础搜索与抓取工具，可在 MCP 配置的 `env` 字段或本地 `.env.local` 里设置 `GROK_MCP_DISABLED_TOOL_GROUPS=planning,deep_research,host_controls`。这样 MCP tool list 会只加载 `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info`、`switch_model`；未配置或留空时默认仍加载完整工具面。该配置按 MCP server 进程启动时读取，改完后需要重启对应客户端或 MCP server 才会改变工具列表。未知组名会让 MCP server 启动失败，便于及时发现拼写错误。
 
 > 当前 Grok 路由已支持 `/chat/completions` 与 `/responses` 双通道。多 agent 家族与部分 response-only relay 模型会优先走 `/responses`；OpenRouter 与多数兼容 relay 仍优先 `chat/completions`。
 
@@ -475,7 +479,7 @@ claude mcp list
 - Grok `/models` 连通性与可用模型
 - Tavily / Firecrawl 的只读探测结果（仅在已配置时执行）
 - 默认最小真实 `web_search` / `web_fetch` 探针结果
-- `web_search` / `get_sources` / `web_fetch` / `web_map` / `toggle_builtin_tools` / `deep_research_planner` / `deep_research_runtime` 的 readiness 汇总
+- `web_search` / `get_sources` / `web_fetch` / `web_map` / `planning` / `toggle_builtin_tools` / `deep_research_planner` / `deep_research_runtime` 的 readiness 汇总
 - 修复建议列表（API Key 自动脱敏）
 - `doctor.recommendations_detail`：与 `check_id` / `feature` 关联的结构化修复建议
 - `feature_readiness.web_fetch.providers`：provider 级状态，稳定包含 `check_id`；`verified_path` 表示真实抓取探针实际打通的后端；未执行或退化的 provider 会在可判定时附带 `reason_code`，并可能补充 `skipped_reason`
@@ -495,7 +499,7 @@ claude mcp list
 - `feature_readiness.get_sources` 当前会附带 `cache_summary`，至少包含 `total_sessions`、`readable_sessions`、`error_sessions`、`partial_sessions`、`unreadable_sessions`，用于快速判断当前 source cache 的可读性与退化面。
 - `feature_readiness` 当前还会提供一组 summary-safe 机器字段：`based_on_checks` 表示该能力主要参考了哪些 doctor checks，`probe_scope` 表示结论属于哪类探针/状态面，`degraded_by` 用 `check_id/status/reason_code` 描述当前退化来源。对 `get_sources`，cache 侧退化当前会使用 synthetic cause `source_cache_state`；对 `web_search` 还会额外返回 `runtime_override_active` 与 `runtime_model_source`，用于标记当前退化是否受进程 env / 项目 `.env.local` / `.env` 覆盖层影响。
 - `feature_readiness.deep_research_planner` 与 `feature_readiness.deep_research_runtime` 当前会额外暴露 `profile_probes`，分别给出 `standard` / `deep` / `ultra` 三档 deep research 的真实探针结果、winning provider / model，以及命中的 endpoint path，用于区分“默认轻路径正常”与“指定档位的 deep research 也能真实工作”。
-- `feature_readiness` / `doctor` 的状态语义当前可按以下方式理解：`ready`=当前能力已验证可用，`degraded`=能力存在但探针或局部依赖异常，`not_ready`=配置或前置条件不足，`partial_ready`=接口存在但仍缺少运行中瞬时条件；其中 `transient` 和 `client_specific` 项默认不拉低 overall doctor。
+- `feature_readiness` / `doctor` 的状态语义当前可按以下方式理解：`ready`=当前能力已验证可用，`degraded`=能力存在但探针或局部依赖异常，`not_ready`=配置或前置条件不足，`partial_ready`=接口存在但仍缺少运行中瞬时条件，`disabled`=该 MCP 工具组在进程启动时被显式关闭；其中 `transient`、`client_specific` 和显式 `disabled` 项默认不拉低 overall doctor。
 - 输出中的 API Key 会脱敏；显而易见的 bearer/token/签名 query、常见 OAuth/OIDC credential 参数，以及高置信度 cloud-signed credential 键（如 `X-Amz-Credential`、`X-Goog-Credential`、`GoogleAccessId`）也会做遮罩。但诊断结果仍可能包含本机绝对路径、endpoint/主机名或精简后的上游错误摘要；若要贴到 issue / 聊天，请先二次检查并按需删减。
 
 ### `switch_model` — 模型切换

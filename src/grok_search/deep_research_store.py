@@ -617,7 +617,9 @@ class DeepResearchStore:
                 finished_at = _parse_utc_iso(job.finished_at)
                 if finished_at is None:
                     continue
-                age_seconds = (dt.datetime.now(dt.UTC) - finished_at.astimezone(dt.UTC)).total_seconds()
+                age_seconds = (
+                    dt.datetime.now(dt.timezone.utc) - finished_at.astimezone(dt.timezone.utc)
+                ).total_seconds()
                 if age_seconds <= recent_reuse_seconds:
                     reusable.append(job)
         return reusable
@@ -636,7 +638,7 @@ class DeepResearchStore:
         exclude_job_ids: set[str] | None = None,
     ) -> list[DeepResearchJob]:
         interrupted_at = utc_now_iso()
-        now = dt.datetime.now(dt.UTC)
+        now = dt.datetime.now(dt.timezone.utc)
         excluded = {item.strip() for item in (exclude_job_ids or set()) if item and item.strip()}
         with self._connect() as connection:
             rows = connection.execute(
@@ -678,7 +680,7 @@ class DeepResearchStore:
                     _parse_utc_iso(row["started_at"]),
                     _parse_utc_iso(row["created_at"]),
                 ]
-                visible_times = [item.astimezone(dt.UTC) for item in candidate_times if item is not None]
+                visible_times = [item.astimezone(dt.timezone.utc) for item in candidate_times if item is not None]
                 if visible_times:
                     newest = max(visible_times)
                     age_seconds = (now - newest).total_seconds()

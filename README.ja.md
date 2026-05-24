@@ -1,3 +1,5 @@
+![GrokSearch banner](./images/groksearch-banner-v2.png)
+
 [简体中文](README.md) | [繁體中文](README.zh-TW.md) | [English](README.en.md) | 日本語 | [Русский](README.ru.md)
 
 # GrokSearch
@@ -139,6 +141,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `GROK_API_URL` | Yes | 利用するプロバイダが提供する OpenAI-compatible Grok base URL。一般的なパス形式には `/v1` が含まれます。現在のコードパスは `/v1` 省略だけでは事前にブロックしませんが、多くの OpenAI-compatible エンドポイントでは実行時に失敗し、通常は compatibility warning も伴います |
 | `GROK_API_KEY` | Yes | Grok API Key |
 | `GROK_MODEL` | No | デフォルトモデル。優先順位は process env > project `.env.local` > project `.env` > 永続 config > コード既定値 |
+| `GROK_MCP_DISABLED_TOOL_GROUPS` | No | 任意の MCP tool group 非表示設定。`planning`、`deep_research`、`host_controls` を指定できます。不明な値は起動時エラーになり、typo が静かに無視されません。空なら `21` tools をすべて公開し、core search / fetch tools はこの設定では無効化されません |
 | `GROK_TIME_CONTEXT_MODE` | No | 時間コンテキスト注入モード：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | No | `web_fetch` / `web_map` 用 Tavily Key。Tavily ベースの supplemental `web_search` にも使用 |
 | `TAVILY_API_URL` | No | Tavily API エンドポイント |
@@ -168,6 +171,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `GROK_TIME_CONTEXT_MODE` の既定値は `always` で、現在の「常にローカル時間を注入する」動作を維持します。
 - `GROK_DEBUG=false` のとき、これらの helper progress log は logger にも `ctx.info()` にも流れません。`GROK_DEBUG=true` のときだけ debug-only progress/debug signal として転送されます。
 - コンテキストを節約したい場合は、`GROK_TIME_CONTEXT_MODE` を `auto`（明確に時系列依存の問い合わせ時のみ注入）または `never` に変更できます。
+- 基本的な検索と取得だけを残したい場合は、MCP 設定の `env` ブロックまたはローカル `.env.local` に `GROK_MCP_DISABLED_TOOL_GROUPS=planning,deep_research,host_controls` を設定できます。未設定または空の場合は全ツールを公開します。設定すると `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info`、`switch_model` のみが残ります。この設定は MCP server プロセス起動時に読み込まれるため、変更後は対象クライアントまたは MCP server を再起動してください。不明な tool group 名は MCP server の起動失敗として扱われます。
 
 補足:
 

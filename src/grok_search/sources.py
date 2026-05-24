@@ -291,7 +291,7 @@ def _is_empty_merged_source_value(value: Any) -> bool:
 
 
 def standardize_sources(sources: list[dict], retrieved_at: str | None = None) -> list[dict]:
-    timestamp = retrieved_at or dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    timestamp = retrieved_at or dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     standardized_by_url: OrderedDict[str, dict] = OrderedDict()
 
     for index, item in enumerate(sources or []):

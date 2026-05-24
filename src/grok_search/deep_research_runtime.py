@@ -1889,7 +1889,7 @@ def _parse_utc_iso(value: str) -> dt.datetime | None:
     if not text:
         return None
     try:
-        return dt.datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(dt.UTC)
+        return dt.datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(dt.timezone.utc)
     except ValueError:
         return None
 
@@ -2204,7 +2204,7 @@ def _batch_bundle_candidates(store: DeepResearchStore, job_id: str) -> list[dict
             attempt_count = 0
         created_at = _parse_utc_iso(str(manifest.get("created_at", "") or "")) or dt.datetime.fromtimestamp(
             next(iter(candidate.get("paths", {}).values()), batches_dir).stat().st_mtime,
-            tz=dt.UTC,
+            tz=dt.timezone.utc,
         )
         latest_mtime_ns = max(
             [path.stat().st_mtime_ns for path in candidate.get("paths", {}).values()] or [0]
@@ -8687,7 +8687,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         evidence_ledger=evidence_ledger,
         section_banks=section_banks,
     )
-    started_at_dt = _parse_utc_iso(job.started_at) or dt.datetime.now(dt.UTC)
+    started_at_dt = _parse_utc_iso(job.started_at) or dt.datetime.now(dt.timezone.utc)
 
     runtime.store.update_job(job_id, phase="researching", progress_pct=20.0, heartbeat_at=utc_now_iso())
     runtime.store.append_event(
@@ -8816,7 +8816,7 @@ async def _default_runner(runtime: DeepResearchRuntime, job_id: str) -> None:
         if runtime.store.get_job(job_id).cancel_requested:
             _mark_canceled(runtime, job_id, "researching")
             return
-        elapsed_seconds = (dt.datetime.now(dt.UTC) - started_at_dt).total_seconds()
+        elapsed_seconds = (dt.datetime.now(dt.timezone.utc) - started_at_dt).total_seconds()
         if elapsed_seconds >= job.resolved_budget_seconds and not allow_one_budget_overrun_batch:
             _write_partial_outputs(runtime, job_id, plan, completed_unit_ids, unit_results, sections)
             latest_checkpoint_key = (

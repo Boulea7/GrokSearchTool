@@ -1,3 +1,4 @@
+import datetime as dt
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
@@ -420,14 +421,19 @@ def test_store_find_reusable_jobs_orders_stably_when_updated_at_ties(tmp_path):
         resolved_budget_seconds=240,
         continued_from_job_id="",
     )
+    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    updated_at = (now - dt.timedelta(minutes=3)).isoformat().replace("+00:00", "Z")
+    finished_at = (now - dt.timedelta(minutes=2)).isoformat().replace("+00:00", "Z")
+    first_created_at = (now - dt.timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+    second_created_at = (now - dt.timedelta(minutes=4)).isoformat().replace("+00:00", "Z")
     with store._connect() as connection:
         connection.execute(
             "UPDATE jobs SET updated_at = ?, created_at = ?, finished_at = ? WHERE job_id = ?",
-            ("2026-04-22T00:00:00Z", "2026-04-22T00:00:01Z", "2026-04-22T00:01:00Z", first.job_id),
+            (updated_at, first_created_at, finished_at, first.job_id),
         )
         connection.execute(
             "UPDATE jobs SET updated_at = ?, created_at = ?, finished_at = ? WHERE job_id = ?",
-            ("2026-04-22T00:00:00Z", "2026-04-22T00:00:02Z", "2026-04-22T00:01:00Z", second.job_id),
+            (updated_at, second_created_at, finished_at, second.job_id),
         )
 
     reusable = store.find_reusable_jobs("fp-stable-reuse", recent_reuse_seconds=3600 * 24 * 30)
