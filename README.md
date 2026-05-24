@@ -102,7 +102,7 @@ https://github.com/Boulea7/GrokSearchTool
 
 安装要求：
 1. 先阅读仓库 README，以及 docs/COMPATIBILITY.md、docs/HOSTS.md 和 docs/host-assets/grok-search-stdio.json。
-2. 默认使用 release tag v1.1.1 安装；除非我明确要求，不要使用 main 分支。
+2. 默认使用 release tag v1.2.0 安装；除非我明确要求，不要使用 main 分支。
 3. 根据目标宿主写入本地 MCP 配置，不要把真实 key 写入 Git 仓库。
 4. 基础配置如下：
    GROK_API_URL="<你的 OpenAI-compatible Grok base URL，通常以 /v1 结尾>"
@@ -130,7 +130,7 @@ https://github.com/Boulea7/GrokSearchTool
 - 公开安装文档当前只承诺本地 `stdio` 路径
 - `toggle_builtin_tools` 仅适用于 Claude Code 项目级设置
 - `get_config_info` 中 `toggle_builtin_tools` 的 readiness 仅表示检测到了本地 Git 项目上下文，不代表已经完成完整的 Claude Code 宿主验证
-- 下面的安装片段默认使用当前发布 tag `v1.1.1`，需要跟随开发分支时再手动改为 `main`
+- 下面的安装片段默认使用当前发布 tag `v1.2.0`，需要跟随开发分支时再手动改为 `main`
 
 <details>
 <summary><b>安装 uv</b></summary>
@@ -162,7 +162,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.2.0",
     "grok-search"
   ],
   "env": {
@@ -184,7 +184,7 @@ claude mcp add-json grok-search --scope user '{
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.2.0", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -209,7 +209,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.2.0", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
@@ -238,7 +238,7 @@ claude mcp add-json grok-search --scope user '{
   "args": [
     "--native-tls",
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.2.0",
     "grok-search"
   ],
   "env": {

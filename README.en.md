@@ -93,7 +93,7 @@ Target host:
 
 Requirements:
 1. Read the repository README, docs/COMPATIBILITY.md, docs/HOSTS.md, and docs/host-assets/grok-search-stdio.json first.
-2. Install from release tag v1.1.1 by default; do not use main unless I explicitly ask for it.
+2. Install from release tag v1.2.0 by default; do not use main unless I explicitly ask for it.
 3. Write local MCP configuration for the target host, and never commit real keys to Git.
 4. Base configuration:
    GROK_API_URL="<your OpenAI-compatible Grok base URL, usually ending in /v1>"
@@ -121,7 +121,7 @@ Notes:
 - Public installation guidance currently covers local `stdio` only.
 - `toggle_builtin_tools` is specific to Claude Code project settings.
 - `toggle_builtin_tools` readiness in `get_config_info` only means a local Git project context was detected; it is not a full Claude Code host verification.
-- The installation snippets below intentionally use release tag `v1.1.1`; change it to `main` only when you explicitly want the development branch.
+- The installation snippets below intentionally use release tag `v1.2.0`; change it to `main` only when you explicitly want the development branch.
 
 ### Add as an MCP server
 
@@ -133,7 +133,7 @@ claude mcp add-json grok-search --scope user '{
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1",
+    "git+https://github.com/Boulea7/GrokSearchTool@v1.2.0",
     "grok-search"
   ],
   "env": {
@@ -157,7 +157,7 @@ Add the following snippet to `~/.codex/config.toml` or project-level `.codex/con
 ```toml
 [mcp_servers.grok-search]
 command = "uvx"
-args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"]
+args = ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.2.0", "grok-search"]
 
 [mcp_servers.grok-search.env]
 GROK_API_URL = "https://api.example.com/v1"
@@ -182,7 +182,7 @@ Create a `STDIO` MCP server entry with the same core fields:
   "name": "grok-search",
   "type": "stdio",
   "command": "uvx",
-  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.1.1", "grok-search"],
+  "args": ["--from", "git+https://github.com/Boulea7/GrokSearchTool@v1.2.0", "grok-search"],
   "env": {
     "GROK_API_URL": "https://api.example.com/v1",
     "GROK_API_KEY": "your-grok-api-key",
