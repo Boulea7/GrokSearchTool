@@ -6,6 +6,32 @@ All notable changes to this repository are documented here.
 
 No unreleased changes yet.
 
+## 1.2.0 - 2026-05-25
+
+### Added
+
+- Added `GROK_MCP_DISABLED_TOOL_GROUPS` so MCP hosts can hide optional `planning`, `deep_research`, and `host_controls` tools while keeping the core search/fetch/config surface enabled.
+- Added Claude Code and Codex host rule assets for compact companion guidance.
+- Added the refreshed README banner asset and applied it across all localized README files.
+
+### Changed
+
+- Report optional MCP tool group state through `get_config_info`, `MCP_TOOL_GROUPS`, and `feature_readiness`, including startup-time disabled status.
+- Lazy-load the deep research runtime so disabling the deep research tool group avoids importing and initializing that runtime at MCP startup.
+- Updated all README variants with the new tool-group configuration, current install tag, and host guidance.
+
+### Fixed
+
+- Validate unknown `GROK_MCP_DISABLED_TOOL_GROUPS` values at startup so typos are not silently ignored.
+- Normalize underscore and hyphen aliases consistently, including `toggle_builtin_tools`.
+- Replaced Python 3.11-only `datetime.UTC` usage with `datetime.timezone.utc` for Python 3.10 compatibility.
+- Made the deep research reusable-job ordering regression test time-stable.
+
+### Verification
+
+- GitHub PR #36 passed Release Gates, Packaging Contracts, GitGuardian, Sourcery, cubic, and CodeRabbit status checks before merge.
+- Local focused verification passed for MCP config/server tests, docs/package contracts, deep research store/runtime/source coverage, Ruff, compileall, and staged secret scans.
+
 ## 1.1.1 - 2026-05-21
 
 ### Changed

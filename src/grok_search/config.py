@@ -32,7 +32,7 @@ class Config:
     _SETUP_COMMAND = (
         'claude mcp add-json grok-search --scope user '
         '\'{"type":"stdio","command":"uvx","args":["--from",'
-        '"git+https://github.com/Boulea7/GrokSearchTool@v1.1.1","grok-search"],'
+        '"git+https://github.com/Boulea7/GrokSearchTool@v1.2.0","grok-search"],'
         '"env":{"GROK_API_URL":"https://api.example.com/v1","GROK_API_KEY":"your-api-key"}}\''
     )
     _DEFAULT_MODEL = "grok-4.20-0309"
