@@ -91,6 +91,7 @@ class Config:
         "client": "host_controls",
         "client-controls": "host_controls",
         "toggle": "host_controls",
+        "toggle-builtin-tools": "host_controls",
         "toggle_builtin_tools": "host_controls",
     }
     _KNOWN_PROVIDER_FAMILIES = {
@@ -290,10 +291,22 @@ class Config:
     def mcp_disabled_tool_groups(self) -> list[str]:
         raw = self._get_env_value("GROK_MCP_DISABLED_TOOL_GROUPS", "") or ""
         disabled: list[str] = []
+        invalid: list[str] = []
         for item in re.split(r"[,;\s]+", raw):
+            original = item.strip()
+            if not original:
+                continue
             group = self._normalize_mcp_tool_group(item)
             if group in self._MCP_OPTIONAL_TOOL_GROUPS and group not in disabled:
                 disabled.append(group)
+            elif group not in self._MCP_OPTIONAL_TOOL_GROUPS:
+                invalid.append(original)
+        if invalid:
+            supported = ", ".join(sorted(self._MCP_OPTIONAL_TOOL_GROUPS))
+            raise ValueError(
+                "Invalid GROK_MCP_DISABLED_TOOL_GROUPS value(s): "
+                f"{', '.join(invalid)}. Supported groups: {supported}."
+            )
         return disabled
 
     def mcp_tool_group_enabled(self, group: str) -> bool:

@@ -268,7 +268,7 @@ claude mcp add-json grok-search --scope user '{
 | `GROK_MODEL_FALLBACKS` | 否 | 内建降级链 | 逗号分隔的模型自动降级顺序；当当前供应商明确返回“模型不可用”时，会在同一供应商内按该顺序继续尝试，例如可显式包含 `grok-4.1-fast` |
 | `GROK_WEB_SEARCH_MODEL` | 否 | `grok-4.20-fast` | `web_search` 的工具级默认主模型；默认不再隐式继承全局 `GROK_MODEL` |
 | `GROK_WEB_SEARCH_FALLBACK_MODELS` | 否 | `grok-4.20-0309,grok-4.20-auto,grok-4.20-0309-non-reasoning,grok-4.20-reasoning,grok-4.20-expert` | `web_search` 的工具级 fallback 顺序；provider 只补 suffix / path / diagnostics，不改这组顺序 |
-| `GROK_MCP_DISABLED_TOOL_GROUPS` | 否 | 空 | 逗号、分号或空格分隔的可选工具组禁用列表。支持 `planning`、`deep_research`、`host_controls` 及常见别名；留空时保持完整 `21` 个工具。核心 `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info`、`switch_model` 不会被该配置关闭 |
+| `GROK_MCP_DISABLED_TOOL_GROUPS` | 否 | 空 | 逗号、分号或空格分隔的可选工具组禁用列表。支持 `planning`、`deep_research`、`host_controls` 及常见别名；未知值会在启动时直接报错，避免拼写错误被静默忽略。留空时保持完整 `21` 个工具。核心 `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info`、`switch_model` 不会被该配置关闭 |
 | `GROK_TIME_CONTEXT_MODE` | 否 | `always` | 时间上下文注入策略：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | 否 | - | Tavily API 密钥（用于 `web_fetch` / `web_map`，也用于 Tavily supplemental `web_search`） |
 | `TAVILY_API_URL` | 否 | `https://api.tavily.com` | Tavily API 地址 |
@@ -311,7 +311,7 @@ claude mcp add-json grok-search --scope user '{
 
 > `get_config_info` 的基础快照现在还会返回 `GROK_ROUTING_DIAGNOSTICS`。其中会列出当前 active provider、编号 provider chain、各 profile 解析出的默认模型、预期会走 `/chat/completions` 还是 `/responses`，以及 multi-agent 相关 routing signals，方便判断官方 xAI、OpenRouter、普通 relay 与 `grok2api` 风格反代在当前配置下到底会怎么走。
 
-> 如果只想保留基础搜索与抓取工具，可在 MCP 配置的 `env` 字段或本地 `.env.local` 里设置 `GROK_MCP_DISABLED_TOOL_GROUPS=planning,deep_research,host_controls`。这样 MCP tool list 会只加载 `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info`、`switch_model`；未配置或留空时默认仍加载完整工具面。该配置按 MCP server 进程启动时读取，改完后需要重启对应客户端或 MCP server 才会改变工具列表。
+> 如果只想保留基础搜索与抓取工具，可在 MCP 配置的 `env` 字段或本地 `.env.local` 里设置 `GROK_MCP_DISABLED_TOOL_GROUPS=planning,deep_research,host_controls`。这样 MCP tool list 会只加载 `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info`、`switch_model`；未配置或留空时默认仍加载完整工具面。该配置按 MCP server 进程启动时读取，改完后需要重启对应客户端或 MCP server 才会改变工具列表。未知组名会让 MCP server 启动失败，便于及时发现拼写错误。
 
 > 当前 Grok 路由已支持 `/chat/completions` 与 `/responses` 双通道。多 agent 家族与部分 response-only relay 模型会优先走 `/responses`；OpenRouter 与多数兼容 relay 仍优先 `chat/completions`。
 

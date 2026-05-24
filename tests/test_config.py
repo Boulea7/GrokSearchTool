@@ -939,3 +939,20 @@ def test_config_get_config_info_excludes_server_only_diagnostic_fields(monkeypat
     assert "connection_test" not in info
     assert "doctor" not in info
     assert "feature_readiness" not in info
+
+
+def test_mcp_disabled_tool_groups_accept_aliases(monkeypatch):
+    config = Config()
+    monkeypatch.setenv("GROK_MCP_DISABLED_TOOL_GROUPS", "plan;deep-research toggle_builtin_tools")
+
+    assert config.mcp_disabled_tool_groups() == ["planning", "deep_research", "host_controls"]
+    assert config.mcp_tool_group_enabled("planning") is False
+    assert config.mcp_tool_group_enabled("toggle_builtin_tools") is False
+
+
+def test_mcp_disabled_tool_groups_reject_unknown_values(monkeypatch):
+    config = Config()
+    monkeypatch.setenv("GROK_MCP_DISABLED_TOOL_GROUPS", "planning,typo_group")
+
+    with pytest.raises(ValueError, match="Invalid GROK_MCP_DISABLED_TOOL_GROUPS"):
+        config.mcp_disabled_tool_groups()

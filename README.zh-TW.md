@@ -141,7 +141,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 | `GROK_API_URL` | 是 | 由你的服務商提供的 OpenAI-compatible Grok base URL；常見路徑形式包含 `/v1`。程式碼路徑不會僅因省略 `/v1` 就預先攔截，但不少 OpenAI-compatible 端點仍可能因此在執行期失敗，並通常伴隨相容性 warning |
 | `GROK_API_KEY` | 是 | Grok API Key |
 | `GROK_MODEL` | 否 | 預設模型；優先級為進程 env > 專案 `.env.local` > 專案 `.env` > 持久化 config > 程式預設 |
-| `GROK_MCP_DISABLED_TOOL_GROUPS` | 否 | 可選 MCP 工具組禁用列表，支援 `planning`、`deep_research`、`host_controls`；留空時公開完整 `21` 個工具，核心搜尋 / 抓取工具不會被此設定關閉 |
+| `GROK_MCP_DISABLED_TOOL_GROUPS` | 否 | 可選 MCP 工具組禁用列表，支援 `planning`、`deep_research`、`host_controls`；未知值會在啟動時直接報錯，避免拼寫錯誤被靜默忽略。留空時公開完整 `21` 個工具，核心搜尋 / 抓取工具不會被此設定關閉 |
 | `GROK_TIME_CONTEXT_MODE` | 否 | 時間上下文注入模式：`always` / `auto` / `never` |
 | `TAVILY_API_KEY` | 否 | `web_fetch` / `web_map` 用的 Tavily Key，也用於 Tavily supplemental `web_search` |
 | `TAVILY_API_URL` | 否 | Tavily API 端點 |
@@ -171,7 +171,7 @@ FIRECRAWL_API_KEY = "fc-your-firecrawl-key"
 - `GROK_TIME_CONTEXT_MODE` 預設為 `always`，保持目前一律注入本地時間上下文的行為。
 - `GROK_DEBUG=false` 時，這類 helper progress log 不會寫入 logger，也不會透過 `ctx.info()` 對外轉發；僅在 `GROK_DEBUG=true` 時才作為 debug-only progress/debug signal 暴露。
 - 如需節省上下文，可將 `GROK_TIME_CONTEXT_MODE` 設為 `auto`（僅在明顯時效查詢或顯式時效控制下注入）或 `never`。
-- 若只想保留基礎搜尋與抓取工具，可在 MCP 設定的 `env` 區塊或本地 `.env.local` 中加入 `GROK_MCP_DISABLED_TOOL_GROUPS=planning,deep_research,host_controls`。未設定或留空時會公開完整工具面；設定後只會保留 `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info`、`switch_model`。此設定在 MCP server 進程啟動時讀取，修改後需重啟對應客戶端或 MCP server。
+- 若只想保留基礎搜尋與抓取工具，可在 MCP 設定的 `env` 區塊或本地 `.env.local` 中加入 `GROK_MCP_DISABLED_TOOL_GROUPS=planning,deep_research,host_controls`。未設定或留空時會公開完整工具面；設定後只會保留 `web_search`、`get_sources`、`web_fetch`、`web_map`、`get_config_info`、`switch_model`。此設定在 MCP server 進程啟動時讀取，修改後需重啟對應客戶端或 MCP server。未知工具組名稱會讓 MCP server 啟動失敗，方便及早發現拼寫錯誤。
 
 說明：
 

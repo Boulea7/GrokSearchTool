@@ -570,18 +570,20 @@ def test_mcp_tool_groups_default_to_full_surface():
 def test_mcp_disabled_tool_groups_hide_optional_tools_only():
     tool_names = _list_mcp_tool_names_with_disabled_groups("planning,deep_research,host_controls")
 
-    assert "web_search" in tool_names
-    assert "get_sources" in tool_names
-    assert "web_fetch" in tool_names
-    assert "web_map" in tool_names
-    assert "get_config_info" in tool_names
-    assert "switch_model" in tool_names
+    expected_core_tools = {
+        "web_search",
+        "get_sources",
+        "web_fetch",
+        "web_map",
+        "get_config_info",
+        "switch_model",
+    }
+    assert set(tool_names) == expected_core_tools
     assert "plan_intent" not in tool_names
     assert "plan_execution" not in tool_names
     assert "deep_research_start" not in tool_names
     assert "deep_research_list" not in tool_names
     assert "toggle_builtin_tools" not in tool_names
-    assert len(tool_names) == 6
 
 
 def test_mcp_tool_group_summary_reports_disabled_tools(monkeypatch):
