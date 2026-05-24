@@ -421,7 +421,7 @@ def test_store_find_reusable_jobs_orders_stably_when_updated_at_ties(tmp_path):
         resolved_budget_seconds=240,
         continued_from_job_id="",
     )
-    now = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     updated_at = (now - dt.timedelta(minutes=3)).isoformat().replace("+00:00", "Z")
     finished_at = (now - dt.timedelta(minutes=2)).isoformat().replace("+00:00", "Z")
     first_created_at = (now - dt.timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
